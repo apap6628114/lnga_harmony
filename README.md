@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="AppScope/resources/base/media/startIcon.png" alt="NGA OH Logo" width="120" height="120">
+  <img src="AppScope/resources/base/media/foreground.png" alt="LNGA Logo" width="120" height="120">
   <h1>NGA OH</h1>
   <p><strong>NGA 玩家社区 · 鸿蒙原生客户端</strong></p>
   <p>
