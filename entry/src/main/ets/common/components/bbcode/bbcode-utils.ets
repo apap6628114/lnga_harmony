@@ -23,11 +23,12 @@ export function isInlineNode(type: BBNodeType): boolean {
  * 计算 SIZE 标签缩放后的字体像素尺寸（受引用上下文影响）。
  *
  * @param size - BBCode size 百分比（如 150 表示 150%）
- * @param inQuote - 是否处于引用块内（引用内基础字号 14，正文 15）
+ * @param inQuote - 是否处于引用块内（引用内基础字号比正文少 1）
+ * @param baseFontSize - 基础字号（正文默认 15，引用内自动减 1）
  * @returns 缩放后的字号，最小 8
  */
-export function calcScaleSize(size: number, inQuote: boolean): number {
-  return Math.max(8, Math.round((inQuote ? 14 : 15) * size / 100))
+export function calcScaleSize(size: number, inQuote: boolean, baseFontSize: number = 15): number {
+  return Math.max(8, Math.round((inQuote ? (baseFontSize - 1) : baseFontSize) * size / 100))
 }
 
 /**

@@ -60,3 +60,9 @@ export const KEY_FORCE_HTML_MODE: string = 'nga_forceHtmlMode'
 
 /** 内置网页浏览：true 时无 APP 响应的 URL 在应用内 WebView 打开 */
 export const KEY_USE_INTERNAL_WEBVIEW: string = 'useInternalWebView'
+
+/** 帖子内容字体大小（vp），默认为 15 */
+export const KEY_CONTENT_FONT_SIZE: string = 'contentFontSize'
+
+/** 帖子列表字体大小（vp），默认为 15 */
+export const KEY_TOPIC_FONT_SIZE: string = 'topicFontSize'

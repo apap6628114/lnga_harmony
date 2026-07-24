@@ -36,6 +36,7 @@ export struct BBCodeContentView {
   @StorageProp('networkChangeVersion') networkChangeVersion: number = 0
   @StorageProp('imageLoadStrategy') imageLoadStrategy: string = ImageLoadStrategy.ALWAYS
   @StorageProp('enableImageSizePrefetch') enableImageSizePrefetch: boolean = true
+  @StorageProp('contentFontSize') contentFontSize: number = 15
   hideFailedImages: boolean = false
   onImageClick: (urls: string[], index: number) => void = (_urls: string[], _index: number) => {}
   onLinkClick: (href: string) => void = (_href: string) => {}
@@ -250,7 +251,7 @@ export struct BBCodeContentView {
               this.RenderInlineSpan(node, ctx)
             }, (node: BBNode) => node.id.toString())
           }
-          .fontSize(ctx.inQuote ? 14 : 15)
+          .fontSize(ctx.inQuote ? (this.contentFontSize - 1) : this.contentFontSize)
           .fontColor(ctx.inQuote ? AppColors.textSecondary : AppColors.textPrimary)
           .fontStyle(ctx.inQuote ? FontStyle.Italic : FontStyle.Normal)
           .lineHeight(ctx.inQuote ? 24 : 26)
@@ -278,7 +279,7 @@ export struct BBCodeContentView {
     } else if (node.type === BBNodeType.COLOR) {
       this.RenderFormattedSpan(node, ctx, FontWeight.Normal, FontStyle.Normal, TextDecorationType.None, node.color, 0, '', 0)
     } else if (node.type === BBNodeType.SIZE) {
-      this.RenderFormattedSpan(node, ctx, FontWeight.Normal, FontStyle.Normal, TextDecorationType.None, '', calcScaleSize(node.size, ctx.inQuote), '', 0)
+      this.RenderFormattedSpan(node, ctx, FontWeight.Normal, FontStyle.Normal, TextDecorationType.None, '', calcScaleSize(node.size, ctx.inQuote, this.contentFontSize), '', 0)
     } else if (node.type === BBNodeType.FONT) {
       this.RenderFormattedSpan(node, ctx, FontWeight.Normal, FontStyle.Normal, TextDecorationType.None, '', 0, node.fontFamily, 0)
     } else if (node.type === BBNodeType.URL || node.type === BBNodeType.PID_LINK ||
@@ -303,13 +304,13 @@ export struct BBCodeContentView {
             ? { color: Color.White } : { color: Color.Transparent })
       } else {
         Span(`[表情:${node.emotionCat}:${node.emotionCode}]`)
-          .fontSize(ctx.inQuote ? 12 : 14)
+          .fontSize(ctx.inQuote ? (this.contentFontSize - 3) : (this.contentFontSize - 1))
           .fontColor(AppColors.textTertiary)
       }
     } else if (node.type === BBNodeType.SUBSCRIPT) {
-      this.RenderFormattedSpan(node, ctx, FontWeight.Normal, FontStyle.Normal, TextDecorationType.None, '', calcSubscriptSize(ctx.inQuote ? 14 : 15), '', calcSubscriptOffset(ctx.inQuote ? 14 : 15))
+      this.RenderFormattedSpan(node, ctx, FontWeight.Normal, FontStyle.Normal, TextDecorationType.None, '', calcSubscriptSize(ctx.inQuote ? (this.contentFontSize - 1) : this.contentFontSize), '', calcSubscriptOffset(ctx.inQuote ? (this.contentFontSize - 1) : this.contentFontSize))
     } else if (node.type === BBNodeType.SUPERSCRIPT) {
-      this.RenderFormattedSpan(node, ctx, FontWeight.Normal, FontStyle.Normal, TextDecorationType.None, '', calcSuperscriptSize(ctx.inQuote ? 14 : 15), '', calcSuperscriptOffset(ctx.inQuote ? 14 : 15))
+      this.RenderFormattedSpan(node, ctx, FontWeight.Normal, FontStyle.Normal, TextDecorationType.None, '', calcSuperscriptSize(ctx.inQuote ? (this.contentFontSize - 1) : this.contentFontSize), '', calcSuperscriptOffset(ctx.inQuote ? (this.contentFontSize - 1) : this.contentFontSize))
     }
   }
 
@@ -327,7 +328,7 @@ export struct BBCodeContentView {
         .fontStyle(style)
         .decoration({ type: deco })
         .fontColor(color.length > 0 ? color : (ctx.inQuote ? AppColors.textSecondary : AppColors.textPrimary))
-        .fontSize(size > 0 ? size : (ctx.inQuote ? 14 : 15))
+        .fontSize(size > 0 ? size : (ctx.inQuote ? (this.contentFontSize - 1) : this.contentFontSize))
         .baselineOffset(new LengthMetrics(offset))
     }
   }
@@ -344,7 +345,7 @@ export struct BBCodeContentView {
         .fontStyle(style)
         .fontColor(AppColors.primary)
         .decoration({ type: TextDecorationType.Underline, color: AppColors.primary })
-        .fontSize(size > 0 ? size : (ctx.inQuote ? 14 : 15))
+        .fontSize(size > 0 ? size : (ctx.inQuote ? (this.contentFontSize - 1) : this.contentFontSize))
         .baselineOffset(new LengthMetrics(offset))
         .onClick(() => {
           if (child.href.length > 0) {
@@ -362,7 +363,7 @@ export struct BBCodeContentView {
             ? { color: Color.White } : { color: Color.Transparent })
       } else {
         Span(`[表情:${child.emotionCat}:${child.emotionCode}]`)
-          .fontSize(ctx.inQuote ? 12 : 14)
+          .fontSize(ctx.inQuote ? (this.contentFontSize - 3) : (this.contentFontSize - 1))
           .fontColor(AppColors.textTertiary)
       }
     } else if (child.type === BBNodeType.BOLD) {
@@ -371,18 +372,18 @@ export struct BBCodeContentView {
         .fontStyle(style)
         .decoration({ type: deco })
         .fontColor(color.length > 0 ? color : (ctx.inQuote ? AppColors.textSecondary : AppColors.textPrimary))
-        .fontSize(size > 0 ? size : (ctx.inQuote ? 14 : 15))
+        .fontSize(size > 0 ? size : (ctx.inQuote ? (this.contentFontSize - 1) : this.contentFontSize))
         .baselineOffset(new LengthMetrics(offset))
     } else if (child.type === BBNodeType.SUBSCRIPT) {
       Span(child.text)
-        .fontSize(calcSubscriptSize(size > 0 ? size : (ctx.inQuote ? 14 : 15)))
-        .baselineOffset(new LengthMetrics(calcSubscriptOffset(size > 0 ? size : (ctx.inQuote ? 14 : 15))))
+        .fontSize(calcSubscriptSize(size > 0 ? size : (ctx.inQuote ? (this.contentFontSize - 1) : this.contentFontSize)))
+        .baselineOffset(new LengthMetrics(calcSubscriptOffset(size > 0 ? size : (ctx.inQuote ? (this.contentFontSize - 1) : this.contentFontSize))))
         .fontWeight(weight)
         .fontColor(color.length > 0 ? color : (ctx.inQuote ? AppColors.textSecondary : AppColors.textPrimary))
     } else if (child.type === BBNodeType.SUPERSCRIPT) {
       Span(child.text)
-        .fontSize(calcSuperscriptSize(size > 0 ? size : (ctx.inQuote ? 14 : 15)))
-        .baselineOffset(new LengthMetrics(calcSuperscriptOffset(size > 0 ? size : (ctx.inQuote ? 14 : 15))))
+        .fontSize(calcSuperscriptSize(size > 0 ? size : (ctx.inQuote ? (this.contentFontSize - 1) : this.contentFontSize)))
+        .baselineOffset(new LengthMetrics(calcSuperscriptOffset(size > 0 ? size : (ctx.inQuote ? (this.contentFontSize - 1) : this.contentFontSize))))
         .fontWeight(weight)
         .fontColor(color.length > 0 ? color : (ctx.inQuote ? AppColors.textSecondary : AppColors.textPrimary))
     } else {
@@ -391,7 +392,7 @@ export struct BBCodeContentView {
         .fontStyle(style)
         .decoration({ type: deco })
         .fontColor(color.length > 0 ? color : (ctx.inQuote ? AppColors.textSecondary : AppColors.textPrimary))
-        .fontSize(size > 0 ? size : (ctx.inQuote ? 14 : 15))
+        .fontSize(size > 0 ? size : (ctx.inQuote ? (this.contentFontSize - 1) : this.contentFontSize))
         .baselineOffset(new LengthMetrics(offset))
     }
   }
@@ -674,7 +675,7 @@ export struct BBCodeContentView {
         if (child.type === BBNodeType.LIST_ITEM) {
           Row() {
             Text('• ')
-              .fontSize(ctx.inQuote ? 14 : 15)
+              .fontSize(ctx.inQuote ? (this.contentFontSize - 1) : this.contentFontSize)
               .fontColor(ctx.inQuote ? AppColors.textSecondary : AppColors.textPrimary)
             if (child.children.length > 0) {
               Column() {
@@ -684,7 +685,7 @@ export struct BBCodeContentView {
               .alignItems(HorizontalAlign.Start)
             } else {
               Text(child.text)
-                .fontSize(ctx.inQuote ? 14 : 15)
+                .fontSize(ctx.inQuote ? (this.contentFontSize - 1) : this.contentFontSize)
                 .fontColor(ctx.inQuote ? AppColors.textSecondary : AppColors.textPrimary)
                 .layoutWeight(1)
                 .lineHeight(ctx.inQuote ? 24 : 26)

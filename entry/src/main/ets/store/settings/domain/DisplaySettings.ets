@@ -1,11 +1,11 @@
 import { SettingsContext } from '../SettingsContext'
 import { SettingsState } from '../SettingsState'
-import { KEY_SHOW_SIGNATURE } from '../../../common/constants/AppStorageKeys'
+import { KEY_SHOW_SIGNATURE, KEY_CONTENT_FONT_SIZE, KEY_TOPIC_FONT_SIZE } from '../../../common/constants/AppStorageKeys'
 
 /**
  * 显示设置域子 store。
  *
- * 承载 fontSize / domainIndex / holdingHand / smartGrip / showSignature 字段及其 setter。
+ * 承载 fontSize / topicFontSize / domainIndex / holdingHand / smartGrip / showSignature 字段及其 setter。
  */
 export class DisplaySettings {
   private ctx: SettingsContext
@@ -16,6 +16,13 @@ export class DisplaySettings {
 
   setFontSize(size: number): void {
     this.ctx.state.fontSize = size
+    AppStorage.setOrCreate(KEY_CONTENT_FONT_SIZE, size)
+    this.ctx.persist()
+  }
+
+  setTopicFontSize(size: number): void {
+    this.ctx.state.topicFontSize = size
+    AppStorage.setOrCreate(KEY_TOPIC_FONT_SIZE, size)
     this.ctx.persist()
   }
 
@@ -44,6 +51,7 @@ export class DisplaySettings {
   /** 从持久化对象加载显示字段 */
   load(saved: SettingsState): void {
     if (saved.fontSize) this.ctx.state.fontSize = saved.fontSize
+    if (saved.topicFontSize) this.ctx.state.topicFontSize = saved.topicFontSize
     if (saved.domainIndex) this.ctx.state.domainIndex = saved.domainIndex
     if (saved.holdingHand !== undefined) this.ctx.state.holdingHand = saved.holdingHand
     if (saved.smartGrip !== undefined) this.ctx.state.smartGrip = saved.smartGrip

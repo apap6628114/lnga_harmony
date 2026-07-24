@@ -526,10 +526,10 @@ export struct TopicListPanel {
       Row() {
         Stack() {
           Image($r('app.media.icon_refresh'))
-            .width(20).height(20)
+            .width(22).height(22)
             .fillColor(AppColors.primary)
         }
-        .width(40).height(40).borderRadius(20)
+        .width(44).height(44).borderRadius(22)
         .backgroundColor(Color.Transparent)
         .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
         .backgroundEffect({
@@ -550,6 +550,7 @@ export struct TopicListPanel {
 struct TopicCardComponent {
   @Prop thread: Record<string, Object> = {}
   @Prop isFavorites: boolean = false
+  @StorageProp('topicFontSize') topicFontSize: number = 15
   onRemoveFav: (tid: number) => void = (_tid: number) => {}
   onCardClick: (tid: string) => void = (_tid: string) => {}
 
@@ -557,15 +558,15 @@ struct TopicCardComponent {
     Column() {
       Row() {
         Text(getTypeTags(Number(this.thread['type'] ?? 0)))
-          .fontSize(15).lineHeight(22).fontColor(AppColors.textTertiary)
+          .fontSize(this.topicFontSize).fontColor(AppColors.textTertiary)
         Text(unescapeHtml(String(this.thread['subject'] ?? '')))
-          .fontSize(15).lineHeight(22)
+          .fontSize(this.topicFontSize)
           .fontColor(getSubjectFontColor(String(this.thread['titleFont'] ?? '')))
           .fontWeight(isSubjectBold(String(this.thread['titleFont'] ?? '')) ? FontWeight.Bold : FontWeight.Normal)
           .fontStyle(isSubjectItalic(String(this.thread['titleFont'] ?? '')) ? FontStyle.Italic : FontStyle.Normal)
           .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
         if (this.isFavorites) {
-          Text('✕').fontSize(16).fontColor(AppColors.textTertiary)
+          Text('✕').fontSize(this.topicFontSize + 1).fontColor(AppColors.textTertiary)
             .padding({ left: 8, right: 4 })
             .onClick(() => { this.onRemoveFav(Number(this.thread['tid'] ?? 0)) })
         }
@@ -573,7 +574,7 @@ struct TopicCardComponent {
 
       if (this.thread['previewSnippet']) {
         Text(unescapeHtml(String(this.thread['previewSnippet'] ?? '')))
-          .fontSize(13).fontColor(AppColors.textSecondary).maxLines(2).lineHeight(19)
+          .fontSize(this.topicFontSize - 2).fontColor(AppColors.textSecondary).maxLines(2).lineHeight(19)
           .textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 10 }).width('100%')
       }
 

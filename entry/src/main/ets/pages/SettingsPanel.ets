@@ -474,6 +474,16 @@ export struct SettingsPanel {
               Divider().margin({ left: 60 }).color(AppColors.separator)
 
               SettingPickerRow({
+                iconRes: $r('app.media.icon_text_fields'), iconColor: IconColors.textFields, label: '字体大小',
+                badgeText: `${appStore.settings.fontSize}`,
+                onAction: () => {
+                  routerStore.navigateActivity(Screen.fontSizeSettings())
+                }
+              })
+
+              Divider().margin({ left: 60 }).color(AppColors.separator)
+
+              SettingPickerRow({
                 iconRes: $r('app.media.icon_settings'), iconColor: IconColors.settings, label: '帖子楼层导航',
                 badgeText: this.threadNavBadge,
                 onAction: () => {

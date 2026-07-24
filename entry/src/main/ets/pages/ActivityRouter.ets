@@ -15,6 +15,7 @@ import { BrowseHistoryPanel } from './BrowseHistoryPanel'
 import { TopicListPanel } from './TopicListPanel'
 import { WebViewPanel } from './WebViewPanel'
 import { AiSettingsPanel } from './ai/AiSettingsPanel'
+import { FontSizeSettingsPanel } from './FontSizeSettingsPanel'
 
 @Component
 export struct ActivityRouter {
@@ -60,6 +61,8 @@ export struct ActivityRouter {
             SettingsPanel()
           } else if (entry.screen.type === 'aiSettings') {
             AiSettingsPanel()
+          } else if (entry.screen.type === 'fontSizeSettings') {
+            FontSizeSettingsPanel()
           } else if (entry.screen.type === 'webview') {
             WebViewPanel({ url: entry.screen.webviewUrl })
           } else {
