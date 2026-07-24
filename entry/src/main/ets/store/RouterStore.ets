@@ -282,11 +282,15 @@ export class RouterStoreClass {
       if (top.preBack && top.preBack()) {
         return
       }
-      this.activityStack = this.activityStack.slice(0, -1)
+      animateTo({ duration: 400, curve: Curve.FastOutSlowIn }, () => {
+        this.activityStack = this.activityStack.slice(0, -1)
+      })
       return
     }
     if (this.boardSlot) {
-      this.boardSlot = null
+      animateTo({ duration: 400, curve: Curve.FastOutSlowIn }, () => {
+        this.boardSlot = null
+      })
     }
   }
 
