@@ -58,6 +58,7 @@ export type ScreenType =
   | 'webview'
   | 'ttsSettings'
   | 'aiSettings'
+  | 'fontSizeSettings'
 
 export class Screen {
   type: ScreenType = 'thread'
@@ -161,6 +162,12 @@ export class Screen {
     return s
   }
 
+  static fontSizeSettings(): Screen {
+    const s = new Screen()
+    s.type = 'fontSizeSettings'
+    return s
+  }
+
   static topicList(
     name: string, fid: number = 0,
     authorid: string = '', favor: string = '',
@@ -192,6 +199,7 @@ export class Screen {
       case 'webview': return 'NGA网页版'
       case 'ttsSettings': return '语音朗读'
       case 'aiSettings': return 'AI 配置'
+      case 'fontSizeSettings': return '字体大小'
       default: return ''
     }
   }
@@ -282,11 +290,15 @@ export class RouterStoreClass {
       if (top.preBack && top.preBack()) {
         return
       }
-      this.activityStack = this.activityStack.slice(0, -1)
+      animateTo({ duration: 400, curve: Curve.FastOutSlowIn }, () => {
+        this.activityStack = this.activityStack.slice(0, -1)
+      })
       return
     }
     if (this.boardSlot) {
-      this.boardSlot = null
+      animateTo({ duration: 400, curve: Curve.FastOutSlowIn }, () => {
+        this.boardSlot = null
+      })
     }
   }
 

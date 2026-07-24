@@ -30,6 +30,7 @@ export struct SearchPanel {
   @State showEmpty: boolean = false
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
+  @StorageProp('topicFontSize') topicFontSize: number = 15
 
   private scroller: Scroller = new Scroller()
   private forumsDataSource: ThreadDataSource = new ThreadDataSource()
@@ -316,9 +317,9 @@ export struct SearchPanel {
     Column() {
       Row() {
         Text(this.getTypeTags(Number(thread['type'] ?? 0)))
-          .fontSize(15).fontColor(AppColors.textTertiary)
+          .fontSize(this.topicFontSize).fontColor(AppColors.textTertiary)
         Text(unescapeHtml(String(thread['subject'] ?? '')))
-          .fontSize(15)
+          .fontSize(this.topicFontSize)
           .fontColor(this.getSubjectFontColor(String(thread['titleFont'] ?? '')))
           .fontWeight(this.isSubjectBold(String(thread['titleFont'] ?? '')) ? FontWeight.Bold : FontWeight.Normal)
           .fontStyle(this.isSubjectItalic(String(thread['titleFont'] ?? '')) ? FontStyle.Italic : FontStyle.Normal)
@@ -327,7 +328,7 @@ export struct SearchPanel {
 
       if (thread['previewSnippet']) {
         Text(unescapeHtml(String(thread['previewSnippet'] ?? '')))
-          .fontSize(13).fontColor(AppColors.textSecondary).maxLines(2)
+          .fontSize(this.topicFontSize - 2).fontColor(AppColors.textSecondary).maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 6 }).width('100%')
       }
 

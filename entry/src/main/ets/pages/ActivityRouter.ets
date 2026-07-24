@@ -15,6 +15,7 @@ import { BrowseHistoryPanel } from './BrowseHistoryPanel'
 import { TopicListPanel } from './TopicListPanel'
 import { WebViewPanel } from './WebViewPanel'
 import { AiSettingsPanel } from './ai/AiSettingsPanel'
+import { FontSizeSettingsPanel } from './FontSizeSettingsPanel'
 
 @Component
 export struct ActivityRouter {
@@ -24,59 +25,77 @@ export struct ActivityRouter {
   build() {
     Stack() {
       ForEach(this.activityStack, (entry: NavEntry) => {
-        if (entry.screen.type === 'thread') {
-          ThreadPanel({
-            threadTid: entry.screen.tid,
-            threadPid: entry.screen.pid,
-            navEntryId: entry.id
-          })
-        } else if (entry.screen.type === 'browseHistory') {
-          BrowseHistoryPanel()
-        } else if (entry.screen.type === 'messages') {
-          MessageListPanel({ composeToInit: entry.screen.composeTo })
-        } else if (entry.screen.type === 'notifications') {
-          NotificationPanel()
-        } else if (entry.screen.type === 'blacklist') {
-          BlacklistPanel()
-        } else if (entry.screen.type === 'notes') {
-          NotesPanel()
-        } else if (entry.screen.type === 'filterKeywords') {
-          FilterKeywordsPanel()
-        } else if (entry.screen.type === 'topicList') {
-          TopicListPanel({
-            boardFid: entry.screen.topicListFid,
-            boardName: entry.screen.topicListName,
-            isFavorites: entry.screen.topicListFavor === '1',
-            authorid: entry.screen.topicListAuthorid,
-            favor: entry.screen.topicListFavor,
-            searchpost: entry.screen.topicListSearchpost
-          })
-        } else if (entry.screen.type === 'profile') {
-          ProfilePanel({ uid: entry.screen.uid })
-        } else if (entry.screen.type === 'ttsSettings') {
-          TtsSettingsPanel()
-        } else if (entry.screen.type === 'settings') {
-          SettingsPanel()
-        } else if (entry.screen.type === 'aiSettings') {
-          AiSettingsPanel()
-        } else if (entry.screen.type === 'webview') {
-          WebViewPanel({ url: entry.screen.webviewUrl })
-        } else {
-          Stack() {
-            Column() {
-              Row().width('100%').height(44 + this.statusBarHeight)
+        Column() {
+          if (entry.screen.type === 'thread') {
+            ThreadPanel({
+              threadTid: entry.screen.tid,
+              threadPid: entry.screen.pid,
+              navEntryId: entry.id
+            })
+          } else if (entry.screen.type === 'browseHistory') {
+            BrowseHistoryPanel()
+          } else if (entry.screen.type === 'messages') {
+            MessageListPanel({ composeToInit: entry.screen.composeTo })
+          } else if (entry.screen.type === 'notifications') {
+            NotificationPanel()
+          } else if (entry.screen.type === 'blacklist') {
+            BlacklistPanel()
+          } else if (entry.screen.type === 'notes') {
+            NotesPanel()
+          } else if (entry.screen.type === 'filterKeywords') {
+            FilterKeywordsPanel()
+          } else if (entry.screen.type === 'topicList') {
+            TopicListPanel({
+              boardFid: entry.screen.topicListFid,
+              boardName: entry.screen.topicListName,
+              isFavorites: entry.screen.topicListFavor === '1',
+              authorid: entry.screen.topicListAuthorid,
+              favor: entry.screen.topicListFavor,
+              searchpost: entry.screen.topicListSearchpost
+            })
+          } else if (entry.screen.type === 'profile') {
+            ProfilePanel({ uid: entry.screen.uid })
+          } else if (entry.screen.type === 'ttsSettings') {
+            TtsSettingsPanel()
+          } else if (entry.screen.type === 'settings') {
+            SettingsPanel()
+          } else if (entry.screen.type === 'aiSettings') {
+            AiSettingsPanel()
+          } else if (entry.screen.type === 'fontSizeSettings') {
+            FontSizeSettingsPanel()
+          } else if (entry.screen.type === 'webview') {
+            WebViewPanel({ url: entry.screen.webviewUrl })
+          } else {
+            Stack() {
               Column() {
-                this.ContentBody(entry)
+                Row().width('100%').height(44 + this.statusBarHeight)
+                Column() {
+                  this.ContentBody(entry)
+                }
+                .layoutWeight(1).width('100%')
               }
-              .layoutWeight(1).width('100%')
+              .width('100%').height('100%')
+
+              PanelNavBar({ title: entry.screen.getTitle() })
+                .width('100%').position({ x: 0, y: 0 })
             }
             .width('100%').height('100%')
-
-            PanelNavBar({ title: entry.screen.getTitle() })
-              .width('100%').position({ x: 0, y: 0 })
           }
-          .width('100%').height('100%')
         }
+        .width('100%').height('100%')
+        .id(`activity_entry_${entry.id}`) // 【关键】给组件赋予唯一 ID，确保离场节点能保留并播放动画
+        .transition(
+          TransitionEffect.asymmetric(
+            // 进场动画
+            TransitionEffect.move(TransitionEdge.END)
+              .combine(TransitionEffect.OPACITY)
+              .animation({ duration: 450, curve: Curve.FastOutSlowIn }),
+            // 退场动画
+            TransitionEffect.move(TransitionEdge.END)
+              .combine(TransitionEffect.OPACITY)
+              .animation({ duration: 450, curve: Curve.FastOutSlowIn })
+          )
+        )
       }, (entry: NavEntry) => String(entry.id))
     }
     .width('100%').height('100%')

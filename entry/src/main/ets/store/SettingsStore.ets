@@ -25,6 +25,8 @@ import {
   KEY_ENABLE_IMAGE_SIZE_PREFETCH,
   KEY_VIDEO_MUTED,
   KEY_USE_INTERNAL_WEBVIEW,
+  KEY_CONTENT_FONT_SIZE,
+  KEY_TOPIC_FONT_SIZE,
 } from '../common/constants/AppStorageKeys'
 
 
@@ -121,6 +123,8 @@ export class SettingsStore extends BaseStore<SettingsState> {
     AppStorage.setOrCreate(KEY_ENABLE_IMAGE_SIZE_PREFETCH, this.state.enableImageSizePrefetch)
     AppStorage.setOrCreate(KEY_VIDEO_MUTED, this.state.videoMuted)
     AppStorage.setOrCreate(KEY_USE_INTERNAL_WEBVIEW, this.state.useInternalWebView)
+    AppStorage.setOrCreate(KEY_CONTENT_FONT_SIZE, this.state.fontSize)
+    AppStorage.setOrCreate(KEY_TOPIC_FONT_SIZE, this.state.topicFontSize)
   }
 
   // ============== 设置域 setter ==============
@@ -143,6 +147,7 @@ export class SettingsStore extends BaseStore<SettingsState> {
 
   // --- Display ---
   setFontSize(size: number): void { this.displaySettings.setFontSize(size) }
+  setTopicFontSize(size: number): void { this.displaySettings.setTopicFontSize(size) }
   setDomainIndex(index: number): void { this.displaySettings.setDomainIndex(index) }
   setHoldingHand(value: number): void { this.displaySettings.setHoldingHand(value) }
   setSmartGrip(enabled: boolean): void { this.displaySettings.setSmartGrip(enabled) }
