@@ -35,11 +35,11 @@ export struct BoardRouter {
             // 进场：从右侧滑入
             TransitionEffect.move(TransitionEdge.END)
               .combine(TransitionEffect.OPACITY)
-              .animation({ duration: 300, curve: Curve.FastOutSlowIn }),
+              .animation({ duration: 450, curve: Curve.FastOutSlowIn }),
             // 离场：向右侧滑出
             TransitionEffect.move(TransitionEdge.END)
               .combine(TransitionEffect.OPACITY)
-              .animation({ duration: 300, curve: Curve.FastOutSlowIn })
+              .animation({ duration: 450, curve: Curve.FastOutSlowIn })
           )
         )
       }

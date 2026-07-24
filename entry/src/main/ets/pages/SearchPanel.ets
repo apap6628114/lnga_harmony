@@ -316,7 +316,7 @@ export struct SearchPanel {
     Column() {
       Row() {
         Text(this.getTypeTags(Number(thread['type'] ?? 0)))
-          .fontSize(15).fontColor(AppColors.textTertiary)
+          .fontSize(15).lineHeight(22).fontColor(AppColors.textTertiary)
         Text(unescapeHtml(String(thread['subject'] ?? '')))
           .fontSize(15)
           .fontColor(this.getSubjectFontColor(String(thread['titleFont'] ?? '')))

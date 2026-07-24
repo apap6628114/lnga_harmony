@@ -86,11 +86,11 @@ export struct ActivityRouter {
             // 进场动画
             TransitionEffect.move(TransitionEdge.END)
               .combine(TransitionEffect.OPACITY)
-              .animation({ duration: 300, curve: Curve.FastOutSlowIn }),
+              .animation({ duration: 450, curve: Curve.FastOutSlowIn }),
             // 退场动画
             TransitionEffect.move(TransitionEdge.END)
               .combine(TransitionEffect.OPACITY)
-              .animation({ duration: 300, curve: Curve.FastOutSlowIn })
+              .animation({ duration: 450, curve: Curve.FastOutSlowIn })
           )
         )
       }, (entry: NavEntry) => String(entry.id))

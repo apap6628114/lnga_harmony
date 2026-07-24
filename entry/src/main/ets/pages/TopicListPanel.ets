@@ -557,7 +557,7 @@ struct TopicCardComponent {
     Column() {
       Row() {
         Text(getTypeTags(Number(this.thread['type'] ?? 0)))
-          .fontSize(15).fontColor(AppColors.textTertiary)
+          .fontSize(15).lineHeight(22).fontColor(AppColors.textTertiary)
         Text(unescapeHtml(String(this.thread['subject'] ?? '')))
           .fontSize(15).lineHeight(22)
           .fontColor(getSubjectFontColor(String(this.thread['titleFont'] ?? '')))
