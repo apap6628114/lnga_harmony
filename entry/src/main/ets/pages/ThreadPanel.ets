@@ -156,7 +156,6 @@ export struct ThreadPanel {
 
   aboutToDisappear(): void {
     this.stopHoldingHandMonitoring()
-    TtsPlayer.shutdown()
   }
 
   private onThreadChanged(): void {
@@ -662,6 +661,7 @@ export struct ThreadPanel {
                   prompt += '楼层：#' + p.lou.toString() + '  作者：' + p.author + '\n\n'
                   prompt += '【正文内容】\n'
                   prompt += plainText
+                  TtsPlayer.stop()
                   this.getUIContext().getRouter().pushUrl({
                     url: 'pages/ai/AiChatPage',
                     params: {
@@ -677,7 +677,7 @@ export struct ThreadPanel {
                     appStore.showToast('该楼层没有可朗读的内容')
                     return
                   }
-                  TtsPlayer.speak(plainText, p.pid)
+                  TtsPlayer.speak(plainText, p.pid, true)
                 },
                 isTopicAuthor: String(post.authorid) === this.threadAuthorId,
                 isOwnPost: appStore.auth.isAuthenticated && String(post.authorid) === appStore.auth.uid,

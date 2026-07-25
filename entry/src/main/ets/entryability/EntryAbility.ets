@@ -11,6 +11,7 @@ import {
   KEY_NAV_BAR_HEIGHT,
   KEY_CURRENT_BREAKPOINT,
 } from '../common/constants/AppStorageKeys';
+import { TtsPlayer } from '../common/media/TtsPlayer';
 
 const logger = new Logger(DOMAIN_APP, 'EntryAbility')
 
@@ -18,6 +19,8 @@ export default class EntryAbility extends UIAbility {
   private curBp: string = 'sm'
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    TtsPlayer.initialize(this.context)
+
     // 在 loadContent 前尽可能早地应用用户保存的主题，减少主题切换闪烁
     // 注意：此时 appStore 尚未 init，直接使用默认主题；appStore.init 完成后会通过 applyCurrentTheme 修正
     try {
@@ -57,6 +60,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    TtsPlayer.shutdown()
     logger.info( '%{public}s', 'Ability onDestroy');
   }
 

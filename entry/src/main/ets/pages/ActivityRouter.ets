@@ -16,11 +16,45 @@ import { TopicListPanel } from './TopicListPanel'
 import { WebViewPanel } from './WebViewPanel'
 import { AiSettingsPanel } from './ai/AiSettingsPanel'
 import { FontSizeSettingsPanel } from './FontSizeSettingsPanel'
+import { TtsPlayer } from '../common/media/TtsPlayer'
 
 @Component
 export struct ActivityRouter {
-  @Prop activityStack: NavEntry[] = []
+  @Prop @Watch('onActivityStackChanged') activityStack: NavEntry[] = []
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
+  /** 当前位于活动栈顶部的帖子条目标识。 */
+  private activeThreadEntryId: number = -1
+
+  /**
+   * 记录组件首次显示时的顶层帖子条目。
+   */
+  aboutToAppear(): void {
+    this.activeThreadEntryId = this.resolveActiveThreadEntryId()
+  }
+
+  /**
+   * 在顶层帖子被关闭、替换或覆盖时停止帖子朗读。
+   */
+  private onActivityStackChanged(): void {
+    const nextThreadEntryId: number = this.resolveActiveThreadEntryId()
+    if (this.activeThreadEntryId >= 0 && nextThreadEntryId !== this.activeThreadEntryId) {
+      TtsPlayer.stop()
+    }
+    this.activeThreadEntryId = nextThreadEntryId
+  }
+
+  /**
+   * 获取当前位于活动栈顶部的帖子条目标识。
+   *
+   * @returns 顶层是帖子时返回条目标识，否则返回 -1。
+   */
+  private resolveActiveThreadEntryId(): number {
+    if (this.activityStack.length === 0) {
+      return -1
+    }
+    const topEntry: NavEntry = this.activityStack[this.activityStack.length - 1]
+    return topEntry.screen.type === 'thread' ? topEntry.id : -1
+  }
 
   build() {
     Stack() {
