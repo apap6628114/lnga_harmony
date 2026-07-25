@@ -117,6 +117,9 @@ export class SettingsStore extends BaseStore<SettingsState> {
       this.checkinSettings.load(saved)
       this.aiSettings.load(saved)
       this.webSearchSettings.load(saved)
+      if (saved.useInternalWebView !== undefined) {
+        this.state.useInternalWebView = saved.useInternalWebView
+      }
     }
     AppStorage.setOrCreate(KEY_SHOW_SIGNATURE, this.state.showSignature)
     AppStorage.setOrCreate(KEY_IMAGE_LOAD_STRATEGY, this.state.imageLoadStrategy)
@@ -163,7 +166,7 @@ export class SettingsStore extends BaseStore<SettingsState> {
   setVideoMuted(enabled: boolean): void { this.mediaSettings.setVideoMuted(enabled) }
 
   // --- Internal WebView ---
-  /** 设置是否在应用内 WebView 打开无关联链接 */
+  /** 设置是否在没有可用 App Linking 应用时使用应用内 WebView */
   setUseInternalWebView(enabled: boolean): void {
     this.state.useInternalWebView = enabled
     AppStorage.setOrCreate(KEY_USE_INTERNAL_WEBVIEW, enabled)
