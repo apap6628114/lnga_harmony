@@ -22,6 +22,11 @@ import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/comp
 import { AnonymousName } from '../common/components/AnonymousName'
 import { TopicPaginationManager } from '../common/managers/TopicPaginationManager'
 import { Logger, DOMAIN_UI } from '../common/utils/Logger'
+import {
+  ReadingFontRole,
+  ReadingLineHeightRole,
+  ReadingTypography
+} from '../common/typography/ReadingTypography'
 
 const logger = new Logger(DOMAIN_UI, 'TopicListPanel')
 
@@ -557,15 +562,16 @@ struct TopicCardComponent {
     Column() {
       Row() {
         Text(getTypeTags(Number(this.thread['type'] ?? 0)))
-          .fontSize(this.topicFontSize).fontColor(AppColors.textTertiary)
+          .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.topicFontSize))
+          .fontColor(AppColors.textTertiary)
         Text(unescapeHtml(String(this.thread['subject'] ?? '')))
-          .fontSize(this.topicFontSize)
+          .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.topicFontSize))
           .fontColor(getSubjectFontColor(String(this.thread['titleFont'] ?? '')))
           .fontWeight(isSubjectBold(String(this.thread['titleFont'] ?? '')) ? FontWeight.Bold : FontWeight.Normal)
           .fontStyle(isSubjectItalic(String(this.thread['titleFont'] ?? '')) ? FontStyle.Italic : FontStyle.Normal)
           .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
         if (this.isFavorites) {
-          Text('✕').fontSize(this.topicFontSize + 1).fontColor(AppColors.textTertiary)
+          Image($r('app.media.icon_close')).width(16).height(16).fillColor(AppColors.textTertiary)
             .padding({ left: 8, right: 4 })
             .onClick(() => { this.onRemoveFav(Number(this.thread['tid'] ?? 0)) })
         }
@@ -573,7 +579,13 @@ struct TopicCardComponent {
 
       if (this.thread['previewSnippet']) {
         Text(unescapeHtml(String(this.thread['previewSnippet'] ?? '')))
-          .fontSize(this.topicFontSize - 2).fontColor(AppColors.textSecondary).maxLines(2).lineHeight(19)
+          .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.topicFontSize))
+          .fontColor(AppColors.textSecondary)
+          .maxLines(2)
+          .lineHeight(ReadingTypography.lineHeight(
+            ReadingLineHeightRole.TOPIC_SUMMARY,
+            ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.topicFontSize)
+          ))
           .textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 10 }).width('100%')
       }
 

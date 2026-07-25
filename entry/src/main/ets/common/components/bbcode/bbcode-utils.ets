@@ -1,4 +1,5 @@
 import { BBNode, BBNodeType } from '../../../model/BBCodeNode'
+import { ReadingFontRole, ReadingTypography } from '../../typography/ReadingTypography'
 
 /**
  * 判断 BBCode 节点类型是否为内联（inline）节点。
@@ -28,7 +29,7 @@ export function isInlineNode(type: BBNodeType): boolean {
  * @returns 缩放后的字号，最小 8
  */
 export function calcScaleSize(size: number, inQuote: boolean, baseFontSize: number = 15): number {
-  return Math.max(8, Math.round((inQuote ? (baseFontSize - 1) : baseFontSize) * size / 100))
+  return ReadingTypography.bbcodeFontSize(size, inQuote, baseFontSize)
 }
 
 /**
@@ -47,15 +48,6 @@ export function isInlineGroupBlank(nodes: BBNode[]): boolean {
   return true
 }
 
-/** 下标/上标相对基础字号的缩放比例 */
-export const SUB_SUP_SCALE: number = 0.7
-
-/** 下标相对基础字号的向上偏移比例 */
-export const SUB_OFFSET_RATIO: number = 0.3
-
-/** 上标相对基础字号的向上偏移比例 */
-export const SUP_OFFSET_RATIO: number = 0.35
-
 /**
  * 计算下标（subscript）文本的字号。
  *
@@ -63,7 +55,7 @@ export const SUP_OFFSET_RATIO: number = 0.35
  * @returns 下标字号
  */
 export function calcSubscriptSize(baseSize: number): number {
-  return Math.round(baseSize * SUB_SUP_SCALE)
+  return ReadingTypography.fontSize(ReadingFontRole.SUB_SUP, baseSize)
 }
 
 /**
@@ -73,7 +65,7 @@ export function calcSubscriptSize(baseSize: number): number {
  * @returns baselineOffset 像素值（负数表示向下）
  */
 export function calcSubscriptOffset(baseSize: number): number {
-  return -(baseSize * SUB_OFFSET_RATIO)
+  return ReadingTypography.subscriptOffset(baseSize)
 }
 
 /**
@@ -83,7 +75,7 @@ export function calcSubscriptOffset(baseSize: number): number {
  * @returns 上标字号
  */
 export function calcSuperscriptSize(baseSize: number): number {
-  return Math.round(baseSize * SUB_SUP_SCALE)
+  return ReadingTypography.fontSize(ReadingFontRole.SUB_SUP, baseSize)
 }
 
 /**
@@ -93,5 +85,5 @@ export function calcSuperscriptSize(baseSize: number): number {
  * @returns baselineOffset 像素值（正数表示向上）
  */
 export function calcSuperscriptOffset(baseSize: number): number {
-  return baseSize * SUP_OFFSET_RATIO
+  return ReadingTypography.superscriptOffset(baseSize)
 }

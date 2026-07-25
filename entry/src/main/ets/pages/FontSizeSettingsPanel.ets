@@ -3,6 +3,11 @@ import { AppColors } from '../common/constants/Constants'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { Avatar } from '../common/components/Avatar'
 import { AnonymousName } from '../common/components/AnonymousName'
+import {
+  ReadingFontRole,
+  ReadingLineHeightRole,
+  ReadingTypography
+} from '../common/typography/ReadingTypography'
 
 /**
  * 字体大小设置面板。
@@ -157,11 +162,31 @@ export struct FontSizeSettingsPanel {
             .decoration({ type: TextDecorationType.Underline, color: AppColors.primary })
           Span('和普通文字会保持真实帖子的排版比例。')
         }
-        .fontSize(this.currentContentFontSize)
+        .fontSize(ReadingTypography.fontSize(ReadingFontRole.CONTENT, this.currentContentFontSize))
         .fontColor(AppColors.textPrimary)
-        .lineHeight(26)
+        .lineHeight(ReadingTypography.lineHeight(
+          ReadingLineHeightRole.CONTENT,
+          ReadingTypography.fontSize(ReadingFontRole.CONTENT, this.currentContentFontSize)
+        ))
         .width('100%')
         .margin({ top: 12 })
+
+        Column() {
+          Text('引用内容会使用稍小字号，并保持适合当前字号的行距。')
+            .fontSize(ReadingTypography.fontSize(ReadingFontRole.QUOTE, this.currentContentFontSize))
+            .fontColor(AppColors.textSecondary)
+            .fontStyle(FontStyle.Italic)
+            .lineHeight(ReadingTypography.lineHeight(
+              ReadingLineHeightRole.QUOTE,
+              ReadingTypography.fontSize(ReadingFontRole.QUOTE, this.currentContentFontSize)
+            ))
+            .width('100%')
+        }
+        .width('100%')
+        .padding({ left: 12, top: 6, bottom: 6 })
+        .margin({ top: 6 })
+        .border({ width: { left: 2 }, color: { left: AppColors.quoteBorders[0] } })
+        .alignItems(HorizontalAlign.Start)
 
         Row() {
           Row() {
@@ -208,9 +233,11 @@ export struct FontSizeSettingsPanel {
 
       Column() {
         Row() {
-          Text('[讨论]').fontSize(this.currentTopicFontSize).fontColor(AppColors.textTertiary)
+          Text('[讨论]')
+            .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.currentTopicFontSize))
+            .fontColor(AppColors.textTertiary)
           Text('调整字体大小后，帖子列表会呈现这样的阅读效果')
-            .fontSize(this.currentTopicFontSize)
+            .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.currentTopicFontSize))
             .fontColor(AppColors.textPrimary)
             .maxLines(2)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -220,10 +247,13 @@ export struct FontSizeSettingsPanel {
         .alignItems(VerticalAlign.Top)
 
         Text('这是主题内容摘要，可以用来判断较长文本在当前字号下的行数与阅读密度。')
-          .fontSize(this.currentTopicFontSize - 2)
+          .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.currentTopicFontSize))
           .fontColor(AppColors.textSecondary)
           .maxLines(2)
-          .lineHeight(19)
+          .lineHeight(ReadingTypography.lineHeight(
+            ReadingLineHeightRole.TOPIC_SUMMARY,
+            ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.currentTopicFontSize)
+          ))
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .margin({ top: 10 })
           .width('100%')
