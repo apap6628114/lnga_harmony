@@ -21,6 +21,8 @@ export struct SettingsPanel {
   @StorageProp('themeName') themeName: string = 'light'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('aiConfigVersion') @Watch('onAiConfigVersionChange') aiConfigVersion: number = 0
+  /** 当前帖子内容字号，用于响应字体设置页的实时更新。 */
+  @StorageProp('contentFontSize') contentFontSize: number = 15
   @State cacheSizeText: string = ''
   @State clearingCache: boolean = false
   @State imageStrategyBadge: string = '始终加载'
@@ -475,7 +477,7 @@ export struct SettingsPanel {
 
               SettingPickerRow({
                 iconRes: $r('app.media.icon_text_fields'), iconColor: IconColors.textFields, label: '字体大小',
-                badgeText: `${appStore.settings.fontSize}`,
+                badgeText: `${this.contentFontSize}`,
                 onAction: () => {
                   routerStore.navigateActivity(Screen.fontSizeSettings())
                 }
