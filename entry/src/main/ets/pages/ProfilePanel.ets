@@ -1,6 +1,5 @@
 import { appStore } from '../store/AppStore'
 import { routerStore, Screen } from '../store/RouterStore'
-import { getNotifications } from '../service/api/MessageApi'
 import { checkin } from '../service/api/FavoriteApi'
 import { ProfileData, ReputationData } from '../model/User'
 import { AppColors, IconColors, BreakpointType } from '../common/constants/Constants'
@@ -15,7 +14,6 @@ import { SettingRow } from '../common/components/SettingRow'
 import { getCachedBBNodes, preWarmBatch } from '../parser/bbcode/BBCodeCache'
 import { BBCodeContentView } from '../common/components/BBCodeContentView'
 import { openImageViewer, handleForumLink } from '../common/utils/LinkUtils'
-import { KEY_UNREAD_NOTI_COUNT } from '../common/constants/AppStorageKeys'
 import { Context } from '@kit.AbilityKit'
 
 /**
@@ -35,8 +33,10 @@ export struct ProfilePanel {
   @State hasError: boolean = false
   @State errorMsg: string = ''
   @State profile: ProfileData | null = null
-  @State unreadNotifications: number = 0
-  @State unreadMessages: number = 0
+  /** 当前账号的未查看通知数量。 */
+  @StorageProp('unreadNotiCount') unreadNotifications: number = 0
+  /** 当前账号的未查看私信通知数量。 */
+  @StorageProp('unreadMessageCount') unreadMessages: number = 0
   @State checkinLoading: boolean = false
   @State checkinResult: string = ''
   noteDialogController?: CustomDialogController
@@ -76,9 +76,6 @@ export struct ProfilePanel {
       this.isLoading = false
     }
     appStore.ensureProfile(this.uid)
-    if (this.isOwnProfile) {
-      this.loadUnreadCount()
-    }
   }
 
   private onUidChange(): void {
@@ -96,9 +93,6 @@ export struct ProfilePanel {
       this.isLoading = false
     }
     appStore.ensureProfile(this.uid)
-    if (this.isOwnProfile) {
-      this.loadUnreadCount()
-    }
   }
 
   private onProfileVersionChange(): void {
@@ -108,24 +102,6 @@ export struct ProfilePanel {
       if (cached.sign) preWarmBatch([cached.sign])
       this.isLoading = false
       this.hasError = false
-    }
-  }
-
-  private async loadUnreadCount(): Promise<void> {
-    try {
-      const result = await getNotifications(appStore.auth.token)
-      if (result.ok && result.data) {
-        const notifications = result.data as import('../model/Notification').NotificationInfo[]
-        let unreadCount: number = 0
-        for (let i: number = 0; i < notifications.length; i++) {
-          if ((notifications[i] as import('../model/Notification').NotificationInfo).unread) {
-            unreadCount++
-          }
-        }
-        this.unreadNotifications = unreadCount
-        AppStorage.setOrCreate(KEY_UNREAD_NOTI_COUNT, this.unreadNotifications)
-      }
-    } catch (e) {
     }
   }
 

@@ -4,7 +4,6 @@
 
 import { appStore } from '../store/AppStore'
 import { routerStore, Screen } from '../store/RouterStore'
-import { getNotifications, clearNotifications } from '../service/api/MessageApi'
 import type { NotificationInfo, ReplyNotification, UpvoteNotification } from '../model/Notification'
 import { AppColors, NOTI_TYPE_MAP, getNotiIcon } from '../common/constants/Constants'
 import { formatTime, escHtml } from '../common/utils/Utils'
@@ -14,7 +13,6 @@ import { PanelNavBar } from '../common/components/PanelNavBar'
 import { Avatar } from '../common/components/Avatar'
 import { NotificationDataSource } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/components/PageStateView'
-import { KEY_UNREAD_NOTI_COUNT } from '../common/constants/AppStorageKeys'
 
 interface FilterMode {
   key: number
@@ -39,50 +37,62 @@ export struct NotificationPanel {
   @State clearing: boolean = false
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
+  /** 通知 Store 的页面刷新信号。 */
+  @StorageProp('notificationVersion') @Watch('onNotificationVersionChange') notificationVersion: number = 0
   private notificationsDataSource: NotificationDataSource = new NotificationDataSource()
   private scroller: Scroller = new Scroller()
+  /** 当前页面出现周期版本号。 */
+  private appearanceGeneration: number = 0
 
   aboutToAppear(): void {
-    const cached = appStore.getCachedNotifications() as NotificationInfo[]
-    if (cached.length > 0) {
-      this.notifications = cached
-      this.updateFilteredDataSource()
-    }
-    this.loadNotifications()
+    this.appearanceGeneration++
+    const currentGeneration: number = this.appearanceGeneration
+    this.syncFromStore()
+    appStore.markAllNotificationsSeen()
+    this.syncFromStore()
+    this.loadNotifications(currentGeneration)
   }
 
-  private async loadNotifications(): Promise<void> {
-    this.isLoading = true
+  /** 结束当前页面出现周期，使未完成的异步回调失效。 */
+  aboutToDisappear(): void {
+    this.appearanceGeneration++
+  }
+
+  /** 通知 Store 发布新版本时同步页面快照。 */
+  private onNotificationVersionChange(): void {
+    this.syncFromStore()
+  }
+
+  /** 从通知 Store 同步列表快照和懒加载数据源。 */
+  private syncFromStore(): void {
+    this.notifications = appStore.getCachedNotifications() as NotificationInfo[]
+    this.updateFilteredDataSource()
+  }
+
+  /**
+   * 刷新通知并仅在当前页面出现周期内更新查看状态。
+   *
+   * @param appearanceGeneration - 请求发起时的页面出现周期版本号
+   */
+  private async loadNotifications(appearanceGeneration: number = this.appearanceGeneration): Promise<void> {
+    this.isLoading = this.notifications.length === 0
     this.hasError = false
-    try {
-      const result = await getNotifications(appStore.auth.token)
-      if (result.ok) {
-        if (result.data.length > 0) {
-          // API 返回了新数据，更新缓存和 UI
-          this.notifications = result.data as NotificationInfo[]
-          this.updateFilteredDataSource()
-          appStore.updateCachedNotifications(result.data)
-        }
-        // API 返回空（已被轮询消费），保留先前加载的缓存数据
-      } else {
-        // API 失败时保留缓存
-        if (this.notifications.length > 0) {
-          appStore.showToast('刷新通知失败')
-        } else {
-          this.hasError = true
-          this.errorMsg = result.error || '加载失败'
-        }
-      }
-    } catch (e) {
+    const success: boolean = await appStore.refreshNotifications(true)
+    if (appearanceGeneration !== this.appearanceGeneration) {
+      return
+    }
+    this.syncFromStore()
+    appStore.markAllNotificationsSeen()
+    this.syncFromStore()
+    if (!success) {
       if (this.notifications.length > 0) {
         appStore.showToast('刷新通知失败')
       } else {
         this.hasError = true
-        this.errorMsg = (e as Error).message || '加载失败'
+        this.errorMsg = '加载失败'
       }
     }
     this.isLoading = false
-    AppStorage.setOrCreate(KEY_UNREAD_NOTI_COUNT, 0)
   }
 
   private getFilteredNotifications(): NotificationInfo[] {
@@ -105,13 +115,10 @@ export struct NotificationPanel {
   private async handleClearAll(): Promise<void> {
     if (this.clearing) return
     this.clearing = true
-    try {
-      await clearNotifications(appStore.auth.token)
-      this.notifications = []
-      this.notificationsDataSource.clear()
-      appStore.clearCachedNotifications()
-      AppStorage.setOrCreate(KEY_UNREAD_NOTI_COUNT, 0)
-    } catch (e) {
+    const success: boolean = await appStore.clearAllNotifications()
+    if (success) {
+      this.syncFromStore()
+    } else {
       appStore.showToast('清除失败')
     }
     this.clearing = false
@@ -197,7 +204,7 @@ export struct NotificationPanel {
                       Row() {
                         if (n.userName.length > 0) {
                           Text(unescapeHtml(n.userName)).fontSize(15).fontColor(AppColors.primary)
-                            .fontWeight(n.unread ? FontWeight.Bold : FontWeight.Normal)
+                            .fontWeight(n.seen ? FontWeight.Normal : FontWeight.Bold)
                           if (appStore.settingsStore.getNote(n.userId).length > 0) {
                             Text('(' + appStore.settingsStore.getNote(n.userId) + ')')
                               .fontSize(11).fontColor(AppColors.warning).margin({ left: 3 })
@@ -206,23 +213,23 @@ export struct NotificationPanel {
                         }
                         Text(escHtml(NOTI_TYPE_MAP[n.type] ? NOTI_TYPE_MAP[n.type].label : '通知'))
                           .fontSize(15).fontColor(AppColors.textSecondary)
-                          .fontWeight(n.unread ? FontWeight.Bold : FontWeight.Normal)
+                          .fontWeight(n.seen ? FontWeight.Normal : FontWeight.Bold)
                       }.layoutWeight(1)
                       Text(formatTime(Number(n.timeStamp))).fontSize(12).fontColor(AppColors.textTertiary)
-                        .fontWeight(n.unread ? FontWeight.Bold : FontWeight.Normal)
+                        .fontWeight(n.seen ? FontWeight.Normal : FontWeight.Bold)
                     }.width('100%').alignItems(VerticalAlign.Center)
                     if (n.title.length > 0) {
                       Text(unescapeHtml(n.title)).fontSize(14).fontColor(AppColors.textPrimary)
                         .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 4 })
                         .width('100%')
-                        .fontWeight(n.unread ? FontWeight.Bold : FontWeight.Normal)
+                        .fontWeight(n.seen ? FontWeight.Normal : FontWeight.Bold)
                     }
                   }.layoutWeight(1).alignItems(HorizontalAlign.Start)
                 }.width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
                 .alignItems(VerticalAlign.Center)
                 .onClick(() => this.handleNotificationClick(n))
               }
-            }, (n: NotificationInfo) => String(n.timeStamp) + String(n.userId))
+            }, (n: NotificationInfo) => n.notificationId)
           }
           .width('100%').layoutWeight(1)
           .divider({ strokeWidth: 0.5, color: AppColors.separator })
@@ -232,7 +239,7 @@ export struct NotificationPanel {
       }
       .width('100%').height('100%')
 
-      PanelNavBar({ title: '通知', rightLabel: '全部已读', rightLabelColor: this.clearing ? AppColors.textTertiary : AppColors.primary, onRightClick: (): void => { this.handleClearAll() } })
+      PanelNavBar({ title: '通知', rightLabel: '清空', rightLabelColor: this.clearing ? AppColors.textTertiary : AppColors.primary, onRightClick: (): void => { this.handleClearAll() } })
         .width('100%').position({ x: 0, y: 0 })
     }
     .width('100%').height('100%').backgroundColor(AppColors.bg)

@@ -123,7 +123,6 @@ export struct TopicListPanel {
     this.sortMode = 'latest'
     this.showSort = !this.authorid && !this.favor
     this.loadTopics(1)
-    appStore.refreshUnreadCount()
   }
 
   private buildTopicParams(page: number): TopicListParams {

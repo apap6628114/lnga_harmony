@@ -35,6 +35,10 @@ class AppStoreClass {
   private store: PreferencesStore = new PreferencesStore()
   private writeQueue: SerialQueue = new SerialQueue()
   private context?: Context
+  /** AppStore 及用户相关 Store 是否完成初始化。 */
+  private initialized: boolean = false
+  /** AppStore 初始化流程是否已经结束。 */
+  private initializationFinished: boolean = false
 
   // ---------- Sub Stores ----------
   readonly authStore: AuthStore = new AuthStore()
@@ -49,6 +53,8 @@ class AppStoreClass {
   // ============== Init & Lifecycle ==============
 
   async init(context: Context): Promise<void> {
+    this.initialized = false
+    this.initializationFinished = false
     try {
       this.context = context
       await this.store.init(context, 'nga_app_store')
@@ -66,11 +72,25 @@ class AppStoreClass {
         await this.loadUserData()
       }
       this.settingsStore.applyCurrentTheme()
+      this.initialized = true
 
       logger.info('AppStore initialized')
     } catch (e) {
       logger.error('AppStore init failed: %{public}s', formatError(e))
+      throw new Error(formatError(e))
+    } finally {
+      this.initializationFinished = true
     }
+  }
+
+  /** 返回 AppStore 及全部用户 Store 是否完成初始化。 */
+  get isInitialized(): boolean {
+    return this.initialized
+  }
+
+  /** 返回 AppStore 初始化流程是否已经成功或失败地结束。 */
+  get isInitializationFinished(): boolean {
+    return this.initializationFinished
   }
 
   private async loadUserData(): Promise<void> {
@@ -175,10 +195,23 @@ class AppStoreClass {
     return this.notificationStore.unreadNotiCount
   }
 
+  /** 返回未查看私信通知数量。 */
+  get unreadMessageCount(): number {
+    return this.notificationStore.unreadMessageCount
+  }
+
   refreshUnreadCount(): Promise<void> { return this.notificationStore.refreshUnreadCount() }
+  /** 刷新通知并返回请求是否成功。 */
+  refreshNotifications(force: boolean = false): Promise<boolean> {
+    return this.notificationStore.refreshNotifications(force)
+  }
   getCachedNotifications(): NgaNotification[] { return this.notificationStore.getCachedNotifications() }
-  updateCachedNotifications(data: NgaNotification[]): void { this.notificationStore.updateCachedNotifications(data) }
-  clearCachedNotifications(): void { this.notificationStore.clearCachedNotifications() }
+  /** 将全部通知标记为已查看。 */
+  markAllNotificationsSeen(): void { this.notificationStore.markAllSeen() }
+  /** 将私信通知标记为已查看。 */
+  markMessageNotificationsSeen(): void { this.notificationStore.markMessagesSeen() }
+  /** 清空服务端与本地通知。 */
+  clearAllNotifications(): Promise<boolean> { return this.notificationStore.clearAllNotifications() }
 
   // ---------- Facade: Vote ----------
 

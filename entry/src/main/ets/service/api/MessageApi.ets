@@ -9,6 +9,7 @@ import { parseMessageList, parseMessageDetail } from '../../parser/MessageParser
 import { parseNgaError } from '../../parser/ErrorParser';
 import { ApiResult, NotificationsResult } from '../../model/NgaApiResults';
 import { MessageListResult, MessageDetailResult, MessageSendResult } from '../../model/MessageResult';
+import type { NotificationParseResult } from '../../model/Notification';
 
 // ============== 通知 ==============
 
@@ -24,7 +25,15 @@ export async function getNotifications(token: string): Promise<NotificationsResu
       '__lib': 'noti', '__output': '8', '__act': 'get_all',
     };
     const raw = await ngaClient.get('/nuke.php', params, { uid: session.uid, cid: session.cid });
-    result.data = parseNotifications(raw as object);
+    const parsed: NotificationParseResult = parseNotifications(raw as object);
+    if (!parsed.valid) {
+      result.error = '通知数据格式异常';
+      return result;
+    }
+    result.data = parsed.items;
+    result.malformedCount = parsed.malformedCount;
+    result.unsupportedCount = parsed.unsupportedCount;
+    result.serverUnreadHint = parsed.serverUnreadHint;
     result.ok = true;
   } catch (e) {
     result.error = (e as Error).message ?? '获取通知失败';

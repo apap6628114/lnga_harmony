@@ -70,7 +70,14 @@ export class TopicListResult extends ApiResult {
  * 通知列表结果。
  */
 export class NotificationsResult extends ApiResult {
+  /** 成功解析的通知。 */
   data: NgaNotification[] = [];
+  /** 结构损坏的通知记录数量。 */
+  malformedCount: number = 0;
+  /** 暂不支持的通知类型数量。 */
+  unsupportedCount: number = 0;
+  /** 服务端未读提示，仅用于诊断。 */
+  serverUnreadHint: number = 0;
 }
 
 /**

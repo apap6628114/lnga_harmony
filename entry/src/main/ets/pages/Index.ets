@@ -15,35 +15,47 @@ const logger = new Logger(DOMAIN_UI, 'IndexPage')
 @Component
 struct Index {
   @StorageProp('themeName') themeName: string = 'original'
+  /** AppStore 初始化是否失败。 */
+  @State initializationFailed: boolean = false
 
   aboutToAppear(): void {
     this.waitAndRoute()
   }
 
   private async waitAndRoute(): Promise<void> {
-    if (appStore.auth.initialized) {
-      if (appStore.auth.isAuthenticated) {
-        const valid = await verifyToken(appStore.auth.token)
-        if (valid) {
-          try { this.getUIContext().getRouter().replaceUrl({ url: 'pages/MainPage' }) } catch (e) { logger.error('route to MainPage failed: %{public}s', (e as Error).message) }
-        } else {
-          appStore.clearAuth()
-          try { this.getUIContext().getRouter().replaceUrl({ url: 'pages/LoginPage' }) } catch (e) { logger.error('route to LoginPage failed: %{public}s', (e as Error).message) }
-        }
+    if (!appStore.isInitializationFinished) {
+      setTimeout(() => this.waitAndRoute(), 50)
+      return
+    }
+    if (!appStore.isInitialized || !appStore.auth.initialized) {
+      this.initializationFailed = true
+      return
+    }
+    if (appStore.auth.isAuthenticated) {
+      const valid = await verifyToken(appStore.auth.token)
+      if (valid) {
+        try { this.getUIContext().getRouter().replaceUrl({ url: 'pages/MainPage' }) } catch (e) { logger.error('route to MainPage failed: %{public}s', (e as Error).message) }
       } else {
+        appStore.clearAuth()
         try { this.getUIContext().getRouter().replaceUrl({ url: 'pages/LoginPage' }) } catch (e) { logger.error('route to LoginPage failed: %{public}s', (e as Error).message) }
       }
     } else {
-      setTimeout(() => this.waitAndRoute(), 50)
+      try { this.getUIContext().getRouter().replaceUrl({ url: 'pages/LoginPage' }) } catch (e) { logger.error('route to LoginPage failed: %{public}s', (e as Error).message) }
     }
   }
 
   build() {
     Column() {
-      LoadingProgress()
-        .width(40)
-        .height(40)
-        .color(AppColors.primary)
+      if (this.initializationFailed) {
+        Text('应用初始化失败，请重新启动')
+          .fontSize(15)
+          .fontColor(AppColors.textSecondary)
+      } else {
+        LoadingProgress()
+          .width(40)
+          .height(40)
+          .color(AppColors.primary)
+      }
     }
     .width('100%')
     .height('100%')

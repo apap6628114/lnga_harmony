@@ -30,30 +30,71 @@ export struct MessageListPanel {
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
   private threadsDataSource: MessageThreadDataSource = new MessageThreadDataSource()
+  /** 当前页面出现周期版本号。 */
+  private appearanceGeneration: number = 0
 
   aboutToAppear(): void {
+    this.appearanceGeneration++
+    const currentGeneration: number = this.appearanceGeneration
     if (this.composeToInit.length > 0) {
       this.composeTo = this.composeToInit
       this.showCompose = true
     }
-    this.loadMessages()
+    this.loadMessages(currentGeneration)
   }
 
-  private async loadMessages(): Promise<void> {
+  /** 结束当前页面出现周期，使未完成的异步回调失效。 */
+  aboutToDisappear(): void {
+    this.appearanceGeneration++
+  }
+
+  /**
+   * 在消息列表成功显示后刷新私信通知并标记为已查看。
+   *
+   * @param appearanceGeneration - 消息列表成功时的页面出现周期版本号
+   */
+  private async syncMessageNotificationState(appearanceGeneration: number): Promise<void> {
+    if (appearanceGeneration !== this.appearanceGeneration) {
+      return
+    }
+    appStore.markMessageNotificationsSeen()
+    await appStore.refreshNotifications(true)
+    if (appearanceGeneration !== this.appearanceGeneration) {
+      return
+    }
+    appStore.markMessageNotificationsSeen()
+  }
+
+  /**
+   * 加载私信列表，并仅在当前页面出现周期内更新界面和通知状态。
+   *
+   * @param appearanceGeneration - 请求发起时的页面出现周期版本号
+   */
+  private async loadMessages(appearanceGeneration: number = this.appearanceGeneration): Promise<void> {
     this.isLoading = true
     this.hasError = false
     try {
       const result: MessageListResult = await getMessageList(appStore.auth.token, '1')
+      if (appearanceGeneration !== this.appearanceGeneration) {
+        return
+      }
       if (result.ok && result.data) {
         this.threads = result.data.messageEntryList
         this.threadsDataSource.replaceAll(this.threads)
+        this.isLoading = false
+        await this.syncMessageNotificationState(appearanceGeneration)
+        return
       } else {
         this.hasError = true
       }
     } catch (e) {
-      this.hasError = true
+      if (appearanceGeneration === this.appearanceGeneration) {
+        this.hasError = true
+      }
     }
-    this.isLoading = false
+    if (appearanceGeneration === this.appearanceGeneration) {
+      this.isLoading = false
+    }
   }
 
   private async handleSend(): Promise<void> {

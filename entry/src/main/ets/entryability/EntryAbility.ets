@@ -33,6 +33,9 @@ export default class EntryAbility extends UIAbility {
     appStore.init(this.context)
       .then(() => {
         logger.info( 'AppStore initialized');
+        if (appStore.isInitialized && appStore.auth.isAuthenticated) {
+          appStore.refreshNotifications(false);
+        }
       })
       .catch((e: Error) => {
         logger.error( 'AppStore init failed: %{public}s', formatError(e));
@@ -97,8 +100,10 @@ export default class EntryAbility extends UIAbility {
   }
 
   onForeground(): void {
-    appStore.autoCheckinIfNeeded();
-    appStore.refreshUnreadCount();
+    if (appStore.isInitialized) {
+      appStore.autoCheckinIfNeeded();
+      appStore.refreshNotifications(false);
+    }
     logger.info( '%{public}s', 'Ability onForeground');
   }
 
