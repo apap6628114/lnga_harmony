@@ -3,6 +3,49 @@ import { textToSpeech } from '@kit.CoreSpeechKit'
 import { DOMAIN_MEDIA, formatError, Logger } from '../utils/Logger'
 
 const logger: Logger = new Logger(DOMAIN_MEDIA, 'TtsPcmRenderer')
+const MAX_BUFFERED_PCM_BYTES: number = 64 * 1024 * 1024
+
+/**
+ * PCM 数据加入完整朗读缓冲区的结果。
+ */
+export enum TtsPcmEnqueueResult {
+  /** 数据已经加入当前任务。 */
+  ACCEPTED = 0,
+  /** 数据不属于当前播放任务。 */
+  INACTIVE = 1,
+  /** 数据会使完整朗读缓冲区超过内存上限。 */
+  LIMIT_EXCEEDED = 2
+}
+
+/**
+ * 计算 PCM 音频的实际声道数。
+ *
+ * @param channelCount TTS 返回的声道数。
+ * @returns PCM 数据的实际声道数。
+ */
+function resolveChannelCount(channelCount: number): number {
+  return channelCount === 2 ? 2 : 1
+}
+
+/**
+ * 根据 PCM 格式和数据量计算音频时长。
+ *
+ * @param response TTS 音频参数。
+ * @param bufferedBytes PCM 数据总字节数。
+ * @returns 音频时长，单位为毫秒。
+ */
+function resolveDurationMs(
+  response: textToSpeech.StartResponse,
+  bufferedBytes: number
+): number {
+  const bytesPerSample: number = response.sampleBit / 8
+  const bytesPerSecond: number =
+    response.sampleRate * resolveChannelCount(response.audioChannel) * bytesPerSample
+  if (bytesPerSecond <= 0) {
+    return 0
+  }
+  return Math.floor(bufferedBytes * 1000 / bytesPerSecond)
+}
 
 /**
  * 将 TTS 返回的采样率转换为 AudioRenderer 支持的枚举值。
@@ -101,6 +144,12 @@ export class TtsPcmRenderer {
   private bufferedBytes: number = 0
   /** 当前正在播放的音频渲染器。 */
   private renderer: audio.AudioRenderer | null = null
+  /** 当前渲染器是否正处于业务暂停状态。 */
+  private playbackPaused: boolean = false
+  /** 暂停期间阻止继续写入 PCM 数据的等待任务。 */
+  private resumeSignal: Promise<void> | null = null
+  /** 恢复播放时唤醒 PCM 写入任务的回调。 */
+  private resumeResolver: (() => void) | null = null
 
   /**
    * 开始接收一次完整朗读任务的 PCM 数据。
@@ -111,6 +160,7 @@ export class TtsPcmRenderer {
     this.stop()
     this.generation = generation
     this.bufferedBytes = 0
+    this.playbackPaused = false
   }
 
   /**
@@ -139,32 +189,40 @@ export class TtsPcmRenderer {
    *
    * @param buffer PCM 数据。
    * @param generation 当前播放代次。
-   * @returns 数据是否已加入当前任务。
+   * @returns PCM 数据加入缓冲区的结果。
    */
-  enqueue(buffer: ArrayBuffer, generation: number): boolean {
+  enqueue(buffer: ArrayBuffer, generation: number): TtsPcmEnqueueResult {
     if (generation !== this.generation) {
-      return false
+      return TtsPcmEnqueueResult.INACTIVE
     }
     if (buffer.byteLength > 0) {
+      if (this.bufferedBytes + buffer.byteLength > MAX_BUFFERED_PCM_BYTES) {
+        return TtsPcmEnqueueResult.LIMIT_EXCEEDED
+      }
       this.buffers.push(buffer.slice(0))
       this.bufferedBytes += buffer.byteLength
     }
-    return true
+    return TtsPcmEnqueueResult.ACCEPTED
   }
 
   /**
    * 播放已经完整合成的 PCM 数据并释放渲染器。
    *
    * @param generation 当前播放代次。
+   * @param onStarted 音频渲染器启动后的异步回调。
    * @returns 当前任务是否完整播放。
    */
-  async complete(generation: number): Promise<boolean> {
+  async complete(
+    generation: number,
+    onStarted: (durationMs: number) => Promise<void>
+  ): Promise<boolean> {
     const response: textToSpeech.StartResponse | null = this.startResponse
     if (generation !== this.generation || response === null) {
       return false
     }
     const buffers: ArrayBuffer[] = this.buffers
     const bufferedBytes: number = this.bufferedBytes
+    const durationMs: number = resolveDurationMs(response, bufferedBytes)
     this.buffers = []
     this.bufferedBytes = 0
     if (buffers.length === 0) {
@@ -185,6 +243,7 @@ export class TtsPcmRenderer {
         return false
       }
       this.renderer = renderer
+      this.playbackPaused = false
       logger.info(
         'TTS PCM renderer started: %{public}dHz/%{public}dbit, channel code %{public}d, bytes: %{public}d',
         response.sampleRate,
@@ -192,6 +251,10 @@ export class TtsPcmRenderer {
         response.audioChannel,
         bufferedBytes
       )
+      await onStarted(durationMs)
+      if (generation !== this.generation) {
+        return false
+      }
       for (let index: number = 0; index < buffers.length; index++) {
         if (generation !== this.generation) {
           return false
@@ -202,7 +265,7 @@ export class TtsPcmRenderer {
       if (generation !== this.generation) {
         return false
       }
-      await renderer.drain()
+      await this.drainWhenResumed(renderer, generation)
       return generation === this.generation
     } finally {
       if (renderer !== null && this.renderer === renderer) {
@@ -214,8 +277,58 @@ export class TtsPcmRenderer {
         this.startResponse = null
         this.buffers = []
         this.bufferedBytes = 0
+        this.playbackPaused = false
+        this.releaseResumeSignal()
       }
     }
+  }
+
+  /**
+   * 暂停当前 PCM 播放。
+   *
+   * @returns 是否已经处于暂停状态。
+   */
+  async pause(): Promise<boolean> {
+    const renderer: audio.AudioRenderer | null = this.renderer
+    const generation: number = this.generation
+    if (renderer === null || generation < 0) {
+      return false
+    }
+    if (this.playbackPaused) {
+      return true
+    }
+    this.playbackPaused = true
+    this.ensureResumeSignal()
+    try {
+      await renderer.pause()
+      return generation === this.generation && this.renderer === renderer
+    } catch (error) {
+      if (generation === this.generation && this.renderer === renderer) {
+        this.playbackPaused = false
+        this.releaseResumeSignal()
+      }
+      throw new Error(formatError(error))
+    }
+  }
+
+  /**
+   * 恢复当前 PCM 播放。
+   *
+   * @returns 是否已经恢复播放。
+   */
+  async resume(): Promise<boolean> {
+    const renderer: audio.AudioRenderer | null = this.renderer
+    const generation: number = this.generation
+    if (renderer === null || generation < 0 || !this.playbackPaused) {
+      return false
+    }
+    await renderer.start()
+    if (generation !== this.generation || this.renderer !== renderer) {
+      return false
+    }
+    this.playbackPaused = false
+    this.releaseResumeSignal()
+    return true
   }
 
   /**
@@ -228,6 +341,8 @@ export class TtsPcmRenderer {
     this.buffers = []
     this.bufferedBytes = 0
     this.renderer = null
+    this.playbackPaused = false
+    this.releaseResumeSignal()
     if (renderer !== null) {
       this.releaseRenderer(renderer).catch((error: Object): void => {
         logger.warn('Release stopped TTS AudioRenderer failed: %{public}s', formatError(error))
@@ -259,7 +374,7 @@ export class TtsPcmRenderer {
         encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW
       },
       rendererInfo: {
-        usage: audio.StreamUsage.STREAM_USAGE_VOICE_ASSISTANT,
+        usage: audio.StreamUsage.STREAM_USAGE_AUDIOBOOK,
         rendererFlags: 0
       }
     }
@@ -280,12 +395,94 @@ export class TtsPcmRenderer {
   ): Promise<void> {
     let offset: number = 0
     while (offset < buffer.byteLength && generation === this.generation) {
+      if (!await this.waitUntilResumed(generation)) {
+        return
+      }
       const remaining: ArrayBuffer = offset === 0 ? buffer : buffer.slice(offset)
-      const written: number = await renderer.write(remaining)
+      let written: number = 0
+      try {
+        written = await renderer.write(remaining)
+      } catch (error) {
+        if (this.playbackPaused && generation === this.generation) {
+          continue
+        }
+        throw new Error(formatError(error))
+      }
       if (written <= 0) {
+        if (this.playbackPaused && generation === this.generation) {
+          continue
+        }
         throw new Error('AudioRenderer did not consume PCM data')
       }
       offset += written
+    }
+  }
+
+  /**
+   * 在业务暂停期间等待恢复命令。
+   *
+   * @param generation 当前播放代次。
+   * @returns 当前任务是否仍可继续写入。
+   */
+  private async waitUntilResumed(generation: number): Promise<boolean> {
+    while (this.playbackPaused && generation === this.generation) {
+      const signal: Promise<void> = this.ensureResumeSignal()
+      await signal
+    }
+    return generation === this.generation
+  }
+
+  /**
+   * 在播放状态下等待渲染器排空，暂停造成的状态切换不会被视为播放错误。
+   *
+   * @param renderer 当前音频渲染器。
+   * @param generation 当前播放代次。
+   */
+  private async drainWhenResumed(
+    renderer: audio.AudioRenderer,
+    generation: number
+  ): Promise<void> {
+    while (generation === this.generation) {
+      if (!await this.waitUntilResumed(generation)) {
+        return
+      }
+      try {
+        await renderer.drain()
+        return
+      } catch (error) {
+        if (!this.playbackPaused || generation !== this.generation) {
+          throw new Error(formatError(error))
+        }
+      }
+    }
+  }
+
+  /**
+   * 创建或获取当前暂停周期的恢复信号。
+   *
+   * @returns 当前暂停周期的恢复信号。
+   */
+  private ensureResumeSignal(): Promise<void> {
+    const currentSignal: Promise<void> | null = this.resumeSignal
+    if (currentSignal !== null) {
+      return currentSignal
+    }
+    const signal: Promise<void> = new Promise<void>((resolve: () => void): void => {
+      this.resumeResolver = resolve
+    })
+    this.resumeSignal = signal
+    return signal
+  }
+
+  /**
+   * 释放当前暂停周期的恢复信号。
+   */
+  private releaseResumeSignal(): void {
+    const resolver: (() => void) | null = this.resumeResolver
+    this.resumeResolver = null
+    this.resumeSignal = null
+    if (resolver !== null) {
+      resolver()
     }
   }
 

@@ -2,8 +2,12 @@ import { common } from '@kit.AbilityKit'
 import { BusinessError } from '@kit.BasicServicesKit'
 import { textToSpeech } from '@kit.CoreSpeechKit'
 import { appStore } from '../../store/AppStore'
+import {
+  TtsAvSessionController,
+  TtsMediaMetadata
+} from './TtsAvSessionController'
 import { TtsBackgroundTaskController } from './TtsBackgroundTaskController'
-import { TtsPcmRenderer } from './TtsPcmRenderer'
+import { TtsPcmEnqueueResult, TtsPcmRenderer } from './TtsPcmRenderer'
 import { DOMAIN_MEDIA, formatError, Logger } from '../utils/Logger'
 
 const MAX_CHUNK_LEN: number = 10000
@@ -124,13 +128,32 @@ class TtsPlaybackCoordinator {
   private startToastGeneration: number = -1
   /** TTS PCM 数据缓冲与播放组件。 */
   private readonly pcmRenderer: TtsPcmRenderer = new TtsPcmRenderer()
+  /** 系统媒体播控会话控制器。 */
+  private readonly avSessionController: TtsAvSessionController
   /** 音频播放长时任务控制器。 */
   private readonly backgroundTaskController: TtsBackgroundTaskController
+  /** 串行化播放、暂停操作的任务链。 */
+  private playbackControlOperation: Promise<void> = Promise.resolve()
+  /** 用户或系统当前是否期望朗读保持暂停。 */
+  private playbackPauseRequested: boolean = false
+  /** 当前任务是否已经创建并启动 PCM 渲染器。 */
+  private pcmPlaybackStarted: boolean = false
 
   /**
    * 创建 TTS 播放协调器。
    */
   constructor() {
+    this.avSessionController = new TtsAvSessionController({
+      onPlay: (): void => {
+        this.resume()
+      },
+      onPause: (): void => {
+        this.pause()
+      },
+      onStop: (): void => {
+        this.stop()
+      }
+    })
     this.backgroundTaskController = new TtsBackgroundTaskController((): void => {
       this.handleBackgroundTaskCancelled()
     })
@@ -142,6 +165,7 @@ class TtsPlaybackCoordinator {
    * @param context UIAbility 上下文。
    */
   initialize(context: common.UIAbilityContext): void {
+    this.avSessionController.initialize(context)
     this.backgroundTaskController.initialize(context)
   }
 
@@ -151,8 +175,14 @@ class TtsPlaybackCoordinator {
    * @param text 待朗读文本。
    * @param pid 楼层标识。
    * @param allowBackground 是否允许熄屏或切后台继续朗读。
+   * @param metadata 系统播控中心展示的媒体信息。
    */
-  speak(text: string, pid: number, allowBackground: boolean): void {
+  speak(
+    text: string,
+    pid: number,
+    allowBackground: boolean,
+    metadata?: TtsMediaMetadata
+  ): void {
     if (this.speakingPid === pid) {
       this.stopInternal()
       return
@@ -170,6 +200,11 @@ class TtsPlaybackCoordinator {
     this.backgroundPlaybackEnabled = allowBackground
     this.pendingChunks = splitText(normalizedText)
     this.chunkIndex = 0
+    this.playbackPauseRequested = false
+    this.pcmPlaybackStarted = false
+    if (allowBackground) {
+      this.avSessionController.start(this.resolveMediaMetadata(pid, metadata))
+    }
     const generation: number = this.playbackGeneration
     if (this.engine === null) {
       this.initializeEngine(generation)
@@ -196,11 +231,32 @@ class TtsPlaybackCoordinator {
   }
 
   /**
+   * 暂停当前正在输出的朗读声音。
+   */
+  pause(): void {
+    const generation: number = this.playbackGeneration
+    this.enqueuePlaybackControl(async (): Promise<void> => {
+      await this.pauseInternal(generation)
+    })
+  }
+
+  /**
+   * 恢复当前暂停的朗读声音。
+   */
+  resume(): void {
+    const generation: number = this.playbackGeneration
+    this.enqueuePlaybackControl(async (): Promise<void> => {
+      await this.resumeInternal(generation)
+    })
+  }
+
+  /**
    * 停止朗读并释放所有 Ability 级资源。
    */
   shutdown(): void {
     this.stopInternal()
     this.releaseEngine()
+    this.avSessionController.shutdown()
     this.backgroundTaskController.shutdown()
   }
 
@@ -526,7 +582,15 @@ class TtsPlaybackCoordinator {
       return
     }
     const generation: number = this.playbackGeneration
-    if (!this.pcmRenderer.enqueue(pcmData, generation)) {
+    const enqueueResult: TtsPcmEnqueueResult =
+      this.pcmRenderer.enqueue(pcmData, generation)
+    if (enqueueResult === TtsPcmEnqueueResult.LIMIT_EXCEEDED) {
+      this.handlePcmRendererError(
+        generation,
+        new Error('TTS PCM buffer exceeded the 64 MiB safety limit'),
+        '朗读内容过长，已停止以避免占用过多内存'
+      )
+    } else if (enqueueResult === TtsPcmEnqueueResult.INACTIVE) {
       this.handlePcmRendererError(
         generation,
         new Error('TTS PCM data arrived outside the active playback')
@@ -563,12 +627,59 @@ class TtsPlaybackCoordinator {
    * @param generation 当前朗读任务代次。
    */
   private playBufferedAudio(generation: number): void {
-    this.pcmRenderer.complete(generation).then((completed: boolean): void => {
+    this.pcmRenderer.complete(generation, async (durationMs: number): Promise<void> => {
+      await this.handlePcmPlaybackStarted(generation, durationMs)
+    }).then((completed: boolean): void => {
       if (completed && this.isActivePlayback(generation)) {
-        this.finishPlayback()
+        this.finishPlayback(true)
       }
     }).catch((error: Object): void => {
       this.handlePcmRendererError(generation, error)
+    })
+  }
+
+  /**
+   * 同步 PCM 渲染器启动后的期望播放状态。
+   *
+   * @param generation 当前朗读任务代次。
+   * @param durationMs 当前媒体总时长，单位为毫秒。
+   */
+  private async handlePcmPlaybackStarted(
+    generation: number,
+    durationMs: number
+  ): Promise<void> {
+    if (!this.isActivePlayback(generation)) {
+      return
+    }
+    this.pcmPlaybackStarted = true
+    await this.enqueuePlaybackControl(async (): Promise<void> => {
+      if (!this.isActivePlayback(generation)) {
+        return
+      }
+      if (this.playbackPauseRequested) {
+        let paused: boolean = false
+        try {
+          paused = await this.pcmRenderer.pause()
+        } catch (error) {
+          logger.warn('Apply pending TTS pause failed: %{public}s', formatError(error))
+        }
+        if (!this.isActivePlayback(generation)) {
+          return
+        }
+        if (!paused) {
+          this.stopInternal()
+          appStore.showToast('暂停失败，朗读已停止')
+          return
+        }
+        if (this.backgroundPlaybackEnabled) {
+          this.avSessionController.setPaused(durationMs)
+          this.backgroundTaskController.stop()
+        }
+        return
+      }
+      if (this.backgroundPlaybackEnabled) {
+        this.avSessionController.setPlaying(durationMs)
+      }
     })
   }
 
@@ -577,8 +688,13 @@ class TtsPlaybackCoordinator {
    *
    * @param generation 出错的朗读任务代次。
    * @param error 错误对象。
+   * @param toastMessage 面向用户展示的错误信息。
    */
-  private handlePcmRendererError(generation: number, error: Object): void {
+  private handlePcmRendererError(
+    generation: number,
+    error: Object,
+    toastMessage: string = '朗读出错'
+  ): void {
     if (!this.isActivePlayback(generation)) {
       return
     }
@@ -592,7 +708,7 @@ class TtsPlaybackCoordinator {
     } catch (stopError) {
       logger.warn('Stop TTS after PCM playback error failed: %{public}s', formatError(stopError))
     }
-    appStore.showToast('朗读出错')
+    appStore.showToast(toastMessage)
   }
 
   /**
@@ -626,9 +742,136 @@ class TtsPlaybackCoordinator {
   }
 
   /**
-   * 清理当前朗读状态并释放长时任务。
+   * 将播放控制操作加入串行队列。
+   *
+   * @param task 待执行的播放控制操作。
+   * @returns 当前播放控制任务链。
    */
-  private finishPlayback(): void {
+  private enqueuePlaybackControl(task: () => Promise<void>): Promise<void> {
+    this.playbackControlOperation =
+      this.playbackControlOperation.then(task).catch((error: Object): void => {
+        logger.warn('Control TTS PCM playback failed: %{public}s', formatError(error))
+      })
+    return this.playbackControlOperation
+  }
+
+  /**
+   * 暂停当前代次的 PCM 播放并释放长时任务。
+   *
+   * @param generation 当前朗读任务代次。
+   */
+  private async pauseInternal(generation: number): Promise<void> {
+    if (!this.isActivePlayback(generation)) {
+      return
+    }
+    this.playbackPauseRequested = true
+    let paused: boolean = false
+    try {
+      paused = await this.pcmRenderer.pause()
+    } catch (error) {
+      if (this.isActivePlayback(generation)) {
+        this.playbackPauseRequested = false
+      }
+      throw new Error(formatError(error))
+    }
+    if (!this.isActivePlayback(generation)) {
+      return
+    }
+    if (this.pcmPlaybackStarted && !paused) {
+      this.playbackPauseRequested = false
+      return
+    }
+    if (this.backgroundPlaybackEnabled) {
+      this.avSessionController.setPaused()
+      this.backgroundTaskController.stop()
+    }
+  }
+
+  /**
+   * 重新申请长时任务并恢复当前代次的 PCM 播放。
+   *
+   * @param generation 当前朗读任务代次。
+   */
+  private async resumeInternal(generation: number): Promise<void> {
+    if (!this.isActivePlayback(generation) || !this.playbackPauseRequested) {
+      return
+    }
+    this.playbackPauseRequested = false
+    if (this.backgroundPlaybackEnabled) {
+      const backgroundTaskStarted: boolean = await this.backgroundTaskController.start()
+      if (!this.isActivePlayback(generation)) {
+        return
+      }
+      if (!backgroundTaskStarted && this.backgroundWarningGeneration !== generation) {
+        this.backgroundWarningGeneration = generation
+        appStore.showToast('后台朗读启动失败，熄屏后可能中断')
+      }
+    }
+    if (!this.pcmPlaybackStarted) {
+      if (this.backgroundPlaybackEnabled) {
+        this.avSessionController.setPreparing()
+      }
+      return
+    }
+    let resumed: boolean = false
+    try {
+      resumed = await this.pcmRenderer.resume()
+    } catch (error) {
+      this.rollbackFailedResume(generation)
+      throw new Error(formatError(error))
+    }
+    if (resumed && this.isActivePlayback(generation) && this.backgroundPlaybackEnabled) {
+      this.avSessionController.setResumed()
+    } else if (!resumed) {
+      this.rollbackFailedResume(generation)
+    }
+  }
+
+  /**
+   * 恢复 PCM 播放失败时还原暂停状态和后台资源。
+   *
+   * @param generation 当前朗读任务代次。
+   */
+  private rollbackFailedResume(generation: number): void {
+    if (!this.isActivePlayback(generation)) {
+      return
+    }
+    this.playbackPauseRequested = true
+    if (this.backgroundPlaybackEnabled) {
+      this.avSessionController.setPaused()
+      this.backgroundTaskController.stop()
+    }
+  }
+
+  /**
+   * 补全系统播控中心展示的媒体元数据。
+   *
+   * @param pid 当前朗读楼层标识。
+   * @param metadata 调用方提供的媒体元数据。
+   * @returns 可直接交给 AVSession 的媒体元数据。
+   */
+  private resolveMediaMetadata(
+    pid: number,
+    metadata?: TtsMediaMetadata
+  ): TtsMediaMetadata {
+    if (metadata !== undefined) {
+      return metadata
+    }
+    return {
+      assetId: 'tts-' + pid.toString(),
+      title: '帖子朗读',
+      artist: 'NGA玩家社区',
+      album: '文字转语音'
+    }
+  }
+
+  /**
+   * 清理当前朗读状态并释放长时任务。
+   *
+   * @param completed 是否为自然播放完成。
+   */
+  private finishPlayback(completed: boolean = false): void {
+    const avSessionActive: boolean = this.backgroundPlaybackEnabled
     this.pcmRenderer.stop()
     this.speakingPid = -1
     this.pendingChunks = []
@@ -637,7 +880,12 @@ class TtsPlaybackCoordinator {
     this.backgroundPlaybackEnabled = false
     this.backgroundWarningGeneration = -1
     this.startToastGeneration = -1
+    this.playbackPauseRequested = false
+    this.pcmPlaybackStarted = false
     this.backgroundTaskController.stop()
+    if (avSessionActive) {
+      this.avSessionController.stop(completed)
+    }
   }
 
   /**
@@ -715,9 +963,15 @@ export class TtsPlayer {
    * @param text 待朗读文本。
    * @param pid 楼层标识。
    * @param allowBackground 是否允许熄屏或切后台继续朗读。
+   * @param metadata 系统播控中心展示的媒体信息。
    */
-  static speak(text: string, pid: number, allowBackground: boolean = false): void {
-    playbackCoordinator.speak(text, pid, allowBackground)
+  static speak(
+    text: string,
+    pid: number,
+    allowBackground: boolean = false,
+    metadata?: TtsMediaMetadata
+  ): void {
+    playbackCoordinator.speak(text, pid, allowBackground, metadata)
   }
 
   /**
@@ -735,6 +989,20 @@ export class TtsPlayer {
    */
   static stop(): void {
     playbackCoordinator.stop()
+  }
+
+  /**
+   * 暂停当前朗读。
+   */
+  static pause(): void {
+    playbackCoordinator.pause()
+  }
+
+  /**
+   * 恢复当前朗读。
+   */
+  static resume(): void {
+    playbackCoordinator.resume()
   }
 
   /**

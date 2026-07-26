@@ -24,6 +24,7 @@ import { replyManager, ReplyType } from '../common/managers/ReplyManager'
 import { withTimeout } from '../common/utils/TimeoutUtils'
 import { bbNodesToPlainText } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
+import { TtsMediaMetadata } from '../common/media/TtsAvSessionController'
 import { TtsPlayer } from '../common/media/TtsPlayer'
 import { shareThread, sharePost } from '../common/utils/ShareUtils'
 import { openImageViewer as sharedOpenImageViewer, handleForumLink } from '../common/utils/LinkUtils'
@@ -677,7 +678,14 @@ export struct ThreadPanel {
                     appStore.showToast('该楼层没有可朗读的内容')
                     return
                   }
-                  TtsPlayer.speak(plainText, p.pid, true)
+                  const floorName: string = p.lou === 0 ? '楼主' : '第' + p.lou.toString() + '楼'
+                  const metadata: TtsMediaMetadata = {
+                    assetId: 'thread-' + this.threadTid + '-post-' + p.pid.toString(),
+                    title: this.threadSubject.trim().length > 0 ? this.threadSubject : '帖子朗读',
+                    artist: p.author,
+                    album: floorName
+                  }
+                  TtsPlayer.speak(plainText, p.pid, true, metadata)
                 },
                 isTopicAuthor: String(post.authorid) === this.threadAuthorId,
                 isOwnPost: appStore.auth.isAuthenticated && String(post.authorid) === appStore.auth.uid,
