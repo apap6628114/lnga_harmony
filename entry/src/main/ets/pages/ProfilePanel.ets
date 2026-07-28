@@ -2,7 +2,7 @@ import { appStore } from '../store/AppStore'
 import { routerStore, Screen } from '../store/RouterStore'
 import { checkin } from '../service/api/FavoriteApi'
 import { ProfileData, ReputationData } from '../model/User'
-import { AppColors, IconColors, BreakpointType } from '../common/constants/Constants'
+import { AppColors, BreakpointType, ProfileActionIconColors } from '../common/constants/Constants'
 import { formatTime, fmtNum, escHtml } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { Avatar } from '../common/components/Avatar'
@@ -401,7 +401,7 @@ export struct ProfilePanel {
             if (this.isOwnProfile) {
               Column() {
                 SettingRow({
-                  iconRes: $r('app.media.icon_mail'), iconColor: IconColors.mail, label: '私信',
+                  iconRes: $r('app.media.profile_messages'), iconColor: ProfileActionIconColors.messages, label: '私信',
                   badge: this.formatBadge(this.unreadMessages),
                   onAction: () => {
                     routerStore.navigateActivity(Screen.messages())
@@ -409,7 +409,7 @@ export struct ProfilePanel {
                 })
                 Divider().margin({ left: 60 }).color(AppColors.separator)
                 SettingRow({
-                  iconRes: $r('app.media.icon_bell'), iconColor: IconColors.bell, label: '通知',
+                  iconRes: $r('app.media.profile_notifications'), iconColor: ProfileActionIconColors.notifications, label: '通知',
                   badge: this.formatBadge(this.unreadNotifications),
                   onAction: () => {
                     routerStore.navigateActivity(Screen.notifications())
@@ -417,14 +417,14 @@ export struct ProfilePanel {
                 })
                 Divider().margin({ left: 60 }).color(AppColors.separator)
                 SettingRow({
-                  iconRes: $r('app.media.icon_star'), iconColor: IconColors.star, label: '收藏主题',
+                  iconRes: $r('app.media.profile_favorites'), iconColor: ProfileActionIconColors.favorites, label: '收藏主题',
                   onAction: () => {
                     routerStore.navigateActivity(Screen.topicList('我的收藏', 0, '', '1'))
                   }
                 })
                 Divider().margin({ left: 60 }).color(AppColors.separator)
                 SettingRow({
-                  iconRes: $r('app.media.icon_clock'), iconColor: IconColors.clock, label: '浏览历史',
+                  iconRes: $r('app.media.profile_history'), iconColor: ProfileActionIconColors.history, label: '浏览历史',
                   onAction: () => {
                     routerStore.navigateActivity(Screen.browseHistory())
                   }
@@ -434,14 +434,14 @@ export struct ProfilePanel {
                 // 签到行 - 内联，不使用 @Builder
                 Row() {
                   Stack() {
-                    Image($r('app.media.icon_check'))
+                    Image($r('app.media.profile_checkin'))
                       .width(17).height(17)
                       .fillColor(AppColors.white)
                   }
                   .width(29)
                   .height(29)
                   .borderRadius(6)
-                  .backgroundColor(IconColors.checkin)
+                  .backgroundColor(ProfileActionIconColors.checkin)
                   .margin({ right: 12 })
 
                   Text(this.checkinLoading ? '签到中...' : this.checkinResult || '每日签到')
@@ -476,7 +476,7 @@ export struct ProfilePanel {
 
                 Divider().margin({ left: 60 }).color(AppColors.separator)
                 SettingRow({
-                  iconRes: $r('app.media.icon_settings'), iconColor: IconColors.settings, label: '设置',
+                  iconRes: $r('app.media.profile_settings'), iconColor: ProfileActionIconColors.settings, label: '设置',
                   onAction: () => {
                     routerStore.navigateActivity(Screen.settings())
                   }

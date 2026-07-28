@@ -6,7 +6,14 @@
 import { appStore } from '../store/AppStore'
 import { routerStore, Screen } from '../store/RouterStore'
 import { logoutOrchestrator } from '../service/LogoutOrchestrator'
-import { AppColors, IconColors, ImageLoadStrategy, ThreadNavMode, THEME_OPTIONS, ThemeOption } from '../common/constants/Constants'
+import {
+  AppColors,
+  ImageLoadStrategy,
+  SettingsIconColors,
+  ThreadNavMode,
+  THEME_OPTIONS,
+  ThemeOption
+} from '../common/constants/Constants'
 import { ConfirmDialog, ActionSheetDialog, ActionOption, CredentialPasswordDialog } from '../common/dialogs/Dialogs'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { SettingRow, SettingToggleRow, SettingPickerRow } from '../common/components/SettingRow'
@@ -36,7 +43,7 @@ export struct SettingsPanel {
       message: '确定要清除所有缓存吗？\n清除后图片等资源需要重新加载',
       confirmLabel: '清除',
       destructive: true,
-      icon: $r('app.media.icon_delete'),
+      icon: $r('app.media.settings_clear_cache'),
       onConfirm: () => {
         this.clearCache()
       },
@@ -56,7 +63,7 @@ export struct SettingsPanel {
       message: '确定要退出登录吗？\n退出后需要重新输入账号密码登录',
       confirmLabel: '退出',
       destructive: true,
-      icon: $r('app.media.icon_exit'),
+      icon: $r('app.media.settings_logout'),
       onConfirm: async () => {
         await logoutOrchestrator.logout(this.getUIContext())
       },
@@ -357,7 +364,7 @@ export struct SettingsPanel {
             // ---- Block 1: 黑名单管理 / 用户备注 / 关键词屏蔽 / 自动签到 ----
             Column() {
               SettingRow({
-                iconRes: $r('app.media.icon_block'), iconColor: IconColors.block, label: '黑名单管理',
+                iconRes: $r('app.media.settings_blacklist'), iconColor: SettingsIconColors.blacklist, label: '黑名单管理',
                 onAction: () => {
                   routerStore.navigateActivity(Screen.blacklist())
                 }
@@ -366,7 +373,7 @@ export struct SettingsPanel {
               Divider().margin({ left: 60 }).color(AppColors.separator)
 
               SettingRow({
-                iconRes: $r('app.media.icon_person'), iconColor: IconColors.textFields, label: '用户备注',
+                iconRes: $r('app.media.settings_user_notes'), iconColor: SettingsIconColors.userNotes, label: '用户备注',
                 onAction: () => {
                   routerStore.navigateActivity(Screen.notes())
                 }
@@ -375,7 +382,7 @@ export struct SettingsPanel {
               Divider().margin({ left: 60 }).color(AppColors.separator)
 
               SettingRow({
-                iconRes: $r('app.media.icon_text_fields'), iconColor: IconColors.textFields, label: '关键词屏蔽',
+                iconRes: $r('app.media.settings_keyword_filter'), iconColor: SettingsIconColors.keywordFilter, label: '关键词屏蔽',
                 onAction: () => {
                   routerStore.navigateActivity(Screen.filterKeywords())
                 }
@@ -384,7 +391,7 @@ export struct SettingsPanel {
               Divider().margin({ left: 60 }).color(AppColors.separator)
 
               SettingToggleRow({
-                iconRes: $r('app.media.icon_calendar_check'), iconColor: IconColors.checkin, label: '自动签到',
+                iconRes: $r('app.media.settings_auto_checkin'), iconColor: SettingsIconColors.autoCheckin, label: '自动签到',
                 isOn: appStore.settings.autoCheckin,
                 onChange: (v: boolean) => {
                   appStore.settingsStore.setAutoCheckin(v)
@@ -400,7 +407,7 @@ export struct SettingsPanel {
             // ---- Block 2: AI 配置 / 智感握姿 / 语音朗读 ----
             Column() {
               SettingPickerRow({
-                iconRes: $r('app.media.icon_ai_settings'), iconColor: IconColors.ai, label: 'AI 配置',
+                iconRes: $r('app.media.settings_ai_config'), iconColor: SettingsIconColors.aiConfig, label: 'AI 配置',
                 badgeText: this.aiProviderBadge,
                 onAction: () => {
                   routerStore.navigateActivity(Screen.aiSettings())
@@ -410,7 +417,7 @@ export struct SettingsPanel {
               Divider().margin({ left: 60 }).color(AppColors.separator)
 
               SettingToggleRow({
-                iconRes: $r('app.media.icon_hand'), iconColor: IconColors.hand, label: '智感握姿',
+                iconRes: $r('app.media.settings_smart_grip'), iconColor: SettingsIconColors.smartGrip, label: '智感握姿',
                 isOn: appStore.settings.smartGrip,
                 onChange: (v: boolean) => {
                   appStore.settingsStore.setSmartGrip(v)
@@ -420,7 +427,7 @@ export struct SettingsPanel {
               Divider().margin({ left: 60 }).color(AppColors.separator)
 
               SettingRow({
-                iconRes: $r('app.media.icon_volume_up'), iconColor: '#5AC8FA', label: '语音朗读',
+                iconRes: $r('app.media.settings_tts'), iconColor: SettingsIconColors.tts, label: '语音朗读',
                 onAction: () => {
                   routerStore.navigateActivity(Screen.ttsSettings())
                 }
@@ -434,7 +441,7 @@ export struct SettingsPanel {
             // ---- Block 3A: 显示签名 / 图片加载模式 / 预热图片尺寸 ----
             Column() {
               SettingToggleRow({
-                iconRes: $r('app.media.icon_clipboard'), iconColor: IconColors.signature, label: '显示签名',
+                iconRes: $r('app.media.settings_signature'), iconColor: SettingsIconColors.signature, label: '显示签名',
                 isOn: appStore.settings.showSignature,
                 onChange: (v: boolean) => {
                   appStore.settingsStore.setShowSignature(v)
@@ -444,7 +451,7 @@ export struct SettingsPanel {
               Divider().margin({ left: 60 }).color(AppColors.separator)
 
               SettingPickerRow({
-                iconRes: $r('app.media.icon_image'), iconColor: IconColors.globe, label: '图片加载模式',
+                iconRes: $r('app.media.settings_image_loading'), iconColor: SettingsIconColors.imageLoading, label: '图片加载模式',
                 badgeText: this.imageStrategyBadge,
                 onAction: () => {
                   this.showImageStrategyPicker()
@@ -455,9 +462,9 @@ export struct SettingsPanel {
 
               Row() {
                 Stack() {
-                  Image($r('app.media.icon_image')).width(17).height(17).fillColor(AppColors.white)
+                  Image($r('app.media.settings_image_prefetch')).width(17).height(17).fillColor(AppColors.white)
                 }
-                .width(29).height(29).borderRadius(6).backgroundColor(IconColors.moon).margin({ right: 12 })
+                .width(29).height(29).borderRadius(6).backgroundColor(SettingsIconColors.imagePrefetch).margin({ right: 12 })
 
                 Column() {
                   Text('预热图片尺寸').fontSize(17).width('100%')
@@ -476,7 +483,7 @@ export struct SettingsPanel {
               Divider().margin({ left: 60 }).color(AppColors.separator)
 
               SettingPickerRow({
-                iconRes: $r('app.media.icon_text_fields'), iconColor: IconColors.textFields, label: '字体大小',
+                iconRes: $r('app.media.settings_font_size'), iconColor: SettingsIconColors.fontSize, label: '字体大小',
                 badgeText: `${this.contentFontSize}`,
                 onAction: () => {
                   routerStore.navigateActivity(Screen.fontSizeSettings())
@@ -486,7 +493,7 @@ export struct SettingsPanel {
               Divider().margin({ left: 60 }).color(AppColors.separator)
 
               SettingPickerRow({
-                iconRes: $r('app.media.icon_settings'), iconColor: IconColors.settings, label: '帖子楼层导航',
+                iconRes: $r('app.media.settings_thread_navigation'), iconColor: SettingsIconColors.threadNavigation, label: '帖子楼层导航',
                 badgeText: this.threadNavBadge,
                 onAction: () => {
                   this.showThreadNavPicker()
@@ -496,7 +503,7 @@ export struct SettingsPanel {
               Divider().margin({ left: 60 }).color(AppColors.separator)
 
               SettingPickerRow({
-                iconRes: $r('app.media.icon_image'), iconColor: IconColors.globe, label: '预加载页数',
+                iconRes: $r('app.media.settings_page_prefetch'), iconColor: SettingsIconColors.pagePrefetch, label: '预加载页数',
                 badgeText: this.prefetchPageBadge,
                 onAction: () => {
                   this.showPrefetchPagePicker()
@@ -506,7 +513,7 @@ export struct SettingsPanel {
               Divider().margin({ left: 60 }).color(AppColors.separator)
 
               SettingToggleRow({
-                iconRes: $r('app.media.icon_globe'), iconColor: IconColors.globe, label: '内置网页浏览',
+                iconRes: $r('app.media.settings_internal_browser'), iconColor: SettingsIconColors.internalBrowser, label: '内置网页浏览',
                 isOn: appStore.settings.useInternalWebView,
                 onChange: (v: boolean) => {
                   appStore.settingsStore.setUseInternalWebView(v)
@@ -521,7 +528,7 @@ export struct SettingsPanel {
             // ---- Block 3B: 导出账号凭证 / 清除缓存 / 退出登录 ----
             Column() {
               SettingRow({
-                iconRes: $r('app.media.icon_export'), iconColor: IconColors.checkin, label: '导出账号凭证',
+                iconRes: $r('app.media.settings_credential_export'), iconColor: SettingsIconColors.credentialExport, label: '导出账号凭证',
                 onAction: () => {
                   this.handleExport()
                 }
@@ -530,7 +537,7 @@ export struct SettingsPanel {
               Divider().margin({ left: 60 }).color(AppColors.separator)
 
               SettingPickerRow({
-                iconRes: $r('app.media.icon_delete'), iconColor: IconColors.hand, label: '清除缓存',
+                iconRes: $r('app.media.settings_clear_cache'), iconColor: SettingsIconColors.clearCache, label: '清除缓存',
                 badgeText: this.cacheSizeText,
                 onAction: () => {
                   this.clearCacheDialogController?.open()
@@ -541,7 +548,7 @@ export struct SettingsPanel {
 
               Row() {
                 Stack() {
-                  Image($r('app.media.icon_exit')).width(17).height(17).fillColor(AppColors.white)
+                  Image($r('app.media.settings_logout')).width(17).height(17).fillColor(AppColors.white)
                 }
                 .width(29).height(29).borderRadius(6).backgroundColor(AppColors.destructive).margin({ right: 12 })
 

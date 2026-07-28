@@ -77,6 +77,66 @@ export class IconColors {
   static readonly ai: string = '#6366F1'
 }
 
+/**
+ * 设置中心专用图标色板。
+ *
+ * 同一功能分组使用相邻色相，并为危险操作保留独立的警示色。
+ */
+export class SettingsIconColors {
+  /** 黑名单管理的中性石板色。 */
+  static readonly blacklist: string = '#64748B'
+  /** 用户备注的柔和玫红色。 */
+  static readonly userNotes: string = '#DB2777'
+  /** 关键词屏蔽的警示橙色。 */
+  static readonly keywordFilter: string = '#D97706'
+  /** 自动签到的成功绿色。 */
+  static readonly autoCheckin: string = '#16A34A'
+  /** AI 配置的智能紫色。 */
+  static readonly aiConfig: string = '#7C3AED'
+  /** 智感握姿的感知靛蓝色。 */
+  static readonly smartGrip: string = '#4F46E5'
+  /** 语音朗读的清晰天蓝色。 */
+  static readonly tts: string = '#0284C7'
+  /** 显示签名的书写青绿色。 */
+  static readonly signature: string = '#0D9488'
+  /** 图片加载模式的媒体蓝色。 */
+  static readonly imageLoading: string = '#3B82F6'
+  /** 图片尺寸预取的信息青色。 */
+  static readonly imagePrefetch: string = '#0891B2'
+  /** 字体大小的排版紫红色。 */
+  static readonly fontSize: string = '#A21CAF'
+  /** 帖子楼层导航的路径橙色。 */
+  static readonly threadNavigation: string = '#EA580C'
+  /** 页面预加载的效率绿色。 */
+  static readonly pagePrefetch: string = '#059669'
+  /** 内置网页浏览的浏览器蓝色。 */
+  static readonly internalBrowser: string = '#1D4ED8'
+  /** 账号凭证导出的安全青色。 */
+  static readonly credentialExport: string = '#0F766E'
+  /** 清除缓存的维护琥珀色。 */
+  static readonly clearCache: string = '#B45309'
+}
+
+/**
+ * 个人主页操作列表专用图标色板。
+ *
+ * 按消息、提醒、内容、记录、签到和设置六类语义建立稳定配色。
+ */
+export class ProfileActionIconColors {
+  /** 私信入口的通信蓝色。 */
+  static readonly messages: string = '#2563EB'
+  /** 通知入口的提醒红色。 */
+  static readonly notifications: string = '#DC2626'
+  /** 收藏主题的暖金色。 */
+  static readonly favorites: string = '#D97706'
+  /** 浏览历史的中性深灰色。 */
+  static readonly history: string = '#475569'
+  /** 每日签到的成功绿色。 */
+  static readonly checkin: string = '#16A34A'
+  /** 设置入口的中心紫色。 */
+  static readonly settings: string = '#6D28D9'
+}
+
 // 字号选项
 export interface FontOption {
   label: string
