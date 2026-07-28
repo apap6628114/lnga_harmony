@@ -26,6 +26,7 @@ import {
   NodeGroup,
   splitQuoteChildren,
   QUOTE_BORDER_COLORS,
+  QuoteSplit,
 } from './bbcode/BBCodeRenderContext'
 
 @Component

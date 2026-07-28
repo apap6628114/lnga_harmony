@@ -206,6 +206,8 @@ export struct ThreadPanel {
   }
 
   private async loadPosts(targetPage: number, mode: string): Promise<void> {
+    // 在 reset 前保存已有帖子，供跨页引用查找使用
+    const prevPosts: PostInfo[] = [...this.mgr.posts]
     if (mode === LOAD_REPLACE) {
       this.mgr.reset()
       this.postsDataSource.clear()
@@ -236,9 +238,10 @@ export struct ThreadPanel {
 
     try {
       const noteMap: Record<string, string> = appStore.settingsStore.getNoteMap()
+      const isNegativeAuthor: boolean = this.authorOnly && this.threadAuthorId !== '' && Number(this.threadAuthorId) <= 0
       const result: ThreadResult = await withTimeout<ThreadResult>(getThread(
         appStore.auth.token, this.threadTid, '',
-        this.authorOnly ? this.threadAuthorId : '', String(targetPage),
+        this.authorOnly && !isNegativeAuthor ? this.threadAuthorId : '', String(targetPage),
         appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords(),
         noteMap
       ), 15000)
@@ -246,7 +249,13 @@ export struct ThreadPanel {
       if (gen !== this.mgr.getGeneration()) return
 
       if (result.ok) {
+        if (isNegativeAuthor) {
+          result.posts = result.posts.filter((p: PostInfo): boolean => String(p.authorid) === this.threadAuthorId)
+        }
+
         await preWarmPosts(result.posts, false, taskpool.Priority.HIGH)
+
+        this.processPostsQuoteInjection(result.posts, prevPosts)
 
         if (result.pagination) {
           this.mgr.totalPages = result.pagination.totalPages
@@ -255,7 +264,9 @@ export struct ThreadPanel {
           const info: ThreadInfo = result.threadInfo
           this.threadSubject = unescapeHtml(info.subject) || '帖子'
           this.threadFid = info.fid
-          this.threadAuthorId = String(info.authorid)
+          if (info.authorid > 0 || this.threadAuthorId === '') {
+            this.threadAuthorId = String(info.authorid)
+          }
         }
 
         if (mode === LOAD_REPLACE) {
@@ -316,6 +327,85 @@ export struct ThreadPanel {
 
   }
 
+  private processPostsQuoteInjection(posts: PostInfo[], prevPosts?: PostInfo[]): void {
+    // posts: 需要处理的楼层数组
+    // prevPosts: 跳页前已有的帖子（跨页引用用）
+    // ── 引用原文注入：为 [b]Reply to [pid][/b] 快速回复格式补充被引用内容
+    // Step 1: 备份所有楼层原始内容，防止链式修改后查找错乱
+    // 同时包含新加载的 posts 和 mgr 中已有的帖子（跨页引用需要）
+    const origByPid: Map<number, string> = new Map()
+    const collectToMap = (arr: PostInfo[]): void => {
+      for (const p of arr) {
+        origByPid.set(p.pid, p.content)            // p.content: 主楼层的正文
+        if (p.comments) {
+          for (const c of p.comments) {
+            origByPid.set(c.pid, c.content)        // c.content: 贴条的正文
+          }
+        }
+      }
+    }
+    collectToMap(posts)
+    collectToMap(this.mgr.posts)
+    if (prevPosts) {
+      collectToMap(prevPosts)
+    }
+    // Step 2: 遍历楼层和贴条，对快速回复格式注入引用原文
+    const injectReplyQuote = (target: PostInfo): void => {
+      if (target.content.startsWith('[quote]')) return
+      const headerRegex: RegExp = /\[b\]Reply to \[pid=(\d+),(\d+),(\d+)\]Reply\[\/pid\] Post by \[uid=(\d+)\](.*?)\[\/uid\] \(([^)]+)\)/i
+      const headerMatch: RegExpMatchArray | null = target.content.match(headerRegex)
+      if (!headerMatch) return
+      const refPid: number = parseInt(headerMatch[1], 10)
+      const rawContent: string | undefined = origByPid.get(refPid)
+      if (!rawContent) return
+      let cleaned: string = rawContent
+        .replace(/\[b\]Reply to \[pid=.*?\[\/pid\]\s*\[\/b\]/s, '')
+        .replace(/\[pid=.*?Reply\[\/pid\]\s*\[b\]Post by.*?\(.*?\):\[\/b\]/s, '')
+        .replace(/\[quote\]/g, '')
+        .replace(/\[\/quote\]/g, '')
+        .replace(/<br\s*\/?>/gi, '')
+        .trim()
+      if (cleaned.length === 0) return
+      const closeBIdx: number = target.content.indexOf('[/b]')
+      const replyText: string = closeBIdx >= 0 ? target.content.substring(closeBIdx + 4) : ''
+      target.content = `[quote][pid=${headerMatch[1]},${headerMatch[2]},${headerMatch[3]}]Reply[/pid] [b]Post by [uid=${headerMatch[4]}]${headerMatch[5]}[/uid] (${headerMatch[6]}):[/b]\n${cleaned}[/quote]\n<br/><br/>${replyText}`
+    }
+    // Step 3: 修复 [quote] 格式中被 NGA 截断的引用内容
+    const fixTruncatedQuote = (target: PostInfo): void => {
+      if (!target.content.startsWith('[quote]')) return
+      const pidInQuote: RegExpMatchArray | null = target.content.match(/\[pid=(\d+),(\d+),(\d+)\]/)
+      if (!pidInQuote) return
+      const refPid: number = parseInt(pidInQuote[1], 10)
+      const fullContent: string | undefined = origByPid.get(refPid)
+      if (!fullContent) return
+      const afterQuote: number = target.content.indexOf('[quote]') + 7
+      const headerEnd: number = target.content.indexOf('[/b]', afterQuote)
+      const quoteEnd: number = target.content.indexOf('[/quote]', afterQuote)
+      if (headerEnd < 0 || quoteEnd < 0) return
+      const existingBody: string = target.content.substring(headerEnd + 4, quoteEnd)
+        .replace(/<br\s*\/?>/gi, '').trim()
+      let cleanedFull: string = fullContent
+        .replace(/\[b\]Reply to \[pid=.*?\[\/pid\]\s*\[\/b\]/s, '')
+        .replace(/\[pid=.*?Reply\[\/pid\]\s*\[b\]Post by.*?\(.*?\):\[\/b\]/s, '')
+        .replace(/\[quote\]/g, '').replace(/\[\/quote\]/g, '')
+        .replace(/<br\s*\/?>/gi, '')
+        .trim()
+      if (cleanedFull.length === 0) return
+      if (existingBody === cleanedFull) return
+      if (!cleanedFull.startsWith(existingBody)) return
+      target.content = target.content.substring(0, headerEnd + 4) + '\n' + cleanedFull + target.content.substring(quoteEnd)
+    }
+    for (const p of posts) {
+      injectReplyQuote(p)
+      fixTruncatedQuote(p)
+      if (p.comments) {
+        for (const c of p.comments) {
+          injectReplyQuote(c)
+          fixTruncatedQuote(c)
+        }
+      }
+    }
+  }
 
   private triggerPrefetches(): void {
     if (appStore.settings.threadNavMode === ThreadNavMode.PAGE) return
@@ -346,6 +436,7 @@ export struct ThreadPanel {
     this.prefetchNextInProgress = true
     const gen: number = this.mgr.getGeneration()
     try {
+      const isNegativeAuthor: boolean = this.authorOnly && this.threadAuthorId !== '' && Number(this.threadAuthorId) <= 0
       const noteMap: Record<string, string> = appStore.settingsStore.getNoteMap()
       const promises: Promise<FetchPageResult | null>[] = []
       for (let i = 0; i < pagesToFetch.length; i++) {
@@ -353,7 +444,7 @@ export struct ThreadPanel {
         promises.push(
           withTimeout<ThreadResult>(getThread(
             appStore.auth.token, this.threadTid, '',
-            this.authorOnly ? this.threadAuthorId : '', String(page),
+            isNegativeAuthor ? '' : (this.authorOnly ? this.threadAuthorId : ''), String(page),
             appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords(),
             noteMap
           ), 10000).then((r: ThreadResult) => {
@@ -370,6 +461,10 @@ export struct ThreadPanel {
         const item: FetchPageResult | null = results[i]
         if (item === null || item.result === null) continue
         if (item.result.ok) {
+          if (isNegativeAuthor) {
+            item.result.posts = item.result.posts.filter((p: PostInfo): boolean => String(p.authorid) === this.threadAuthorId)
+          }
+          this.processPostsQuoteInjection(item.result.posts)
           this.mgr.setPrefetchedPage(item.page, item.result.posts, item.result.pagination.totalPages)
           preWarmPosts(item.result.posts, false, taskpool.Priority.MEDIUM).catch(() => {})
         }
@@ -399,22 +494,27 @@ export struct ThreadPanel {
     this.prefetchPrevInProgress = true
     const gen: number = this.mgr.getGeneration()
     let ok: boolean = false
+    const isNegativeAuthorPrev: boolean = this.authorOnly && this.threadAuthorId !== '' && Number(this.threadAuthorId) <= 0
     try {
       const noteMap: Record<string, string> = appStore.settingsStore.getNoteMap()
       const result: ThreadResult = await withTimeout<ThreadResult>(getThread(
         appStore.auth.token, this.threadTid, '',
-        this.authorOnly ? this.threadAuthorId : '', String(targetPage),
+        isNegativeAuthorPrev ? '' : (this.authorOnly ? this.threadAuthorId : ''), String(targetPage),
         appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords(),
         noteMap
       ), 10000)
       if (gen !== this.mgr.getGeneration()) return
       if (result.ok) {
+        if (isNegativeAuthorPrev) {
+          result.posts = result.posts.filter((p: PostInfo): boolean => String(p.authorid) === this.threadAuthorId)
+        }
         ok = true
         try {
-          await preWarmPosts(result.posts, false, taskpool.Priority.MEDIUM)
+            await preWarmPosts(result.posts, false, taskpool.Priority.MEDIUM)
         } catch (e) {
           // 预热失败不影响 posts 存储
         }
+        this.processPostsQuoteInjection(result.posts)
         this.mgr.prefetchedPrevPosts = result.posts
         this.mgr.prefetchedPrevPage = targetPage
       }
