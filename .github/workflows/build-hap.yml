@@ -6,39 +6,111 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: harmonyos-hap-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
+    name: Build unsigned HAP
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      HARMONY_CLI_VERSION: 6.1.0.816
+      HARMONY_CLI_ARCHIVE: commandline-tools-linux-x64-6.1.0.816.zip
+      HARMONY_CLI_SHA256: 4b21e8a4ce19fc7eb381425a570e936c80067b8a0bef9cdcfe8a49e4764038e2
+      HARMONY_CLI_URL: https://github.com/Okysu/harmony-auto-build/releases/download/commandline-tools-linux-x64-6.1.0.816/commandline-tools-linux-x64-6.1.0.816.zip
+      HARMONY_CLI_DIR: ${{ github.workspace }}/.harmony-cli
+      HARMONY_CLI_HOME: ${{ github.workspace }}/.harmony-cli/command-line-tools
 
     steps:
-      # 1. 拉取代码
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Checkout code
+        uses: actions/checkout@v7
 
-      # 2. 配置 Node.js
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: "18.20.1"
+          package-manager-cache: false
 
-      # 3. 安装并配置 HarmonyOS/OpenHarmony SDK 及 Command Line Tools
-      - name: Setup HarmonyOS SDK
-        uses: Huawei/setup-harmonyos-sdk@v1
+      - name: Setup Java
+        uses: actions/setup-java@v6
         with:
-          version: '5.0.0' # 根据你的 DevEco Studio 版本调整 SDK 版本
+          distribution: temurin
+          java-version: "17"
 
-      # 4. 执行鸿蒙编译
-      - name: Build HAP Package
+      - name: Cache HarmonyOS command-line tools
+        id: cache-harmony-cli
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.HARMONY_CLI_DIR }}
+          key: harmonyos-cli-linux-x64-${{ env.HARMONY_CLI_VERSION }}-${{ env.HARMONY_CLI_SHA256 }}
+
+      - name: Download HarmonyOS command-line tools
+        if: steps.cache-harmony-cli.outputs.cache-hit != 'true'
+        shell: bash
         run: |
-          hvigorw assembleHap --no-daemon
+          set -euo pipefail
+          archive_path="${RUNNER_TEMP}/${HARMONY_CLI_ARCHIVE}"
+          curl \
+            --fail \
+            --location \
+            --retry 3 \
+            --retry-all-errors \
+            --connect-timeout 30 \
+            "${HARMONY_CLI_URL}" \
+            --output "${archive_path}"
+          echo "${HARMONY_CLI_SHA256}  ${archive_path}" | sha256sum --check --strict
+          rm -rf "${HARMONY_CLI_DIR}"
+          mkdir -p "${HARMONY_CLI_DIR}"
+          unzip -q "${archive_path}" -d "${HARMONY_CLI_DIR}"
+          rm -f "${archive_path}"
 
-      # 5. 上传产物
-      - name: Upload HAP Artifact
-        uses: actions/upload-artifact@v4
+      - name: Configure HarmonyOS build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "${HARMONY_CLI_HOME}/bin"
+          test -d "${HARMONY_CLI_HOME}/sdk"
+          chmod -R u+x "${HARMONY_CLI_HOME}/bin"
+          echo "${HARMONY_CLI_HOME}/bin" >> "${GITHUB_PATH}"
+          node_home="$(dirname "$(dirname "$(command -v node)")")"
+          {
+            echo "DEVECO_NODE_HOME=${node_home}"
+            echo "DEVECO_SDK_HOME=${HARMONY_CLI_HOME}"
+            echo "OHPM_HOME=${HARMONY_CLI_HOME}/ohpm"
+            echo "HOS_SDK_HOME=${HARMONY_CLI_HOME}/sdk"
+          } >> "${GITHUB_ENV}"
+          {
+            echo "hwsdk.dir=${HARMONY_CLI_HOME}/sdk"
+            echo "sdk.dir=${HARMONY_CLI_HOME}/sdk"
+          } > local.properties
+
+      - name: Verify HarmonyOS build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v ohpm
+          command -v hvigorw
+          node --version
+          java -version
+          ohpm --version
+
+      - name: Install dependencies
+        shell: bash
+        run: ohpm install
+
+      - name: Build unsigned HAP
+        shell: bash
+        run: hvigorw --mode project -p product=unsigned -p buildMode=release assembleApp --no-daemon
+
+      - name: Upload HAP artifact
+        uses: actions/upload-artifact@v7
         with:
           name: nga-harmony-hap
-          path: |
-            **/build/**/outputs/**/*.hap
+          path: "**/build/**/outputs/**/*.hap"
+          if-no-files-found: error
           retention-days: 14
