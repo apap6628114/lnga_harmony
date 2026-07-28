@@ -1,0 +1,43 @@
+name: Build HarmonyOS HAP
+
+on:
+  push:
+    branches:
+      - main  # 当 main 分支有 push 时触发
+  workflow_dispatch:  # 允许在 GitHub 网页手动点击按钮触发打包
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 拉取当前仓库的代码
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. 配置 Node.js 环境（OpenHarmony/DevEco SDK 构建依赖 Node）
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # 3. 安装项目依赖
+      - name: Install Dependencies
+        run: |
+          npm install
+
+      # 4. 执行 Compile / Build 命令
+      # 注意：如果你的项目使用的是 Command Line Tools / hvigorw
+      - name: Build HAP Package
+        run: |
+          chmod +x ./hvigorw
+          ./hvigorw assembleHap --no-daemon
+
+      # 5. 将编译出的 .hap 文件上传为 Artifacts（可在 GitHub 直接下载）
+      - name: Upload HAP Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nga-harmony-hap
+          path: |
+            **/build/**/outputs/**/*.hap
+          retention-days: 14  # 构建出的包保存 14 天
