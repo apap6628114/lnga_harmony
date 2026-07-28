@@ -11,39 +11,30 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. 拉取完整 Git 历史（防止版本号提取失败）
+      # 1. 拉取代码
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 2. 配置 Node.js 环境
+      # 2. 配置 Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
 
-      # 3. 只有当根目录存在 package.json 时才执行 npm install，否则安全跳过
-      - name: Install Dependencies (If package.json exists)
-        run: |
-          if [ -f "package.json" ]; then
-            npm install --legacy-peer-deps
-          else
-            echo "No package.json found in root, skipping npm install."
-          fi
+      # 3. 安装并配置 HarmonyOS/OpenHarmony SDK 及 Command Line Tools
+      - name: Setup HarmonyOS SDK
+        uses: Huawei/setup-harmonyos-sdk@v1
+        with:
+          version: '5.0.0' # 根据你的 DevEco Studio 版本调整 SDK 版本
 
-      # 4. 执行 hvigorw 编译命令
+      # 4. 执行鸿蒙编译
       - name: Build HAP Package
         run: |
-          if [ -f "./hvigorw" ]; then
-            chmod +x ./hvigorw
-            ./hvigorw assembleHap --no-daemon
-          else
-            echo "hvigorw wrapper not found!"
-            exit 1
-          fi
+          hvigorw assembleHap --no-daemon
 
-      # 5. 收集并上传构建出来的 .hap 文件
+      # 5. 上传产物
       - name: Upload HAP Artifact
         uses: actions/upload-artifact@v4
         with:
