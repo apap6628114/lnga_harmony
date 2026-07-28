@@ -247,12 +247,16 @@ function fillThreadResult(raw: Record<string, Object>, result: ThreadResult,
       }
     }
     if (rawT) {
+      const rawAuthorId: number = Number(rawT['authorid'] ?? 0);
+      const firstPostAuthorId: number | undefined = data.rowList.find(r => r.lou === 0)?.authorid;
+      const finalAuthorId: number = rawAuthorId > 0 ? rawAuthorId : (firstPostAuthorId ?? rawAuthorId);
+
       const info: ThreadInfo = {
         tid: Number(rawT['tid'] ?? 0),
         fid: Number(rawT['fid'] ?? 0),
         subject: String(rawT['subject'] ?? ''),
         replies: Number(rawT['replies'] ?? 0),
-        authorid: Number(rawT['authorid'] ?? 0),
+        authorid: finalAuthorId,
         author: String(rawT['author'] ?? ''),
         postdate: Number(rawT['postdate'] ?? 0),
         lastpost: Number(rawT['lastpost'] ?? 0),

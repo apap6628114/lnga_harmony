@@ -1,0 +1,44 @@
+name: Build HarmonyOS HAP
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 拉取代码
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2. 配置 Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 3. 安装并配置 HarmonyOS/OpenHarmony SDK 及 Command Line Tools
+      - name: Setup HarmonyOS SDK
+        uses: Huawei/setup-harmonyos-sdk@v1
+        with:
+          version: '5.0.0' # 根据你的 DevEco Studio 版本调整 SDK 版本
+
+      # 4. 执行鸿蒙编译
+      - name: Build HAP Package
+        run: |
+          hvigorw assembleHap --no-daemon
+
+      # 5. 上传产物
+      - name: Upload HAP Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nga-harmony-hap
+          path: |
+            **/build/**/outputs/**/*.hap
+          retention-days: 14
