@@ -6,15 +6,29 @@ const BACKGROUND_TASK_REQUEST_CODE: number = 23001
 const logger: Logger = new Logger(DOMAIN_MEDIA, 'TtsBackgroundTask')
 
 /**
+ * 后台长时任务系统事件回调。
+ */
+export interface TtsBackgroundTaskCallbacks {
+  /** 长时任务被用户或系统取消。 */
+  onCancelled: (info: backgroundTaskManager.ContinuousTaskCancelInfo) => void
+  /** 长时任务因系统校验或调度策略进入暂停状态。 */
+  onSuspended: (info: backgroundTaskManager.ContinuousTaskSuspendInfo) => void
+  /** 长时任务从暂停状态恢复活动。 */
+  onActivated: (info: backgroundTaskManager.ContinuousTaskActiveInfo) => void
+}
+
+/**
  * 管理 TTS 播报所需的音频播放长时任务。
  */
 export class TtsBackgroundTaskController {
-  /** 系统取消长时任务后的业务回调。 */
-  private readonly onCancelled: () => void
+  /** 长时任务系统事件回调。 */
+  private readonly callbacks: TtsBackgroundTaskCallbacks
   /** 当前 UIAbility 上下文。 */
   private context: common.UIAbilityContext | null = null
   /** 系统长时任务是否处于活动状态。 */
   private active: boolean = false
+  /** 系统长时任务是否被系统暂停。 */
+  private suspended: boolean = false
   /** 最新播放状态是否需要长时任务。 */
   private desired: boolean = false
   /** 当前长时任务标识。 */
@@ -35,18 +49,48 @@ export class TtsBackgroundTaskController {
     }
     logger.warn('TTS background task cancelled, reason: %{public}d', info.reason)
     this.active = false
+    this.suspended = false
     this.desired = false
     this.taskId = -1
-    this.onCancelled()
+    this.callbacks.onCancelled(info)
+  }
+
+  /** 系统暂停长时任务时同步内部状态。 */
+  private readonly suspendCallback =
+    (info: backgroundTaskManager.ContinuousTaskSuspendInfo): void => {
+      if (!this.active ||
+        (this.taskId >= 0 && this.taskId !== info.continuousTaskId)) {
+        return
+      }
+      this.suspended = info.suspendState
+      logger.warn(
+        'TTS background task suspend state changed: suspended=%{public}s, reason=%{public}d',
+        info.suspendState.toString(),
+        info.suspendReason
+      )
+      if (info.suspendState) {
+        this.callbacks.onSuspended(info)
+      }
+    }
+
+  /** 系统重新激活长时任务时同步内部状态。 */
+  private readonly activeCallback =
+    (info: backgroundTaskManager.ContinuousTaskActiveInfo): void => {
+      if (!this.active || (this.taskId >= 0 && this.taskId !== info.id)) {
+        return
+      }
+      this.suspended = false
+      logger.info('TTS background task activated, id: %{public}d', info.id)
+      this.callbacks.onActivated(info)
   }
 
   /**
    * 创建后台任务控制器。
    *
-   * @param onCancelled 系统取消长时任务后的业务回调。
+   * @param callbacks 长时任务系统事件回调。
    */
-  constructor(onCancelled: () => void) {
-    this.onCancelled = onCancelled
+  constructor(callbacks: TtsBackgroundTaskCallbacks) {
+    this.callbacks = callbacks
   }
 
   /**
@@ -64,11 +108,14 @@ export class TtsBackgroundTaskController {
       logger.warn('TTS background task is not supported on this device')
       return
     }
+    this.listenerRegistered = true
     try {
       backgroundTaskManager.on('continuousTaskCancel', this.cancelCallback)
-      this.listenerRegistered = true
+      backgroundTaskManager.on('continuousTaskSuspend', this.suspendCallback)
+      backgroundTaskManager.on('continuousTaskActive', this.activeCallback)
     } catch (error) {
       logger.error('Register TTS background task listener failed: %{public}s', formatError(error))
+      this.unregisterListener()
     }
   }
 
@@ -80,7 +127,7 @@ export class TtsBackgroundTaskController {
   async start(): Promise<boolean> {
     this.desired = true
     await this.enqueueSynchronization()
-    return this.active
+    return this.active && !this.suspended
   }
 
   /**
@@ -105,6 +152,7 @@ export class TtsBackgroundTaskController {
       this.unregisterListener()
       this.context = null
       this.active = false
+      this.suspended = false
       this.taskId = -1
     })
   }
@@ -165,6 +213,7 @@ export class TtsBackgroundTaskController {
       const notification: backgroundTaskManager.ContinuousTaskNotification =
         await backgroundTaskManager.startBackgroundRunning(context, ['audioPlayback'], agent)
       this.active = true
+      this.suspended = false
       this.taskId = notification.continuousTaskId ?? -1
       logger.info('TTS background task started, id: %{public}d', this.taskId)
       if (!this.desired) {
@@ -183,6 +232,7 @@ export class TtsBackgroundTaskController {
     if (context === null ||
       !canIUse('SystemCapability.ResourceSchedule.BackgroundTaskManager.ContinuousTask')) {
       this.active = false
+      this.suspended = false
       this.taskId = -1
       return
     }
@@ -195,6 +245,7 @@ export class TtsBackgroundTaskController {
         await backgroundTaskManager.stopBackgroundRunning(context)
       }
       this.active = false
+      this.suspended = false
       this.taskId = -1
       logger.info('TTS background task stopped')
     } catch (error) {
@@ -214,7 +265,26 @@ export class TtsBackgroundTaskController {
     try {
       backgroundTaskManager.off('continuousTaskCancel', this.cancelCallback)
     } catch (error) {
-      logger.warn('Unregister TTS background task listener failed: %{public}s', formatError(error))
+      logger.warn(
+        'Unregister TTS background cancel listener failed: %{public}s',
+        formatError(error)
+      )
+    }
+    try {
+      backgroundTaskManager.off('continuousTaskSuspend', this.suspendCallback)
+    } catch (error) {
+      logger.warn(
+        'Unregister TTS background suspend listener failed: %{public}s',
+        formatError(error)
+      )
+    }
+    try {
+      backgroundTaskManager.off('continuousTaskActive', this.activeCallback)
+    } catch (error) {
+      logger.warn(
+        'Unregister TTS background active listener failed: %{public}s',
+        formatError(error)
+      )
     }
     this.listenerRegistered = false
   }

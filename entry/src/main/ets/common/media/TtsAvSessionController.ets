@@ -4,6 +4,8 @@ import { DOMAIN_MEDIA, formatError, Logger } from '../utils/Logger'
 
 const AV_SESSION_REQUEST_CODE: number = 23002
 const AV_SESSION_TAG: string = 'NgaPostTts'
+const POSITION_SYNC_INTERVAL_MS: number = 1000
+const MAX_STATE_SYNC_ATTEMPTS: number = 3
 const logger: Logger = new Logger(DOMAIN_MEDIA, 'TtsAvSession')
 
 /**
@@ -30,6 +32,26 @@ export interface TtsAvSessionCallbacks {
   onPause: () => void
   /** 请求停止当前朗读。 */
   onStop: () => void
+  /** 请求定位到指定播放位置。 */
+  onSeek: (positionMs: number) => void
+  /** 请求向前跳过系统媒体卡片指定的间隔。 */
+  onFastForward: (intervalSeconds?: number) => void
+  /** 请求向后跳过系统媒体卡片指定的间隔。 */
+  onRewind: (intervalSeconds?: number) => void
+}
+
+/**
+ * 一次不可变的系统媒体会话播放状态。
+ */
+interface TtsAvSessionPlaybackSnapshot {
+  /** 系统媒体播放状态。 */
+  state: avSession.PlaybackState
+  /** 生成快照时的精确播放位置，单位为毫秒。 */
+  positionMs: number
+  /** 当前媒体总时长，单位为毫秒。 */
+  durationMs: number
+  /** 生成快照的系统时间，单位为毫秒。 */
+  updateTimeMs: number
 }
 
 /**
@@ -42,6 +64,8 @@ export class TtsAvSessionController {
   private context: common.UIAbilityContext | null = null
   /** 当前系统媒体会话。 */
   private session: avSession.AVSession | null = null
+  /** 当前系统媒体会话是否已经激活。 */
+  private sessionActivated: boolean = false
   /** 当前媒体元数据。 */
   private metadata: TtsMediaMetadata | null = null
   /** 当前媒体总时长，单位为毫秒。 */
@@ -50,6 +74,8 @@ export class TtsAvSessionController {
   private elapsedTimeMs: number = 0
   /** 最近一次进入播放状态的时间。 */
   private playbackStartedAtMs: number = 0
+  /** 最近一次向系统同步精确播放位置的时间。 */
+  private lastPositionSyncAtMs: number = 0
   /** 当前期望同步给系统的播放状态。 */
   private playbackState: avSession.PlaybackState =
     avSession.PlaybackState.PLAYBACK_STATE_INITIAL
@@ -61,6 +87,12 @@ export class TtsAvSessionController {
   private lifecycleGeneration: number = 0
   /** 串行化系统媒体会话操作的任务链。 */
   private operation: Promise<void> = Promise.resolve()
+  /** 最新待同步播放状态的版本。 */
+  private stateUpdateRevision: number = 0
+  /** 是否已经安排最新播放状态同步任务。 */
+  private stateSynchronizationScheduled: boolean = false
+  /** 当前媒体元数据是否需要重新同步。 */
+  private metadataDirty: boolean = false
 
   /** 响应系统播放命令。 */
   private readonly playCallback = (): void => {
@@ -75,6 +107,31 @@ export class TtsAvSessionController {
   /** 响应系统停止命令。 */
   private readonly stopCallback = (): void => {
     this.callbacks.onStop()
+  }
+
+  /** 响应系统进度定位命令。 */
+  private readonly seekCallback = (positionMs: number): void => {
+    this.callbacks.onSeek(positionMs)
+  }
+
+  /** 响应系统快进命令。 */
+  private readonly fastForwardCallback = (intervalSeconds?: number): void => {
+    this.callbacks.onFastForward(intervalSeconds)
+  }
+
+  /** 响应系统快退命令。 */
+  private readonly rewindCallback = (intervalSeconds?: number): void => {
+    this.callbacks.onRewind(intervalSeconds)
+  }
+
+  /** 将系统上一条命令兼容映射为向后跳过默认间隔。 */
+  private readonly playPreviousCallback = (): void => {
+    this.callbacks.onRewind()
+  }
+
+  /** 将系统下一条命令兼容映射为向前跳过默认间隔。 */
+  private readonly playNextCallback = (): void => {
+    this.callbacks.onFastForward()
   }
 
   /**
@@ -100,17 +157,27 @@ export class TtsAvSessionController {
    * 为新的帖子朗读创建并激活系统媒体会话。
    *
    * @param metadata 系统播控中心展示的媒体信息。
+   *
+   * @returns 当前媒体会话是否成功创建并激活。
    */
-  start(metadata: TtsMediaMetadata): void {
+  start(metadata: TtsMediaMetadata): Promise<boolean> {
     const generation: number = ++this.generation
     this.metadata = metadata
     this.durationMs = 0
     this.elapsedTimeMs = 0
     this.playbackStartedAtMs = 0
+    this.lastPositionSyncAtMs = 0
     this.playbackState = avSession.PlaybackState.PLAYBACK_STATE_PREPARE
     this.activeRequested = true
-    this.enqueue(async (): Promise<void> => {
+    this.stateUpdateRevision++
+    this.metadataDirty = true
+    const activationOperation: Promise<void> = this.enqueue(async (): Promise<void> => {
       await this.activate(generation)
+    })
+    return activationOperation.then((): boolean => {
+      return this.isCurrentActiveGeneration(generation) &&
+        this.session !== null &&
+        this.sessionActivated
     })
   }
 
@@ -118,12 +185,14 @@ export class TtsAvSessionController {
    * 将当前朗读同步为播放状态。
    *
    * @param durationMs 当前媒体总时长，单位为毫秒。
+   * @param positionMs 当前播放位置，单位为毫秒。
    */
-  setPlaying(durationMs: number): void {
+  setPlaying(durationMs: number, positionMs: number = this.elapsedTimeMs): void {
     if (!this.activeRequested) {
       return
     }
     this.durationMs = Math.max(0, durationMs)
+    this.elapsedTimeMs = this.clampPosition(positionMs)
     this.playbackStartedAtMs = Date.now()
     this.playbackState = avSession.PlaybackState.PLAYBACK_STATE_PLAY
     this.enqueueStateUpdate(this.generation, true)
@@ -133,8 +202,9 @@ export class TtsAvSessionController {
    * 将当前朗读同步为暂停状态。
    *
    * @param durationMs 已知的媒体总时长，单位为毫秒。
+   * @param positionMs 当前播放位置，单位为毫秒。
    */
-  setPaused(durationMs?: number): void {
+  setPaused(durationMs?: number, positionMs?: number): void {
     if (!this.activeRequested) {
       return
     }
@@ -142,7 +212,34 @@ export class TtsAvSessionController {
     if (durationMs !== undefined) {
       this.durationMs = Math.max(0, durationMs)
     }
-    this.elapsedTimeMs = this.resolveElapsedTime()
+    this.elapsedTimeMs = positionMs === undefined
+      ? this.resolveElapsedTime()
+      : this.clampPosition(positionMs)
+    this.playbackStartedAtMs = 0
+    this.playbackState = avSession.PlaybackState.PLAYBACK_STATE_PAUSE
+    this.enqueueStateUpdate(this.generation, updateMetadata)
+  }
+
+  /**
+   * 将自然完成的朗读同步为可定位、可重播的卡片暂停状态。
+   *
+   * 系统媒体卡片会将 PLAYBACK_STATE_COMPLETED 继续渲染为暂停按钮，
+   * 因此使用官方示例采用的暂停状态表达“等待用户再次播放”。
+   *
+   * @param durationMs 当前媒体总时长，单位为毫秒。
+   * @param positionMs 当前播放位置，单位为毫秒。
+   */
+  setReplayReady(
+    durationMs: number,
+    positionMs: number = durationMs
+  ): void {
+    if (!this.activeRequested) {
+      return
+    }
+    const normalizedDurationMs: number = Math.max(0, durationMs)
+    const updateMetadata: boolean = normalizedDurationMs !== this.durationMs
+    this.durationMs = normalizedDurationMs
+    this.elapsedTimeMs = this.clampPosition(positionMs)
     this.playbackStartedAtMs = 0
     this.playbackState = avSession.PlaybackState.PLAYBACK_STATE_PAUSE
     this.enqueueStateUpdate(this.generation, updateMetadata)
@@ -150,45 +247,70 @@ export class TtsAvSessionController {
 
   /**
    * 将尚未开始输出声音的朗读重新同步为准备状态。
+   *
+   * @param durationMs 已知的媒体总时长，单位为毫秒。
    */
-  setPreparing(): void {
+  setPreparing(durationMs?: number): void {
     if (!this.activeRequested) {
       return
     }
-    this.elapsedTimeMs = 0
+    const updateMetadata: boolean = durationMs !== undefined
+    if (durationMs !== undefined) {
+      this.durationMs = Math.max(0, durationMs)
+    }
+    this.elapsedTimeMs = this.clampPosition(this.elapsedTimeMs)
     this.playbackStartedAtMs = 0
     this.playbackState = avSession.PlaybackState.PLAYBACK_STATE_PREPARE
-    this.enqueueStateUpdate(this.generation, false)
+    this.enqueueStateUpdate(this.generation, updateMetadata)
   }
 
   /**
-   * 将暂停的朗读重新同步为播放状态。
+   * 使用 AVPlayer 的真实位置刷新系统媒体卡片。
+   *
+   * @param positionMs 当前播放位置，单位为毫秒。
+   * @param durationMs 当前媒体时长，单位为毫秒。
+   * @param force 是否忽略节流并立即同步。
    */
-  setResumed(): void {
+  setPosition(
+    positionMs: number,
+    durationMs?: number,
+    force: boolean = false
+  ): void {
     if (!this.activeRequested) {
       return
     }
-    this.playbackStartedAtMs = Date.now()
-    this.playbackState = avSession.PlaybackState.PLAYBACK_STATE_PLAY
-    this.enqueueStateUpdate(this.generation, false)
+    const updateMetadata: boolean =
+      durationMs !== undefined && Math.max(0, durationMs) !== this.durationMs
+    if (durationMs !== undefined) {
+      this.durationMs = Math.max(0, durationMs)
+    }
+    this.elapsedTimeMs = this.clampPosition(positionMs)
+    if (this.playbackState === avSession.PlaybackState.PLAYBACK_STATE_PLAY) {
+      this.playbackStartedAtMs = Date.now()
+    }
+    const now: number = Date.now()
+    if (!force && now - this.lastPositionSyncAtMs < POSITION_SYNC_INTERVAL_MS) {
+      return
+    }
+    this.lastPositionSyncAtMs = now
+    this.enqueueStateUpdate(this.generation, updateMetadata)
   }
 
   /**
    * 停止当前系统媒体会话。
-   *
-   * @param completed 是否为自然播放完成。
    */
-  stop(completed: boolean = false): void {
-    const terminalState: avSession.PlaybackState = completed
-      ? avSession.PlaybackState.PLAYBACK_STATE_COMPLETED
-      : avSession.PlaybackState.PLAYBACK_STATE_STOP
+  stop(): void {
     const generation: number = ++this.generation
-    this.elapsedTimeMs = completed ? this.durationMs : this.resolveElapsedTime()
+    this.elapsedTimeMs = this.resolveElapsedTime()
     this.playbackStartedAtMs = 0
-    this.playbackState = terminalState
+    this.playbackState = avSession.PlaybackState.PLAYBACK_STATE_STOP
     this.activeRequested = false
+    this.stateUpdateRevision++
+    this.metadataDirty = false
+    const snapshot: TtsAvSessionPlaybackSnapshot =
+      this.capturePlaybackSnapshot()
     this.enqueue(async (): Promise<void> => {
-      await this.closeSession(generation, terminalState)
+      await this.closeSession(generation, snapshot)
     })
   }
 
@@ -199,12 +321,16 @@ export class TtsAvSessionController {
     const generation: number = ++this.generation
     const lifecycleGeneration: number = ++this.lifecycleGeneration
     this.activeRequested = false
+    this.stateUpdateRevision++
+    this.metadataDirty = false
     this.playbackStartedAtMs = 0
     this.playbackState = avSession.PlaybackState.PLAYBACK_STATE_RELEASED
+    const snapshot: TtsAvSessionPlaybackSnapshot =
+      this.capturePlaybackSnapshot()
     this.enqueue(async (): Promise<void> => {
       await this.closeSession(
         generation,
-        avSession.PlaybackState.PLAYBACK_STATE_RELEASED,
+        snapshot,
         true
       )
       if (generation === this.generation &&
@@ -219,11 +345,13 @@ export class TtsAvSessionController {
    * 将媒体会话操作加入串行队列。
    *
    * @param task 待执行的媒体会话操作。
+   * @returns 当前媒体会话操作链。
    */
-  private enqueue(task: () => Promise<void>): void {
+  private enqueue(task: () => Promise<void>): Promise<void> {
     this.operation = this.operation.then(task).catch((error: Object): void => {
       logger.error('Synchronize TTS AVSession failed: %{public}s', formatError(error))
     })
+    return this.operation
   }
 
   /**
@@ -251,23 +379,44 @@ export class TtsAvSessionController {
       return
     }
     try {
-      await session.setAVMetadata(this.buildMetadata(metadata))
-      if (!this.isCurrentActiveGeneration(generation)) {
-        return
+      if (!this.sessionActivated) {
+        await session.activate()
+        this.sessionActivated = true
       }
-      await session.setAVPlaybackState(this.buildPlaybackState())
-      if (!this.isCurrentActiveGeneration(generation)) {
-        return
-      }
-      await session.activate()
-      logger.info('TTS AVSession activated')
     } catch (error) {
       logger.error('Activate TTS AVSession failed: %{public}s', formatError(error))
       if (this.isCurrentActiveGeneration(generation) && this.session === session) {
         this.session = null
+        this.sessionActivated = false
         await this.releaseSessionInstance(session)
       }
+      return
     }
+    if (!this.isCurrentActiveGeneration(generation)) {
+      return
+    }
+    const snapshot: TtsAvSessionPlaybackSnapshot =
+      this.capturePlaybackSnapshot()
+    const metadataRevision: number = this.stateUpdateRevision
+    try {
+      await session.setAVMetadata(this.buildMetadata(metadata, snapshot.durationMs))
+      if (this.isCurrentActiveGeneration(generation) &&
+        metadataRevision === this.stateUpdateRevision) {
+        this.metadataDirty = false
+      }
+    } catch (error) {
+      this.metadataDirty = true
+      logger.warn('Set initial TTS AVSession metadata failed: %{public}s', formatError(error))
+    }
+    if (!this.isCurrentActiveGeneration(generation)) {
+      return
+    }
+    try {
+      await session.setAVPlaybackState(this.buildPlaybackState(snapshot))
+    } catch (error) {
+      logger.warn('Set initial TTS AVSession state failed: %{public}s', formatError(error))
+    }
+    logger.info('TTS AVSession activated')
   }
 
   /**
@@ -291,6 +440,11 @@ export class TtsAvSessionController {
       session.on('play', this.playCallback)
       session.on('pause', this.pauseCallback)
       session.on('stop', this.stopCallback)
+      session.on('seek', this.seekCallback)
+      session.on('fastForward', this.fastForwardCallback)
+      session.on('rewind', this.rewindCallback)
+      session.on('playPrevious', this.playPreviousCallback)
+      session.on('playNext', this.playNextCallback)
       await this.setLaunchAbility(session, context)
       return session
     } catch (error) {
@@ -327,7 +481,7 @@ export class TtsAvSessionController {
       const agent: WantAgent = await wantAgent.getWantAgent(agentInfo)
       await session.setLaunchAbility(agent)
     } catch (error) {
-      throw new Error(formatError(error))
+      logger.warn('Set TTS AVSession launch ability failed: %{public}s', formatError(error))
     }
   }
 
@@ -335,32 +489,55 @@ export class TtsAvSessionController {
    * 将当前媒体信息转换为 AVSession 元数据。
    *
    * @param metadata 当前媒体信息。
+   * @param durationMs 当前媒体总时长，单位为毫秒。
    * @returns 系统媒体会话元数据。
    */
-  private buildMetadata(metadata: TtsMediaMetadata): avSession.AVMetadata {
+  private buildMetadata(
+    metadata: TtsMediaMetadata,
+    durationMs: number
+  ): avSession.AVMetadata {
     return {
       assetId: metadata.assetId,
       title: metadata.title,
       artist: metadata.artist,
       album: metadata.album,
-      duration: this.durationMs
+      duration: durationMs,
+      skipIntervals: avSession.SkipIntervals.SECONDS_15
     }
   }
 
   /**
-   * 构建当前系统媒体会话播放状态。
+   * 将播放快照转换为系统媒体会话播放状态。
    *
+   * @param snapshot 待发布的不可变播放快照。
    * @returns 系统媒体会话播放状态。
    */
-  private buildPlaybackState(): avSession.AVPlaybackState {
+  private buildPlaybackState(
+    snapshot: TtsAvSessionPlaybackSnapshot
+  ): avSession.AVPlaybackState {
     return {
-      state: this.playbackState,
+      state: snapshot.state,
       speed: 1,
       position: {
-        elapsedTime: this.resolveElapsedTime(),
-        updateTime: Date.now()
+        elapsedTime: snapshot.positionMs,
+        updateTime: snapshot.updateTimeMs
       },
-      bufferedTime: this.durationMs
+      bufferedTime: snapshot.durationMs,
+      duration: snapshot.durationMs
+    }
+  }
+
+  /**
+   * 捕获当前播放状态，避免异步队列执行时读取到后续状态。
+   *
+   * @returns 当前不可变播放快照。
+   */
+  private capturePlaybackSnapshot(): TtsAvSessionPlaybackSnapshot {
+    return {
+      state: this.playbackState,
+      positionMs: this.resolveElapsedTime(),
+      durationMs: this.durationMs,
+      updateTimeMs: Date.now()
     }
   }
 
@@ -371,29 +548,109 @@ export class TtsAvSessionController {
    * @param updateMetadata 是否同时更新包含总时长的媒体元数据。
    */
   private enqueueStateUpdate(generation: number, updateMetadata: boolean): void {
+    if (!this.isCurrentActiveGeneration(generation)) {
+      return
+    }
+    this.stateUpdateRevision++
+    this.metadataDirty = this.metadataDirty || updateMetadata
+    this.scheduleStateSynchronization()
+  }
+
+  /**
+   * 确保系统操作队列中最多存在一个最新状态同步任务。
+   */
+  private scheduleStateSynchronization(): void {
+    if (this.stateSynchronizationScheduled || !this.activeRequested) {
+      return
+    }
+    this.stateSynchronizationScheduled = true
     this.enqueue(async (): Promise<void> => {
-      const session: avSession.AVSession | null = this.session
-      if (!this.isCurrentActiveGeneration(generation) || session === null) {
-        return
-      }
-      const metadata: TtsMediaMetadata | null = this.metadata
-      if (updateMetadata && metadata !== null) {
-        await session.setAVMetadata(this.buildMetadata(metadata))
-      }
-      await session.setAVPlaybackState(this.buildPlaybackState())
+      await this.synchronizeLatestState()
     })
+  }
+
+  /**
+   * 丢弃过期快照并将 AVSession 收敛到最新业务状态。
+   */
+  private async synchronizeLatestState(): Promise<void> {
+    let synchronizedRevision: number = -1
+    try {
+      let attempt: number = 0
+      while (this.activeRequested) {
+        const generation: number = this.generation
+        const revision: number = this.stateUpdateRevision
+        synchronizedRevision = revision
+        const session: avSession.AVSession | null = this.session
+        if (!this.isCurrentActiveGeneration(generation) || session === null) {
+          return
+        }
+        const snapshot: TtsAvSessionPlaybackSnapshot =
+          this.capturePlaybackSnapshot()
+        const currentMetadata: TtsMediaMetadata | null = this.metadata
+        const shouldUpdateMetadata: boolean =
+          this.metadataDirty && currentMetadata !== null
+        let metadataSynchronized: boolean = !shouldUpdateMetadata
+        if (shouldUpdateMetadata && currentMetadata !== null) {
+          try {
+            await session.setAVMetadata(
+              this.buildMetadata(currentMetadata, snapshot.durationMs)
+            )
+            metadataSynchronized = true
+          } catch (error) {
+            logger.warn('Set TTS AVSession metadata failed: %{public}s', formatError(error))
+          }
+        }
+        if (!this.isCurrentActiveGeneration(generation)) {
+          return
+        }
+        let playbackStateSynchronized: boolean = false
+        try {
+          await session.setAVPlaybackState(this.buildPlaybackState(snapshot))
+          playbackStateSynchronized = true
+        } catch (error) {
+          logger.warn('Set TTS AVSession playback state failed: %{public}s', formatError(error))
+        }
+        if (!this.isCurrentActiveGeneration(generation)) {
+          return
+        }
+        if (revision !== this.stateUpdateRevision) {
+          attempt = 0
+          continue
+        }
+        if (metadataSynchronized) {
+          this.metadataDirty = false
+        }
+        if (metadataSynchronized && playbackStateSynchronized) {
+          return
+        }
+        attempt++
+        if (attempt >= MAX_STATE_SYNC_ATTEMPTS) {
+          logger.warn(
+            'TTS AVSession state did not converge after %{public}d attempts',
+            MAX_STATE_SYNC_ATTEMPTS
+          )
+          return
+        }
+      }
+    } finally {
+      this.stateSynchronizationScheduled = false
+      if (this.activeRequested &&
+        synchronizedRevision !== this.stateUpdateRevision) {
+        this.scheduleStateSynchronization()
+      }
+    }
   }
 
   /**
    * 更新终止状态并销毁当前系统媒体会话。
    *
    * @param generation 当前会话操作代次。
-   * @param terminalState 会话关闭前同步的终止状态。
+   * @param snapshot 会话关闭前同步的终止状态快照。
    * @param force 是否忽略播放代次并强制释放旧 Ability 的会话。
    */
   private async closeSession(
     generation: number,
-    terminalState: avSession.PlaybackState,
+    snapshot: TtsAvSessionPlaybackSnapshot,
     force: boolean = false
   ): Promise<void> {
     if (!force && generation !== this.generation) {
@@ -405,16 +662,9 @@ export class TtsAvSessionController {
       return
     }
     this.session = null
+    this.sessionActivated = false
     try {
-      await session.setAVPlaybackState({
-        state: terminalState,
-        speed: 1,
-        position: {
-          elapsedTime: this.elapsedTimeMs,
-          updateTime: Date.now()
-        },
-        bufferedTime: this.durationMs
-      })
+      await session.setAVPlaybackState(this.buildPlaybackState(snapshot))
     } catch (error) {
       logger.warn('Set terminal TTS AVSession state failed: %{public}s', formatError(error))
     }
@@ -435,6 +685,11 @@ export class TtsAvSessionController {
       session.off('play', this.playCallback)
       session.off('pause', this.pauseCallback)
       session.off('stop', this.stopCallback)
+      session.off('seek', this.seekCallback)
+      session.off('fastForward', this.fastForwardCallback)
+      session.off('rewind', this.rewindCallback)
+      session.off('playPrevious', this.playPreviousCallback)
+      session.off('playNext', this.playNextCallback)
     } catch (error) {
       logger.warn('Unregister TTS AVSession callbacks failed: %{public}s', formatError(error))
     }
@@ -474,6 +729,20 @@ export class TtsAvSessionController {
   }
 
   /**
+   * 将播放位置约束在当前媒体有效范围内。
+   *
+   * @param positionMs 待约束的位置。
+   * @returns 有效播放位置，单位为毫秒。
+   */
+  private clampPosition(positionMs: number): number {
+    const normalizedPosition: number = Math.max(0, Math.round(positionMs))
+    if (this.durationMs <= 0) {
+      return normalizedPosition
+    }
+    return Math.min(normalizedPosition, this.durationMs)
+  }
+
+  /**
    * 判断指定代次是否仍是当前需要激活的媒体会话。
    *
    * @param generation 待判断的会话操作代次。
@@ -493,8 +762,10 @@ export class TtsAvSessionController {
       return
     }
     this.metadata = null
+    this.metadataDirty = false
     this.durationMs = 0
     this.elapsedTimeMs = 0
     this.playbackStartedAtMs = 0
+    this.lastPositionSyncAtMs = 0
   }
 }
