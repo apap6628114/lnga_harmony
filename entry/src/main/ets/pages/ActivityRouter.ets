@@ -63,6 +63,7 @@ export struct ActivityRouter {
           if (entry.screen.type === 'thread') {
             ThreadPanel({
               threadTid: entry.screen.tid,
+              threadPage: entry.screen.threadPage,
               threadPid: entry.screen.pid,
               navEntryId: entry.id
             })

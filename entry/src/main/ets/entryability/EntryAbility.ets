@@ -36,9 +36,6 @@ export default class EntryAbility extends UIAbility {
     appStore.init(this.context)
       .then(() => {
         logger.info( 'AppStore initialized');
-        if (appStore.isInitialized && appStore.auth.isAuthenticated) {
-          appStore.refreshNotifications(false);
-        }
       })
       .catch((e: Error) => {
         logger.error( 'AppStore init failed: %{public}s', formatError(e));
@@ -60,6 +57,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    appStore.setNotificationForegroundActive(false)
     TtsPlayer.shutdown()
     logger.info( '%{public}s', 'Ability onDestroy');
   }
@@ -104,15 +102,15 @@ export default class EntryAbility extends UIAbility {
   }
 
   onForeground(): void {
+    appStore.setNotificationForegroundActive(true)
     if (appStore.isInitialized) {
       appStore.autoCheckinIfNeeded();
-      appStore.refreshNotifications(false);
     }
     logger.info( '%{public}s', 'Ability onForeground');
   }
 
   onBackground(): void {
-    // 应用进入后台时持久化所有数据，防止被系统杀死后丢失
+    appStore.setNotificationForegroundActive(false)
     appStore.flushAll();
     logger.info( '%{public}s', 'Ability onBackground');
   }

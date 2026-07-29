@@ -60,6 +60,8 @@ export struct ThreadPanel {
   @State holdingDetected: boolean = false
 
   @Prop @Watch('onThreadChanged') threadTid: string = ''
+  /** 路由请求的初始页码。 */
+  @Prop threadPage: number = 1
   @Prop threadPid: string = ''
   @Prop @Watch('onScrollToPid') navEntryId: number = 0
   @State isLoading: boolean = true
@@ -87,6 +89,8 @@ export struct ThreadPanel {
   private pagePickerOnSelect: ((page: number) => void) | null = null
   private scroller: Scroller = new Scroller()
   private pageSwitchPending: boolean = false
+  /** 尚未交给帖子接口定位的路由目标楼层。 */
+  private pendingTargetPid: string = ''
   @State mgr: ThreadPaginationManager = new ThreadPaginationManager()
   private prefetchNextInProgress: boolean = false
   private prefetchPrevInProgress: boolean = false
@@ -151,8 +155,11 @@ export struct ThreadPanel {
 
   aboutToAppear(): void {
     this.hasInitiallyLoaded = true
+    const initialPage: number = Math.max(this.threadPage, 1)
+    this.pendingTargetPid = this.threadPid
+    this.displayPage = initialPage
     if (this.threadTid) {
-      this.loadPosts(1, LOAD_REPLACE)
+      this.loadPosts(initialPage, LOAD_REPLACE)
     }
     this.loadPersistedVotes()
     this.startHoldingHandMonitoring()
@@ -169,7 +176,9 @@ export struct ThreadPanel {
     }
     this.mgr.reset()
     this.postsDataSource.clear()
-    this.displayPage = 1
+    const initialPage: number = Math.max(this.threadPage, 1)
+    this.pendingTargetPid = this.threadPid
+    this.displayPage = initialPage
     this.isLoading = true
     this.isLoadingMore = false
     this.isLoadingPrevious = false
@@ -179,7 +188,7 @@ export struct ThreadPanel {
     this.votedUpPids = new Set()
     this.votedDownPids = new Set()
     this.pageSwitchPending = false
-    this.loadPosts(1, LOAD_REPLACE)
+    this.loadPosts(initialPage, LOAD_REPLACE)
     this.loadPersistedVotes()
   }
 
@@ -258,12 +267,13 @@ export struct ThreadPanel {
     }
 
     const gen: number = this.mgr.nextGeneration()
+    const requestPid: string = mode === LOAD_REPLACE ? this.pendingTargetPid : ''
 
     try {
       const noteMap: Record<string, string> = appStore.settingsStore.getNoteMap()
       const isNegativeAuthor: boolean = this.authorOnly && this.threadAuthorId !== '' && Number(this.threadAuthorId) <= 0
       const result: ThreadResult = await withTimeout<ThreadResult>(getThread(
-        appStore.auth.token, this.threadTid, '',
+        appStore.auth.token, this.threadTid, requestPid,
         this.authorOnly && !isNegativeAuthor ? this.threadAuthorId : '', String(targetPage),
         appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords(),
         noteMap
@@ -272,6 +282,7 @@ export struct ThreadPanel {
       if (gen !== this.mgr.getGeneration()) return
 
       if (result.ok) {
+        const resolvedPage: number = result.pagination.page > 0 ? result.pagination.page : targetPage
         applyBlacklistStateToPosts(result.posts, appStore.settingsStore.getBlacklistIds())
         if (isNegativeAuthor) {
           result.posts = result.posts.filter((p: PostInfo): boolean => String(p.authorid) === this.threadAuthorId)
@@ -294,19 +305,19 @@ export struct ThreadPanel {
         }
 
         if (mode === LOAD_REPLACE) {
-          this.mgr.replaceWith(result.posts, targetPage, this.mgr.totalPages)
+          this.mgr.replaceWith(result.posts, resolvedPage, this.mgr.totalPages)
           this.postsDataSource.replaceAll(result.posts)
+          this.displayPage = resolvedPage
           this.pageSwitchPending = false
           if (appStore.auth.isAuthenticated) {
             appStore.addBrowseHistoryFromThread(appStore.auth.uid, result, this.threadTid)
           }
-          if (this.threadPid.length > 0) {
-            // 延迟一帧确保 LazyForEach 布局完成，目标 item 已创建
+          if (requestPid.length > 0) {
+            this.pendingTargetPid = ''
             setTimeout((): void => {
               this.onScrollToPid()
             }, 0)
           } else {
-            // 数据替换后单次跳转到顶部，此时 LazyForEach 已收到通知开始布局
             this.scroller.scrollToIndex(1)
           }
         } else if (mode === LOAD_APPEND) {

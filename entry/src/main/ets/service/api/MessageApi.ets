@@ -11,6 +11,23 @@ import { ApiResult, NotificationsResult } from '../../model/NgaApiResults';
 import { MessageListResult, MessageDetailResult, MessageSendResult } from '../../model/MessageResult';
 import type { NotificationParseResult } from '../../model/Notification';
 
+/**
+ * 判断私信接口响应是否包含解析器要求的数据容器。
+ *
+ * @param raw - NGA 私信接口原始响应
+ * @returns 是否具备 data.data 对象
+ */
+function hasMessagePayload(raw: object): boolean {
+  const record: Record<string, Object> = raw as Record<string, Object>;
+  const dataValue: Object | undefined = record['data'];
+  if (!dataValue || typeof dataValue !== 'object' || Array.isArray(dataValue)) {
+    return false;
+  }
+  const dataRecord: Record<string, Object> = dataValue as Record<string, Object>;
+  const rowsValue: Object | undefined = dataRecord['data'];
+  return !!rowsValue && typeof rowsValue === 'object' && !Array.isArray(rowsValue);
+}
+
 // ============== 通知 ==============
 
 export async function getNotifications(token: string): Promise<NotificationsResult> {
@@ -25,6 +42,11 @@ export async function getNotifications(token: string): Promise<NotificationsResu
       '__lib': 'noti', '__output': '8', '__act': 'get_all',
     };
     const raw = await ngaClient.get('/nuke.php', params, { uid: session.uid, cid: session.cid });
+    const error: string | null = parseNgaError(raw);
+    if (error) {
+      result.error = error;
+      return result;
+    }
     const parsed: NotificationParseResult = parseNotifications(raw as object);
     if (!parsed.valid) {
       result.error = '通知数据格式异常';
@@ -50,7 +72,12 @@ export async function clearNotifications(token: string): Promise<ApiResult> {
   }
   try {
     const fields: Record<string, string> = { '__lib': 'noti', 'raw': '3', '__act': 'del' };
-    await ngaClient.post('/nuke.php', fields, { uid: session.uid, cid: session.cid });
+    const raw = await ngaClient.post('/nuke.php', fields, { uid: session.uid, cid: session.cid });
+    const error: string | null = parseNgaError(raw);
+    if (error) {
+      result.error = error;
+      return result;
+    }
     result.ok = true;
   } catch (e) {
     result.error = (e as Error).message ?? '清除通知失败';
@@ -72,6 +99,15 @@ export async function getMessageList(token: string, page: string): Promise<Messa
       '__lib': 'message', '__act': 'message', 'act': 'list', 'page': page || '1', 'lite': 'js',
     };
     const raw = await ngaClient.get('/nuke.php', params, { uid: session.uid, cid: session.cid });
+    const error: string | null = parseNgaError(raw);
+    if (error) {
+      result.error = error;
+      return result;
+    }
+    if (!hasMessagePayload(raw)) {
+      result.error = '私信列表数据格式异常';
+      return result;
+    }
     result.data = parseMessageList(raw as object);
     result.ok = true;
   } catch (e) {
@@ -92,6 +128,15 @@ export async function getMessageDetail(token: string, mid: string, page: string)
       '__lib': 'message', '__act': 'message', 'act': 'read', 'page': page || '1', 'mid': mid, 'lite': 'js',
     };
     const raw = await ngaClient.get('/nuke.php', params, { uid: session.uid, cid: session.cid });
+    const error: string | null = parseNgaError(raw);
+    if (error) {
+      result.error = error;
+      return result;
+    }
+    if (!hasMessagePayload(raw)) {
+      result.error = '私信详情数据格式异常';
+      return result;
+    }
     result.data = parseMessageDetail(raw as object);
     result.ok = true;
   } catch (e) {

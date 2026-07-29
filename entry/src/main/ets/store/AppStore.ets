@@ -22,6 +22,7 @@ import type { NgaNotification } from '../model/Notification'
 import type { Category } from '../model/Forum'
 
 import { Logger, DOMAIN_APP, formatError } from '../common/utils/Logger'
+import { shouldEnableNotificationPolling } from '../common/utils/NotificationPolicy'
 
 const logger = new Logger(DOMAIN_APP, 'AppStore')
 
@@ -39,6 +40,8 @@ class AppStoreClass {
   private initialized: boolean = false
   /** AppStore 初始化流程是否已经结束。 */
   private initializationFinished: boolean = false
+  /** Ability 当前是否处于前台。 */
+  private foregroundActive: boolean = false
 
   // ---------- Sub Stores ----------
   readonly authStore: AuthStore = new AuthStore()
@@ -55,6 +58,7 @@ class AppStoreClass {
   async init(context: Context): Promise<void> {
     this.initialized = false
     this.initializationFinished = false
+    this.notificationStore.stopPolling()
     try {
       this.context = context
       await this.store.init(context, 'nga_app_store')
@@ -73,6 +77,7 @@ class AppStoreClass {
       }
       this.settingsStore.applyCurrentTheme()
       this.initialized = true
+      this.reconcileNotificationPolling()
 
       logger.info('AppStore initialized')
     } catch (e) {
@@ -112,14 +117,17 @@ class AppStoreClass {
   }
 
   async setAuth(token: string, uid: string, nickName: string, avatarUrl: string): Promise<void> {
+    this.notificationStore.stopPolling()
     const uidChanged = await this.authStore.setAuth(token, uid, nickName, avatarUrl)
     if (uidChanged) {
       await this.loadUserData()
       this.settingsStore.applyCurrentTheme()
     }
+    this.reconcileNotificationPolling()
   }
 
   clearAuth(): void {
+    this.notificationStore.stopPolling()
     // ⚠️ 以下顺序有严格依赖：cancel/reset 必须在 authStore.clearAuth() 之前，
     // 否则后者 enqueue 的 persistAuth 写入任务会被取消。
     // 先取消队列中所有待执行的任务（如已入队的 history/vote 旧 uid 写入）
@@ -205,7 +213,32 @@ class AppStoreClass {
   refreshNotifications(force: boolean = false): Promise<boolean> {
     return this.notificationStore.refreshNotifications(force)
   }
+  /**
+   * 更新 Ability 前台状态并统一协调通知轮询。
+   *
+   * @param active - Ability 是否处于前台
+   */
+  setNotificationForegroundActive(active: boolean): void {
+    this.foregroundActive = active
+    this.reconcileNotificationPolling()
+  }
+  /**
+   * 根据初始化、认证与前台状态启动或停止通知轮询。
+   */
+  private reconcileNotificationPolling(): void {
+    if (shouldEnableNotificationPolling(
+      this.foregroundActive,
+      this.initialized,
+      this.auth.isAuthenticated
+    )) {
+      this.notificationStore.startPolling()
+      return
+    }
+    this.notificationStore.stopPolling()
+  }
   getCachedNotifications(): NgaNotification[] { return this.notificationStore.getCachedNotifications() }
+  /** 将指定通知标记为已查看。 */
+  markNotificationSeen(notificationId: string): void { this.notificationStore.markSeen(notificationId) }
   /** 将全部通知标记为已查看。 */
   markAllNotificationsSeen(): void { this.notificationStore.markAllSeen() }
   /** 将私信通知标记为已查看。 */

@@ -63,6 +63,7 @@ export async function getThread(token: string, tid: string, pid: string,
         'tid': tid || '',
         'page': page || '1',
       };
+      if (pid) htmlParams['pid'] = pid;
       if (authorid) htmlParams['authorid'] = authorid;
       const html: string = await ngaClient.getHtmlText('/read.php', htmlParams, { uid: session.uid, cid: session.cid });
       const rawObj: Object = await taskpool.execute(parseHtmlTask, html)
@@ -101,6 +102,7 @@ export async function getThread(token: string, tid: string, pid: string,
           'tid': tid || '',
           'page': page || '1',
         };
+        if (pid) fallbackParams['pid'] = pid;
         if (authorid) fallbackParams['authorid'] = authorid;
         const html: string = await ngaClient.getHtmlText('/read.php', fallbackParams, { uid: session.uid, cid: session.cid });
         const rawObj: Object = await taskpool.execute(parseHtmlTask, html)

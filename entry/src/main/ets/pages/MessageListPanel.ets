@@ -49,20 +49,15 @@ export struct MessageListPanel {
   }
 
   /**
-   * 在消息列表成功显示后刷新私信通知并标记为已查看。
+   * 在消息列表成功显示后刷新通知，但不改变具体通知的本地已读状态。
    *
    * @param appearanceGeneration - 消息列表成功时的页面出现周期版本号
    */
-  private async syncMessageNotificationState(appearanceGeneration: number): Promise<void> {
+  private async refreshNotificationState(appearanceGeneration: number): Promise<void> {
     if (appearanceGeneration !== this.appearanceGeneration) {
       return
     }
-    appStore.markMessageNotificationsSeen()
     await appStore.refreshNotifications(true)
-    if (appearanceGeneration !== this.appearanceGeneration) {
-      return
-    }
-    appStore.markMessageNotificationsSeen()
   }
 
   /**
@@ -82,7 +77,7 @@ export struct MessageListPanel {
         this.threads = result.data.messageEntryList
         this.threadsDataSource.replaceAll(this.threads)
         this.isLoading = false
-        await this.syncMessageNotificationState(appearanceGeneration)
+        await this.refreshNotificationState(appearanceGeneration)
         return
       } else {
         this.hasError = true

@@ -47,16 +47,6 @@ export interface MessageNotification extends NotificationInfo {
 }
 
 /**
- * 评价类通知。
- */
-export interface VoteNotification extends NotificationInfo {
-  /** 主题 ID。 */
-  tid: string;
-  /** 楼层 ID。 */
-  pid: string;
-}
-
-/**
  * 支持或反对类通知。
  */
 export interface UpvoteNotification extends NotificationInfo {
@@ -66,12 +56,14 @@ export interface UpvoteNotification extends NotificationInfo {
   tid: string;
   /** 楼层 ID。 */
   pid: string;
+  /** 服务端页码提示。 */
+  page: string;
 }
 
 /**
  * 应用支持的标准化通知联合类型。
  */
-export type NgaNotification = ReplyNotification | MessageNotification | VoteNotification | UpvoteNotification;
+export type NgaNotification = ReplyNotification | MessageNotification | UpvoteNotification;
 
 /**
  * 通知解析结果。

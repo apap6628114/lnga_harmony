@@ -1,13 +1,29 @@
 import type { NgaNotification } from '../../model/Notification'
 
 /**
+ * 判断通知轮询是否满足前台运行条件。
+ *
+ * @param foregroundActive - Ability 是否处于前台
+ * @param initialized - AppStore 是否初始化完成
+ * @param authenticated - 当前账号是否已认证
+ * @returns 是否应启用通知轮询
+ */
+export function shouldEnableNotificationPolling(
+  foregroundActive: boolean,
+  initialized: boolean,
+  authenticated: boolean
+): boolean {
+  return foregroundActive && initialized && authenticated
+}
+
+/**
  * 判断通知类型是否属于私信。
  *
  * @param type - NGA 通知类型
  * @returns 是否为私信通知
  */
 export function isMessageNotificationType(type: number): boolean {
-  return type === 10 || type === 11 || type === 12
+  return type === 10 || type === 11
 }
 
 /**
@@ -45,6 +61,30 @@ export function mergeNotifications(
     return safeRightTime - safeLeftTime
   })
   return merged.length > maxCount ? merged.slice(0, maxCount) : merged
+}
+
+/**
+ * 将指定通知标记为已查看。
+ *
+ * @param notifications - 通知列表
+ * @param notificationId - 本地稳定通知 ID
+ * @returns 是否发生状态变化
+ */
+export function markNotificationSeen(
+  notifications: NgaNotification[],
+  notificationId: string
+): boolean {
+  for (let index: number = 0; index < notifications.length; index++) {
+    const notification: NgaNotification = notifications[index]
+    if (notification.notificationId === notificationId) {
+      if (notification.seen) {
+        return false
+      }
+      notification.seen = true
+      return true
+    }
+  }
+  return false
 }
 
 /**

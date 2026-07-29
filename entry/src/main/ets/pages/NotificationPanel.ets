@@ -4,7 +4,12 @@
 
 import { appStore } from '../store/AppStore'
 import { routerStore, Screen } from '../store/RouterStore'
-import type { NotificationInfo, ReplyNotification, UpvoteNotification } from '../model/Notification'
+import type {
+  MessageNotification,
+  NotificationInfo,
+  ReplyNotification,
+  UpvoteNotification
+} from '../model/Notification'
 import { AppColors, NOTI_TYPE_MAP, getNotiIcon } from '../common/constants/Constants'
 import { formatTime, escHtml } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
@@ -25,7 +30,7 @@ const FILTER_MODES: FilterMode[] = [
   { key: 2, label: '@我' },
   { key: 3, label: '私信' }
 ]
-const FILTER_TYPES: number[][] = [[], [1, 2, 3, 4, 15, 17], [7, 8], [10, 11, 12]]
+const FILTER_TYPES: number[][] = [[], [1, 2, 17], [7, 8], [10, 11]]
 
 @Component
 export struct NotificationPanel {
@@ -48,8 +53,6 @@ export struct NotificationPanel {
     this.appearanceGeneration++
     const currentGeneration: number = this.appearanceGeneration
     this.syncFromStore()
-    appStore.markAllNotificationsSeen()
-    this.syncFromStore()
     this.loadNotifications(currentGeneration)
   }
 
@@ -70,7 +73,7 @@ export struct NotificationPanel {
   }
 
   /**
-   * 刷新通知并仅在当前页面出现周期内更新查看状态。
+   * 刷新通知并仅在当前页面出现周期内更新页面快照。
    *
    * @param appearanceGeneration - 请求发起时的页面出现周期版本号
    */
@@ -81,8 +84,6 @@ export struct NotificationPanel {
     if (appearanceGeneration !== this.appearanceGeneration) {
       return
     }
-    this.syncFromStore()
-    appStore.markAllNotificationsSeen()
     this.syncFromStore()
     if (!success) {
       if (this.notifications.length > 0) {
@@ -124,19 +125,71 @@ export struct NotificationPanel {
     this.clearing = false
   }
 
-  private handleNotificationClick(n: NotificationInfo): void {
-    const info = NOTI_TYPE_MAP[n.type]
+  /**
+   * 将服务端页码提示转换为可用页码。
+   *
+   * @param page - 服务端页码字符串
+   * @returns 至少为 1 的整数页码
+   */
+  private resolvePage(page: string): number {
+    const parsedPage: number = Number(page)
+    if (!Number.isFinite(parsedPage) || parsedPage < 1) {
+      return 1
+    }
+    return Math.floor(parsedPage)
+  }
+
+  /**
+   * 获取帖子互动通知应定位的楼层。
+   *
+   * @param notification - 帖子互动通知
+   * @returns 目标楼层 ID
+   */
+  private resolveReplyTargetPid(notification: ReplyNotification): string {
+    return this.normalizeTargetPid(notification.replyPid)
+  }
+
+  /**
+   * 将主楼 PID 提示转换为主题顶部导航。
+   *
+   * @param pid - NGA 楼层 ID
+   * @returns 可传给帖子路由的目标楼层 ID
+   */
+  private normalizeTargetPid(pid: string): string {
+    return pid === '0' ? '' : pid
+  }
+
+  /**
+   * 标记并打开一条具体通知。
+   *
+   * @param notification - 被点击的通知
+   */
+  private handleNotificationClick(notification: NotificationInfo): void {
+    const info = NOTI_TYPE_MAP[notification.type]
     if (info && info.category === 'message') {
-      routerStore.navigateActivity(Screen.messages())
-    } else if (n.type === 17) {
-      const upvote = n as UpvoteNotification
+      const message: MessageNotification = notification as MessageNotification
+      if (message.mid.length === 0) {
+        return
+      }
+      appStore.markNotificationSeen(notification.notificationId)
+      this.syncFromStore()
+      routerStore.navigateActivity(Screen.messageDetail(message.mid))
+    } else if (notification.type === 17) {
+      const upvote: UpvoteNotification = notification as UpvoteNotification
       if (upvote.tid.length > 0) {
-        routerStore.navigateActivity(Screen.thread(upvote.tid, 1, upvote.pid))
+        appStore.markNotificationSeen(notification.notificationId)
+        this.syncFromStore()
+        routerStore.navigateActivity(
+          Screen.thread(upvote.tid, this.resolvePage(upvote.page), this.normalizeTargetPid(upvote.pid))
+        )
       }
     } else {
-      const reply = n as ReplyNotification
+      const reply: ReplyNotification = notification as ReplyNotification
       if (reply.tid.length > 0) {
-        routerStore.navigateActivity(Screen.thread(reply.tid, 1, reply.replyPid))
+        const targetPid: string = this.resolveReplyTargetPid(reply)
+        appStore.markNotificationSeen(notification.notificationId)
+        this.syncFromStore()
+        routerStore.navigateActivity(Screen.thread(reply.tid, this.resolvePage(reply.page), targetPid))
       }
     }
   }
@@ -190,8 +243,15 @@ export struct NotificationPanel {
             LazyForEach(this.notificationsDataSource, (n: NotificationInfo) => {
               ListItem() {
                 Row() {
+                  Circle()
+                    .width(8)
+                    .height(8)
+                    .fill(AppColors.primary)
+                    .opacity(n.seen ? 0 : 1)
+                    .margin({ right: 8 })
                   if (n.type === 17) {
-                    // 支持/反对：无头像也无图标
+                    Image(getNotiIcon(n.type)).width(20).height(20).fillColor(AppColors.primary)
+                      .margin({ right: 10 })
                   } else if (n.userName.length > 0) {
                     Avatar({ name: n.userName, uid: n.userId, avatarSize: 40 })
                       .margin({ right: 10 })
@@ -215,6 +275,15 @@ export struct NotificationPanel {
                           .fontSize(15).fontColor(AppColors.textSecondary)
                           .fontWeight(n.seen ? FontWeight.Normal : FontWeight.Bold)
                       }.layoutWeight(1)
+                      if (!n.seen) {
+                        Text('未读')
+                          .fontSize(10)
+                          .fontColor(AppColors.primary)
+                          .backgroundColor(AppColors.primaryLight)
+                          .borderRadius(6)
+                          .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+                          .margin({ left: 6, right: 8 })
+                      }
                       Text(formatTime(Number(n.timeStamp))).fontSize(12).fontColor(AppColors.textTertiary)
                         .fontWeight(n.seen ? FontWeight.Normal : FontWeight.Bold)
                     }.width('100%').alignItems(VerticalAlign.Center)
@@ -227,6 +296,7 @@ export struct NotificationPanel {
                   }.layoutWeight(1).alignItems(HorizontalAlign.Start)
                 }.width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
                 .alignItems(VerticalAlign.Center)
+                .backgroundColor(n.seen ? AppColors.bg : AppColors.primaryLight)
                 .onClick(() => this.handleNotificationClick(n))
               }
             }, (n: NotificationInfo) => n.notificationId)

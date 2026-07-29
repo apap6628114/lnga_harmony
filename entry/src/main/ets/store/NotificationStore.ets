@@ -11,8 +11,10 @@ import { bumpAppStorageVersion } from '../common/utils/AppStorageVersion'
 import {
   countUnseenMessageNotifications,
   countUnseenNotifications,
+  isMessageNotificationType,
   markAllNotificationsSeen,
   markMessageNotificationsSeen,
+  markNotificationSeen,
   mergeNotifications
 } from '../common/utils/NotificationPolicy'
 import { Logger, DOMAIN_STORE, formatError } from '../common/utils/Logger'
@@ -21,13 +23,16 @@ import type { NotificationsResult } from '../model/NgaApiResults'
 import type { AuthState } from './AuthStore'
 
 /** 通知缓存结构版本。 */
-const NOTIFICATION_CACHE_SCHEMA_VERSION: number = 2
+const NOTIFICATION_CACHE_SCHEMA_VERSION: number = 3
 
 /** 本地最多保留的通知数量。 */
 const MAX_CACHED_NOTIFICATIONS: number = 200
 
 /** 普通刷新最短成功间隔。 */
 const NOTIFICATION_REFRESH_DELAY: number = 30 * 1000
+
+/** 前台通知轮询间隔，与 MNGA 的发布配置保持一致。 */
+const NOTIFICATION_POLL_INTERVAL: number = 60 * 1000
 
 /** 通知 Store 日志实例。 */
 const logger: Logger = new Logger(DOMAIN_STORE, 'NotificationStore')
@@ -62,6 +67,10 @@ export class NotificationStore extends BaseStore<Object> {
   private lastSuccessfulQueryTime: number = 0
   /** 当前正在执行的刷新任务。 */
   private refreshPromise: Promise<boolean> | null = null
+  /** 前台轮询定时器。 */
+  private pollingTimer: number = -1
+  /** 是否允许继续调度前台轮询。 */
+  private pollingEnabled: boolean = false
 
   /**
    * 注入持久化、写队列和认证依赖并加载当前账号缓存。
@@ -71,6 +80,7 @@ export class NotificationStore extends BaseStore<Object> {
    * @param auth - 当前认证状态
    */
   async init(store: PreferencesStore, queue: SerialQueue, auth: AuthState): Promise<void> {
+    this.stopPolling()
     this.setDeps(store, queue, auth)
     this.cachedNotifications = []
     this.lastSuccessfulQueryTime = 0
@@ -86,6 +96,7 @@ export class NotificationStore extends BaseStore<Object> {
    * 重置内存状态和全局红点。
    */
   reset(): void {
+    this.stopPolling()
     this.cachedNotifications = []
     this.unreadNotiCount = 0
     this.unreadMessageCount = 0
@@ -95,6 +106,50 @@ export class NotificationStore extends BaseStore<Object> {
     AppStorage.setOrCreate(KEY_UNREAD_MESSAGE_COUNT, 0)
     bumpAppStorageVersion(KEY_NOTIFICATION_VERSION)
     super.reset()
+  }
+
+  /**
+   * 启动前台通知轮询，并立即执行一次普通刷新。
+   */
+  startPolling(): void {
+    if (!this.auth || !this.auth.isAuthenticated || !this.auth.uid) {
+      this.stopPolling()
+      return
+    }
+    if (this.pollingEnabled) {
+      return
+    }
+    this.pollingEnabled = true
+    this.refreshNotifications(false)
+    this.scheduleNextPoll()
+  }
+
+  /**
+   * 停止前台通知轮询。
+   */
+  stopPolling(): void {
+    this.pollingEnabled = false
+    if (this.pollingTimer >= 0) {
+      clearTimeout(this.pollingTimer)
+      this.pollingTimer = -1
+    }
+  }
+
+  /**
+   * 调度下一次前台通知刷新。
+   */
+  private scheduleNextPoll(): void {
+    if (!this.pollingEnabled || this.pollingTimer >= 0) {
+      return
+    }
+    this.pollingTimer = setTimeout((): void => {
+      this.pollingTimer = -1
+      if (!this.pollingEnabled) {
+        return
+      }
+      this.refreshNotifications(false)
+      this.scheduleNextPoll()
+    }, NOTIFICATION_POLL_INTERVAL)
   }
 
   /**
@@ -210,6 +265,19 @@ export class NotificationStore extends BaseStore<Object> {
    */
   getCachedNotifications(): NgaNotification[] {
     return this.cachedNotifications.slice()
+  }
+
+  /**
+   * 将指定通知标记为已查看并持久化。
+   *
+   * @param notificationId - 本地稳定通知 ID
+   */
+  markSeen(notificationId: string): void {
+    if (!markNotificationSeen(this.cachedNotifications, notificationId)) {
+      return
+    }
+    this.publishState()
+    this.persistCachedNotifications()
   }
 
   /**
@@ -336,7 +404,7 @@ export class NotificationStore extends BaseStore<Object> {
       return false
     }
     const record: Record<string, Object> = value as Record<string, Object>
-    return typeof record['notificationId'] === 'string' &&
+    const commonFieldsValid: boolean = typeof record['notificationId'] === 'string' &&
       String(record['notificationId']).length > 0 &&
       typeof record['type'] === 'number' &&
       typeof record['userId'] === 'string' &&
@@ -345,6 +413,25 @@ export class NotificationStore extends BaseStore<Object> {
       typeof record['timeStamp'] === 'string' &&
       typeof record['seen'] === 'boolean' &&
       typeof record['serverUnreadHint'] === 'number'
+    if (!commonFieldsValid) {
+      return false
+    }
+    const type: number = Number(record['type'])
+    if (isMessageNotificationType(type)) {
+      return typeof record['mid'] === 'string' && String(record['mid']).length > 0
+    }
+    if (type === 17) {
+      return typeof record['tid'] === 'string' && String(record['tid']).length > 0 &&
+        typeof record['pid'] === 'string' && String(record['pid']).length > 0 &&
+        typeof record['page'] === 'string'
+    }
+    if (type === 1 || type === 2 || type === 7 || type === 8) {
+      return typeof record['tid'] === 'string' && String(record['tid']).length > 0 &&
+        typeof record['replyPid'] === 'string' && String(record['replyPid']).length > 0 &&
+        typeof record['repliedPid'] === 'string' &&
+        typeof record['page'] === 'string'
+    }
+    return false
   }
 
   /**
