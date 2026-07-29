@@ -135,6 +135,9 @@ function prefetchPostImages(posts: PostInfo[]): void {
   }
   for (let i = 0; i < posts.length; i++) {
     const post: PostInfo = posts[i]
+    if (post.isInBlackList || appStore.settingsStore.isBlacklisted(String(post.authorid))) {
+      continue
+    }
     const attachs: PostAttachInfo[] = post.attachs
     for (let j = 0; j < attachs.length; j++) {
       const url: string = attachs[j].attachurl

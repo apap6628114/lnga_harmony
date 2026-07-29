@@ -20,11 +20,15 @@ export function collectPostContents(posts: PostInfo[], includeSignatures: boolea
   const contents: string[] = []
   for (let i: number = 0; i < posts.length; i++) {
     const p: PostInfo = posts[i]
-    if (p.content) contents.push(p.content)
-    if (includeSignatures && p.signature) contents.push(p.signature)
+    if (!p.isInBlackList) {
+      if (p.content) contents.push(p.content)
+      if (includeSignatures && p.signature) contents.push(p.signature)
+    }
     const comments: PostInfo[] = p.comments
     for (let j: number = 0; j < comments.length; j++) {
-      if (comments[j].content) contents.push(comments[j].content)
+      if (!comments[j].isInBlackList && comments[j].content) {
+        contents.push(comments[j].content)
+      }
     }
   }
   return contents

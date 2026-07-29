@@ -59,6 +59,10 @@ export struct ProfilePanel {
     this.noteDialogController.open()
   }
   @StorageProp('profileVersion') @Watch('onProfileVersionChange') profileVersion: number = 0
+  /** 黑名单变更版本号。 */
+  @StorageProp('blacklistVersion') @Watch('onBlacklistVersionChange') blacklistVersion: number = 0
+  /** 当前主页用户是否已被屏蔽。 */
+  @State isProfileBlacklisted: boolean = false
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
 
@@ -69,6 +73,7 @@ export struct ProfilePanel {
   aboutToAppear(): void {
     this.uidInitialized = true
     this.isOwnProfile = appStore.auth.uid === this.uid
+    this.onBlacklistVersionChange()
     const cached = appStore.getCachedProfile(this.uid)
     if (cached) {
       this.profile = cached
@@ -86,6 +91,7 @@ export struct ProfilePanel {
     this.isLoading = true
     this.hasError = false
     this.isOwnProfile = appStore.auth.uid === this.uid
+    this.onBlacklistVersionChange()
     const cached = appStore.getCachedProfile(this.uid)
     if (cached) {
       this.profile = cached
@@ -93,6 +99,11 @@ export struct ProfilePanel {
       this.isLoading = false
     }
     appStore.ensureProfile(this.uid)
+  }
+
+  /** 同步当前主页用户的黑名单状态。 */
+  private onBlacklistVersionChange(): void {
+    this.isProfileBlacklisted = appStore.settingsStore.isBlacklisted(this.uid)
   }
 
   private onProfileVersionChange(): void {
@@ -535,25 +546,27 @@ export struct ProfilePanel {
                     routerStore.navigateActivity(Screen.topicList(this.profile!.userName + '的回帖', -1, this.profile!.uid, '', '1'))
                   })
 
-                Button(appStore.settings.blacklist.some(e => e.userId === this.profile!.uid) ? '取消屏蔽' : '加黑')
-                  .fontSize(15)
-                  .fontColor(AppColors.destructive)
-                  .backgroundColor(AppColors.bgTertiary)
-                  .borderRadius(12)
-                  .height(44)
-                  .margin({ left: 12 })
-                  .onClick(() => {
-                    if (appStore.settings.blacklist.some(e => e.userId === this.profile!.uid)) {
-                      appStore.settingsStore.removeBlacklist(this.profile!.uid)
-                      appStore.showToast('已取消屏蔽')
-                    } else {
-                      appStore.settingsStore.addBlacklist({
+                if (!this.isOwnProfile) {
+                  Button(this.isProfileBlacklisted ? '取消屏蔽' : '加黑')
+                    .fontSize(15)
+                    .fontColor(AppColors.destructive)
+                    .backgroundColor(AppColors.bgTertiary)
+                    .borderRadius(12)
+                    .height(44)
+                    .margin({ left: 12 })
+                    .onClick(() => {
+                      if (this.isProfileBlacklisted) {
+                        if (appStore.settingsStore.removeBlacklist(this.profile!.uid)) {
+                          appStore.showToast('已取消屏蔽')
+                        }
+                      } else if (appStore.settingsStore.addBlacklist({
                         userId: this.profile!.uid,
                         nickName: this.profile!.userName || `User${this.profile!.uid}`
-                      })
-                      appStore.showToast('已加入黑名单')
-                    }
-                  })
+                      })) {
+                        appStore.showToast('已加入黑名单')
+                      }
+                    })
+                }
               }
               .width('92%')
               .margin({ top: 12, bottom: 30 })

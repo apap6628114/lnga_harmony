@@ -25,9 +25,11 @@ import {
   RenderContext,
   NodeGroup,
   splitQuoteChildren,
+  isQuoteFromBlacklistedUser,
   QUOTE_BORDER_COLORS,
   QuoteSplit,
 } from './bbcode/BBCodeRenderContext'
+import { appStore } from '../../store/AppStore'
 
 @Component
 export struct BBCodeContentView {
@@ -43,6 +45,8 @@ export struct BBCodeContentView {
   @StorageProp('imageLoadStrategy') imageLoadStrategy: string = ImageLoadStrategy.ALWAYS
   @StorageProp('enableImageSizePrefetch') enableImageSizePrefetch: boolean = true
   @StorageProp('contentFontSize') contentFontSize: number = 15
+  /** 黑名单变更版本号。 */
+  @StorageProp('blacklistVersion') @Watch('onBlacklistVersionChange') blacklistVersion: number = 0
   hideFailedImages: boolean = false
   onImageClick: (urls: string[], index: number) => void = (_urls: string[], _index: number) => {}
   onLinkClick: (href: string) => void = (_href: string) => {}
@@ -109,6 +113,13 @@ export struct BBCodeContentView {
     }
   }
 
+  /**
+   * 响应黑名单变化，立即更新图片查看器允许访问的图片集合。
+   */
+  private onBlacklistVersionChange(): void {
+    this.allImageUrls = this.getImageUrls()
+  }
+
   private setImageSize(url: string, size: ImageSize): void {
     this.imageSizes.set(url, size)
     this.releasedImages.add(url)
@@ -168,18 +179,21 @@ export struct BBCodeContentView {
   }
 
   private getVideoUrls(): string[] {
-    return this.collectVideoUrls(this.nodes)
+    return this.collectVideoUrls(this.nodes, true)
   }
 
-  private collectVideoUrls(nodes: BBNode[]): string[] {
+  private collectVideoUrls(nodes: BBNode[], skipBlacklistedQuotes: boolean): string[] {
     const urls: string[] = []
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i]
+      if (skipBlacklistedQuotes && n.type === BBNodeType.QUOTE && this.isQuoteBlacklisted(n)) {
+        continue
+      }
       if (n.type === BBNodeType.VIDEO && n.src.length > 0) {
         urls.push(n.src)
       }
       if (n.children.length > 0) {
-        const childUrls = this.collectVideoUrls(n.children)
+        const childUrls = this.collectVideoUrls(n.children, skipBlacklistedQuotes)
         for (let j = 0; j < childUrls.length; j++) {
           urls.push(childUrls[j])
         }
@@ -189,24 +203,38 @@ export struct BBCodeContentView {
   }
 
   private getImageUrls(): string[] {
-    return this.collectUrls(this.nodes)
+    return this.collectUrls(this.nodes, true)
   }
 
-  private collectUrls(nodes: BBNode[]): string[] {
+  private collectUrls(nodes: BBNode[], skipBlacklistedQuotes: boolean): string[] {
     const urls: string[] = []
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i]
+      if (skipBlacklistedQuotes && n.type === BBNodeType.QUOTE && this.isQuoteBlacklisted(n)) {
+        continue
+      }
       if (n.type === BBNodeType.IMAGE && n.src.length > 0) {
         urls.push(n.src)
       }
       if (n.children.length > 0) {
-        const childUrls = this.collectUrls(n.children)
+        const childUrls = this.collectUrls(n.children, skipBlacklistedQuotes)
         for (let j = 0; j < childUrls.length; j++) {
           urls.push(childUrls[j])
         }
       }
     }
     return urls
+  }
+
+  /**
+   * 判断引用正文是否来自黑名单用户。
+   *
+   * @param node - 引用块节点
+   * @returns 是否应遮蔽引用正文
+   */
+  private isQuoteBlacklisted(node: BBNode): boolean {
+    return this.blacklistVersion >= 0 &&
+      isQuoteFromBlacklistedUser(node.children, appStore.settingsStore.getBlacklistIds())
   }
 
   build() {
@@ -596,7 +624,17 @@ export struct BBCodeContentView {
     Column() {
       if (splitQuoteChildren(node.children).hasHeader) {
         this.RenderQuoteHeader(node.children[0], ctx)
-        this.RenderChildren(splitQuoteChildren(node.children).body, this.makeQuoteCtx(ctx))
+        if (this.isQuoteBlacklisted(node)) {
+          Text('该用户已被屏蔽')
+            .fontSize(this.inlineFontSize(this.makeQuoteCtx(ctx)))
+            .fontColor(AppColors.textTertiary)
+            .lineHeight(this.inlineLineHeight(this.makeQuoteCtx(ctx)))
+            .width('100%')
+            .textAlign(TextAlign.Center)
+            .padding({ top: 8, bottom: 8 })
+        } else {
+          this.RenderChildren(splitQuoteChildren(node.children).body, this.makeQuoteCtx(ctx))
+        }
       } else {
         this.RenderChildren(node.children, this.makeQuoteCtx(ctx))
       }

@@ -91,7 +91,11 @@ export class TopicPaginationManager extends PaginationManager {
    */
   commitPrefetchedPage(page: number): object[] {
     const holder = this.getPrefetchedRaw(page)
-    if (holder === undefined || holder.items.length === 0) {
+    if (holder === undefined) {
+      return []
+    }
+    if (holder.items.length === 0) {
+      this.applyState(page, holder.totalPages)
       this.deletePrefetched(page)
       return []
     }

@@ -11,6 +11,8 @@ export interface ThreadPageInfo {
   fid: number;
   author: string;
   authorId: number;
+  /** 主题作者是否在当前用户的黑名单中。 */
+  isInBlackList: boolean;
   lastPoster: string;
   replies: number;
   subject: string;
@@ -25,6 +27,8 @@ export interface ThreadPageInfo {
   replyInfo: ReplyInfo;
   board: string;
   mirrorBoard: boolean;
+  /** 帖子列表摘要所对应回复的作者 UID。 */
+  previewAuthorId?: string;
   previewSnippet?: string;
   previewImages?: string[];
 }

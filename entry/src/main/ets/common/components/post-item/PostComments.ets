@@ -79,6 +79,19 @@ export struct PostComments {
   /** 点击评论用户资料回调，传入 uid 与点击位置的屏幕坐标 */
   onProfileClick: (uid: string, screenX: number, screenY: number) => void =
     (_uid: string, _x: number, _y: number) => {}
+  /** 黑名单变更版本号。 */
+  @StorageProp('blacklistVersion') blacklistVersion: number = 0
+
+  /**
+   * 判断楼中楼作者是否已被屏蔽。
+   *
+   * @param comment - 待判断的楼中楼回复
+   * @returns 作者是否在实时黑名单中
+   */
+  private isCommentBlacklisted(comment: PostInfo): boolean {
+    return this.blacklistVersion >= 0 &&
+      appStore.settingsStore.isBlacklisted(String(comment.authorid))
+  }
 
   build() {
     Column() {
@@ -120,14 +133,22 @@ export struct PostComments {
 
             // 气泡右侧内容框
             Column() {
-              BBCodeContentView({
-                nodes: filterBBTags(
-                  getCachedBBNodes(stripPostByHeader(c.content)),
-                  [BBNodeType.QUOTE, BBNodeType.POST_BY]
-                ),
-                onImageClick: this.onImageClick,
-                onLinkClick: this.onLinkClick,
-              }).width('100%')
+              if (this.isCommentBlacklisted(c)) {
+                Text('该用户已被屏蔽')
+                  .fontSize(13)
+                  .fontColor(AppColors.textTertiary)
+                  .width('100%')
+                  .textAlign(TextAlign.Center)
+              } else {
+                BBCodeContentView({
+                  nodes: filterBBTags(
+                    getCachedBBNodes(stripPostByHeader(c.content)),
+                    [BBNodeType.QUOTE, BBNodeType.POST_BY]
+                  ),
+                  onImageClick: this.onImageClick,
+                  onLinkClick: this.onLinkClick,
+                }).width('100%')
+              }
             }
             .layoutWeight(1)
             .padding({ top: 6, bottom: 6, left: 10, right: 10 })

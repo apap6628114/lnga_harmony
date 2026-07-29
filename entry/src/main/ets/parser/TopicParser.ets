@@ -23,9 +23,8 @@ export function parseTopicList(raw: object | null, blacklist: Set<string> = new 
   for (const key of keys) {
     const t = tMap[key] as Record<string, Object>;
     if (!t || !t['tid']) continue;
-    if (blacklist.has(String(t['authorid']))) continue;
     if (hasKeywordMatch(String(t['subject'] ?? ''), keywords)) continue;
-    topics.push(mapTopicRaw(t));
+    topics.push(mapTopicRaw(t, blacklist.has(String(t['authorid']))));
   }
 
   const forumInfo = dataObj?.['__F'] as Record<string, Object>;
@@ -50,7 +49,7 @@ function stripBasic(text: string): string {
   return s;
 }
 
-function mapTopicRaw(raw: Record<string, Object>): ThreadPageInfo {
+function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean): ThreadPageInfo {
   const __P = raw['__P'] as Record<string, Object> | undefined;
   const rawAuthor: string = String(raw['author'] ?? '');
   const isAnonymity: boolean = rawAuthor.startsWith('#anony_');
@@ -71,6 +70,7 @@ function mapTopicRaw(raw: Record<string, Object>): ThreadPageInfo {
     fid: Number(raw['fid']),
     author: author,
     authorId: Number(raw['authorid']),
+    isInBlackList: isInBlackList,
     lastPoster: String(raw['lastposter'] ?? ''),
     replies: Number(raw['replies'] ?? 0),
     subject: String(raw['subject'] ?? ''),
@@ -99,6 +99,7 @@ function mapTopicRaw(raw: Record<string, Object>): ThreadPageInfo {
     },
     board: board,
     mirrorBoard: board === '版面镜像',
+    previewAuthorId: String(__P?.['authorid'] ?? ''),
     previewSnippet: snippet,
     previewImages: [],
   };

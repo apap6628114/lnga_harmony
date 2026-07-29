@@ -32,6 +32,7 @@ import { ThreadPaginationManager } from '../common/managers/ThreadPaginationMana
 import type { ThreadInfo } from '../model/Thread'
 import { Logger, DOMAIN_UI } from '../common/utils/Logger'
 import { getActiveAiValidationMessage } from '../service/ai/ActiveAiService'
+import { applyBlacklistStateToPosts } from '../common/utils/BlacklistUtils'
 
 const logger = new Logger(DOMAIN_UI, 'ThreadPanel')
 
@@ -77,6 +78,8 @@ export struct ThreadPanel {
   @State votedDownPids: Set<string> = new Set()
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
+  /** 黑名单变更版本号。 */
+  @StorageProp('blacklistVersion') @Watch('onBlacklistVersionChange') blacklistVersion: number = 0
   @State showMoreMenu: boolean = false
   @State showPagePicker: boolean = false
   private pagePickerTotalPages: number = 0
@@ -180,6 +183,26 @@ export struct ThreadPanel {
     this.loadPersistedVotes()
   }
 
+  /**
+   * 响应黑名单变化，保留楼层结构并即时刷新内容遮蔽状态。
+   */
+  private onBlacklistVersionChange(): void {
+    applyBlacklistStateToPosts(this.mgr.posts, appStore.settingsStore.getBlacklistIds())
+  }
+
+  /**
+   * 获取当前可显示的主题标题。
+   *
+   * @returns 屏蔽作者时返回占位文案，否则返回原主题标题
+   */
+  private getVisibleThreadSubject(): string {
+    if (this.blacklistVersion >= 0 &&
+      appStore.settingsStore.isBlacklisted(this.threadAuthorId)) {
+      return '该用户已被屏蔽'
+    }
+    return this.threadSubject
+  }
+
   private async loadPersistedVotes(): Promise<void> {
     if (!appStore.auth.isAuthenticated) return
     const result = await appStore.loadVoteRecord(appStore.auth.uid, this.threadTid)
@@ -249,6 +272,7 @@ export struct ThreadPanel {
       if (gen !== this.mgr.getGeneration()) return
 
       if (result.ok) {
+        applyBlacklistStateToPosts(result.posts, appStore.settingsStore.getBlacklistIds())
         if (isNegativeAuthor) {
           result.posts = result.posts.filter((p: PostInfo): boolean => String(p.authorid) === this.threadAuthorId)
         }
@@ -461,6 +485,7 @@ export struct ThreadPanel {
         const item: FetchPageResult | null = results[i]
         if (item === null || item.result === null) continue
         if (item.result.ok) {
+          applyBlacklistStateToPosts(item.result.posts, appStore.settingsStore.getBlacklistIds())
           if (isNegativeAuthor) {
             item.result.posts = item.result.posts.filter((p: PostInfo): boolean => String(p.authorid) === this.threadAuthorId)
           }
@@ -505,6 +530,7 @@ export struct ThreadPanel {
       ), 10000)
       if (gen !== this.mgr.getGeneration()) return
       if (result.ok) {
+        applyBlacklistStateToPosts(result.posts, appStore.settingsStore.getBlacklistIds())
         if (isNegativeAuthorPrev) {
           result.posts = result.posts.filter((p: PostInfo): boolean => String(p.authorid) === this.threadAuthorId)
         }
@@ -827,7 +853,7 @@ export struct ThreadPanel {
     .width('100%').height('100%')
 
       PanelNavBar({
-        title: this.threadSubject,
+        title: this.getVisibleThreadSubject(),
         rightIcon: $r('app.media.icon_more'),
         onRightClick: (): void => {
           this.showMoreMenu = !this.showMoreMenu

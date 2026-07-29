@@ -26,8 +26,32 @@ export class RenderContext {
 export class QuoteSplit {
   /** 是否含有 POST_BY 引用头 */
   hasHeader: boolean = false
+  /** 引用来源作者 UID；无法识别来源时为空字符串。 */
+  sourceAuthorId: string = ''
   /** 引用正文节点（去除头之后的剩余子节点） */
   body: BBNode[] = []
+}
+
+/**
+ * 从引用来源头中提取作者 UID。
+ *
+ * @param node - POST_BY 引用来源头
+ * @returns 引用作者 UID；无法识别时为空字符串
+ */
+function extractQuoteAuthorId(node: BBNode): string {
+  if (node.type === BBNodeType.UID_LINK) {
+    const prefix: string = '#/profile?uid='
+    if (node.href.startsWith(prefix)) {
+      return node.href.substring(prefix.length)
+    }
+  }
+  for (let i = 0; i < node.children.length; i++) {
+    const authorId: string = extractQuoteAuthorId(node.children[i])
+    if (authorId.length > 0) {
+      return authorId
+    }
+  }
+  return ''
 }
 
 /**
@@ -43,6 +67,7 @@ export function splitQuoteChildren(children: BBNode[]): QuoteSplit {
   const result = new QuoteSplit()
   if (children.length > 0 && children[0].type === BBNodeType.POST_BY) {
     result.hasHeader = true
+    result.sourceAuthorId = extractQuoteAuthorId(children[0])
     const b: BBNode[] = []
     for (let i = 1; i < children.length; i++) b.push(children[i])
     result.body = b
@@ -50,6 +75,21 @@ export function splitQuoteChildren(children: BBNode[]): QuoteSplit {
     result.body = children
   }
   return result
+}
+
+/**
+ * 判断引用正文是否来自黑名单用户。
+ *
+ * 只有携带标准 POST_BY 来源头并能提取 UID 的引用才会参与判断；
+ * 无来源的普通引用不会被猜测性遮蔽。
+ *
+ * @param children - 引用块的原始子节点数组
+ * @param blacklistIds - 当前黑名单 UID 集合
+ * @returns 是否应遮蔽引用正文
+ */
+export function isQuoteFromBlacklistedUser(children: BBNode[], blacklistIds: Set<string>): boolean {
+  const split: QuoteSplit = splitQuoteChildren(children)
+  return split.sourceAuthorId.length > 0 && blacklistIds.has(split.sourceAuthorId)
 }
 
 /**

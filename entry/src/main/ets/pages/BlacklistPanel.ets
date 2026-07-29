@@ -20,6 +20,8 @@ export struct BlacklistPanel {
   @State blacklistCount: number = 0
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
+  /** 黑名单变更版本号。 */
+  @StorageProp('blacklistVersion') @Watch('onBlacklistVersionChange') blacklistVersion: number = 0
 
   private blacklistDataSource: BlacklistDataSource = new BlacklistDataSource()
 
@@ -34,7 +36,6 @@ export struct BlacklistPanel {
       onConfirm: () => {
         if (this.removeTarget) {
           appStore.settingsStore.removeBlacklist(this.removeTarget.userId)
-          this.refreshBlacklist()
           this.removeTarget = null
         }
       },
@@ -46,12 +47,36 @@ export struct BlacklistPanel {
     customStyle: true
   })
 
+  /** 清空黑名单确认对话框。 */
+  clearDialogController?: CustomDialogController = new CustomDialogController({
+    builder: ConfirmDialog({
+      title: '清空黑名单',
+      message: '确定要清空全部黑名单吗？此操作无法撤销。',
+      confirmLabel: '清空',
+      destructive: true,
+      onConfirm: () => {
+        if (appStore.settingsStore.removeAllBlacklist()) {
+          appStore.showToast('已清空黑名单')
+        }
+      },
+      onCancel: () => {}
+    }),
+    autoCancel: true,
+    customStyle: true
+  })
+
   aboutToDisappear(): void {
     this.deleteDialogController = undefined
+    this.clearDialogController = undefined
     this.addDialogController = undefined
   }
 
   aboutToAppear(): void {
+    this.refreshBlacklist()
+  }
+
+  /** 响应黑名单变更并刷新管理列表。 */
+  private onBlacklistVersionChange(): void {
     this.refreshBlacklist()
   }
 
@@ -98,9 +123,7 @@ export struct BlacklistPanel {
             Text('共 ' + String(this.blacklistCount) + ' 人').fontSize(13).fontColor(AppColors.textTertiary).layoutWeight(1)
             Text('删除全部').fontSize(13).fontColor(AppColors.destructive)
               .onClick(() => {
-                appStore.settingsStore.removeAllBlacklist()
-                this.refreshBlacklist()
-                appStore.showToast('已清空黑名单')
+                this.clearDialogController?.open()
               })
           }.width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
 
@@ -145,10 +168,14 @@ export struct BlacklistPanel {
       PanelNavBar({ title: '黑名单管理', rightLabel: '+ 添加', onRightClick: (): void => {
         this.addDialogController = new CustomDialogController({
           builder: AddBlacklistDialog({
+            currentUserId: appStore.auth.uid,
+            existingUserIds: appStore.settings.blacklist.map((entry: BlacklistEntry): string => entry.userId),
             onConfirm: (uid: string): void => {
-              appStore.settingsStore.addBlacklist({ userId: uid, nickName: `User${uid}` })
-              this.refreshBlacklist()
-              appStore.showToast('已加入黑名单')
+              if (appStore.settingsStore.addBlacklist({ userId: uid, nickName: `User${uid}` })) {
+                appStore.showToast('已加入黑名单')
+              } else {
+                appStore.showToast('该用户无法加入黑名单')
+              }
             }
           }),
           autoCancel: true,

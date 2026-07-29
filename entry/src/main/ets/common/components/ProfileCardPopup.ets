@@ -19,6 +19,10 @@ export struct ProfileCardPopup {
   @State isLoading: boolean = true
   @State hasError: boolean = false
   @StorageProp('profileVersion') @Watch('onProfileVersionChange') profileVersion: number = 0
+  /** 黑名单变更版本号。 */
+  @StorageProp('blacklistVersion') @Watch('onBlacklistVersionChange') blacklistVersion: number = 0
+  /** 当前资料卡用户是否已被屏蔽。 */
+  @State isProfileBlacklisted: boolean = false
   onClose: () => void = () => {}
   noteDialogController?: CustomDialogController
   @State isAnalyzing: boolean = false
@@ -109,12 +113,18 @@ export struct ProfileCardPopup {
   }
 
   aboutToAppear(): void {
+    this.onBlacklistVersionChange()
     const cached = appStore.getCachedProfile(this.targetUid)
     if (cached) {
       this.profile = cached
       this.isLoading = false
     }
     appStore.ensureProfile(this.targetUid)
+  }
+
+  /** 同步当前资料卡用户的黑名单状态。 */
+  private onBlacklistVersionChange(): void {
+    this.isProfileBlacklisted = appStore.settingsStore.isBlacklisted(this.targetUid)
   }
 
   private onProfileVersionChange(): void {
@@ -298,24 +308,27 @@ export struct ProfileCardPopup {
           .layoutWeight(1).textAlign(TextAlign.Center)
           .padding({ top: 10, bottom: 10 })
           .onClick(() => { this.startAnalysis() })
-        Divider().vertical(true).height(16).alignSelf(ItemAlign.Center).color(AppColors.separator)
-        Text(appStore.settings.blacklist.some(e => e.userId === profile.uid) ? '取消屏蔽' : '屏蔽')
-          .fontSize(12)
-          .fontColor(appStore.settings.blacklist.some(e => e.userId === profile.uid) ? AppColors.textPrimary : AppColors.destructive)
-          .layoutWeight(1).textAlign(TextAlign.Center)
-          .padding({ top: 10, bottom: 10 })
-          .onClick(() => {
-            if (appStore.settings.blacklist.some(e => e.userId === profile.uid)) {
-              appStore.settingsStore.removeBlacklist(profile.uid)
-              appStore.showToast('已取消屏蔽')
-            } else {
-              appStore.settingsStore.addBlacklist({
+        if (profile.uid !== appStore.auth.uid) {
+          Divider().vertical(true).height(16).alignSelf(ItemAlign.Center).color(AppColors.separator)
+          Text(this.isProfileBlacklisted ? '取消屏蔽' : '屏蔽')
+            .fontSize(12)
+            .fontColor(this.isProfileBlacklisted ?
+              AppColors.textPrimary : AppColors.destructive)
+            .layoutWeight(1).textAlign(TextAlign.Center)
+            .padding({ top: 10, bottom: 10 })
+            .onClick(() => {
+              if (this.isProfileBlacklisted) {
+                if (appStore.settingsStore.removeBlacklist(profile.uid)) {
+                  appStore.showToast('已取消屏蔽')
+                }
+              } else if (appStore.settingsStore.addBlacklist({
                 userId: profile.uid,
                 nickName: profile.userName || `User${profile.uid}`
-              })
-              appStore.showToast('已加入黑名单')
-            }
-          })
+              })) {
+                appStore.showToast('已加入黑名单')
+              }
+            })
+        }
       }
       .width('100%')
       .border({ width: { top: 0.5 }, color: AppColors.separator })

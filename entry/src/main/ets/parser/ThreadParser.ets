@@ -79,7 +79,6 @@ function mapRow(raw: Record<string, Object>, blacklist: Set<string>,
     for (let j = 0; j < commentKeys.length; j++) {
       const c = commentMap[commentKeys[j]] as Record<string, Object>;
       if (!c || typeof c !== 'object') continue;
-      if (blacklist.has(String(c['authorid']))) continue;
       if (hasKeywordMatch(String(c['content'] ?? ''), keywords)) continue;
       comments.push(mapRow(c, blacklist, keywords, noteMap));
     }

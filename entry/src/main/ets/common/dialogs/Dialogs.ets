@@ -2,6 +2,7 @@
  * 确认对话框 + ActionSheet 组件 + 备注编辑对话框
  */
 import { AppColors } from '../constants/Constants'
+import { normalizeBlacklistUserId } from '../utils/BlacklistUtils'
 
 // 确认对话框
 @CustomDialog
@@ -299,8 +300,47 @@ export struct MakeNoteDialog {
 @CustomDialog
 export struct AddBlacklistDialog {
   controller: CustomDialogController
+  /** 当前输入的 UID。 */
   @State uid: string = ''
+  /** 当前输入校验错误。 */
+  @State validationError: string = ''
+  /** 当前登录用户 UID。 */
+  @Prop currentUserId: string = ''
+  /** 已存在的黑名单 UID。 */
+  @Prop existingUserIds: string[] = []
+  /** UID 校验通过后的确认回调。 */
   onConfirm?: (uid: string) => void
+
+  /**
+   * 获取当前 UID 输入的校验错误。
+   *
+   * @returns 校验错误；输入合法时返回空字符串
+   */
+  private getValidationError(): string {
+    if (this.uid.trim().length === 0) {
+      return ''
+    }
+    const normalizedUserId: string | null = normalizeBlacklistUserId(this.uid)
+    if (normalizedUserId === null) {
+      return 'UID 必须是大于 0 的整数'
+    }
+    if (normalizedUserId === normalizeBlacklistUserId(this.currentUserId)) {
+      return '不能将自己加入黑名单'
+    }
+    if (this.existingUserIds.indexOf(normalizedUserId) >= 0) {
+      return '该用户已在黑名单中'
+    }
+    return ''
+  }
+
+  /**
+   * 判断当前输入是否可以提交。
+   *
+   * @returns 是否可以提交
+   */
+  private canSubmit(): boolean {
+    return this.uid.trim().length > 0 && this.getValidationError().length === 0
+  }
 
   build() {
     Column() {
@@ -317,7 +357,18 @@ export struct AddBlacklistDialog {
       TextInput({ text: this.uid, placeholder: '输入 UID' })
         .height(44).fontSize(15).borderRadius(12)
         .backgroundColor(AppColors.bgSecondary)
-        .onChange((value: string) => { this.uid = value })
+        .onChange((value: string) => {
+          this.uid = value
+          this.validationError = ''
+        })
+
+      if (this.validationError.length > 0) {
+        Text(this.validationError)
+          .fontSize(12)
+          .fontColor(AppColors.destructive)
+          .margin({ top: 6 })
+          .alignSelf(ItemAlign.Start)
+      }
 
       Divider().color(AppColors.separator).margin({ top: 12 })
 
@@ -331,11 +382,17 @@ export struct AddBlacklistDialog {
 
         Button('确定添加')
           .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
-          .fontColor(this.uid.trim().length > 0 ? AppColors.primary : AppColors.textTertiary)
+          .fontColor(this.canSubmit() ? AppColors.primary : AppColors.textTertiary)
           .fontWeight(FontWeight.Bold).fontSize(16)
           .onClick(() => {
-            if (this.uid.trim()) {
-              if (this.onConfirm) this.onConfirm(this.uid.trim())
+            const validationError: string = this.getValidationError()
+            if (validationError.length > 0 || this.uid.trim().length === 0) {
+              this.validationError = validationError || '请输入用户 UID'
+              return
+            }
+            const normalizedUserId: string | null = normalizeBlacklistUserId(this.uid)
+            if (normalizedUserId !== null) {
+              if (this.onConfirm) this.onConfirm(normalizedUserId)
               this.controller.close()
             }
           })

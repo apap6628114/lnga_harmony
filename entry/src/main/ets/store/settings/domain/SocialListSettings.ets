@@ -4,8 +4,13 @@ import { SettingsContext } from '../SettingsContext'
 import { SettingsState } from '../SettingsState'
 import { FavBoard } from '../../../model/SocialEntries'
 import type { BlacklistEntry } from '../../../model/SocialEntries'
-import { KEY_FAV_VERSION } from '../../../common/constants/AppStorageKeys'
+import { KEY_BLACKLIST_VERSION, KEY_FAV_VERSION } from '../../../common/constants/AppStorageKeys'
 import { bumpAppStorageVersion } from '../../../common/utils/AppStorageVersion'
+import {
+  areBlacklistEntriesEqual,
+  normalizeBlacklistEntries,
+  normalizeBlacklistUserId
+} from '../../../common/utils/BlacklistUtils'
 
 import { Logger, DOMAIN_SETTINGS } from '../../../common/utils/Logger'
 
@@ -29,21 +34,68 @@ export class SocialListSettings {
 
   // ============== Blacklist ==============
 
-  addBlacklist(entry: BlacklistEntry): void {
-    this.ctx.state.blacklist = this.blacklistManager.add(entry)
+  /**
+   * 添加黑名单用户。
+   *
+   * @param entry - 待添加的用户条目
+   * @returns 是否实际新增
+   */
+  addBlacklist(entry: BlacklistEntry): boolean {
+    const normalizedUserId: string | null = normalizeBlacklistUserId(entry.userId)
+    const currentUserId: string | null = normalizeBlacklistUserId(this.ctx.auth?.uid ?? '')
+    if (normalizedUserId === null || normalizedUserId === currentUserId ||
+      this.ctx.state.blacklist.some((item: BlacklistEntry): boolean => item.userId === normalizedUserId)) {
+      return false
+    }
+    const normalizedEntry: BlacklistEntry = {
+      userId: normalizedUserId,
+      nickName: entry.nickName.trim() || `User${normalizedUserId}`,
+    }
+    this.ctx.state.blacklist = this.blacklistManager.add(normalizedEntry)
     this.ctx.persist()
+    bumpAppStorageVersion(KEY_BLACKLIST_VERSION)
+    return true
   }
 
-  removeBlacklist(userId: string): void {
-    this.ctx.state.blacklist = this.blacklistManager.remove((u: BlacklistEntry) => u.userId === userId)
+  /**
+   * 移除指定黑名单用户。
+   *
+   * @param userId - 待移除的用户 UID
+   * @returns 是否实际移除
+   */
+  removeBlacklist(userId: string): boolean {
+    const normalizedUserId: string | null = normalizeBlacklistUserId(userId)
+    if (normalizedUserId === null ||
+      !this.ctx.state.blacklist.some((item: BlacklistEntry): boolean => item.userId === normalizedUserId)) {
+      return false
+    }
+    this.ctx.state.blacklist = this.blacklistManager.remove(
+      (item: BlacklistEntry): boolean => item.userId === normalizedUserId)
     this.ctx.persist()
+    bumpAppStorageVersion(KEY_BLACKLIST_VERSION)
+    return true
   }
 
-  removeAllBlacklist(): void {
+  /**
+   * 清空黑名单。
+   *
+   * @returns 是否实际清除了条目
+   */
+  removeAllBlacklist(): boolean {
+    if (this.ctx.state.blacklist.length === 0) {
+      return false
+    }
     this.ctx.state.blacklist = this.blacklistManager.clear()
     this.ctx.persist()
+    bumpAppStorageVersion(KEY_BLACKLIST_VERSION)
+    return true
   }
 
+  /**
+   * 获取当前黑名单 UID 集合。
+   *
+   * @returns 黑名单 UID 集合
+   */
   getBlacklistIds(): Set<string> {
     const ids = new Set<string>()
     for (let i = 0; i < this.ctx.state.blacklist.length; i++) {
@@ -52,6 +104,23 @@ export class SocialListSettings {
     return ids
   }
 
+  /**
+   * 判断用户是否在黑名单中。
+   *
+   * @param userId - 待判断的用户 UID
+   * @returns 是否已被加入黑名单
+   */
+  isBlacklisted(userId: string): boolean {
+    const normalizedUserId: string | null = normalizeBlacklistUserId(userId)
+    return normalizedUserId !== null &&
+      this.ctx.state.blacklist.some((item: BlacklistEntry): boolean => item.userId === normalizedUserId)
+  }
+
+  /**
+   * 获取用于请求头的黑名单 UID 字符串。
+   *
+   * @returns 逗号分隔的 UID 字符串
+   */
   getBlacklistHeaderString(): string {
     return this.ctx.state.blacklist.map(u => u.userId).join(',')
   }
@@ -111,8 +180,13 @@ export class SocialListSettings {
   load(saved: SettingsState): void {
     if (saved.favorites) this.ctx.state.favorites = saved.favorites
     if (saved.blacklist) {
-      this.ctx.state.blacklist = saved.blacklist
-      this.blacklistManager.init(saved.blacklist)
+      const normalizedBlacklist: BlacklistEntry[] =
+        normalizeBlacklistEntries(saved.blacklist, this.ctx.auth?.uid ?? '')
+      this.ctx.state.blacklist = normalizedBlacklist
+      this.blacklistManager.init(normalizedBlacklist)
+      if (!areBlacklistEntriesEqual(normalizedBlacklist, saved.blacklist)) {
+        this.ctx.persist()
+      }
     }
   }
 

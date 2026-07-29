@@ -7,6 +7,7 @@ import { PostItemHeader } from './post-item/PostItemHeader'
 import { PostAttachments } from './post-item/PostAttachments'
 import { PostVoteBar } from './post-item/PostVoteBar'
 import { PostComments } from './post-item/PostComments'
+import { appStore } from '../../store/AppStore'
 
 /**
  * 帖子卡片组件（编排层）。
@@ -28,6 +29,8 @@ export struct PostItem {
   @Prop holdingHand: number = 0
   /** 是否显示签名，订阅 AppStorage */
   @StorageProp('showSignature') showSignature: boolean = true
+  /** 黑名单变更版本号。 */
+  @StorageProp('blacklistVersion') blacklistVersion: number = 0
   /** 签名折叠状态 */
   @State private sigExpanded: boolean = false
   /** 图片点击回调 */
@@ -61,6 +64,16 @@ export struct PostItem {
     this.sigExpanded = false
   }
 
+  /**
+   * 判断当前楼层作者是否已被屏蔽。
+   *
+   * @returns 作者是否在实时黑名单中
+   */
+  private isPostBlacklisted(): boolean {
+    return this.blacklistVersion >= 0 &&
+      appStore.settingsStore.isBlacklisted(String(this.post.authorid))
+  }
+
   build() {
     Column() {
         PostItemHeader({
@@ -69,7 +82,7 @@ export struct PostItem {
           onProfileClick: this.onProfileClick,
         })
 
-        if (this.post.isInBlackList) {
+        if (this.isPostBlacklisted()) {
           Text('该用户已被屏蔽').fontSize(14).fontColor(AppColors.textTertiary)
             .margin({ top: 16 }).width('100%').textAlign(TextAlign.Center).padding({ top: 20, bottom: 20 })
         } else {
@@ -132,15 +145,6 @@ export struct PostItem {
             .border({ width: { left: 2 }, color: AppColors.separator })
           }
 
-          if (this.post.comments.length > 0) {
-            PostComments({
-              post: this.post,
-              onImageClick: this.onImageClick,
-              onLinkClick: this.onLinkClick,
-              onProfileClick: this.onProfileClick,
-            })
-          }
-
           PostVoteBar({
             post: this.post,
             isVotedUp: this.isVotedUp,
@@ -153,6 +157,15 @@ export struct PostItem {
             onShare: this.onShare,
             onSummarize: this.onSummarize,
             onReadAloud: this.onReadAloud,
+          })
+        }
+
+        if (this.post.comments.length > 0) {
+          PostComments({
+            post: this.post,
+            onImageClick: this.onImageClick,
+            onLinkClick: this.onLinkClick,
+            onProfileClick: this.onProfileClick,
           })
         }
       }

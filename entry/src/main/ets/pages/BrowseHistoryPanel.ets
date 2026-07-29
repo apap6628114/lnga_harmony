@@ -14,6 +14,8 @@ export struct BrowseHistoryPanel {
   @State items: BrowseHistoryEntry[] = []
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('browseHistoryVersion') browseHistoryVersion: number = 0
+  /** 黑名单变更版本号。 */
+  @StorageProp('blacklistVersion') blacklistVersion: number = 0
   private historyDataSource: HistoryItemDataSource = new HistoryItemDataSource()
 
   aboutToAppear(): void {
@@ -46,6 +48,17 @@ export struct BrowseHistoryPanel {
     await appStore.clearBrowseHistory(appStore.auth.uid)
   }
 
+  /**
+   * 判断浏览记录中的主题作者是否已被屏蔽。
+   *
+   * @param item - 浏览记录
+   * @returns 作者是否在实时黑名单中
+   */
+  private isAuthorBlacklisted(item: BrowseHistoryEntry): boolean {
+    return this.blacklistVersion >= 0 &&
+      appStore.settingsStore.isBlacklisted(item.authorid)
+  }
+
   build() {
     Stack() {
       Column() {
@@ -65,7 +78,8 @@ export struct BrowseHistoryPanel {
               ListItem() {
                 Row() {
                   Column() {
-                    Text(unescapeHtml((itemObj as BrowseHistoryEntry).subject))
+                    Text(this.isAuthorBlacklisted(itemObj as BrowseHistoryEntry) ?
+                      '该用户已被屏蔽' : unescapeHtml((itemObj as BrowseHistoryEntry).subject))
                       .fontSize(15).fontColor(AppColors.textPrimary).maxLines(2)
                       .textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
                     Row() {

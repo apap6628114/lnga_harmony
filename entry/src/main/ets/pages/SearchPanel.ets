@@ -36,6 +36,8 @@ export struct SearchPanel {
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('topicFontSize') topicFontSize: number = 15
+  /** 黑名单变更版本号。 */
+  @StorageProp('blacklistVersion') blacklistVersion: number = 0
 
   private scroller: Scroller = new Scroller()
   private forumsDataSource: ThreadDataSource = new ThreadDataSource()
@@ -63,6 +65,30 @@ export struct SearchPanel {
   private getTypeTags(type: number): string {
     if (type & 1024) return '[锁定]'
     return ''
+  }
+
+  /**
+   * 判断搜索结果中的主题作者是否已被屏蔽。
+   *
+   * @param thread - 主题列表项
+   * @returns 作者是否在实时黑名单中
+   */
+  private isAuthorBlacklisted(thread: Record<string, Object>): boolean {
+    return this.blacklistVersion >= 0 &&
+      appStore.settingsStore.isBlacklisted(String(thread['authorId'] ?? ''))
+  }
+
+  /**
+   * 判断搜索结果摘要对应的回复作者是否已被屏蔽。
+   *
+   * @param thread - 主题列表项
+   * @returns 摘要作者是否在实时黑名单中
+   */
+  private isPreviewAuthorBlacklisted(thread: Record<string, Object>): boolean {
+    const authorId: string = String(thread['previewAuthorId'] ?? '')
+    return this.blacklistVersion >= 0 &&
+      authorId.length > 0 &&
+      appStore.settingsStore.isBlacklisted(authorId)
   }
 
   private async loadHistory(): Promise<void> {
@@ -321,27 +347,42 @@ export struct SearchPanel {
   SearchTopicCard(thread: Record<string, Object>) {
     Column() {
       Row() {
-        Text(this.getTypeTags(Number(thread['type'] ?? 0)))
-          .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.topicFontSize))
-          .fontColor(AppColors.textTertiary)
-        Text(unescapeHtml(String(thread['subject'] ?? '')))
-          .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.topicFontSize))
-          .fontColor(this.getSubjectFontColor(String(thread['titleFont'] ?? '')))
-          .fontWeight(this.isSubjectBold(String(thread['titleFont'] ?? '')) ? FontWeight.Bold : FontWeight.Normal)
-          .fontStyle(this.isSubjectItalic(String(thread['titleFont'] ?? '')) ? FontStyle.Italic : FontStyle.Normal)
-          .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+        if (this.isAuthorBlacklisted(thread)) {
+          Text('该用户已被屏蔽')
+            .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.topicFontSize))
+            .fontColor(AppColors.textTertiary)
+            .layoutWeight(1)
+        } else {
+          Text(this.getTypeTags(Number(thread['type'] ?? 0)))
+            .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.topicFontSize))
+            .fontColor(AppColors.textTertiary)
+          Text(unescapeHtml(String(thread['subject'] ?? '')))
+            .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.topicFontSize))
+            .fontColor(this.getSubjectFontColor(String(thread['titleFont'] ?? '')))
+            .fontWeight(this.isSubjectBold(String(thread['titleFont'] ?? '')) ? FontWeight.Bold : FontWeight.Normal)
+            .fontStyle(this.isSubjectItalic(String(thread['titleFont'] ?? '')) ? FontStyle.Italic : FontStyle.Normal)
+            .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+        }
       }.width('100%').alignItems(VerticalAlign.Top)
 
       if (thread['previewSnippet']) {
-        Text(unescapeHtml(String(thread['previewSnippet'] ?? '')))
-          .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.topicFontSize))
-          .fontColor(AppColors.textSecondary)
-          .maxLines(2)
-          .lineHeight(ReadingTypography.lineHeight(
-            ReadingLineHeightRole.TOPIC_SUMMARY,
-            ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.topicFontSize)
-          ))
-          .textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 6 }).width('100%')
+        if (this.isPreviewAuthorBlacklisted(thread)) {
+          Text('该用户已被屏蔽')
+            .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.topicFontSize))
+            .fontColor(AppColors.textTertiary)
+            .margin({ top: 6 })
+            .width('100%')
+        } else {
+          Text(unescapeHtml(String(thread['previewSnippet'] ?? '')))
+            .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.topicFontSize))
+            .fontColor(AppColors.textSecondary)
+            .maxLines(2)
+            .lineHeight(ReadingTypography.lineHeight(
+              ReadingLineHeightRole.TOPIC_SUMMARY,
+              ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.topicFontSize)
+            ))
+            .textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 6 }).width('100%')
+        }
       }
 
       Row() {

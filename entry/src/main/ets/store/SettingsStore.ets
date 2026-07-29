@@ -133,10 +133,17 @@ export class SettingsStore extends BaseStore<SettingsState> {
   // ============== 设置域 setter ==============
 
   // --- Blacklist (SocialList) ---
-  addBlacklist(entry: BlacklistEntry): void { this.socialListSettings.addBlacklist(entry) }
-  removeBlacklist(userId: string): void { this.socialListSettings.removeBlacklist(userId) }
-  removeAllBlacklist(): void { this.socialListSettings.removeAllBlacklist() }
+  /** 添加黑名单用户并返回是否实际新增。 */
+  addBlacklist(entry: BlacklistEntry): boolean { return this.socialListSettings.addBlacklist(entry) }
+  /** 移除黑名单用户并返回是否实际移除。 */
+  removeBlacklist(userId: string): boolean { return this.socialListSettings.removeBlacklist(userId) }
+  /** 清空黑名单并返回是否实际清除。 */
+  removeAllBlacklist(): boolean { return this.socialListSettings.removeAllBlacklist() }
+  /** 获取黑名单 UID 集合。 */
   getBlacklistIds(): Set<string> { return this.socialListSettings.getBlacklistIds() }
+  /** 判断用户是否已被加入黑名单。 */
+  isBlacklisted(userId: string): boolean { return this.socialListSettings.isBlacklisted(userId) }
+  /** 获取逗号分隔的黑名单 UID。 */
   getBlacklistHeaderString(): string { return this.socialListSettings.getBlacklistHeaderString() }
 
   // --- Favorites (SocialList) ---

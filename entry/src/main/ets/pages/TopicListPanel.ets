@@ -288,10 +288,11 @@ export struct TopicListPanel {
       }
     }
 
-    const params: TopicListParams = this.buildTopicParams(page)
-
     try {
-      const result: TopicListResult = await withTimeout<TopicListResult>(getTopicList(appStore.auth.token, params, appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords()), 15000)
+      const params: TopicListParams = this.buildTopicParams(page)
+      const result: TopicListResult = await withTimeout<TopicListResult>(
+        getTopicList(appStore.auth.token, params, appStore.settingsStore.getBlacklistIds(),
+          appStore.settingsStore.getEnabledKeywords()), 15000)
       if (gen !== this.mgr.getGeneration()) return
       if (result.ok && result.data) {
         const list: object[] = result.data.threadPageList
@@ -333,6 +334,9 @@ export struct TopicListPanel {
       const added: object[] = this.mgr.commitPrefetchedPage(nextPage)
       if (added.length > 0) {
         this.threadsDataSource.appendAll(added)
+      } else if (this.mgr.currentPage < this.mgr.totalPages) {
+        this.tryLoadNext()
+        return
       }
       this.triggerPrefetch()
     } else {
@@ -555,21 +559,52 @@ struct TopicCardComponent {
   @Prop thread: Record<string, Object> = {}
   @Prop isFavorites: boolean = false
   @StorageProp('topicFontSize') topicFontSize: number = 15
+  /** 黑名单变更版本号。 */
+  @StorageProp('blacklistVersion') blacklistVersion: number = 0
   onRemoveFav: (tid: number) => void = (_tid: number) => {}
   onCardClick: (tid: string) => void = (_tid: string) => {}
+
+  /**
+   * 判断当前主题作者是否已被屏蔽。
+   *
+   * @returns 作者是否在实时黑名单中
+   */
+  private isAuthorBlacklisted(): boolean {
+    return this.blacklistVersion >= 0 &&
+      appStore.settingsStore.isBlacklisted(String(this.thread['authorId'] ?? ''))
+  }
+
+  /**
+   * 判断当前摘要对应的回复作者是否已被屏蔽。
+   *
+   * @returns 摘要作者是否在实时黑名单中
+   */
+  private isPreviewAuthorBlacklisted(): boolean {
+    const authorId: string = String(this.thread['previewAuthorId'] ?? '')
+    return this.blacklistVersion >= 0 &&
+      authorId.length > 0 &&
+      appStore.settingsStore.isBlacklisted(authorId)
+  }
 
   build() {
     Column() {
       Row() {
-        Text(getTypeTags(Number(this.thread['type'] ?? 0)))
-          .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.topicFontSize))
-          .fontColor(AppColors.textTertiary)
-        Text(unescapeHtml(String(this.thread['subject'] ?? '')))
-          .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.topicFontSize))
-          .fontColor(getSubjectFontColor(String(this.thread['titleFont'] ?? '')))
-          .fontWeight(isSubjectBold(String(this.thread['titleFont'] ?? '')) ? FontWeight.Bold : FontWeight.Normal)
-          .fontStyle(isSubjectItalic(String(this.thread['titleFont'] ?? '')) ? FontStyle.Italic : FontStyle.Normal)
-          .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+        if (this.isAuthorBlacklisted()) {
+          Text('该用户已被屏蔽')
+            .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.topicFontSize))
+            .fontColor(AppColors.textTertiary)
+            .layoutWeight(1)
+        } else {
+          Text(getTypeTags(Number(this.thread['type'] ?? 0)))
+            .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.topicFontSize))
+            .fontColor(AppColors.textTertiary)
+          Text(unescapeHtml(String(this.thread['subject'] ?? '')))
+            .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.topicFontSize))
+            .fontColor(getSubjectFontColor(String(this.thread['titleFont'] ?? '')))
+            .fontWeight(isSubjectBold(String(this.thread['titleFont'] ?? '')) ? FontWeight.Bold : FontWeight.Normal)
+            .fontStyle(isSubjectItalic(String(this.thread['titleFont'] ?? '')) ? FontStyle.Italic : FontStyle.Normal)
+            .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+        }
         if (this.isFavorites) {
           Image($r('app.media.icon_close')).width(16).height(16).fillColor(AppColors.textTertiary)
             .padding({ left: 8, right: 4 })
@@ -578,15 +613,23 @@ struct TopicCardComponent {
       }.width('100%').alignItems(VerticalAlign.Top)
 
       if (this.thread['previewSnippet']) {
-        Text(unescapeHtml(String(this.thread['previewSnippet'] ?? '')))
-          .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.topicFontSize))
-          .fontColor(AppColors.textSecondary)
-          .maxLines(2)
-          .lineHeight(ReadingTypography.lineHeight(
-            ReadingLineHeightRole.TOPIC_SUMMARY,
-            ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.topicFontSize)
-          ))
-          .textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 10 }).width('100%')
+        if (this.isPreviewAuthorBlacklisted()) {
+          Text('该用户已被屏蔽')
+            .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.topicFontSize))
+            .fontColor(AppColors.textTertiary)
+            .margin({ top: 10 })
+            .width('100%')
+        } else {
+          Text(unescapeHtml(String(this.thread['previewSnippet'] ?? '')))
+            .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.topicFontSize))
+            .fontColor(AppColors.textSecondary)
+            .maxLines(2)
+            .lineHeight(ReadingTypography.lineHeight(
+              ReadingLineHeightRole.TOPIC_SUMMARY,
+              ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.topicFontSize)
+            ))
+            .textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 10 }).width('100%')
+        }
       }
 
       Row() {
