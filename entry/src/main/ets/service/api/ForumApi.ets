@@ -7,7 +7,7 @@ import { appStore } from '../../store/AppStore';
 import { parseForumCategories } from '../../parser/ForumParser';
 import { parseTopicList } from '../../parser/TopicParser';
 import { parseNgaError } from '../../parser/ErrorParser';
-import { CategoriesResult, TopicListResult, SearchForumResult } from '../../model/NgaApiResults';
+import { ApiResult, CategoriesResult, TopicListResult, SearchForumResult } from '../../model/NgaApiResults';
 
 // ============== 版块分类 ==============
 
@@ -122,6 +122,58 @@ export async function getTopicList(token: string, params: TopicListParams,
     result.ok = true;
   } catch (e) {
     result.error = (e as Error).message ?? '获取主题列表失败';
+  }
+  return result;
+}
+
+/**
+ * 修改父版块中某个子版块的服务器端显示状态。
+ *
+ * 与 MNGA 保持一致：屏蔽时把 filterId 加入 add_to_block_tids，
+ * 恢复显示时从该列表删除，然后由调用方重新加载父版块。
+ *
+ * @param token - 当前账号令牌
+ * @param parentFid - 父版块 fid
+ * @param filterId - NGA 子版块筛选标识
+ * @param show - 是否在父版块中显示
+ * @returns 操作结果
+ */
+export async function setSubforumFilter(token: string, parentFid: number,
+  filterId: string, show: boolean): Promise<ApiResult> {
+  const result = new ApiResult();
+  const session = appStore.getSession(token);
+  if (!session) {
+    result.error = '未登录';
+    return result;
+  }
+  if (parentFid === 0 || filterId.length === 0) {
+    result.error = '子版块筛选参数无效';
+    return result;
+  }
+
+  try {
+    const operation: string = show ? 'del' : 'add';
+    const query: Record<string, string> = {
+      '__lib': 'user_option',
+      '__act': 'set',
+      '__output': '8',
+    };
+    query[operation] = filterId;
+    const fields: Record<string, string> = {
+      'fid': String(parentFid),
+      'type': '1',
+      'info': 'add_to_block_tids',
+    };
+    const raw: object = await ngaClient.postWithQueryAndBody(
+      '/nuke.php', query, fields, { uid: session.uid, cid: session.cid });
+    const error: string | null = parseNgaError(raw);
+    if (error !== null) {
+      result.error = error;
+      return result;
+    }
+    result.ok = true;
+  } catch (e) {
+    result.error = (e as Error).message ?? '修改子版块屏蔽设置失败';
   }
   return result;
 }

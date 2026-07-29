@@ -300,6 +300,21 @@ async function ngaPost(path: string, body: Record<string, string>,
     buildEncodedBody(body, gbkFieldKeys), cookies, '', emptyStringRecord(), hasGbk);
 }
 
+/**
+ * 发送同时携带查询参数与表单正文的 NGA POST 请求。
+ *
+ * @param path - 请求路径
+ * @param params - URL 查询参数
+ * @param body - application/x-www-form-urlencoded 表单
+ * @param cookies - NGA 登录 Cookie
+ * @returns NGA JSON 响应
+ */
+async function ngaPostWithQueryAndBody(path: string, params: Record<string, string>,
+  body: Record<string, string>, cookies?: Cookies): Promise<object> {
+  return ngaRequest(path, http.RequestMethod.POST, params,
+    buildEncodedBody(body), cookies, '', emptyStringRecord());
+}
+
 async function ngaPostWithQuery(path: string, params: Record<string, string>,
   cookies?: Cookies): Promise<object> {
   const extraHeaders: Record<string, string> = {
@@ -427,6 +442,9 @@ interface INgaClient {
     cookies?: Cookies, extraHeaders?: Record<string, string>) => Promise<object>;
   post: (path: string, body: Record<string, string>, cookies?: Cookies,
     gbkFieldKeys?: string[]) => Promise<object>;
+  /** 发送同时携带查询参数与表单正文的 POST 请求。 */
+  postWithQueryAndBody: (path: string, params: Record<string, string>,
+    body: Record<string, string>, cookies?: Cookies) => Promise<object>;
   postWithQuery: (path: string, params: Record<string, string>, cookies?: Cookies) => Promise<object>;
   postMultipart: (path: string, fields: Record<string, string>,
     cookies?: Cookies, baseUrl?: string) => Promise<object>;
@@ -454,6 +472,20 @@ const client: INgaClient = {
   async post(path: string, body: Record<string, string>,
     cookies?: Cookies, gbkFieldKeys?: string[]): Promise<object> {
     return ngaPost(path, body, cookies, gbkFieldKeys);
+  },
+
+  /**
+   * 发送同时携带查询参数与表单正文的 POST 请求。
+   *
+   * @param path - 请求路径
+   * @param params - URL 查询参数
+   * @param body - 表单正文
+   * @param cookies - NGA 登录 Cookie
+   * @returns NGA JSON 响应
+   */
+  async postWithQueryAndBody(path: string, params: Record<string, string>,
+    body: Record<string, string>, cookies?: Cookies): Promise<object> {
+    return ngaPostWithQueryAndBody(path, params, body, cookies);
   },
 
   async postWithQuery(path: string, params: Record<string, string>,

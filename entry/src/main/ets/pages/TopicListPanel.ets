@@ -9,10 +9,12 @@ import { BusinessError } from '@kit.BasicServicesKit'
 import { appStore } from '../store/AppStore'
 import { routerStore, Screen } from '../store/RouterStore'
 import { withTimeout } from '../common/utils/TimeoutUtils'
-import { getTopicList, createTopicListParams } from '../service/api/ForumApi'
+import { getTopicList, createTopicListParams, setSubforumFilter } from '../service/api/ForumApi'
 import { removeFavorite } from '../service/api/FavoriteApi'
 import type { TopicListParams } from '../service/api/ForumApi'
 import type { TopicListResult } from '../model/NgaApiResults'
+import type { SubBoard } from '../model/Forum'
+import { FavBoard } from '../model/SocialEntries'
 import { AppColors, FONT_COLORS, SORT_MODES, SortMode, BreakpointType } from '../common/constants/Constants'
 import { formatTime } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
@@ -74,6 +76,16 @@ export struct TopicListPanel {
   @StorageProp('navBarHeight') navBarHeight: number = 0
   @State loadingContentOpacity: number = 0
   private loadingDelayTimer: number = -1
+  /** 是否显示标题栏更多菜单。 */
+  @State showMoreMenu: boolean = false
+  /** 是否显示子版块屏蔽面板。 */
+  @State showSubBoardFilterPanel: boolean = false
+  /** 当前父版块返回的子版块。 */
+  @State subBoards: SubBoard[] = []
+  /** 当前正在提交的子版块筛选标识。 */
+  @State updatingSubBoardFilterId: string = ''
+  /** 收藏板块版本号，用于响应现有收藏功能的变更。 */
+  @StorageProp('favVersion') favVersion: number = 0
 
   private scroller: Scroller = new Scroller()
 
@@ -114,6 +126,7 @@ export struct TopicListPanel {
     this.showSort = !this.authorid && !this.favor
     this.loadTopics(1)
     appStore.refreshUnreadCount()
+    appStore.settingsStore.ensureFavorites()
     this.startHoldingHandMonitoring()
   }
 
@@ -126,8 +139,136 @@ export struct TopicListPanel {
     this.threadsDataSource.clear()
     this.hasError = false
     this.sortMode = 'latest'
+    this.showMoreMenu = false
+    this.showSubBoardFilterPanel = false
+    this.subBoards = []
+    this.updatingSubBoardFilterId = ''
     this.showSort = !this.authorid && !this.favor
     this.loadTopics(1)
+  }
+
+  /**
+   * 判断当前页面是否对应一个可管理的普通版块。
+   *
+   * @returns 是否允许管理当前版块
+   */
+  private canManageCurrentBoard(): boolean {
+    return this.boardFid !== 0 && !this.isFavorites && !this.favor
+      && !this.authorid && !this.searchKey && !this.author && !this.searchpost
+  }
+
+  /**
+   * 判断当前版块是否已存在于本地收藏板块列表。
+   *
+   * @returns 是否已收藏
+   */
+  private isCurrentBoardFavorite(): boolean {
+    if (!this.canManageCurrentBoard()) return false
+    const favorites: FavBoard[] = appStore.settings.favorites
+    for (let i = 0; i < favorites.length; i++) {
+      if (favorites[i].fid === this.boardFid) return true
+    }
+    return false
+  }
+
+  /**
+   * 接入现有收藏板块功能，切换当前版块的收藏状态。
+   */
+  private toggleCurrentBoardFavorite(): void {
+    if (!this.canManageCurrentBoard()) {
+      appStore.showToast('当前页面不是可收藏的板块')
+      return
+    }
+    if (this.isCurrentBoardFavorite()) {
+      appStore.settingsStore.removeFavorite(this.boardFid)
+      appStore.showToast('已取消收藏板块')
+      return
+    }
+
+    const parsedStid: number = Number(this.boardStid)
+    const favorite: FavBoard = new FavBoard()
+    favorite.fid = this.boardFid
+    favorite.stid = Number.isFinite(parsedStid) && parsedStid !== 0 ? parsedStid : this.boardFid
+    favorite.name = this.boardName
+    appStore.settingsStore.addFavorite(favorite)
+    appStore.showToast('已收藏板块')
+  }
+
+  /**
+   * 打开子版块屏蔽面板。
+   */
+  private openSubBoardFilterPanel(): void {
+    this.showMoreMenu = false
+    if (!this.canManageCurrentBoard()) {
+      appStore.showToast('当前页面不支持子版块屏蔽')
+      return
+    }
+    if (this.subBoards.length === 0) {
+      appStore.showToast('当前板块没有可管理的子版块')
+      return
+    }
+    this.showSubBoardFilterPanel = true
+  }
+
+  /**
+   * 在本地替换指定子版块的显示状态。
+   *
+   * @param filterId - 子版块筛选标识
+   * @param selected - 新显示状态
+   */
+  private replaceSubBoardSelection(filterId: string, selected: boolean): void {
+    const next: SubBoard[] = []
+    for (let i = 0; i < this.subBoards.length; i++) {
+      const item: SubBoard = this.subBoards[i]
+      next.push({
+        fid: item.fid,
+        stid: item.stid,
+        name: item.name,
+        boardHead: item.boardHead,
+        tidStr: item.tidStr,
+        type: item.type,
+        checked: item.filterId === filterId ? selected : item.checked,
+        description: item.description,
+        parentFidStr: item.parentFidStr,
+        filterId: item.filterId,
+        attributes: item.attributes,
+        filterable: item.filterable,
+      })
+    }
+    this.subBoards = next
+  }
+
+  /**
+   * 修改子版块的 NGA 账号级显示状态并刷新父版块。
+   *
+   * @param subBoard - 待修改子版块
+   * @param show - 是否在父版块中显示
+   */
+  private async handleSubBoardFilterChange(subBoard: SubBoard, show: boolean): Promise<void> {
+    if (!subBoard.filterable || subBoard.filterId.length === 0
+      || this.updatingSubBoardFilterId.length > 0) {
+      return
+    }
+
+    const previous: boolean = subBoard.checked
+    this.updatingSubBoardFilterId = subBoard.filterId
+    this.replaceSubBoardSelection(subBoard.filterId, show)
+    try {
+      const result = await setSubforumFilter(
+        appStore.auth.token, this.boardFid, subBoard.filterId, show)
+      if (!result.ok) {
+        this.replaceSubBoardSelection(subBoard.filterId, previous)
+        appStore.showToast(result.error || '修改子版块屏蔽设置失败')
+        return
+      }
+      appStore.showToast(show ? `已显示“${subBoard.name}”` : `已屏蔽“${subBoard.name}”`)
+      await this.loadTopics(1)
+    } catch (e) {
+      this.replaceSubBoardSelection(subBoard.filterId, previous)
+      appStore.showToast((e as Error).message || '修改子版块屏蔽设置失败')
+    } finally {
+      this.updatingSubBoardFilterId = ''
+    }
   }
 
   private buildTopicParams(page: number): TopicListParams {
@@ -173,12 +314,16 @@ export struct TopicListPanel {
 
       let curTime: number = 0
       const allThreads: object[] = []
+      let loadedSubBoards: SubBoard[] = []
 
       for (let i = 0; i < results.length; i++) {
         const result: TopicListResult = results[i]
         if (result.ok && result.data) {
           if (curTime === 0) {
             curTime = result.data.curTime
+          }
+          if (loadedSubBoards.length === 0 && result.data.subBoardList.length > 0) {
+            loadedSubBoards = result.data.subBoardList
           }
           const list: object[] = result.data.threadPageList
           for (let j = 0; j < list.length; j++) {
@@ -207,6 +352,9 @@ export struct TopicListPanel {
       }
 
       this.twentyFourCache = capped
+      if (this.canManageCurrentBoard()) {
+        this.subBoards = loadedSubBoards
+      }
 
       const firstPageLen: number = capped.length > 20 ? 20 : capped.length
       const firstPage: object[] = []
@@ -297,6 +445,7 @@ export struct TopicListPanel {
       if (result.ok && result.data) {
         const list: object[] = result.data.threadPageList
         if (page === 1) {
+          this.subBoards = this.canManageCurrentBoard() ? result.data.subBoardList : []
           this.mgr.replaceWith(list, page, result.data.pagination.totalPages)
           this.threadsDataSource.replaceAll(list)
         } else {
@@ -523,10 +672,15 @@ export struct TopicListPanel {
       PanelNavBar({
         title: this.boardName,
         showBack: this.showBack,
-        rightIcon: $r('app.media.icon_bell'),
-        rightIconBadge: this.unreadNotiCount,
+        rightIcon: this.canManageCurrentBoard() ? $r('app.media.icon_bell') : '',
+        rightIconBadge: this.canManageCurrentBoard() ? this.unreadNotiCount : 0,
         onRightClick: (): void => {
+          this.showMoreMenu = false
           routerStore.navigateActivity(Screen.notifications())
+        },
+        secondaryRightIcon: this.canManageCurrentBoard() ? $r('app.media.icon_more') : '',
+        onSecondaryRightClick: (): void => {
+          this.showMoreMenu = !this.showMoreMenu
         }
       })
         .width('100%').position({ x: 0, y: 0 })
@@ -549,6 +703,169 @@ export struct TopicListPanel {
         .onClick(() => this.loadTopics(1))
       }.width('100%').justifyContent(this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? FlexAlign.Start : FlexAlign.End)
       .padding({ left: this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? 16 : 0, right: this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? 0 : 16, bottom: 16 + this.navBarHeight })
+
+      if (this.showMoreMenu && this.canManageCurrentBoard()) {
+        Stack() {
+          Column() {
+          }
+          .width('100%').height('100%')
+          .onClick(() => {
+            this.showMoreMenu = false
+          })
+
+          Column() {
+            Column() {
+              Text('子版块屏蔽')
+                .fontSize(15)
+                .fontColor(AppColors.textPrimary)
+                .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+                .width('100%')
+                .onClick(() => {
+                  this.openSubBoardFilterPanel()
+                })
+            }
+            .width('100%')
+
+            Divider().width('100%').color(AppColors.separator)
+
+            Column() {
+              Text(this.isCurrentBoardFavorite() ? '取消收藏板块' : '收藏板块')
+                .fontSize(15)
+                .fontColor(AppColors.textPrimary)
+                .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+                .width('100%')
+                .onClick(() => {
+                  this.toggleCurrentBoardFavorite()
+                  this.showMoreMenu = false
+                })
+            }
+            .width('100%')
+          }
+          .width(170)
+          .backgroundColor(AppColors.bgTertiary)
+          .borderRadius(10)
+          .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
+          .position({ top: this.statusBarHeight + 50, right: 12 })
+        }
+        .width('100%').height('100%')
+        .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
+      }
+
+      if (this.showSubBoardFilterPanel && this.canManageCurrentBoard()) {
+        Stack({ alignContent: Alignment.Center }) {
+          Column() {
+          }
+          .width('100%').height('100%')
+          .backgroundColor(AppColors.overlay)
+          .onClick(() => {
+            if (this.updatingSubBoardFilterId.length === 0) {
+              this.showSubBoardFilterPanel = false
+            }
+          })
+
+          Column() {
+            Row() {
+              Column() {
+                Text('子版块屏蔽')
+                  .fontSize(17)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(AppColors.textPrimary)
+                  .width('100%')
+                Text('开关会同步到 NGA 账号，并刷新当前父版块的帖子列表')
+                  .fontSize(12)
+                  .fontColor(AppColors.textTertiary)
+                  .width('100%')
+                  .margin({ top: 3 })
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+
+              Text('关闭')
+                .fontSize(14)
+                .fontColor(AppColors.primary)
+                .padding({ left: 12, top: 8, bottom: 8 })
+                .onClick(() => {
+                  if (this.updatingSubBoardFilterId.length === 0) {
+                    this.showSubBoardFilterPanel = false
+                  }
+                })
+            }
+            .width('100%')
+            .padding({ left: 16, right: 16, top: 14, bottom: 10 })
+            .alignItems(VerticalAlign.Center)
+
+            Divider().width('100%').color(AppColors.separator)
+
+            List() {
+              ForEach(this.subBoards, (subBoard: SubBoard) => {
+                ListItem() {
+                  Row() {
+                    Image(subBoard.boardHead)
+                      .width(36).height(36)
+                      .borderRadius(8)
+                      .objectFit(ImageFit.Cover)
+                      .onError(() => {})
+
+                    Column() {
+                      Text(unescapeHtml(subBoard.name))
+                        .fontSize(15)
+                        .fontColor(AppColors.textPrimary)
+                        .maxLines(1)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
+                        .width('100%')
+                      if (subBoard.description.length > 0) {
+                        Text(unescapeHtml(subBoard.description))
+                          .fontSize(12)
+                          .fontColor(AppColors.textTertiary)
+                          .maxLines(1)
+                          .textOverflow({ overflow: TextOverflow.Ellipsis })
+                          .width('100%')
+                          .margin({ top: 2 })
+                      }
+                    }
+                    .layoutWeight(1)
+                    .alignItems(HorizontalAlign.Start)
+                    .margin({ left: 10, right: 10 })
+
+                    if (this.updatingSubBoardFilterId === subBoard.filterId) {
+                      LoadingProgress().width(22).height(22).color(AppColors.primary)
+                    } else {
+                      Toggle({
+                        type: ToggleType.Switch,
+                        isOn: subBoard.filterable ? subBoard.checked : true
+                      })
+                        .enabled(subBoard.filterable && subBoard.filterId.length > 0
+                          && this.updatingSubBoardFilterId.length === 0)
+                        .onChange((show: boolean): void => {
+                          this.handleSubBoardFilterChange(subBoard, show)
+                        })
+                    }
+                  }
+                  .width('100%')
+                  .height(58)
+                  .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+                  .alignItems(VerticalAlign.Center)
+                }
+              }, (subBoard: SubBoard) => {
+                const stableId: string = subBoard.filterId.length > 0
+                  ? subBoard.filterId : `${subBoard.fid}:${subBoard.stid}:${subBoard.name}`
+                return `${stableId}:${subBoard.checked ? 'shown' : 'blocked'}`
+              })
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .divider({ strokeWidth: 0.5, color: AppColors.separator, startMargin: 60 })
+            .scrollBar(BarState.Auto)
+          }
+          .width('88%')
+          .height('70%')
+          .backgroundColor(AppColors.bgTertiary)
+          .borderRadius(16)
+          .shadow({ radius: 24, color: AppColors.shadow, offsetY: 6 })
+        }
+        .width('100%').height('100%')
+        .transition(TransitionEffect.OPACITY.animation({ duration: 180 }))
+      }
     }
     .width('100%').height('100%').backgroundColor(AppColors.bg).alignContent(Alignment.BottomEnd)
   }

@@ -1,8 +1,18 @@
+import type { SubBoard } from './Forum';
+
+/**
+ * 主题列表及其所属版块元数据。
+ */
 export interface TopicListInfo {
+  /** 当前版块名称。 */
   name: string;
+  /** 当前页主题列表。 */
   threadPageList: ThreadPageInfo[];
-  subBoardList: object[];
+  /** 当前版块下可浏览或屏蔽的子版块列表。 */
+  subBoardList: SubBoard[];
+  /** NGA 服务端当前时间。 */
   curTime: number;
+  /** 主题列表分页信息。 */
   pagination: Pagination;
 }
 
