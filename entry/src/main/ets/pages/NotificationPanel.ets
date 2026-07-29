@@ -11,7 +11,7 @@ import type {
   UpvoteNotification
 } from '../model/Notification'
 import { AppColors, NOTI_TYPE_MAP, getNotiIcon } from '../common/constants/Constants'
-import { formatTime, escHtml } from '../common/utils/Utils'
+import { formatTime } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { BreakpointType } from '../common/constants/Constants'
 import { PanelNavBar } from '../common/components/PanelNavBar'
@@ -19,27 +19,12 @@ import { Avatar } from '../common/components/Avatar'
 import { NotificationDataSource } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/components/PageStateView'
 
-interface FilterMode {
-  key: number
-  label: string
-}
-
-const FILTER_MODES: FilterMode[] = [
-  { key: 0, label: '全部' },
-  { key: 1, label: '回复' },
-  { key: 2, label: '@我' },
-  { key: 3, label: '私信' }
-]
-const FILTER_TYPES: number[][] = [[], [1, 2, 17], [7, 8], [10, 11]]
-
 @Component
 export struct NotificationPanel {
   @State notifications: NotificationInfo[] = []
   @State isLoading: boolean = true
   @State hasError: boolean = false
   @State errorMsg: string = ''
-  @State activeFilter: number = 0
-  @State clearing: boolean = false
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   /** 通知 Store 的页面刷新信号。 */
@@ -69,7 +54,7 @@ export struct NotificationPanel {
   /** 从通知 Store 同步列表快照和懒加载数据源。 */
   private syncFromStore(): void {
     this.notifications = appStore.getCachedNotifications() as NotificationInfo[]
-    this.updateFilteredDataSource()
+    this.notificationsDataSource.replaceAll(this.notifications)
   }
 
   /**
@@ -96,33 +81,63 @@ export struct NotificationPanel {
     this.isLoading = false
   }
 
-  private getFilteredNotifications(): NotificationInfo[] {
-    const list = this.notifications
-    if (!list) return []
-    const types = FILTER_TYPES[this.activeFilter]
-    if (types.length === 0) return list
-    return list.filter((n: NotificationInfo) => types.includes(n.type))
+  /** 判断当前列表是否包含未读通知。 */
+  private hasUnreadNotifications(): boolean {
+    return this.notifications.some((notification: NotificationInfo) => !notification.seen)
   }
 
-  private getEmptyText(): string {
-    const texts: string[] = ['暂无通知', '暂无回复通知', '暂无@消息', '暂无私信通知']
-    return texts[this.activeFilter] || '暂无通知'
-  }
-
-  private updateFilteredDataSource(): void {
-    this.notificationsDataSource.replaceAll(this.getFilteredNotifications())
-  }
-
-  private async handleClearAll(): Promise<void> {
-    if (this.clearing) return
-    this.clearing = true
-    const success: boolean = await appStore.clearAllNotifications()
-    if (success) {
-      this.syncFromStore()
-    } else {
-      appStore.showToast('清除失败')
+  /** 将当前账号的全部通知标记为已读。 */
+  private handleMarkAllSeen(): void {
+    if (!this.hasUnreadNotifications()) {
+      return
     }
-    this.clearing = false
+    appStore.markAllNotificationsSeen()
+    this.syncFromStore()
+  }
+
+  /**
+   * 获取通知行的主要标题。
+   *
+   * @param notification - 通知记录
+   * @returns 主题标题或通知类别标题
+   */
+  private getNotificationTitle(notification: NotificationInfo): string {
+    if (notification.title.length > 0) {
+      return unescapeHtml(notification.title)
+    }
+    const info = NOTI_TYPE_MAP[notification.type]
+    if (info && info.category === 'message') {
+      return '私信'
+    }
+    return '通知'
+  }
+
+  /**
+   * 获取通知行的动作说明。
+   *
+   * @param notification - 通知记录
+   * @returns 用户可读的通知动作
+   */
+  private getNotificationAction(notification: NotificationInfo): string {
+    const info = NOTI_TYPE_MAP[notification.type]
+    return info ? info.label : '通知'
+  }
+
+  /**
+   * 获取通知行的次要描述。
+   *
+   * @param notification - 通知记录
+   * @returns 发起用户、用户备注和通知动作组成的描述
+   */
+  private getNotificationDescription(notification: NotificationInfo): string {
+    const action: string = this.getNotificationAction(notification)
+    if (notification.userName.length === 0) {
+      return action
+    }
+    const userName: string = unescapeHtml(notification.userName)
+    const note: string = appStore.settingsStore.getNote(notification.userId)
+    const actor: string = note.length > 0 ? `${userName} (${note})` : userName
+    return `${actor} ${action}`
   }
 
   /**
@@ -198,30 +213,6 @@ export struct NotificationPanel {
     Stack() {
       Column() {
         Row().width('100%').height(44 + this.statusBarHeight)
-        Row() {
-          ForEach(FILTER_MODES, (mode: FilterMode) => {
-            Text(mode.label)
-              .fontSize(13)
-              .fontColor(this.activeFilter === mode.key ? AppColors.textPrimary : AppColors.textTertiary)
-              .fontWeight(this.activeFilter === mode.key ? FontWeight.Bold : FontWeight.Normal)
-              .backgroundColor(this.activeFilter === mode.key ? AppColors.bg : Color.Transparent)
-              .borderRadius(7)
-              .padding({ left: 12, right: 12, top: 5, bottom: 5 })
-              .layoutWeight(1)
-              .textAlign(TextAlign.Center)
-              .onClick(() => {
-                if (this.activeFilter !== mode.key) {
-                  this.activeFilter = mode.key
-                  this.updateFilteredDataSource()
-                }
-              })
-          })
-        }
-        .width('92%')
-        .margin({ top: 8, bottom: 4 })
-        .padding(3)
-        .backgroundColor(AppColors.bgSecondary)
-        .borderRadius(10)
 
         if (this.isLoading) {
           Column() {
@@ -233,9 +224,9 @@ export struct NotificationPanel {
             ErrorStateView({ msg: this.errorMsg, onRetry: () => this.loadNotifications() })
           }
           .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-        } else if (this.getFilteredNotifications().length === 0) {
+        } else if (this.notifications.length === 0) {
           Column() {
-            EmptyStateView({ msg: this.getEmptyText(), icon: $r('app.media.icon_bell') })
+            EmptyStateView({ msg: '暂无通知', icon: $r('app.media.icon_bell') })
           }
           .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
         } else {
@@ -244,59 +235,53 @@ export struct NotificationPanel {
               ListItem() {
                 Row() {
                   Circle()
-                    .width(8)
-                    .height(8)
+                    .width(7)
+                    .height(7)
                     .fill(AppColors.primary)
                     .opacity(n.seen ? 0 : 1)
-                    .margin({ right: 8 })
-                  if (n.type === 17) {
-                    Image(getNotiIcon(n.type)).width(20).height(20).fillColor(AppColors.primary)
-                      .margin({ right: 10 })
-                  } else if (n.userName.length > 0) {
+                    .margin({ right: 9 })
+                  if (n.userName.length > 0) {
                     Avatar({ name: n.userName, uid: n.userId, avatarSize: 40 })
+                      .opacity(n.seen ? 0.72 : 1)
                       .margin({ right: 10 })
                   } else {
-                    Image(getNotiIcon(n.type)).width(20).height(20).fillColor(AppColors.textSecondary)
-                      .margin({ right: 8 })
+                    Stack() {
+                      Image(getNotiIcon(n.type))
+                        .width(20)
+                        .height(20)
+                        .fillColor(n.seen ? AppColors.textTertiary : AppColors.primary)
+                    }
+                    .width(40)
+                    .height(40)
+                    .backgroundColor(AppColors.bgSecondary)
+                    .borderRadius(20)
+                    .margin({ right: 10 })
                   }
                   Column() {
                     Row() {
-                      Row() {
-                        if (n.userName.length > 0) {
-                          Text(unescapeHtml(n.userName)).fontSize(15).fontColor(AppColors.primary)
-                            .fontWeight(n.seen ? FontWeight.Normal : FontWeight.Bold)
-                          if (appStore.settingsStore.getNote(n.userId).length > 0) {
-                            Text('(' + appStore.settingsStore.getNote(n.userId) + ')')
-                              .fontSize(11).fontColor(AppColors.warning).margin({ left: 3 })
-                          }
-                          Text('').margin({ right: 4 })
-                        }
-                        Text(escHtml(NOTI_TYPE_MAP[n.type] ? NOTI_TYPE_MAP[n.type].label : '通知'))
-                          .fontSize(15).fontColor(AppColors.textSecondary)
-                          .fontWeight(n.seen ? FontWeight.Normal : FontWeight.Bold)
-                      }.layoutWeight(1)
-                      if (!n.seen) {
-                        Text('未读')
-                          .fontSize(10)
-                          .fontColor(AppColors.primary)
-                          .backgroundColor(AppColors.primaryLight)
-                          .borderRadius(6)
-                          .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-                          .margin({ left: 6, right: 8 })
-                      }
-                      Text(formatTime(Number(n.timeStamp))).fontSize(12).fontColor(AppColors.textTertiary)
-                        .fontWeight(n.seen ? FontWeight.Normal : FontWeight.Bold)
+                      Text(this.getNotificationTitle(n))
+                        .fontSize(15)
+                        .fontColor(n.seen ? AppColors.textSecondary : AppColors.textPrimary)
+                        .fontWeight(n.seen ? FontWeight.Normal : FontWeight.Medium)
+                        .maxLines(1)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
+                        .layoutWeight(1)
+                      Text(formatTime(Number(n.timeStamp)))
+                        .fontSize(12)
+                        .fontColor(AppColors.textTertiary)
+                        .margin({ left: 12 })
                     }.width('100%').alignItems(VerticalAlign.Center)
-                    if (n.title.length > 0) {
-                      Text(unescapeHtml(n.title)).fontSize(14).fontColor(AppColors.textPrimary)
-                        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 4 })
-                        .width('100%')
-                        .fontWeight(n.seen ? FontWeight.Normal : FontWeight.Bold)
-                    }
+                    Text(this.getNotificationDescription(n))
+                      .fontSize(13)
+                      .fontColor(n.seen ? AppColors.textTertiary : AppColors.textSecondary)
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                      .margin({ top: 5 })
+                      .width('100%')
                   }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-                }.width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
+                }.width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })
                 .alignItems(VerticalAlign.Center)
-                .backgroundColor(n.seen ? AppColors.bg : AppColors.primaryLight)
+                .backgroundColor(AppColors.bg)
                 .onClick(() => this.handleNotificationClick(n))
               }
             }, (n: NotificationInfo) => n.notificationId)
@@ -309,7 +294,12 @@ export struct NotificationPanel {
       }
       .width('100%').height('100%')
 
-      PanelNavBar({ title: '通知', rightLabel: '清空', rightLabelColor: this.clearing ? AppColors.textTertiary : AppColors.primary, onRightClick: (): void => { this.handleClearAll() } })
+      PanelNavBar({
+        title: '通知',
+        rightLabel: '全部已读',
+        rightLabelColor: this.hasUnreadNotifications() ? AppColors.primary : AppColors.textTertiary,
+        onRightClick: (): void => { this.handleMarkAllSeen() }
+      })
         .width('100%').position({ x: 0, y: 0 })
     }
     .width('100%').height('100%').backgroundColor(AppColors.bg)

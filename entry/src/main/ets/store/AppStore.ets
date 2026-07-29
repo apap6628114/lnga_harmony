@@ -243,8 +243,6 @@ class AppStoreClass {
   markAllNotificationsSeen(): void { this.notificationStore.markAllSeen() }
   /** 将私信通知标记为已查看。 */
   markMessageNotificationsSeen(): void { this.notificationStore.markMessagesSeen() }
-  /** 清空服务端与本地通知。 */
-  clearAllNotifications(): Promise<boolean> { return this.notificationStore.clearAllNotifications() }
 
   // ---------- Facade: Vote ----------
 

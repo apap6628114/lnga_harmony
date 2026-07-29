@@ -1,4 +1,4 @@
-import { clearNotifications, getNotifications } from '../service/api/MessageApi'
+import { getNotifications } from '../service/api/MessageApi'
 import { BaseStore } from './BaseStore'
 import { PreferencesStore } from '../common/infra/PreferencesStore'
 import { SerialQueue } from '../common/infra/SerialQueue'
@@ -302,39 +302,6 @@ export class NotificationStore extends BaseStore<Object> {
     }
     this.publishState()
     this.persistCachedNotifications()
-  }
-
-  /**
-   * 请求服务端清空通知，成功后再清空本地状态。
-   *
-   * @returns 是否清空成功
-   */
-  async clearAllNotifications(): Promise<boolean> {
-    if (!this.auth || !this.auth.isAuthenticated || !this.auth.uid) {
-      return false
-    }
-    const requestGeneration: number = this.generation
-    const requestUid: string = this.auth.uid
-    const requestToken: string = this.auth.token
-    try {
-      const result = await clearNotifications(requestToken)
-      if (!this.isRequestCurrent(requestGeneration, requestUid, requestToken)) {
-        return false
-      }
-      if (!result.ok) {
-        logger.warn('清空通知失败: %{public}s', result.error)
-        return false
-      }
-      this.generation++
-      this.refreshPromise = null
-      this.cachedNotifications = []
-      this.publishState()
-      this.persistCachedNotifications()
-      return true
-    } catch (error) {
-      logger.warn('清空通知异常: %{public}s', formatError(error as Object))
-      return false
-    }
   }
 
   /**

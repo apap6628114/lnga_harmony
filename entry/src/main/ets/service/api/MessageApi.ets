@@ -7,7 +7,7 @@ import { appStore } from '../../store/AppStore';
 import { parseNotifications } from '../../parser/NotificationParser';
 import { parseMessageList, parseMessageDetail } from '../../parser/MessageParser';
 import { parseNgaError } from '../../parser/ErrorParser';
-import { ApiResult, NotificationsResult } from '../../model/NgaApiResults';
+import { NotificationsResult } from '../../model/NgaApiResults';
 import { MessageListResult, MessageDetailResult, MessageSendResult } from '../../model/MessageResult';
 import type { NotificationParseResult } from '../../model/Notification';
 
@@ -59,28 +59,6 @@ export async function getNotifications(token: string): Promise<NotificationsResu
     result.ok = true;
   } catch (e) {
     result.error = (e as Error).message ?? '获取通知失败';
-  }
-  return result;
-}
-
-export async function clearNotifications(token: string): Promise<ApiResult> {
-  const result = new ApiResult();
-  const session = appStore.getSession(token);
-  if (!session) {
-    result.error = '未登录';
-    return result;
-  }
-  try {
-    const fields: Record<string, string> = { '__lib': 'noti', 'raw': '3', '__act': 'del' };
-    const raw = await ngaClient.post('/nuke.php', fields, { uid: session.uid, cid: session.cid });
-    const error: string | null = parseNgaError(raw);
-    if (error) {
-      result.error = error;
-      return result;
-    }
-    result.ok = true;
-  } catch (e) {
-    result.error = (e as Error).message ?? '清除通知失败';
   }
   return result;
 }
