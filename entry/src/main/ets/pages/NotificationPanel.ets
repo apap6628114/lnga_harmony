@@ -284,7 +284,7 @@ export struct NotificationPanel {
                 .backgroundColor(AppColors.bg)
                 .onClick(() => this.handleNotificationClick(n))
               }
-            }, (n: NotificationInfo) => n.notificationId)
+            }, (n: NotificationInfo) => `${n.notificationId}_${n.seen}`)
           }
           .width('100%').layoutWeight(1)
           .divider({ strokeWidth: 0.5, color: AppColors.separator })
