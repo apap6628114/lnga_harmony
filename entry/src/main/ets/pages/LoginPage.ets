@@ -14,6 +14,7 @@ import { common } from '@kit.AbilityKit'
 import { BusinessError } from '@kit.BasicServicesKit'
 import { util } from '@kit.ArkTS'
 import { webview } from '@kit.ArkWeb'
+import { PageScope } from '../common/concurrency/PageScope'
 
 
 @Entry
@@ -40,6 +41,12 @@ struct LoginPage {
   private authTriggered: boolean = false
   private pendingCredentialContent: string = ''
   private importCredentialDialogController?: CustomDialogController
+  /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
+  private scope: PageScope = new PageScope()
+
+  aboutToAppear(): void {
+    this.scope.begin()
+  }
 
   build() {
     Stack() {
@@ -368,8 +375,12 @@ struct LoginPage {
   }
 
   private async refreshCaptcha(): Promise<void> {
+    const gen: number = this.scope.begin()
     try {
       const result = await loginStep1(this.username, this.password)
+      if (!this.scope.isActive(gen)) {
+        return
+      }
       if (result.ok) {
         this.loginToken = result.loginToken
         this.captchaId = result.captchaId
@@ -475,6 +486,7 @@ struct LoginPage {
   }
 
   aboutToDisappear(): void {
+    this.scope.end()
     this.stopCookiePolling()
     this.importCredentialDialogController = undefined
     this.pendingCredentialContent = ''

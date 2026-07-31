@@ -8,6 +8,7 @@ import { floatingLayerStore } from '../store/FloatingLayerStore'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { HistoryItemDataSource } from '../common/datasource/LazyDataSource'
 import { AnonymousName } from '../common/components/AnonymousName'
+import { PageScope } from '../common/concurrency/PageScope'
 
 @Component
 export struct BrowseHistoryPanel {
@@ -17,21 +18,38 @@ export struct BrowseHistoryPanel {
   /** 黑名单变更版本号。 */
   @StorageProp('blacklistVersion') blacklistVersion: number = 0
   private historyDataSource: HistoryItemDataSource = new HistoryItemDataSource()
+  /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
+  private scope: PageScope = new PageScope()
 
   aboutToAppear(): void {
-    this.loadHistory()
+    this.loadHistory(this.scope.begin())
   }
 
-  private async loadHistory(): Promise<void> {
+  /** 结束页面出现会话，使未完成的异步回调失效。 */
+  aboutToDisappear(): void {
+    this.scope.end()
+  }
+
+  private async loadHistory(gen: number): Promise<void> {
     if (!appStore.auth.isAuthenticated) {
+      if (!this.scope.isActive(gen)) {
+        return
+      }
       this.items = []
       this.historyDataSource.clear()
       return
     }
     try {
-      this.items = await appStore.getBrowseHistory(appStore.auth.uid)
+      const items: BrowseHistoryEntry[] = await appStore.getBrowseHistory(appStore.auth.uid)
+      if (!this.scope.isActive(gen)) {
+        return
+      }
+      this.items = items
       this.historyDataSource.replaceAll(this.items as object[])
     } catch (e) {
+      if (!this.scope.isActive(gen)) {
+        return
+      }
       this.items = []
     }
   }

@@ -14,6 +14,7 @@ import { Avatar } from '../common/components/Avatar'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { MessageThreadDataSource } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/components/PageStateView'
+import { PageScope } from '../common/concurrency/PageScope'
 
 @Component
 export struct MessageListPanel {
@@ -30,12 +31,11 @@ export struct MessageListPanel {
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
   private threadsDataSource: MessageThreadDataSource = new MessageThreadDataSource()
-  /** 当前页面出现周期版本号。 */
-  private appearanceGeneration: number = 0
+  /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
+  private scope: PageScope = new PageScope()
 
   aboutToAppear(): void {
-    this.appearanceGeneration++
-    const currentGeneration: number = this.appearanceGeneration
+    const currentGeneration: number = this.scope.begin()
     if (this.composeToInit.length > 0) {
       this.composeTo = this.composeToInit
       this.showCompose = true
@@ -45,7 +45,7 @@ export struct MessageListPanel {
 
   /** 结束当前页面出现周期，使未完成的异步回调失效。 */
   aboutToDisappear(): void {
-    this.appearanceGeneration++
+    this.scope.end()
   }
 
   /**
@@ -54,23 +54,23 @@ export struct MessageListPanel {
    * @param appearanceGeneration - 消息列表成功时的页面出现周期版本号
    */
   private async refreshNotificationState(appearanceGeneration: number): Promise<void> {
-    if (appearanceGeneration !== this.appearanceGeneration) {
+    if (!this.scope.isActive(appearanceGeneration)) {
       return
     }
     await appStore.refreshNotifications(true)
   }
 
   /**
-   * 加载私信列表，并仅在当前页面出现周期内更新界面和通知状态。
+   * 加载私信列表，并仅在当前页面出现会话内更新界面和通知状态。
    *
-   * @param appearanceGeneration - 请求发起时的页面出现周期版本号
+   * @param appearanceGeneration - 请求发起时的页面出现会话代际
    */
-  private async loadMessages(appearanceGeneration: number = this.appearanceGeneration): Promise<void> {
+  private async loadMessages(appearanceGeneration: number): Promise<void> {
     this.isLoading = true
     this.hasError = false
     try {
       const result: MessageListResult = await getMessageList(appStore.auth.token, '1')
-      if (appearanceGeneration !== this.appearanceGeneration) {
+      if (!this.scope.isActive(appearanceGeneration)) {
         return
       }
       if (result.ok && result.data) {
@@ -83,11 +83,11 @@ export struct MessageListPanel {
         this.hasError = true
       }
     } catch (e) {
-      if (appearanceGeneration === this.appearanceGeneration) {
+      if (this.scope.isActive(appearanceGeneration)) {
         this.hasError = true
       }
     }
-    if (appearanceGeneration === this.appearanceGeneration) {
+    if (this.scope.isActive(appearanceGeneration)) {
       this.isLoading = false
     }
   }
@@ -107,7 +107,7 @@ export struct MessageListPanel {
         this.composeTo = ''
         this.composeSubject = ''
         this.composeContent = ''
-        this.loadMessages()
+        this.loadMessages(this.scope.begin())
       } else {
         appStore.showToast(result.error || '发送失败')
       }
@@ -129,7 +129,7 @@ export struct MessageListPanel {
         } else if (this.hasError) {
           Row().width('100%').height(44 + this.statusBarHeight)
           Column() {
-            ErrorStateView({ msg: '加载失败', onRetry: () => this.loadMessages() })
+            ErrorStateView({ msg: '加载失败', onRetry: () => this.loadMessages(this.scope.begin()) })
           }
           .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
         } else if (this.threads.length === 0) {

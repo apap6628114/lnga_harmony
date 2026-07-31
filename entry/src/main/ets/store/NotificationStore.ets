@@ -177,7 +177,7 @@ export class NotificationStore extends BaseStore<Object> {
       return true
     }
 
-    const requestGeneration: number = this.generation
+    const requestGeneration: number = this.generationGuard.current()
     const requestUid: string = this.auth.uid
     const requestToken: string = this.auth.token
     const task: Promise<boolean> = this.performRefresh(requestGeneration, requestUid, requestToken)

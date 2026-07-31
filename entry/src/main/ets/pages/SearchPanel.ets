@@ -12,6 +12,7 @@ import { formatTime, escHtml } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { ThreadDataSource } from '../common/datasource/LazyDataSource'
 import { AnonymousName } from '../common/components/AnonymousName'
+import { PageScope } from '../common/concurrency/PageScope'
 import {
   ReadingFontRole,
   ReadingLineHeightRole,
@@ -42,9 +43,17 @@ export struct SearchPanel {
   private scroller: Scroller = new Scroller()
   private forumsDataSource: ThreadDataSource = new ThreadDataSource()
   private threadsDataSource: ThreadDataSource = new ThreadDataSource()
+  /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
+  private scope: PageScope = new PageScope()
 
   aboutToAppear(): void {
+    this.scope.begin()
     this.loadHistory()
+  }
+
+  /** 结束页面出现会话，使未完成的异步回调失效。 */
+  aboutToDisappear(): void {
+    this.scope.end()
   }
 
   private getSubjectFontColor(titleFont: string): ResourceColor {
@@ -161,10 +170,15 @@ export struct SearchPanel {
   }
 
   private async doSearch(page: number): Promise<void> {
+    // 每次搜索开启新会话，旧搜索的过期回调将被丢弃
+    const gen: number = this.scope.begin()
     if (page === 1) { this.isLoading = true } else { this.isLoadingMore = true }
     try {
       if (this.currentTab === 2) {
         const result: SearchForumResult = await searchForum(appStore.auth.token, this.submitted)
+        if (!this.scope.isActive(gen)) {
+          return
+        }
         if (result.ok && result.data) {
           this.forums = result.data as object[]
           this.forumsDataSource.replaceAll(this.forums)
@@ -175,6 +189,9 @@ export struct SearchPanel {
         if (this.currentTab === 1) params.searchpost = '1'
         if (this.currentTab === 3) { params.author = this.submitted } else { params.key = this.submitted }
         const result: TopicListResult = await getTopicList(appStore.auth.token, params, appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords())
+        if (!this.scope.isActive(gen)) {
+          return
+        }
         if (result.ok && result.data) {
           if (page === 1) {
             this.threads = result.data.threadPageList
@@ -191,6 +208,9 @@ export struct SearchPanel {
         }
       }
     } catch (e) { /* ignore */ }
+    if (!this.scope.isActive(gen)) {
+      return
+    }
     this.isLoading = false
     this.isLoadingMore = false
     this.showEmpty = this.submitted.length > 0 && !this.isLoading && this.threads.length === 0 && this.forums.length === 0

@@ -1,4 +1,5 @@
 import { fetchForumFavorites } from '../../../service/api/FavoriteApi'
+import { AuthScope } from '../../AuthScope'
 import { FilterListManager } from '../../../common/utils/FilterListManager'
 import { SettingsContext } from '../SettingsContext'
 import { SettingsState } from '../SettingsState'
@@ -140,8 +141,13 @@ export class SocialListSettings {
 
   private async doRefreshFavorites(): Promise<void> {
     if (!this.ctx.auth!.isAuthenticated) return
+    const scope: AuthScope = AuthScope.capture(this.ctx.auth, 0)
     try {
       const result = await fetchForumFavorites(this.ctx.auth!.token)
+      // 请求期间可能已退出/切换账号：放弃回写，防止旧账号收藏写入新账号状态
+      if (!scope.isCurrent(this.ctx.auth, 0)) {
+        return
+      }
       if (result.ok && result.data.length > 0) {
         const favs: FavBoard[] = []
         for (let i = 0; i < result.data.length; i++) {

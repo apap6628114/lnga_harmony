@@ -132,6 +132,8 @@ export struct TopicListPanel {
 
   aboutToDisappear(): void {
     this.stopHoldingHandMonitoring()
+    // 推进分页代际，使未完成的分页/预取异步回调失效，避免回写已销毁页面
+    this.mgr.reset()
   }
 
   private onBoardChanged(): void {

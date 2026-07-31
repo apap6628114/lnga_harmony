@@ -14,6 +14,7 @@ import { SettingRow } from '../common/components/SettingRow'
 import { getCachedBBNodes, preWarmBatch } from '../parser/bbcode/BBCodeCache'
 import { BBCodeContentView } from '../common/components/BBCodeContentView'
 import { openImageViewer, handleForumLink } from '../common/utils/LinkUtils'
+import { PageScope } from '../common/concurrency/PageScope'
 import { Context } from '@kit.AbilityKit'
 
 /**
@@ -69,8 +70,11 @@ export struct ProfilePanel {
   @Prop @Watch('onUidChange') uid: string = ''
   private isOwnProfile: boolean = false
   private uidInitialized: boolean = false
+  /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
+  private scope: PageScope = new PageScope()
 
   aboutToAppear(): void {
+    this.scope.begin()
     this.uidInitialized = true
     this.isOwnProfile = appStore.auth.uid === this.uid
     this.onBlacklistVersionChange()
@@ -81,6 +85,11 @@ export struct ProfilePanel {
       this.isLoading = false
     }
     appStore.ensureProfile(this.uid)
+  }
+
+  /** 结束页面出现会话，使未完成的异步回调失效。 */
+  aboutToDisappear(): void {
+    this.scope.end()
   }
 
   private onUidChange(): void {
@@ -469,7 +478,11 @@ export struct ProfilePanel {
                 .alignItems(VerticalAlign.Center)
                 .onClick(() => {
                   this.checkinLoading = true
+                  const gen: number = this.scope.begin()
                   checkin(appStore.auth.token).then((result) => {
+                    if (!this.scope.isActive(gen)) {
+                      return
+                    }
                     if (result.ok) {
                       this.checkinResult = '签到成功'
                     } else {
@@ -477,8 +490,16 @@ export struct ProfilePanel {
                     }
                     this.checkinLoading = false
                     appStore.showToast(this.checkinResult)
-                    setTimeout(() => { this.checkinResult = '' }, 3000)
+                    setTimeout(() => {
+                      if (!this.scope.isAlive()) {
+                        return
+                      }
+                      this.checkinResult = ''
+                    }, 3000)
                   }).catch(() => {
+                    if (!this.scope.isActive(gen)) {
+                      return
+                    }
                     this.checkinResult = '签到失败'
                     this.checkinLoading = false
                     appStore.showToast(this.checkinResult)

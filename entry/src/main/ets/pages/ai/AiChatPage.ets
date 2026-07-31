@@ -5,6 +5,7 @@ import { MdStreamingContentView } from '../../common/components/MdStreamingConte
 import { PanelNavBar } from '../../common/components/PanelNavBar'
 import { AppColors } from '../../common/constants/Constants'
 import { appStore } from '../../store/AppStore'
+import { PageScope } from '../../common/concurrency/PageScope'
 
 /** 流式输出默认刷新间隔毫秒数 */
 const DEFAULT_FLUSH_INTERVAL_MS: number = 80
@@ -97,16 +98,14 @@ struct AiChatPage {
   private lastChunkTimeMs: number = 0
   /** 当前自适应刷新间隔。 */
   private adaptiveFlushMs: number = DEFAULT_FLUSH_INTERVAL_MS
-  /** 当前有效 AI 请求序号，用于丢弃过期异步回调。 */
-  private activeRequestId: number = 0
-  /** 页面是否仍处于可安全更新状态。 */
-  private pageAlive: boolean = false
+  /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
+  private scope: PageScope = new PageScope()
 
   /** 滚动控制器 */
   private scroller: Scroller = new Scroller()
 
   aboutToAppear(): void {
-    this.pageAlive = true
+    this.scope.begin()
     const params: Record<string, Object> = this.getUIContext().getRouter().getParams() as Record<string, Object>
     if (params) {
       const prompt: string = (params['initialPrompt'] as string) ?? ''
@@ -128,8 +127,7 @@ struct AiChatPage {
   }
 
   aboutToDisappear(): void {
-    this.pageAlive = false
-    this.activeRequestId++
+    this.scope.end()
     this.isSending = false
     this.resetStreamingState()
   }
@@ -154,7 +152,7 @@ struct AiChatPage {
       return
     }
 
-    const requestId: number = this.nextRequestId()
+    const requestId: number = this.scope.begin()
     const userBubble: ChatBubble = new ChatBubble('user', text, false)
     this.bubbles.push(userBubble)
     this.inputText = ''
@@ -238,23 +236,13 @@ struct AiChatPage {
   }
 
   /**
-   * 分配新的 AI 请求序号。
-   *
-   * @returns 新请求序号
-   */
-  private nextRequestId(): number {
-    this.activeRequestId++
-    return this.activeRequestId
-  }
-
-  /**
    * 判断指定请求是否仍允许更新页面状态。
    *
-   * @param requestId - 请求序号
+   * @param requestId - 会话代际
    * @returns true 表示请求仍有效
    */
   private isActiveRequest(requestId: number): boolean {
-    return this.pageAlive && this.activeRequestId === requestId
+    return this.scope.isActive(requestId)
   }
 
   /**
@@ -294,6 +282,9 @@ struct AiChatPage {
     }
     this.streamFlushTimer = setTimeout((): void => {
       this.streamFlushTimer = -1
+      if (!this.scope.isAlive()) {
+        return
+      }
       this.flushStreamingText()
     }, this.adaptiveFlushMs)
   }
@@ -332,6 +323,9 @@ struct AiChatPage {
     }
     this.streamScrollTimer = setTimeout((): void => {
       this.streamScrollTimer = -1
+      if (!this.scope.isAlive()) {
+        return
+      }
       this.scrollToBottom()
     }, 0)
   }

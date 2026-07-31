@@ -6,6 +6,7 @@ import { formatTime, fmtNum, escHtml } from '../utils/Utils'
 import { unescapeHtml } from '../../parser/_shared/HtmlEntityCodec'
 import { Avatar } from './Avatar'
 import { MakeNoteDialog } from '../dialogs/Dialogs'
+import { PageScope } from '../concurrency/PageScope'
 
 import { getUserActivityAnalysis } from '../../service/api/UserApi'
 import type { UserActivityAnalysis, ForumStat } from '../../model/NgaApiResults'
@@ -26,6 +27,13 @@ export struct ProfileCardPopup {
   onClose: () => void = () => {}
   noteDialogController?: CustomDialogController
   @State isAnalyzing: boolean = false
+  /** 组件存活会话作用域，驱动异步回调的存活与代际校验。 */
+  private scope: PageScope = new PageScope()
+
+  /** 组件消失时结束会话，使未完成的异步回调失效。 */
+  aboutToDisappear(): void {
+    this.scope.end()
+  }
 
   private async startAnalysis(): Promise<void> {
     if (this.isAnalyzing) return
@@ -35,11 +43,16 @@ export struct ProfileCardPopup {
       return
     }
     this.isAnalyzing = true
+    const gen: number = this.scope.begin()
     try {
       const result: UserActivityAnalysis | null = await getUserActivityAnalysis(
         appStore.auth.token,
         this.targetUid
       )
+      // 弹窗可能已关闭：不再执行路由跳转与提示
+      if (!this.scope.isActive(gen)) {
+        return
+      }
       if (result && (result.topicCount > 0 || result.replyCount > 0)) {
         const userName: string = this.profile?.userName ?? ''
         let prompt: string = ''
@@ -113,6 +126,7 @@ export struct ProfileCardPopup {
   }
 
   aboutToAppear(): void {
+    this.scope.begin()
     this.onBlacklistVersionChange()
     const cached = appStore.getCachedProfile(this.targetUid)
     if (cached) {

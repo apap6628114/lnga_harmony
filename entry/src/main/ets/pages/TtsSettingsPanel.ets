@@ -4,6 +4,7 @@ import { appStore } from '../store/AppStore'
 import { AppColors } from '../common/constants/Constants'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { TtsPlayer } from '../common/media/TtsPlayer'
+import { PageScope } from '../common/concurrency/PageScope'
 
 const VOICE_OPTIONS: VoiceOption[] = [
   { person: 13, label: '聆小珊', lang: '中文' },
@@ -26,23 +27,31 @@ export struct TtsSettingsPanel {
   @State currentPitch: number = appStore.settings.ttsPitch
   @State installedSet: number[] = []
   private previousPerson: number = appStore.settings.ttsPerson
+  /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
+  private scope: PageScope = new PageScope()
 
   aboutToAppear(): void {
+    this.scope.begin()
     this.queryInstalledVoices()
   }
 
   aboutToDisappear(): void {
+    this.scope.end()
     if (TtsPlayer.isSpeaking(-2)) {
       TtsPlayer.stop()
     }
   }
 
   private queryInstalledVoices(): void {
+    const gen: number = this.scope.begin()
     const query: textToSpeech.VoiceQuery = {
       requestId: 'qry_' + Date.now(),
       online: 1
     }
     textToSpeech.listVoices(query).then((voices: textToSpeech.VoiceInfo[]) => {
+      if (!this.scope.isActive(gen)) {
+        return
+      }
       const installed: number[] = []
       for (let i = 0; i < voices.length; i++) {
         if (voices[i].status === 'INSTALLED') {
@@ -51,6 +60,9 @@ export struct TtsSettingsPanel {
       }
       this.installedSet = installed
     }).catch(() => {
+      if (!this.scope.isActive(gen)) {
+        return
+      }
       this.installedSet = [13]
     })
   }
@@ -86,6 +98,9 @@ export struct TtsSettingsPanel {
     appStore.showToast('正在下载' + label + '...')
     textToSpeech.downloadVoice(downloadParams,
       (err: BusinessError, downloadResponse: textToSpeech.DownloadResponse) => {
+        if (!this.scope.isAlive()) {
+          return
+        }
         if (err) {
           if (err.code === 1002300010) {
             this.markInstalled(person)
@@ -98,10 +113,16 @@ export struct TtsSettingsPanel {
           return
         }
         downloadResponse.on('complete', (voiceInfo: textToSpeech.VoiceInfo) => {
+          if (!this.scope.isAlive()) {
+            return
+          }
           this.markInstalled(person)
           appStore.showToast(label + '下载完成')
         })
         let errorCallback: ErrorCallback<BusinessError> = (error: BusinessError) => {
+          if (!this.scope.isAlive()) {
+            return
+          }
           appStore.showToast('当前设备不支持下载此音色')
           this.currentPerson = this.previousPerson
           appStore.settingsStore.setTtsPerson(this.previousPerson)

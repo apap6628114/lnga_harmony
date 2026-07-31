@@ -1,4 +1,5 @@
 import { checkin } from '../../../service/api/FavoriteApi'
+import { AuthScope } from '../../AuthScope'
 import { SettingsContext } from '../SettingsContext'
 import { SettingsState } from '../SettingsState'
 
@@ -29,8 +30,13 @@ export class CheckinSettings {
     if (this.ctx.state.lastCheckinDate === today) {
       return false
     }
+    const scope: AuthScope = AuthScope.capture(this.ctx.auth, 0)
     try {
       const result = await checkin(this.ctx.auth!.token)
+      // 请求期间可能已退出/切换账号：不再记录签到日期（否则会阻塞新账号当日签到）
+      if (!scope.isCurrent(this.ctx.auth, 0)) {
+        return false
+      }
       if (result.ok) {
         this.ctx.state.lastCheckinDate = today
         this.ctx.persist()

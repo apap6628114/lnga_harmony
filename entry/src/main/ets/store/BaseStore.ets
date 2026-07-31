@@ -1,5 +1,6 @@
 import { PreferencesStore } from '../common/infra/PreferencesStore'
 import { SerialQueue } from '../common/infra/SerialQueue'
+import { GenerationGuard } from '../common/concurrency/GenerationGuard'
 
 import type { AuthState } from './AuthStore'
 
@@ -25,11 +26,11 @@ export abstract class BaseStore<T> {
   protected auth!: AuthState
 
   /**
-   * Store 级全局版本号。
-   * reset() 时自增，使所有已捕获 generation 的异步回调自动失效。
+   * Store 级代际守卫。
+   * reset() 时推进代际，使所有已捕获代际的异步回调自动失效。
    * 适用于"整个 Store 重置后不应再执行旧操作"的场景。
    */
-  protected generation: number = 0
+  protected readonly generationGuard: GenerationGuard = new GenerationGuard()
 
   /**
    * 供子类 init 调用的依赖注入辅助方法。
@@ -43,14 +44,14 @@ export abstract class BaseStore<T> {
     }
   }
 
-  /** 子类 reset 完成后应调用 super.reset() 触发 generation++ */
+  /** 子类 reset 完成后应调用 super.reset() 触发代际推进 */
   reset(): void {
-    this.generation++
+    this.generationGuard.bump()
   }
 
-  /** 异步回调前调用：generation 不匹配说明已过时，放弃执行 */
+  /** 异步回调前调用：代际不匹配说明已过时，放弃执行 */
   protected isCurrent(gen: number): boolean {
-    return gen === this.generation
+    return this.generationGuard.isCurrent(gen)
   }
 
   /** 写入队列前检查 uid 是否仍有效（auth 未注入时返回 true 不拦截） */

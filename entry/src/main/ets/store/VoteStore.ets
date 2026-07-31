@@ -40,7 +40,13 @@ export class VoteStore extends BaseStore<Object> {
       return [new Set<string>(), new Set<string>()]
     }
     if (this.voteLoadedUid !== uid) {
+      const gen: number = this.generationGuard.current()
       const saved = await this.store.getJSON<Record<string, VoteRecord>>(this.voteKey(uid))
+      // 加载期间已登出（reset 推进代际）或已有其他账号的数据回写：放弃本次，避免跨账号污染
+      if (!this.generationGuard.isCurrent(gen) ||
+        (this.voteLoadedUid !== '' && this.voteLoadedUid !== uid)) {
+        return [new Set<string>(), new Set<string>()]
+      }
       this.voteCache = saved ?? {}
       this.voteLoadedUid = uid
     }
@@ -61,7 +67,13 @@ export class VoteStore extends BaseStore<Object> {
   async saveVoteRecord(uid: string, tid: string, upPids: Set<string>, downPids: Set<string>): Promise<void> {
     if (uid.length === 0 || tid.length === 0) return
     if (this.voteLoadedUid !== uid) {
+      const gen: number = this.generationGuard.current()
       const saved = await this.store.getJSON<Record<string, VoteRecord>>(this.voteKey(uid))
+      // 加载期间已登出（reset 推进代际）或已有其他账号的数据回写：放弃本次，避免跨账号污染
+      if (!this.generationGuard.isCurrent(gen) ||
+        (this.voteLoadedUid !== '' && this.voteLoadedUid !== uid)) {
+        return
+      }
       this.voteCache = saved ?? {}
       this.voteLoadedUid = uid
     }
@@ -85,7 +97,13 @@ export class VoteStore extends BaseStore<Object> {
   async removeVoteRecord(uid: string, tid: string): Promise<void> {
     if (uid.length === 0) return
     if (this.voteLoadedUid !== uid) {
+      const gen: number = this.generationGuard.current()
       const saved = await this.store.getJSON<Record<string, VoteRecord>>(this.voteKey(uid))
+      // 加载期间已登出（reset 推进代际）或已有其他账号的数据回写：放弃本次，避免跨账号污染
+      if (!this.generationGuard.isCurrent(gen) ||
+        (this.voteLoadedUid !== '' && this.voteLoadedUid !== uid)) {
+        return
+      }
       this.voteCache = saved ?? {}
       this.voteLoadedUid = uid
     }

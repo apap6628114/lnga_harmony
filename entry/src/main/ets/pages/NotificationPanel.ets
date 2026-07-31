@@ -18,6 +18,7 @@ import { PanelNavBar } from '../common/components/PanelNavBar'
 import { Avatar } from '../common/components/Avatar'
 import { NotificationDataSource } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/components/PageStateView'
+import { PageScope } from '../common/concurrency/PageScope'
 
 @Component
 export struct NotificationPanel {
@@ -31,19 +32,18 @@ export struct NotificationPanel {
   @StorageProp('notificationVersion') @Watch('onNotificationVersionChange') notificationVersion: number = 0
   private notificationsDataSource: NotificationDataSource = new NotificationDataSource()
   private scroller: Scroller = new Scroller()
-  /** 当前页面出现周期版本号。 */
-  private appearanceGeneration: number = 0
+  /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
+  private scope: PageScope = new PageScope()
 
   aboutToAppear(): void {
-    this.appearanceGeneration++
-    const currentGeneration: number = this.appearanceGeneration
+    const currentGeneration: number = this.scope.begin()
     this.syncFromStore()
     this.loadNotifications(currentGeneration)
   }
 
   /** 结束当前页面出现周期，使未完成的异步回调失效。 */
   aboutToDisappear(): void {
-    this.appearanceGeneration++
+    this.scope.end()
   }
 
   /** 通知 Store 发布新版本时同步页面快照。 */
@@ -62,11 +62,11 @@ export struct NotificationPanel {
    *
    * @param appearanceGeneration - 请求发起时的页面出现周期版本号
    */
-  private async loadNotifications(appearanceGeneration: number = this.appearanceGeneration): Promise<void> {
+  private async loadNotifications(appearanceGeneration: number): Promise<void> {
     this.isLoading = this.notifications.length === 0
     this.hasError = false
     const success: boolean = await appStore.refreshNotifications(true)
-    if (appearanceGeneration !== this.appearanceGeneration) {
+    if (!this.scope.isActive(appearanceGeneration)) {
       return
     }
     this.syncFromStore()
@@ -221,7 +221,7 @@ export struct NotificationPanel {
           .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
         } else if (this.hasError) {
           Column() {
-            ErrorStateView({ msg: this.errorMsg, onRetry: () => this.loadNotifications() })
+            ErrorStateView({ msg: this.errorMsg, onRetry: () => this.loadNotifications(this.scope.begin()) })
           }
           .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
         } else if (this.notifications.length === 0) {

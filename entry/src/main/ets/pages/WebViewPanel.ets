@@ -10,6 +10,7 @@ import { Logger, DOMAIN_UI, formatError } from '../common/utils/Logger'
 import { KEY_USE_INTERNAL_WEBVIEW } from '../common/constants/AppStorageKeys'
 import { handleForumLink, openAppLinkOrFallback, openSystemLink } from '../common/utils/LinkUtils'
 import { AppColors } from '../common/constants/Constants'
+import { PageScope } from '../common/concurrency/PageScope'
 
 const logger = new Logger(DOMAIN_UI, 'WebViewPanel')
 
@@ -34,11 +35,19 @@ export struct WebViewPanel {
   private ngaSession: boolean = false
   /** 已确认没有关联应用、下一次应直接由 WebView 加载的 URL */
   private internalFallbackUrl: string = ''
+  /** 页面出现会话作用域，驱动异步回调的存活校验。 */
+  private scope: PageScope = new PageScope()
 
   aboutToAppear(): void {
+    this.scope.begin()
     this.injectCookies()
     this.ngaSession = this.isNgaDomain(this.extractHostname(this.url))
     this.internalFallbackUrl = this.url
+  }
+
+  /** 结束页面出现会话，使未完成的异步回调失效。 */
+  aboutToDisappear(): void {
+    this.scope.end()
   }
 
   private injectCookies(): void {
@@ -249,7 +258,12 @@ export struct WebViewPanel {
             if (event) {
               this.progress = event.newProgress
               if (event.newProgress >= 100) {
-                setTimeout(() => { this.isLoading = false }, 300)
+                setTimeout(() => {
+                  if (!this.scope.isAlive()) {
+                    return
+                  }
+                  this.isLoading = false
+                }, 300)
               }
             }
           })

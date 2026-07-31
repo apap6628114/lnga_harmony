@@ -2,6 +2,7 @@ import { getForumCategories } from '../service/api/ForumApi'
 import { PreferencesStore } from '../common/infra/PreferencesStore'
 import { SerialQueue } from '../common/infra/SerialQueue'
 import { BaseStore } from './BaseStore'
+import { AuthScope } from './AuthScope'
 import type { Category } from '../model/Forum'
 import type { AuthState } from './AuthStore'
 import { KEY_CAT_VERSION } from '../common/constants/AppStorageKeys'
@@ -60,7 +61,7 @@ export class CategoryStore extends BaseStore<Object> {
   ensureCategories(): void {
     if (this.categoriesRefreshing) return
     this.categoriesRefreshing = true
-    const gen = ++this.generation
+    const gen = this.generationGuard.bump()
     const hasCache = this.cachedCategories.length > 0
     setTimeout(async () => {
       await this.doRefreshCategories(gen)
@@ -78,8 +79,13 @@ export class CategoryStore extends BaseStore<Object> {
       }
       return
     }
+    const scope: AuthScope = AuthScope.capture(this.auth, gen)
     try {
       const result = await getForumCategories(this.auth.token)
+      // 请求期间可能已重置或切号：代际与身份任一变化即放弃回写
+      if (!this.isCurrent(gen) || !scope.isCurrent(this.auth, gen)) {
+        return
+      }
       this.categoriesLoaded = true
       if (result.ok) {
         this.categoriesError = ''

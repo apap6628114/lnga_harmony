@@ -1,6 +1,7 @@
 import { getUserProfile } from '../service/api/UserApi'
 import { LruCache } from '../common/cache/LruCache'
 import { BaseStore } from './BaseStore'
+import { AuthScope } from './AuthScope'
 import { PreferencesStore } from '../common/infra/PreferencesStore'
 import { SerialQueue } from '../common/infra/SerialQueue'
 import { KEY_PROFILE_VERSION } from '../common/constants/AppStorageKeys'
@@ -95,8 +96,13 @@ export class ProfileStore extends BaseStore<Object> {
 
   private async doRefreshProfile(uid: string): Promise<ProfileData | null> {
     if (!this.auth.isAuthenticated) return null
+    const scope: AuthScope = AuthScope.capture(this.auth, this.generationGuard.current())
     try {
       const result = await getUserProfile(this.auth.token, uid)
+      // 请求期间会话可能已退出/切换：放弃回写，防止旧账号数据写入新账号缓存
+      if (!scope.isCurrent(this.auth, this.generationGuard.current())) {
+        return null
+      }
       if (result.ok && result.data) {
         const newJson = JSON.stringify(result.data)
         const cachedResult = this.cache.getWithStale(uid)

@@ -169,8 +169,10 @@ class AppStoreClass {
 
   /** 若自动签到实际成功，则显示全局成功提示。 */
   autoCheckinIfNeeded(): void {
+    const requestUid: string = this.auth.uid
     this.settingsStore.autoCheckinIfNeeded().then((checked: boolean): void => {
-      if (checked) {
+      // 签到请求期间可能已退出或切换账号：身份不一致时不再提示
+      if (checked && this.auth.uid === requestUid && this.auth.isAuthenticated) {
         this.showToast('自动签到成功')
       }
     }).catch((): void => {})

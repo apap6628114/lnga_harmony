@@ -5,6 +5,7 @@ import { MutedVideo } from '../../media/MutedVideo'
 import { ImageSize } from '../../media/ImageSizeUtil'
 import { fetchVideoSize, getCachedVideoSize } from '../../media/VideoSizeUtil'
 import { shouldUsePassive } from '../../utils/NetworkUtil'
+import { PageScope } from '../../concurrency/PageScope'
 
 /** 视频附件扩展名集合 */
 const VIDEO_EXTS: string[] = ['mp4', 'webm', 'ogg', 'mov', '3gp']
@@ -33,6 +34,17 @@ export struct PostAttachments {
   @State private videoSizes: Map<string, ImageSize> = new Map()
   /** 图片点击回调，传入图片 url 列表与点击项索引 */
   onImageClick: (urls: string[], index: number) => void = (_urls: string[], _index: number) => {}
+  /** 组件存活会话作用域，驱动异步回调的存活校验。 */
+  private scope: PageScope = new PageScope()
+
+  aboutToAppear(): void {
+    this.scope.begin()
+  }
+
+  /** 组件消失时结束会话，使未完成的异步回调失效。 */
+  aboutToDisappear(): void {
+    this.scope.end()
+  }
 
   aboutToReuse(params: Record<string, Object>): void {
     this.attachsExpanded = false
@@ -156,6 +168,9 @@ export struct PostAttachments {
           this.setAttachVideoSize(att.attachurl, cached)
         } else if (!this.videoSizes.has(att.attachurl)) {
           fetchVideoSize(att.attachurl).then((size: ImageSize | null) => {
+            if (!this.scope.isAlive()) {
+              return
+            }
             if (size) {
               this.setAttachVideoSize(att.attachurl, size)
             }

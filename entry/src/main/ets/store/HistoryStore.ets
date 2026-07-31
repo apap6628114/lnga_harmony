@@ -46,7 +46,13 @@ export class HistoryStore extends BaseStore<Object> {
 
   async getBrowseHistory(uid: string): Promise<BrowseHistoryEntry[]> {
     if (this.historyLoadedUid !== uid) {
+      const gen: number = this.generationGuard.current()
       const saved = await this.store.getJSON<BrowseHistoryEntry[]>(this.historyKey(uid))
+      // 加载期间已登出（reset 推进代际）或已有其他账号的数据回写：放弃本次，避免跨账号污染
+      if (!this.generationGuard.isCurrent(gen) ||
+        (this.historyLoadedUid !== '' && this.historyLoadedUid !== uid)) {
+        return []
+      }
       this.historyItems = saved ?? []
       this.historyLoadedUid = uid
     }
@@ -59,8 +65,13 @@ export class HistoryStore extends BaseStore<Object> {
 
   async addBrowseHistory(uid: string, entry: BrowseHistoryEntry): Promise<void> {
     if (uid.length === 0) return
+    const gen: number = this.generationGuard.current()
     if (this.historyLoadedUid !== uid) {
       await this.getBrowseHistory(uid)
+    }
+    // 加载期间已登出（reset 推进代际）：中止写入，避免旧会话数据写入新账号
+    if (!this.generationGuard.isCurrent(gen)) {
+      return
     }
     const filtered: BrowseHistoryEntry[] = []
     for (let i = 0; i < this.historyItems.length; i++) {
@@ -110,8 +121,13 @@ export class HistoryStore extends BaseStore<Object> {
   }
 
   async removeBrowseHistory(uid: string, tid: string): Promise<void> {
+    const gen: number = this.generationGuard.current()
     if (this.historyLoadedUid !== uid) {
       await this.getBrowseHistory(uid)
+    }
+    // 加载期间已登出（reset 推进代际）：中止删除，避免误清新账号数据
+    if (!this.generationGuard.isCurrent(gen)) {
+      return
     }
     const filtered: BrowseHistoryEntry[] = []
     for (let i = 0; i < this.historyItems.length; i++) {

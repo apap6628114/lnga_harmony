@@ -1,3 +1,5 @@
+import { GenerationGuard } from '../concurrency/GenerationGuard'
+
 /**
  * 分页管理器基类（共性层）。
  *
@@ -22,24 +24,23 @@ export abstract class PaginationManager {
   hasMore: boolean = true
 
   private prefetchedPages: Map<number, PrefetchedPageHolder> = new Map()
-  private generation: number = 0
+  private generationGuard: GenerationGuard = new GenerationGuard()
 
   /**
-   * 推进 generation 计数器并返回新值。翻页前调用以标记一次新的异步会话，
+   * 推进代际计数器并返回新值。翻页前调用以标记一次新的异步会话，
    * 响应到达后通过 getGeneration 比对以丢弃过期结果。
-   * @returns 新的 generation 值
+   * @returns 新的代际值
    */
   nextGeneration(): number {
-    this.generation++
-    return this.generation
+    return this.generationGuard.bump()
   }
 
   /**
-   * 获取当前 generation 值，用于响应到达时校验是否过期。
-   * @returns 当前 generation
+   * 获取当前代际值，用于响应到达时校验是否过期。
+   * @returns 当前代际
    */
   getGeneration(): number {
-    return this.generation
+    return this.generationGuard.current()
   }
 
   /**
@@ -55,10 +56,11 @@ export abstract class PaginationManager {
   }
 
   /**
-   * 重置 generation 计数器。子类 reset 须调用以同步清零。
+   * 推进代际使旧异步会话失效。子类 reset 须调用。
+   * 采用 bump 语义（不归零），避免"捕获 0 后归零 → 0 === 0 误判有效"的边界缺陷。
    */
   protected resetGeneration(): void {
-    this.generation = 0
+    this.generationGuard.bump()
   }
 
   /**
