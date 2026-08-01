@@ -2,11 +2,12 @@ import { appStore } from '../../store/AppStore'
 import { routerStore, Screen } from '../../store/RouterStore'
 import { ProfileData, AdminForumsData } from '../../model/User'
 import { AppColors } from '../constants/Constants'
-import { formatTime, fmtNum, escHtml } from '../utils/Utils'
+import { formatTime, fmtNum, escHtml, getAvatarUrl } from '../utils/Utils'
 import { unescapeHtml } from '../../parser/_shared/HtmlEntityCodec'
 import { Avatar } from './Avatar'
 import { MakeNoteDialog } from '../dialogs/Dialogs'
 import { PageScope } from '../concurrency/PageScope'
+import { openImageViewer } from '../utils/LinkUtils'
 
 import { getUserActivityAnalysis } from '../../service/api/UserApi'
 import type { UserActivityAnalysis, ForumStat } from '../../model/NgaApiResults'
@@ -162,6 +163,17 @@ export struct ProfileCardPopup {
     ))
   }
 
+  /**
+   * 使用帖子图片预览器展示用户头像。
+   *
+   * @param profile - 当前资料卡的用户资料
+   */
+  private openAvatarImage(profile: ProfileData): void {
+    const avatarUrl: string = getAvatarUrl(profile.avatarUrl, profile.uid)
+    if (avatarUrl.length === 0) return
+    openImageViewer([avatarUrl], 0)
+  }
+
   private joinForumNames(forums: AdminForumsData[]): string {
     const names: string[] = []
     for (let i = 0; i < forums.length; i++) {
@@ -222,6 +234,9 @@ export struct ProfileCardPopup {
     Column() {
       Row() {
         Avatar({ avatar: profile.avatarUrl, uid: profile.uid, name: profile.userName, avatarSize: 50 })
+          .onClick((): void => {
+            this.openAvatarImage(profile)
+          })
 
         Column() {
           Row() {
