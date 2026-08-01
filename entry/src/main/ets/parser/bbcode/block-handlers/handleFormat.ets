@@ -1,7 +1,54 @@
 import { BBNode, BBNodeType } from '../../../model/BBCodeNode'
-import { decodeHtmlEntities } from '../../_shared/HtmlEntityCodec'
-import { createBBNode, ParseState } from '../lexer'
+import { createBBNode, indexOfIgnoreCase, ParseState } from '../lexer'
 import { parseBlockNodes, parseBBCode } from '../parser'
+
+/**
+ * [hr] 水平分隔线处理器。
+ *
+ * @param state 解析游标
+ * @param result 当前块级节点输出数组
+ * @returns 是否匹配并消费了水平分隔线
+ */
+export const handleHorizontalRule = (state: ParseState, result: BBNode[]): boolean => {
+  const savedPos: number = state.pos
+  const pattern: RegExp = /\[hr\s*\/?\]/gi
+  pattern.lastIndex = state.pos
+  const match: RegExpExecArray | null = pattern.exec(state.content)
+  if (match && match.index === state.pos) {
+    state.pos = pattern.lastIndex
+    const node = createBBNode()
+    node.type = BBNodeType.HR
+    result.push(node)
+    return true
+  }
+  state.pos = savedPos
+  return false
+}
+
+/**
+ * [p] 段落块处理器。
+ *
+ * @param state 解析游标
+ * @param result 当前块级节点输出数组
+ * @returns 是否匹配并消费了段落块
+ */
+export const handleParagraph = (state: ParseState, result: BBNode[]): boolean => {
+  const savedPos: number = state.pos
+  const pattern: RegExp = /\[p\]/gi
+  pattern.lastIndex = state.pos
+  const match: RegExpExecArray | null = pattern.exec(state.content)
+  if (match && match.index === state.pos) {
+    state.pos = pattern.lastIndex
+    const node = createBBNode()
+    node.type = BBNodeType.PARAGRAPH
+    const closePattern: RegExp = /\[\/p\]/gi
+    node.children = parseBlockNodes(state, closePattern)
+    result.push(node)
+    return true
+  }
+  state.pos = savedPos
+  return false
+}
 
 /**
  * [dice]骰子块处理器。仅记录占位节点。
@@ -80,7 +127,7 @@ export const handleAlign = (state: ParseState, result: BBNode[]): boolean => {
   pAlign.lastIndex = state.pos
   const alm = pAlign.exec(state.content)
   if (alm && alm.index === state.pos) {
-    const alignVal = alm[1]
+    const alignVal: string = alm[1].toLowerCase()
     state.pos = pAlign.lastIndex
     const n = createBBNode()
     n.type = BBNodeType.ALIGN
@@ -101,7 +148,7 @@ export const handleAlign = (state: ParseState, result: BBNode[]): boolean => {
 export const handleStyle = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pStyle: RegExp = /\[style\s+([^\]]*)\]/gi
+  let pStyle: RegExp = /\[style(?:\s+|=)([^\]]*)\]/gi
   pStyle.lastIndex = state.pos
   const sm = pStyle.exec(state.content)
   if (sm && sm.index === state.pos) {
@@ -131,11 +178,11 @@ export const handleHip = (state: ParseState, result: BBNode[]): boolean => {
   const hipm = pHip.exec(state.content)
   if (hipm && hipm.index === state.pos) {
     state.pos = pHip.lastIndex
-    let end = state.content.indexOf('[/hip]', state.pos)
+    let end = indexOfIgnoreCase(state.content, '[/hip]', state.pos)
     if (end < 0) end = state.len
     const body = state.content.substring(state.pos, end)
     state.pos = end < state.len ? end + 6 : state.len
-    const innerNodes = parseBBCode(decodeHtmlEntities(body))
+    const innerNodes = parseBBCode(body)
     for (let k = 0; k < innerNodes.length; k++) {
       result.push(innerNodes[k])
     }

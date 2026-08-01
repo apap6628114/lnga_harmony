@@ -34,11 +34,11 @@ export const handleQuote = (state: ParseState, result: BBNode[]): boolean => {
       headerNode.children = childNodes
       n.children.push(headerNode)
       state.pos = pQuoteHeader.lastIndex
-      let pSkipBr: RegExp = /(?:<br\s*\/?>)+/gi
-      pSkipBr.lastIndex = state.pos
-      const brm = pSkipBr.exec(state.content)
-      if (brm && brm.index === state.pos) {
-        state.pos = pSkipBr.lastIndex
+      const pSkipBreak: RegExp = /(?:\r?\n)+/g
+      pSkipBreak.lastIndex = state.pos
+      const breakMatch: RegExpExecArray | null = pSkipBreak.exec(state.content)
+      if (breakMatch && breakMatch.index === state.pos) {
+        state.pos = pSkipBreak.lastIndex
       }
     }
 

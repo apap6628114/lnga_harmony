@@ -1,5 +1,5 @@
 import { BBNode, BBNodeType } from '../../../model/BBCodeNode'
-import { createBBNode, isSafeUrl, resolveMediaUrl, ParseState } from '../lexer'
+import { createBBNode, indexOfIgnoreCase, isSafeUrl, resolveMediaUrl, ParseState } from '../lexer'
 import { guessMediaTypeFromExt } from '../inline-parser'
 
 /**
@@ -19,7 +19,7 @@ export const handleFlash = (state: ParseState, result: BBNode[]): boolean => {
   const fvm = pFv.exec(state.content)
   if (fvm && fvm.index === state.pos) {
     state.pos = pFv.lastIndex
-    let end = state.content.indexOf('[/flash]', state.pos)
+    let end = indexOfIgnoreCase(state.content, '[/flash]', state.pos)
     if (end < 0) end = state.len
     const rawUrl = state.content.substring(state.pos, end).trim()
     state.pos = end < state.len ? end + 8 : state.len
@@ -35,7 +35,7 @@ export const handleFlash = (state: ParseState, result: BBNode[]): boolean => {
   const fam = pFa.exec(state.content)
   if (fam && fam.index === state.pos) {
     state.pos = pFa.lastIndex
-    let end = state.content.indexOf('[/flash]', state.pos)
+    let end = indexOfIgnoreCase(state.content, '[/flash]', state.pos)
     if (end < 0) end = state.len
     const rawUrl = state.content.substring(state.pos, end).trim()
     state.pos = end < state.len ? end + 8 : state.len
@@ -63,7 +63,7 @@ export const handleFlash = (state: ParseState, result: BBNode[]): boolean => {
       n.type = BBNodeType.AUDIO
       n.src = safeSrc
     } else {
-      // 非视频/音频扩展名：flash 标签语义上即 FLASH 播放器，兜底为 FLASH 类型
+      /* 非视频/音频扩展名：flash 标签语义上即 FLASH 播放器，兜底为 FLASH 类型。 */
       n.type = BBNodeType.FLASH
       n.href = safeSrc
     }

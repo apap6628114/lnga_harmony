@@ -2,8 +2,8 @@
  * HTML 实体解码统一工具
  *
  * 项目内存在两类语义不同的解码需求，此处集中导出，避免多份重复实现：
- * - `decodeHtmlEntities`：BBCode 帖子正文解码。除标准实体外，还需把 `<br>` 转为换行、
- *   剥离残余 HTML 标签，因为 BBCode 解析器以纯文本切片为单位处理。
+ * - `decodeHtmlEntities`：BBCode 文字载荷解码。服务端真实 HTML 必须在调用前完成结构化处理，
+ *   避免转义文字在解码后又被误判为标签删除。
  * - `unescapeHtml`：纯文本字段（用户名、标题、签名、消息内容等）解码，仅反转实体，
  *   不触碰 `<`、标签或换行，避免吞掉合法文本。
  *
@@ -54,19 +54,12 @@ export function unescapeHtml(s: string): string {
 }
 
 /**
- * 反转 HTML 实体并规范化 BBCode 正文：`<br>` 转换行、剥离残余 HTML 标签。
- * 仅用于 BBCode 解析路径。
+ * 反转 BBCode 文字载荷中的 HTML 实体，不处理真实 HTML 标签。
+ * 标签清理由 BBCode 预处理阶段在实体解码前完成。
  *
  * @param s 待解码的 BBCode 正文片段
  * @returns 解码并清理后的文本
  */
 export function decodeHtmlEntities(s: string): string {
-  return s
-    .replace(/&#91;/g, '[')
-    .replace(/&#93;/g, ']')
-    .replace(/&(\w+);/g, (_s: string, name: string): string => NAMED_ENTITIES.get(name) ?? _s)
-    .replace(/&#(\d+);/g, (_s: string, c: string): string => fromCodePoint(parseInt(c, 10)))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_s: string, hex: string): string => fromCodePoint(parseInt(hex, 16)))
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
+  return unescapeHtml(s)
 }

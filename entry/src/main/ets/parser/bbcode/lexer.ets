@@ -1,12 +1,13 @@
 import { BBNode, BBNodeType } from '../../model/BBCodeNode'
 import { decodeHtmlEntities } from '../_shared/HtmlEntityCodec'
-import { resolveImgUrl, NGA_CDN_BASE } from '../_shared/AttachUrl'
+import { NGA_CDN_BASE } from '../_shared/AttachUrl'
 
 /**
  * 词法/状态层：ParseState、节点工厂、文本预处理与 HTML 转义工具。
  * 供 parser / block-handlers / inline-parser 共享，是解析各阶段的公共基础设施。
  */
 
+/** 当前进程内用于生成节点键的递增序号。 */
 let bbNodeIdCounter: number = 0
 
 /** 创建一个新的 BBNode 并分配全局自增 id。 */
@@ -14,16 +15,6 @@ function createBBNode(): BBNode {
   const n = new BBNode()
   n.id = ++bbNodeIdCounter
   return n
-}
-
-/** 内联解析中用于吞掉未匹配的闭合标签，避免它们被当作纯文本。 */
-const CLOSE_TAG_PATTERN: RegExp = /\[\/(b|i|u|del|h|item|color|size|font|url|img|pid|uid|tid|quote|collapse|code|list|flash|lessernuke|album|hip|dice|align|style|table|tr|td|l|r|randomblock|sub|sup)\]/gi
-
-/** 行内格式化标签描述：开标签正则 + 闭标签字符串 + 节点类型。 */
-interface FormatRecord {
-  open: RegExp
-  close: string
-  type: BBNodeType
 }
 
 /**
@@ -43,11 +34,6 @@ function resolveMediaUrl(raw: string): string {
   return raw
 }
 
-/** 将字符串中的 < > 转义为 HTML 实体，用于 title 等需原样展示的文本。 */
-function escAngle(s: string): string {
-  return s.replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-
 /** 判断 URL 是否属于可安全跳转/加载的白名单协议。 */
 function isSafeUrl(url: string): boolean {
   const trimmed = url.trim().toLowerCase()
@@ -61,38 +47,80 @@ function isSafeUrl(url: string): boolean {
   return false
 }
 
-/** 反转义常见 HTML 实体，供链接/格式化文本展示前清洗。 */
-function escSegHtml(s: string): string {
-  return s
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
+/**
+ * 将 ASCII 大写字母编码转换为小写编码。
+ *
+ * BBCode 标签名只允许 ASCII 字母，因此无需为每次查找构造完整正文的小写副本。
+ *
+ * @param code UTF-16 编码单元
+ * @returns 用于标签比较的小写 ASCII 编码
+ */
+function toLowerAsciiCode(code: number): number {
+  return code >= 65 && code <= 90 ? code + 32 : code
+}
+
+/**
+ * 以不区分 ASCII 大小写的方式查找标签位置。
+ *
+ * 查找从 start 开始逐字符比较，避免在表格单元格循环中反复对整篇正文执行
+ * `toLowerCase()`，使复杂楼层的解析复杂度保持线性。
+ *
+ * @param content 完整正文
+ * @param search 待查找的 ASCII 标签
+ * @param start 起始位置
+ * @returns 匹配位置；未找到时返回 -1
+ */
+function indexOfIgnoreCase(content: string, search: string, start: number): number {
+  if (search.length === 0) return Math.min(Math.max(0, start), content.length)
+  const normalizedStart: number = Math.max(0, start)
+  const lastStart: number = content.length - search.length
+  for (let i: number = normalizedStart; i <= lastStart; i++) {
+    let matched: boolean = true
+    for (let j: number = 0; j < search.length; j++) {
+      if (toLowerAsciiCode(content.charCodeAt(i + j)) !== toLowerAsciiCode(search.charCodeAt(j))) {
+        matched = false
+        break
+      }
+    }
+    if (matched) return i
+  }
+  return -1
 }
 
 /** 解析器游标状态：当前内容、位置、总长度。 */
 class ParseState {
+  /** 预处理后的完整正文。 */
   content: string = ''
+  /** 当前解析位置。 */
   pos: number = 0
+  /** 正文总字符数。 */
   len: number = 0
 }
 
-/** 向节点数组追加一个文本节点；连续换行折叠为单个，空文本忽略。 */
+/** 向节点数组追加已解码文本；相邻文本合并，所有有效换行均保留。 */
 function pushTextNode(into: BBNode[], text: string): void {
   if (text.length === 0) return
-  const normalized = text.replace(/\n{2,}/g, '\n')
-  if (normalized.length === 0) return
+  const decoded: string = decodeHtmlEntities(text)
+  if (decoded.length === 0) return
+  const previous: BBNode | undefined = into.length > 0 ? into[into.length - 1] : undefined
+  if (previous !== undefined && previous.type === BBNodeType.TEXT) {
+    previous.text += decoded
+    return
+  }
   const n = createBBNode()
   n.type = BBNodeType.TEXT
-  n.text = normalized
+  n.text = decoded
   into.push(n)
 }
 
-/** 预处理原始内容：还原转义的中括号、规范化 blockquote/a/img 标签为 BBCode。 */
+/**
+ * 在实体解码前规范化服务端真实 HTML，并保留转义后应作为文字显示的尖括号。
+ *
+ * @param s NGA 返回的原始 BBCode/HTML 混合正文
+ * @returns 仅含 BBCode、文字与换行的解析输入
+ */
 function preprocessContent(s: string): string {
-  return s
-    .replace(/&#91;/g, '[')
-    .replace(/&#93;/g, ']')
+  const normalized: string = s
     .replace(/<blockquote[^>]*>/gi, '[quote]')
     .replace(/<\/blockquote>/gi, '[/quote]')
     .replace(/<a\s+href="(https?:\/\/[^"]+)"[^>]*>(.*?)<\/a>/gi, '[url=$1]$2[/url]')
@@ -105,17 +133,44 @@ function preprocessContent(s: string): string {
         if (nm) return `[s:${nm[1]}:${nm[2]}]`
         return _m
       })
+    .replace(/<br\s*\/?>/gi, '\n')
+  return stripResidualHtmlOutsideCode(normalized)
+}
+
+/**
+ * 清理代码块之外的残余服务端 HTML，代码正文保持原样。
+ *
+ * @param content 已完成结构标签规范化的正文
+ * @returns 清理后的正文
+ */
+function stripResidualHtmlOutsideCode(content: string): string {
+  const lower: string = content.toLowerCase()
+  let result: string = ''
+  let position: number = 0
+  while (position < content.length) {
+    const codeStart: number = lower.indexOf('[code]', position)
+    if (codeStart < 0) {
+      result += content.substring(position).replace(/<\/?[a-z][^>]*>/gi, '')
+      break
+    }
+    result += content.substring(position, codeStart).replace(/<\/?[a-z][^>]*>/gi, '')
+    const codeEnd: number = lower.indexOf('[/code]', codeStart + 6)
+    if (codeEnd < 0) {
+      result += content.substring(codeStart)
+      break
+    }
+    result += content.substring(codeStart, codeEnd + 7)
+    position = codeEnd + 7
+  }
+  return result
 }
 
 export {
   createBBNode,
-  CLOSE_TAG_PATTERN,
   resolveMediaUrl,
-  escAngle,
   isSafeUrl,
-  escSegHtml,
+  indexOfIgnoreCase,
   pushTextNode,
   preprocessContent
 }
 export { ParseState }
-export { FormatRecord }

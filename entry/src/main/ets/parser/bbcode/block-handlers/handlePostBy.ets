@@ -1,6 +1,5 @@
 import { BBNode, BBNodeType } from '../../../model/BBCodeNode'
-import { decodeHtmlEntities } from '../../_shared/HtmlEntityCodec'
-import { createBBNode, ParseState } from '../lexer'
+import { createBBNode, indexOfIgnoreCase, ParseState } from '../lexer'
 import { parseInlineInto } from '../inline-parser'
 import { parseBBCode } from '../parser'
 
@@ -33,10 +32,10 @@ export const handlePostBy = (state: ParseState, result: BBNode[]): boolean => {
       state.pos++
     }
 
-    const closeBIdx: number = state.content.indexOf('[/b]', state.pos)
+    const closeBIdx: number = indexOfIgnoreCase(state.content, '[/b]', state.pos)
     if (closeBIdx >= 0) {
       if (closeBIdx > state.pos) {
-        const extraContent: string = decodeHtmlEntities(state.content.substring(state.pos, closeBIdx))
+        const extraContent: string = state.content.substring(state.pos, closeBIdx)
         const extraNodes: BBNode[] = parseBBCode(extraContent)
         for (let i = 0; i < extraNodes.length; i++) {
           result.push(extraNodes[i])

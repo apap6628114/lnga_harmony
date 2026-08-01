@@ -1,5 +1,6 @@
 import { BBNode, BBNodeType } from '../../../model/BBCodeNode'
-import { createBBNode, escAngle, ParseState } from '../lexer'
+import { decodeHtmlEntities } from '../../_shared/HtmlEntityCodec'
+import { createBBNode, ParseState } from '../lexer'
 import { parseBlockNodes } from '../parser'
 
 /**
@@ -20,7 +21,7 @@ export const handleCollapse = (state: ParseState, result: BBNode[]): boolean => 
     state.pos = pCollapse.lastIndex
     const n = createBBNode()
     n.type = BBNodeType.COLLAPSE
-    n.title = escAngle(title)
+    n.title = decodeHtmlEntities(title)
     let pCloseCollapse: RegExp = /\[\/collapse\]/gi
     n.children = parseBlockNodes(state, pCloseCollapse)
     result.push(n)

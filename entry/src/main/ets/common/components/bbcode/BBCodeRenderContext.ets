@@ -1,5 +1,6 @@
 import { BBNode, BBNodeType } from '../../../model/BBCodeNode'
 import { AppColors } from '../../constants/Constants'
+import { InlineTextStyle } from './bbcode-utils'
 
 /** 引用块嵌套层级对应的左边框颜色序列（按引用深度循环取色）。 */
 export const QUOTE_BORDER_COLORS: Resource[] = AppColors.quoteBorders
@@ -15,6 +16,10 @@ export class RenderContext {
   inQuote: boolean = false
   /** 引用嵌套深度，根节点为 0 */
   quoteDepth: number = 0
+  /** 块节点向后代传递的文字样式。 */
+  inlineStyle: InlineTextStyle = new InlineTextStyle()
+  /** 当前文字对齐方式。 */
+  textAlign: TextAlign = TextAlign.Start
 }
 
 /**

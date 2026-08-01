@@ -1,6 +1,6 @@
 import { BBNode, BBNodeType } from '../../../model/BBCodeNode'
 import { decodeHtmlEntities } from '../../_shared/HtmlEntityCodec'
-import { createBBNode, escAngle, ParseState } from '../lexer'
+import { createBBNode, indexOfIgnoreCase, ParseState } from '../lexer'
 import { parseBlockNodes, parseBBCode } from '../parser'
 
 /**
@@ -18,14 +18,12 @@ export const handleNuke = (state: ParseState, result: BBNode[]): boolean => {
   const lnm = pNuke.exec(state.content)
   if (lnm && lnm.index === state.pos) {
     state.pos = pNuke.lastIndex
-    let end = state.content.indexOf('[/lessernuke]', state.pos)
+    let end = indexOfIgnoreCase(state.content, '[/lessernuke]', state.pos)
     if (end < 0) end = state.len
     state.pos = end < state.len ? end + 13 : state.len
     const n = createBBNode()
     n.type = BBNodeType.WARN
-    const bodyContent = parseBBCode(decodeHtmlEntities(
-      state.content.substring(pNuke.lastIndex, end < state.len ? end : state.len)
-    ))
+    const bodyContent = parseBBCode(state.content.substring(pNuke.lastIndex, end < state.len ? end : state.len))
     n.children = bodyContent
     result.push(n)
     return true
@@ -53,7 +51,7 @@ export const handleAlbum = (state: ParseState, result: BBNode[]): boolean => {
     state.pos = pAlbum.lastIndex
     const n = createBBNode()
     n.type = BBNodeType.ALBUM
-    n.title = escAngle(albumTitle)
+    n.title = decodeHtmlEntities(albumTitle)
     let pCloseAlbum: RegExp = /\[\/album\]/gi
     n.children = parseBlockNodes(state, pCloseAlbum)
     result.push(n)

@@ -1,29 +1,53 @@
 import { BBNode, BBNodeType } from '../../model/BBCodeNode'
 import { decodeHtmlEntities } from '../_shared/HtmlEntityCodec'
-import {
-  createBBNode,
-  CLOSE_TAG_PATTERN,
-  isSafeUrl,
-  escSegHtml,
-  pushTextNode,
-  ParseState,
-  FormatRecord
-} from './lexer'
+import { createBBNode, isSafeUrl, pushTextNode } from './lexer'
 
-/**
- * 内联解析层：对一段已 decodeHtmlEntities 的纯文本/片段进行行内标签解析。
- * 处理 pid/uid/tid 链接、@提及、表情、Post by、url、b/i/u/del/color/size/font 等格式化标签，
- * 以及未匹配的闭合标签吞咽。本层不调用 parseBBCode，无循环依赖。
- */
-
-/**
- * 根据文件扩展名推测 [img] 标签的真实媒体类型。
- * NGA 有时会把 GIF 转换后保存为 .gif.mp4 但仍用 [img] 包裹。
- * 返回 VIDEO / AUDIO 或 IMAGE（非媒体扩展名时由调用方默认当图片处理）。
- */
+/** 可作为视频播放的常见文件扩展名。 */
 const MEDIA_VIDEO_EXTS: string[] = ['mp4', 'webm', 'ogg', 'mov', '3gp']
+
+/** 可作为音频播放的常见文件扩展名。 */
 const MEDIA_AUDIO_EXTS: string[] = ['mp3', 'wav', 'flac', 'aac', 'm4a']
 
+/** 单个内联标签允许的最大字符数。 */
+const MAX_INLINE_TAG_LENGTH: number = 512
+
+/** 内联格式允许的最大嵌套层数。 */
+const MAX_INLINE_DEPTH: number = 64
+
+/**
+ * 内联标签词法单元。
+ */
+class InlineTagToken {
+  /** 标签原文。 */
+  raw: string = ''
+  /** 规范化后的小写标签名。 */
+  name: string = ''
+  /** 等号后的原始属性。 */
+  attribute: string = ''
+  /** 是否为闭合标签。 */
+  closing: boolean = false
+  /** 标签结束后的字符位置。 */
+  end: number = 0
+}
+
+/**
+ * 尚未闭合的内联节点栈帧。
+ */
+class InlineFrame {
+  /** 与闭合标签配对的小写标签名。 */
+  tagName: string = ''
+  /** 当前标签对应的语义节点。 */
+  node: BBNode = new BBNode()
+  /** 无属性 URL 是否需要从显示文字推导地址。 */
+  deriveUrlFromText: boolean = false
+}
+
+/**
+ * 根据文件扩展名推测媒体类型。
+ *
+ * @param rawUrl 原始媒体地址
+ * @returns 图片、视频或音频节点类型
+ */
 function guessMediaTypeFromExt(rawUrl: string): BBNodeType {
   const extMatch: RegExpExecArray | null = /\.(\w+)(\?.*)?$/.exec(rawUrl)
   if (!extMatch) return BBNodeType.IMAGE
@@ -33,249 +57,311 @@ function guessMediaTypeFromExt(rawUrl: string): BBNodeType {
   return BBNodeType.IMAGE
 }
 
-function parseInlineInto(seg: string, into: BBNode[]): void {
-  let i = 0
-  const segLen = seg.length
+/**
+ * 从指定位置读取完整的方括号标签。
+ *
+ * @param segment 内联原始片段
+ * @param start 左中括号位置
+ * @returns 可识别标签；普通方括号文本返回 null
+ */
+function readInlineTag(segment: string, start: number): InlineTagToken | null {
+  const closeBracket: number = segment.indexOf(']', start + 1)
+  if (closeBracket < 0) return null
+  if (closeBracket - start + 1 > MAX_INLINE_TAG_LENGTH) return null
+  const raw: string = segment.substring(start, closeBracket + 1)
+  let body: string = segment.substring(start + 1, closeBracket).trim()
+  if (body.length === 0) return null
 
-  while (i < segLen) {
-    const ch = seg[i]
+  const token = new InlineTagToken()
+  token.raw = raw
+  token.end = closeBracket + 1
+  if (body.startsWith('/')) {
+    token.closing = true
+    body = body.substring(1).trim()
+  }
 
-    if (ch === '[') {
-      if (seg.length >= i + 5 && seg.substring(i, i + 5) === '[pid=') {
-        const closerPos: string = '[/pid]'
-        const closerLen: number = 6
-        const idEnd: number = seg.indexOf(']', i + 5)
-        const firstComma: number = seg.indexOf(',', i + 5)
-        const secComma: number = firstComma >= 0 ? seg.indexOf(',', firstComma + 1) : -1
-        if (idEnd >= 0 && firstComma >= 0 && secComma >= 0) {
-          const pid: string = seg.substring(i + 5, firstComma)
-          const tid: string = seg.substring(firstComma + 1, secComma)
-          const bodyStart: number = idEnd + 1
-          const closeIdx: number = seg.indexOf(closerPos, bodyStart)
-          const bodyEnd: number = closeIdx >= 0 ? closeIdx : segLen
-          const text: string = seg.substring(bodyStart, bodyEnd)
-          i = closeIdx >= 0 ? bodyEnd + closerLen : segLen
-          const n = createBBNode()
-          n.type = BBNodeType.PID_LINK
-          n.href = `#/thread?tid=${tid}&pid=${pid}`
-          n.text = escSegHtml(text)
-          into.push(n)
-          continue
-        }
-      }
+  const equalIndex: number = body.indexOf('=')
+  const name: string = (equalIndex >= 0 ? body.substring(0, equalIndex) : body).trim()
+  if (!/^[a-z]+$/i.test(name)) return null
+  token.name = name.toLowerCase()
+  token.attribute = equalIndex >= 0 ? body.substring(equalIndex + 1).trim() : ''
+  return token
+}
 
-      if (seg.length >= i + 5 && seg.substring(i, i + 5) === '[uid=') {
-        const closerPos: string = '[/uid]'
-        const closerLen: number = 6
-        const idEnd: number = seg.indexOf(']', i + 5)
-        if (idEnd >= 0) {
-          const uid: string = seg.substring(i + 5, idEnd)
-          const bodyStart: number = idEnd + 1
-          const closeIdx: number = seg.indexOf(closerPos, bodyStart)
-          const bodyEnd: number = closeIdx >= 0 ? closeIdx : segLen
-          const text: string = seg.substring(bodyStart, bodyEnd)
-          i = closeIdx >= 0 ? bodyEnd + closerLen : segLen
-          const n = createBBNode()
-          n.type = BBNodeType.UID_LINK
-          n.href = `#/profile?uid=${uid}`
-          n.text = escSegHtml(text)
-          into.push(n)
-          continue
-        }
-      }
+/**
+ * 判断标签是否属于可继承的文字样式。
+ *
+ * @param name 小写标签名
+ * @returns 是否为文字样式标签
+ */
+function isInlineStyleTag(name: string): boolean {
+  return name === 'b' || name === 'h' || name === 'item' || name === 'i' || name === 'u' ||
+    name === 'del' || name === 'color' || name === 'size' || name === 'font' || name === 'sub' || name === 'sup'
+}
 
-      if (seg.length >= i + 5 && seg.substring(i, i + 5) === '[tid=') {
-        const closerPos: string = '[/tid]'
-        const closerLen: number = 6
-        const idEnd: number = seg.indexOf(']', i + 5)
-        if (idEnd >= 0) {
-          const tidPart: string = seg.substring(i + 5, idEnd)
-          const ampPos: number = tidPart.indexOf('&page=')
-          const tidVal: string = ampPos >= 0 ? tidPart.substring(0, ampPos) : tidPart
-          const pageVal: string = ampPos >= 0 ? tidPart.substring(ampPos + 6) : ''
-          const bodyStart: number = idEnd + 1
-          const closeIdx: number = seg.indexOf(closerPos, bodyStart)
-          const bodyEnd: number = closeIdx >= 0 ? closeIdx : segLen
-          const text: string = seg.substring(bodyStart, bodyEnd)
-          i = closeIdx >= 0 ? bodyEnd + closerLen : segLen
-          const n = createBBNode()
-          n.type = BBNodeType.TID_LINK
-          n.href = `#/thread?tid=${tidVal}${pageVal.length > 0 ? '&page=' + pageVal : ''}`
-          n.text = escSegHtml(text)
-          into.push(n)
-          continue
-        }
-      }
+/**
+ * 判断标签是否属于内联链接。
+ *
+ * @param name 小写标签名
+ * @returns 是否为链接标签
+ */
+function isInlineLinkTag(name: string): boolean {
+  return name === 'url' || name === 'pid' || name === 'uid' || name === 'tid'
+}
 
-      const menP: RegExp = /\[@(\d+)\]/g
-      menP.lastIndex = i
-      const menM = menP.exec(seg)
-      if (menM && menM.index === i) {
-        i = menP.lastIndex
-        const n = createBBNode()
-        n.type = BBNodeType.MENTION
-        n.href = `#/profile?uid=${menM[1]}`
-        n.text = `@${menM[1]}`
-        into.push(n)
-        continue
-      }
+/**
+ * 返回栈顶节点的子节点数组，空栈时返回根节点数组。
+ *
+ * @param root 当前片段根节点
+ * @param frames 开放标签栈
+ * @returns 新节点应追加到的数组
+ */
+function currentChildren(root: BBNode[], frames: InlineFrame[]): BBNode[] {
+  if (frames.length === 0) return root
+  return frames[frames.length - 1].node.children
+}
 
-      const emo1P: RegExp = /\[s:(\w+):([^\]]+)\]/g
-      emo1P.lastIndex = i
-      const emo1M = emo1P.exec(seg)
-      if (emo1M && emo1M.index === i) {
-        i = emo1P.lastIndex
-        const n = createBBNode()
-        n.type = BBNodeType.EMOTION
-        n.emotionCat = emo1M[1]
-        n.emotionCode = emo1M[2]
-        into.push(n)
-        continue
-      }
+/**
+ * 把样式标签映射为语义节点类型。
+ *
+ * @param name 小写标签名
+ * @returns 对应节点类型
+ */
+function styleNodeType(name: string): BBNodeType {
+  if (name === 'b' || name === 'h' || name === 'item') return BBNodeType.BOLD
+  if (name === 'i') return BBNodeType.ITALIC
+  if (name === 'u') return BBNodeType.UNDERLINE
+  if (name === 'del') return BBNodeType.STRIKETHROUGH
+  if (name === 'color') return BBNodeType.COLOR
+  if (name === 'size') return BBNodeType.SIZE
+  if (name === 'font') return BBNodeType.FONT
+  if (name === 'sub') return BBNodeType.SUBSCRIPT
+  return BBNodeType.SUPERSCRIPT
+}
 
-      const emo2P: RegExp = /\[s:(\d+)\]/g
-      emo2P.lastIndex = i
-      const emo2M = emo2P.exec(seg)
-      if (emo2M && emo2M.index === i) {
-        i = emo2P.lastIndex
-        const n = createBBNode()
-        n.type = BBNodeType.EMOTION
-        n.emotionCat = 'old'
-        n.emotionCode = emo2M[1]
-        n.text = `[表情${emo2M[1]}]`
-        into.push(n)
-        continue
-      }
+/**
+ * 校验并写入样式标签属性。
+ *
+ * @param node 待填充样式节点
+ * @param tag 标签词法单元
+ * @returns 属性是否有效
+ */
+function applyStyleAttribute(node: BBNode, tag: InlineTagToken): boolean {
+  if (node.type === BBNodeType.COLOR) {
+    const color: string = decodeHtmlEntities(tag.attribute).trim()
+    if (!/^(?:#[0-9a-fA-F]{3,8}|[a-zA-Z]+)$/.test(color)) return false
+    node.color = color
+  } else if (node.type === BBNodeType.SIZE) {
+    const sizeMatch: RegExpExecArray | null = /^(\d+)%$/.exec(tag.attribute)
+    if (!sizeMatch) return false
+    node.size = Math.min(300, Math.max(50, parseInt(sizeMatch[1], 10)))
+  } else if (node.type === BBNodeType.FONT) {
+    const family: string = decodeHtmlEntities(tag.attribute).trim()
+    if (family.length === 0 || family.length > 64) return false
+    node.fontFamily = family
+  }
+  return true
+}
 
-      const pbP: RegExp = /Post by (.+?) \((\d+)\)/g
-      pbP.lastIndex = i
-      const pbM = pbP.exec(seg)
-      if (pbM && pbM.index === i) {
-        i = pbP.lastIndex
-        pushTextNode(into, 'Post by ')
-        const n = createBBNode()
-        n.type = BBNodeType.UID_LINK
-        n.href = `#/profile?uid=${pbM[2]}`
-        n.text = escSegHtml(pbM[1])
-        into.push(n)
-        pushTextNode(into, ` (${pbM[2]})`)
-        continue
-      }
+/**
+ * 收集节点树的可见文字，供无属性 URL 推导跳转地址。
+ *
+ * @param nodes 内联节点树
+ * @returns 拼接后的可见文字
+ */
+function collectInlineText(nodes: BBNode[]): string {
+  let result: string = ''
+  for (let i: number = 0; i < nodes.length; i++) {
+    const node: BBNode = nodes[i]
+    if (node.text.length > 0) result += node.text
+    if (node.children.length > 0) result += collectInlineText(node.children)
+  }
+  return result
+}
 
-      let fmtMatched = false
-      const closedFmtIndex: number = checkInlineFormat(i, seg, segLen, into)
-      if (closedFmtIndex > i) {
-        i = closedFmtIndex
-        fmtMatched = true
-      }
-      if (fmtMatched) continue
+/**
+ * 根据标签属性生成链接地址。
+ *
+ * @param tag 链接开始标签
+ * @returns 应写入节点的安全地址
+ */
+function createLinkHref(tag: InlineTagToken): string {
+  const attribute: string = decodeHtmlEntities(tag.attribute).trim()
+  if (tag.name === 'url') return isSafeUrl(attribute) ? attribute : ''
+  if (tag.name === 'uid') return attribute.length > 0 ? `#/profile?uid=${attribute}` : ''
+  if (tag.name === 'pid') {
+    const parts: string[] = attribute.split(',')
+    return parts.length >= 2 && parts[0].length > 0 && parts[1].length > 0 ?
+      `#/thread?tid=${parts[1]}&pid=${parts[0]}` : ''
+  }
+  const pageMarker: string = '&page='
+  const pageIndex: number = attribute.toLowerCase().indexOf(pageMarker)
+  const tid: string = pageIndex >= 0 ? attribute.substring(0, pageIndex) : attribute
+  const page: string = pageIndex >= 0 ? attribute.substring(pageIndex + pageMarker.length) : ''
+  return tid.length > 0 ? `#/thread?tid=${tid}${page.length > 0 ? '&page=' + page : ''}` : ''
+}
 
-      if (seg.length >= i + 5) {
-        const fiveChars: string = seg.substring(i, i + 5)
-        if (fiveChars === '[url=') {
-          const hrefEnd: number = seg.indexOf(']', i + 5)
-          if (hrefEnd >= 0) {
-            const href: string = seg.substring(i + 5, hrefEnd)
-            const bodyStart: number = hrefEnd + 1
-            const closeTagIdx: number = seg.indexOf('[/url]', bodyStart)
-            const bodyEnd: number = closeTagIdx >= 0 ? closeTagIdx : segLen
-            const text: string = seg.substring(bodyStart, bodyEnd)
-            i = closeTagIdx >= 0 ? bodyEnd + 6 : segLen
-            const n = createBBNode()
-            n.type = BBNodeType.URL
-            n.href = isSafeUrl(href) ? href : ''
-            n.text = escSegHtml(text)
-            into.push(n)
-            continue
-          }
-        } else if (fiveChars === '[url]') {
-          const bodyStart: number = i + 5
-          const closeTagIdx: number = seg.indexOf('[/url]', bodyStart)
-          const bodyEnd: number = closeTagIdx >= 0 ? closeTagIdx : segLen
-          const text: string = seg.substring(bodyStart, bodyEnd)
-          i = closeTagIdx >= 0 ? bodyEnd + 6 : segLen
-          const n = createBBNode()
-          n.type = BBNodeType.URL
-          n.href = isSafeUrl(text) ? text : ''
-          n.text = escSegHtml(text)
-          into.push(n)
-          continue
-        }
-      }
+/**
+ * 打开一个样式或链接标签并压入栈。
+ *
+ * @param tag 开始标签
+ * @param root 当前片段根节点
+ * @param frames 开放标签栈
+ * @returns 是否成功识别并打开
+ */
+function openInlineFrame(tag: InlineTagToken, root: BBNode[], frames: InlineFrame[]): boolean {
+  if (!isInlineStyleTag(tag.name) && !isInlineLinkTag(tag.name)) return false
+  if (frames.length >= MAX_INLINE_DEPTH) return false
+  const node = createBBNode()
+  if (isInlineStyleTag(tag.name)) {
+    node.type = styleNodeType(tag.name)
+    if (!applyStyleAttribute(node, tag)) return false
+  } else {
+    node.type = tag.name === 'url' ? BBNodeType.URL :
+      tag.name === 'pid' ? BBNodeType.PID_LINK :
+        tag.name === 'uid' ? BBNodeType.UID_LINK : BBNodeType.TID_LINK
+    node.href = createLinkHref(tag)
+  }
 
-      CLOSE_TAG_PATTERN.lastIndex = i
-      const closeM = CLOSE_TAG_PATTERN.exec(seg)
-      if (closeM && closeM.index === i) {
-        i = CLOSE_TAG_PATTERN.lastIndex
-        continue
-      }
+  currentChildren(root, frames).push(node)
+  const frame = new InlineFrame()
+  frame.tagName = tag.name
+  frame.node = node
+  frame.deriveUrlFromText = tag.name === 'url' && tag.attribute.length === 0
+  frames.push(frame)
+  return true
+}
 
-      pushTextNode(into, '[')
-      i++
+/**
+ * 完成链接栈帧的派生字段。
+ *
+ * @param frame 即将关闭的栈帧
+ */
+function finalizeFrame(frame: InlineFrame): void {
+  if (frame.deriveUrlFromText) {
+    const href: string = collectInlineText(frame.node.children).trim()
+    frame.node.href = isSafeUrl(href) ? href : ''
+  }
+}
+
+/**
+ * 闭合最近的同名标签；交叉标签按容错规则自动闭合其上的栈帧。
+ *
+ * @param name 小写闭合标签名
+ * @param frames 开放标签栈
+ * @returns 是否找到匹配的开始标签
+ */
+function closeInlineFrame(name: string, frames: InlineFrame[]): boolean {
+  let matchIndex: number = -1
+  for (let i: number = frames.length - 1; i >= 0; i--) {
+    if (frames[i].tagName === name) {
+      matchIndex = i
+      break
+    }
+  }
+  if (matchIndex < 0) return false
+  for (let i: number = frames.length - 1; i >= matchIndex; i--) {
+    finalizeFrame(frames[i])
+    frames.pop()
+  }
+  return true
+}
+
+/**
+ * 尝试解析提及或表情等单标签节点。
+ *
+ * @param rawBody 方括号内部原文
+ * @param target 当前输出数组
+ * @returns 是否成功识别
+ */
+function appendInlineAtom(rawBody: string, target: BBNode[]): boolean {
+  const mention: RegExpExecArray | null = /^@(\d+)$/.exec(rawBody)
+  if (mention) {
+    const node = createBBNode()
+    node.type = BBNodeType.MENTION
+    node.href = `#/profile?uid=${mention[1]}`
+    node.text = `@${mention[1]}`
+    target.push(node)
+    return true
+  }
+
+  const emotion: RegExpExecArray | null = /^s:(\w+):([^\]]+)$/.exec(rawBody)
+  if (emotion) {
+    const node = createBBNode()
+    node.type = BBNodeType.EMOTION
+    node.emotionCat = emotion[1]
+    node.emotionCode = emotion[2]
+    target.push(node)
+    return true
+  }
+
+  const oldEmotion: RegExpExecArray | null = /^s:(\d+)$/.exec(rawBody)
+  if (oldEmotion) {
+    const node = createBBNode()
+    node.type = BBNodeType.EMOTION
+    node.emotionCat = 'old'
+    node.emotionCode = oldEmotion[1]
+    node.text = `[表情${oldEmotion[1]}]`
+    target.push(node)
+    return true
+  }
+  return false
+}
+
+/**
+ * 使用显式标签栈解析一段不含块节点的 BBCode。
+ *
+ * @param segment 未解码的内联正文
+ * @param into 节点输出数组
+ */
+function parseInlineInto(segment: string, into: BBNode[]): void {
+  const frames: InlineFrame[] = []
+  let index: number = 0
+  while (index < segment.length) {
+    const bracketIndex: number = segment.indexOf('[', index)
+    if (bracketIndex < 0) {
+      pushTextNode(currentChildren(into, frames), segment.substring(index))
+      break
+    }
+    if (bracketIndex > index) {
+      pushTextNode(currentChildren(into, frames), segment.substring(index, bracketIndex))
+    }
+
+    const closeBracket: number = segment.indexOf(']', bracketIndex + 1)
+    if (closeBracket < 0) {
+      pushTextNode(currentChildren(into, frames), segment.substring(bracketIndex))
+      break
+    }
+    const rawBody: string = segment.substring(bracketIndex + 1, closeBracket).trim()
+    if (appendInlineAtom(rawBody, currentChildren(into, frames))) {
+      index = closeBracket + 1
       continue
     }
 
-    let nextBracket = seg.indexOf('[', i)
-    if (nextBracket < 0) nextBracket = segLen
-    if (nextBracket > i) {
-      pushTextNode(into, seg.substring(i, nextBracket))
-      i = nextBracket
-    } else {
-      pushTextNode(into, seg.substring(i, i + 1))
-      i++
-    }
-  }
-}
-
-function checkInlineFormat(startIdx: number, seg: string, segLen: number, into: BBNode[]): number {
-  const savedI = startIdx
-  let i = startIdx
-
-  const fmtPats: FormatRecord[] = [
-    { open: /\[b\]/gi, close: '[/b]', type: BBNodeType.BOLD },
-    { open: /\[h\]/gi, close: '[/h]', type: BBNodeType.BOLD },
-    { open: /\[item\]/gi, close: '[/item]', type: BBNodeType.BOLD },
-    { open: /\[i\]/gi, close: '[/i]', type: BBNodeType.ITALIC },
-    { open: /\[u\]/gi, close: '[/u]', type: BBNodeType.UNDERLINE },
-    { open: /\[del\]/gi, close: '[/del]', type: BBNodeType.STRIKETHROUGH },
-    { open: /\[color=(#[0-9a-fA-F]+|\w+)\]/gi, close: '[/color]', type: BBNodeType.COLOR },
-    { open: /\[size=(\d+)%\]/gi, close: '[/size]', type: BBNodeType.SIZE },
-    { open: /\[font=(.*?)\]/gi, close: '[/font]', type: BBNodeType.FONT },
-    { open: /\[sub\]/gi, close: '[/sub]', type: BBNodeType.SUBSCRIPT },
-    { open: /\[sup\]/gi, close: '[/sup]', type: BBNodeType.SUPERSCRIPT },
-  ]
-
-  for (let fi = 0; fi < fmtPats.length; fi++) {
-    const rec = fmtPats[fi]
-    rec.open.lastIndex = i
-    const fm = rec.open.exec(seg)
-    if (fm && fm.index === i) {
-      i = rec.open.lastIndex
-      const closeIdx = seg.toLowerCase().indexOf(rec.close.toLowerCase(), i)
-      const bodyEnd = closeIdx >= 0 ? closeIdx : segLen
-      const body = seg.substring(i, bodyEnd)
-      i = closeIdx >= 0 ? bodyEnd + rec.close.length : segLen
-
-      const n = createBBNode()
-      n.type = rec.type
-      if (rec.type === BBNodeType.COLOR) n.color = fm[1]
-      if (rec.type === BBNodeType.SIZE) n.size = parseInt(fm[1], 10)
-      if (rec.type === BBNodeType.FONT) n.fontFamily = fm[1]
-
-      const childNodes: BBNode[] = []
-      parseInlineInto(body, childNodes)
-      if (childNodes.length === 1 && childNodes[0].type === BBNodeType.TEXT) {
-        n.text = childNodes[0].text
-      } else if (childNodes.length === 0) {
-        n.text = ''
-      } else {
-        n.children = childNodes
+    const tag: InlineTagToken | null = readInlineTag(segment, bracketIndex)
+    if (tag !== null) {
+      const handled: boolean = tag.closing ? closeInlineFrame(tag.name, frames) : openInlineFrame(tag, into, frames)
+      if (handled) {
+        index = tag.end
+        continue
       }
-      into.push(n)
-      return i
+      pushTextNode(currentChildren(into, frames), tag.raw)
+      index = tag.end
+      continue
+    }
+
+    if (segment.charAt(bracketIndex + 1) === '[') {
+      pushTextNode(currentChildren(into, frames), '[')
+      index = bracketIndex + 1
+    } else {
+      pushTextNode(currentChildren(into, frames), segment.substring(bracketIndex, closeBracket + 1))
+      index = closeBracket + 1
     }
   }
-  return savedI
+
+  for (let i: number = frames.length - 1; i >= 0; i--) {
+    finalizeFrame(frames[i])
+  }
 }
 
-export { parseInlineInto, guessMediaTypeFromExt }
+export { parseInlineInto, guessMediaTypeFromExt, MAX_INLINE_DEPTH, MAX_INLINE_TAG_LENGTH }
