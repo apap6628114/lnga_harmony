@@ -1,6 +1,0 @@
-{
-  "exclude": [
-    "entry/src/test/",
-    "entry/src/ohosTest/"
-  ]
-}
