@@ -113,9 +113,6 @@ hvigorw assembleHap --mode debug
 
 # 构建 release HAP
 hvigorw assembleHap --mode release
-
-# 运行 ohosTest
-hvigorw run ohosTest
 ```
 
 > 也可直接在 DevEco Studio 中点击 `Run` 按钮部署到真机或模拟器。

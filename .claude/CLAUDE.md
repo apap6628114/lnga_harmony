@@ -6,7 +6,7 @@ NGA 论坛客户端，stage 模型，API 6.1.0(23)，单 entry 模块。
 
 工程依赖 DevEco Studio 内置工具链，项目根目录**无 `hvigorw` Wrapper**，须从安装目录调用。
 
-构建、模拟器拉起、安装部署的完整流程见 skill：**`harmonyos-build-deploy`**（`.claude/skills/harmonyos-build-deploy/`）。
+编译验证、模拟器拉起、HAP 安装部署的完整流程见 skill：**`harmonyos-build-deploy`**（`.claude/skills/harmonyos-build-deploy/`）。该 skill 不执行自动化测试；应用启动也仅在用户明确要求时进行。
 
 核心要点：
 - 环境变量：`export DEVECO_SDK_HOME="C:/Program Files/Huawei/DevEco Studio/sdk"`

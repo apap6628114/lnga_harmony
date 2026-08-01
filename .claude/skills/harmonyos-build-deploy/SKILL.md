@@ -1,11 +1,19 @@
 ---
 name: harmonyos-build-deploy
-description: 鸿蒙项目构建、模拟器拉起、应用安装部署。当用户要求编译、启动模拟器、安装 HAP 或在模拟器上运行应用时使用。
+description: HarmonyOS 项目编译验证、模拟器状态检查与拉起、HAP 安装部署。当用户要求确认能否编译、启动模拟器、安装到模拟器或显式启动应用时使用；不编写、不运行 Local Test、Instrument Test、UI 自动化测试或测试用例。
 ---
 
-# HarmonyOS 构建部署
+# HarmonyOS 构建与模拟器部署
 
-三步闭环：**构建 HAP → 拉起模拟器 → 安装启动**，每步先检查状态再按需执行。
+三步主流程：**构建 HAP → 拉起模拟器 → 安装 HAP**。每步先检查状态再按需执行；启动应用仅在用户明确要求时执行。
+
+## 职责边界
+
+- 可以检查环境、编译工程、确认编译结果、拉起模拟器、等待设备就绪并安装 HAP。
+- 只有用户明确要求“启动/打开/运行应用”时，才在安装后启动 Ability。
+- 禁止调用 `hvigorw test`、`onDeviceTest`、`ohosTest`、Hypium、UiTest 或任何测试用例执行入口。
+- 禁止自动点击界面、输入数据、读取控件或把“应用能启动”扩展为功能测试。
+- 编译成功只证明工程能够产出 HAP；安装成功只证明 HAP 已部署。不得据此声称业务功能、UI 或测试用例通过。
 
 ## 配置
 
@@ -78,7 +86,7 @@ if [ -f "$SDK_PKG_PATH" ]; then
 fi
 ```
 
-### 检查应用
+### 检查应用（仅显式要求启动时）
 
 ```bash
 hdc shell pidof ${BUNDLE_NAME}
@@ -96,7 +104,7 @@ hdc shell pidof ${BUNDLE_NAME}
 |------|------|------|
 | 模拟器 | ✅ 已连接 / ❌ 未运行 | 跳过 / 拉起 |
 | HAP    | ✅ 最新 / 🔄 需构建 | 跳过 / 构建 |
-| 应用   | ✅ 运行中 / ⚠️ 未启动 | 跳过 / 安装启动 |
+| HAP 部署 | ⏳ 待执行 | 安装 / 覆盖安装 |
 ```
 
 ## 步骤 1：构建 HAP
@@ -167,21 +175,30 @@ done
 hdc shell "param get const.product.model"  # 返回 "emulator" 即系统就绪
 ```
 
-## 步骤 3：安装并启动应用
+## 步骤 3：安装 HAP
 
 ```bash
 source .claude/skills/harmonyos-build-deploy/config.sh
 
 # 安装（-r 覆盖安装，已安装同版本也不会报错）
 hdc install -r "${HAP_PATH}"
-
-# 启动
-hdc shell aa start -a ${ABILITY_NAME} -b ${BUNDLE_NAME}
 ```
 
 成功标志：
 - 安装：输出 `install bundle successfully`
-- 启动：输出 `start ability successfully`
+
+安装完成后停止，不进行界面操作或自动化测试。
+
+## 可选步骤 4：启动应用
+
+仅当用户明确要求启动、打开或运行应用时执行：
+
+```bash
+source .claude/skills/harmonyos-build-deploy/config.sh
+hdc shell aa start -a ${ABILITY_NAME} -b ${BUNDLE_NAME}
+```
+
+成功标志：输出 `start ability successfully`。启动成功不代表功能验证通过。
 
 ## 踩坑记录
 
@@ -196,4 +213,4 @@ hdc shell aa start -a ${ABILITY_NAME} -b ${BUNDLE_NAME}
 | `SDK component missing` / 找不到 SDK | `sdk-pkg.json` 中 `path` 与实际目录名不匹配 | 检查 `DEVECO_SDK_HOME/default/sdk-pkg.json`，修正 `path` 字段 |
 | 构建 unsigned HAP | 默认 product 带签名配置 | 添加 `-p product=unsigned` 参数，需先在 `build-profile.json5` 中定义 unsigned product |
 | 模拟器 -start 后进程被杀则模拟器也关 | 生命周期绑定 | 用独立常驻进程（`run_in_background: true` / 独立终端 / GUI） |
-| 应用 `aa start` 报错 | 可能已运行 | 先 `pidof` 检查，已运行则跳过或先 `aa stop` |
+| 显式启动应用时 `aa start` 报错 | 可能已运行 | 先 `pidof` 检查，已运行则跳过；不要为此自动停止用户正在运行的应用 |
