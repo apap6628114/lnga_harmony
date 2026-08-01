@@ -1,24 +1,52 @@
 import { BBNode, BBNodeType } from '../../../model/BBCodeNode'
 import { ReadingFontRole, ReadingTypography } from '../../typography/ReadingTypography'
 
-/** NGA 正文常用的网页命名色到 ArkUI 十六进制颜色的映射。 */
+/**
+ * CSS 命名色与 NGA 官方编辑器色板到十六进制颜色的映射。
+ *
+ * 覆盖 CSS 2.1 全部基础色（含 aqua/fuchsia 别名、gray/grey 拼写归一化）与
+ * NGA 编辑器预设色板（排版帖 tid=5355906），未收录的名字由
+ * normalizeTextColor 原样透传给 ArkUI 解析。
+ */
 const NAMED_TEXT_COLORS: Map<string, string> = new Map<string, string>([
+  ['aqua', '#00ffff'],
   ['black', '#000000'],
-  ['white', '#ffffff'],
-  ['red', '#ff0000'],
-  ['green', '#008000'],
   ['blue', '#0000ff'],
-  ['yellow', '#ffff00'],
-  ['orange', '#ffa500'],
-  ['purple', '#800080'],
-  ['pink', '#ffc0cb'],
-  ['gray', '#808080'],
-  ['grey', '#808080'],
+  ['burlywood', '#deb887'],
+  ['chocolate', '#d2691e'],
+  ['coral', '#ff7f50'],
+  ['crimson', '#dc143c'],
   ['cyan', '#00ffff'],
-  ['magenta', '#ff00ff'],
-  ['skyblue', '#87ceeb'],
+  ['darkblue', '#00008b'],
+  ['darkred', '#8b0000'],
+  ['deeppink', '#ff1493'],
+  ['firebrick', '#b22222'],
+  ['fuchsia', '#ff00ff'],
+  ['gray', '#808080'],
+  ['green', '#008000'],
+  ['grey', '#808080'],
   ['indigo', '#4b0082'],
+  ['lime', '#00ff00'],
   ['limegreen', '#32cd32'],
+  ['magenta', '#ff00ff'],
+  ['maroon', '#800000'],
+  ['navy', '#000080'],
+  ['olive', '#808000'],
+  ['orange', '#ffa500'],
+  ['orangered', '#ff4500'],
+  ['pink', '#ffc0cb'],
+  ['purple', '#800080'],
+  ['red', '#ff0000'],
+  ['royalblue', '#4169e1'],
+  ['sandybrown', '#f4a460'],
+  ['seagreen', '#2e8b57'],
+  ['sienna', '#a0522d'],
+  ['silver', '#c0c0c0'],
+  ['skyblue', '#87ceeb'],
+  ['teal', '#008080'],
+  ['tomato', '#ff6347'],
+  ['white', '#ffffff'],
+  ['yellow', '#ffff00'],
 ])
 
 /**

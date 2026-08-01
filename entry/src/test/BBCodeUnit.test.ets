@@ -33,6 +33,27 @@ export default function bbcodeUnitTest(): void {
       expect(runs[0].style.scalePercent).assertEqual(150)
     })
 
+    it('mapsNgaPaletteAndCssBaseColors', 0, (): void => {
+      const runs: InlineRun[] = flattenInlineNodes(parseBBCode(
+        '[color=royalblue]宝[/color][color=crimson]红[/color][color=seagreen]海[/color]' +
+        '[color=teal]青[/color][color=maroon]栗[/color][color=Silver]银[/color]'))
+
+      expect(runs.length).assertEqual(6)
+      expect(runs[0].style.color).assertEqual('#4169e1')
+      expect(runs[1].style.color).assertEqual('#dc143c')
+      expect(runs[2].style.color).assertEqual('#2e8b57')
+      expect(runs[3].style.color).assertEqual('#008080')
+      expect(runs[4].style.color).assertEqual('#800000')
+      expect(runs[5].style.color).assertEqual('#c0c0c0')
+    })
+
+    it('passesThroughUnmappedNamedColor', 0, (): void => {
+      const runs: InlineRun[] = flattenInlineNodes(parseBBCode('[color=gold]金[/color]'))
+
+      expect(runs.length).assertEqual(1)
+      expect(runs[0].style.color).assertEqual('gold')
+    })
+
     it('keepsFormattingInsideClickableLink', 0, (): void => {
       const nodes: BBNode[] = parseBBCode(
         '[b][url=https://example.com][i]格式化链接[/i][/url][/b]')
