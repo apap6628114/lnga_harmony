@@ -1,6 +1,6 @@
 <div align="center">
   <img src="AppScope/resources/base/media/foreground.png" alt="LNGA Logo" width="120" height="120">
-  <h1>NGA OH</h1>
+  <h1>LNGA</h1>
   <p><strong>NGA 玩家社区 · 鸿蒙原生客户端</strong></p>
   <p>
     <img src="https://img.shields.io/badge/HarmonyOS-6.1.0(23)-0078D7?style=flat-square">
@@ -28,7 +28,7 @@
 
 ## 简介
 
-**NGA OH** 是基于 **HarmonyOS** 原生框架 **ArkUI (ArkTS)** 构建的 [NGA 玩家社区](https://nga.cn) 客户端。致力于在鸿蒙生态中提供流畅、原生的 NGA 论坛浏览与交互体验。
+**LNGA** 是基于 **HarmonyOS** 原生框架 **ArkUI (ArkTS)** 构建的 [NGA 玩家社区](https://nga.cn) 客户端。致力于在鸿蒙生态中提供流畅、原生的 NGA 论坛浏览与交互体验。
 
 项目完整覆盖了 NGA 论坛的核心功能：板块浏览、帖子阅读、发帖回复、私信聊天、通知推送、AI 内容总结等，并针对手机、平板、二合一设备做了自适应布局适配。
 
