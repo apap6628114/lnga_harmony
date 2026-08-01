@@ -17,175 +17,222 @@ import { webview } from '@kit.ArkWeb'
 import { PageScope } from '../common/concurrency/PageScope'
 
 
+/**
+ * 提供账号密码、凭据文件和网页三种登录方式的响应式页面。
+ */
 @Entry
 @Component
 struct LoginPage {
+  /** 用户名。 */
   @State username: string = ''
+  /** 密码。 */
   @State password: string = ''
+  /** 图形验证码。 */
   @State captcha: string = ''
+  /** 账号密码登录是否正在进行。 */
   @State loading: boolean = false
+  /** 凭据文件是否正在导入。 */
   @State importing: boolean = false
+  /** 当前需要展示的错误信息。 */
   @State error: string = ''
+  /** 两步登录令牌。 */
   @State loginToken: string = ''
+  /** 图形验证码标识。 */
   @State captchaId: string = ''
+  /** 图形验证码图片。 */
   @State captchaImage: string = ''
+  /** 系统状态栏安全区高度。 */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
+  /** 系统导航栏安全区高度。 */
+  @StorageProp('navBarHeight') navBarHeight: number = 0
+  /** 当前响应式断点。 */
+  @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
+  /** 当前主题名称。 */
   @StorageProp('themeName') themeName: string = 'original'
 
+  /** 网页登录 WebView 控制器。 */
   private webController: webview.WebviewController = new webview.WebviewController()
+  /** 是否展示网页登录层。 */
   @State showWebLogin: boolean = false
+  /** 是否正在处理网页登录结果。 */
   @State webLoginLoading: boolean = false
+  /** 网页登录使用的 NGA 域名。 */
   private loginDomain: string = ''
+  /** 网页登录 Cookie 轮询定时器。 */
   private cookiePollTimer: number = -1
+  /** Cookie 轮询是否处于活动状态。 */
   private pollingActive: boolean = false
+  /** 网页认证结果是否已经触发处理。 */
   private authTriggered: boolean = false
+  /** 待解密的凭据文件内容。 */
   private pendingCredentialContent: string = ''
+  /** 凭据文件密码弹窗控制器。 */
   private importCredentialDialogController?: CustomDialogController
   /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
   private scope: PageScope = new PageScope()
 
+  /** 开始当前页面的异步会话。 */
   aboutToAppear(): void {
     this.scope.begin()
   }
 
+  /**
+   * 构建支持旋转、窄屏和大屏的登录界面。
+   */
   build() {
     Stack() {
-      Column() {
-        Text('N G A')
-          .fontSize(28)
-          .fontWeight(FontWeight.Bold)
-          .letterSpacing(12)
-          .margin({ top: 120, bottom: 50 })
-
-      TextInput({ placeholder: '用户名', text: this.username })
-        .width('85%')
-        .height(48)
-        .fontSize(17)
-        .backgroundColor(AppColors.bgSecondary)
-        .borderRadius(10)
-        .padding({ left: 16, right: 16 })
-        .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-        .onChange((value: string) => {
-          this.username = value
-        })
-
-      TextInput({ placeholder: '密码', text: this.password })
-        .type(InputType.Password)
-        .width('85%')
-        .height(48)
-        .fontSize(17)
-        .backgroundColor(AppColors.bgSecondary)
-        .borderRadius(10)
-        .padding({ left: 16, right: 16 })
-        .margin({ top: 12 })
-        .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-        .onChange((value: string) => {
-          this.password = value
-        })
-
-      if (this.loginToken) {
-        Text('输入图形验证码(6字符)')
-          .fontSize(13)
-          .fontColor(AppColors.textTertiary)
-          .margin({ top: 16 })
-
-        Row() {
-          TextInput({ placeholder: '验证码', text: this.captcha })
-            .layoutWeight(1)
-            .height(46)
-            .fontSize(17)
-            .backgroundColor(AppColors.bgSecondary)
-            .borderRadius(10)
-            .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-            .padding({ left: 16, right: 16 })
-            .maxLength(6)
-            .onChange((value: string) => {
-              this.captcha = value
+      Scroll() {
+        Column() {
+          Text('L N G A')
+            .fontSize(28)
+            .fontWeight(FontWeight.Bold)
+            .letterSpacing(12)
+            .margin({
+              top: this.currentBreakpoint === 'sm' ? 96 : 48,
+              bottom: this.currentBreakpoint === 'sm' ? 48 : 32
             })
 
-          if (this.captchaImage) {
-            Image(this.captchaImage)
-              .width(120)
-              .height(46)
-              .borderRadius(10)
+          Column() {
+            TextInput({ placeholder: '用户名', text: this.username })
+              .width('100%')
+              .height(48)
+              .fontSize(17)
               .backgroundColor(AppColors.bgSecondary)
-              .objectFit(ImageFit.Contain)
-              .margin({ left: 8 })
-              .onClick(() => {
-                this.refreshCaptcha()
+              .borderRadius(10)
+              .padding({ left: 16, right: 16 })
+              .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+              .onChange((value: string) => {
+                this.username = value
               })
+
+            TextInput({ placeholder: '密码', text: this.password })
+              .type(InputType.Password)
+              .width('100%')
+              .height(48)
+              .fontSize(17)
+              .backgroundColor(AppColors.bgSecondary)
+              .borderRadius(10)
+              .padding({ left: 16, right: 16 })
+              .margin({ top: 12 })
+              .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+              .onChange((value: string) => {
+                this.password = value
+              })
+
+            if (this.loginToken) {
+              Text('输入图形验证码(6字符)')
+                .width('100%')
+                .fontSize(13)
+                .fontColor(AppColors.textTertiary)
+                .margin({ top: 16 })
+
+              Row() {
+                TextInput({ placeholder: '验证码', text: this.captcha })
+                  .layoutWeight(1)
+                  .height(46)
+                  .fontSize(17)
+                  .backgroundColor(AppColors.bgSecondary)
+                  .borderRadius(10)
+                  .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+                  .padding({ left: 16, right: 16 })
+                  .maxLength(6)
+                  .onChange((value: string) => {
+                    this.captcha = value
+                  })
+
+                if (this.captchaImage) {
+                  Image(this.captchaImage)
+                    .width(120)
+                    .height(46)
+                    .borderRadius(10)
+                    .backgroundColor(AppColors.bgSecondary)
+                    .objectFit(ImageFit.Contain)
+                    .margin({ left: 8 })
+                    .onClick(() => {
+                      this.refreshCaptcha()
+                    })
+                }
+              }
+              .width('100%')
+              .margin({ top: 12 })
+            }
+
+            if (this.error) {
+              Text(this.error)
+                .width('100%')
+                .fontSize(13)
+                .fontColor(AppColors.destructive)
+                .margin({ top: 12 })
+                .textAlign(TextAlign.Center)
+            }
+
+            Button(this.loading ? '...' : (this.loginToken ? '继 续' : '登 录'))
+              .width('100%')
+              .height(50)
+              .fontSize(17)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(AppColors.white)
+              .backgroundColor(AppColors.primary)
+              .borderRadius(12)
+              .margin({ top: 20 })
+              .enabled(!this.loading && !this.importing)
+              .onClick(() => {
+                this.handleLogin()
+              })
+
+            Row() {
+              Divider().layoutWeight(1).color(AppColors.separator)
+              Text('或').fontSize(11).fontColor(AppColors.textTertiary).padding({ left: 8, right: 8 })
+              Divider().layoutWeight(1).color(AppColors.separator)
+            }
+            .width('100%')
+            .margin({ top: 24, bottom: 24 })
+
+            Button(this.importing ? '...' : '导入凭据文件')
+              .width('100%')
+              .height(50)
+              .fontSize(17)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(AppColors.primary)
+              .backgroundColor(Color.Transparent)
+              .borderRadius(12)
+              .borderWidth(1.5)
+              .borderColor(AppColors.primary)
+              .enabled(!this.loading && !this.importing)
+              .onClick(() => {
+                this.handleImport()
+              })
+
+            Button('通过网页登录')
+              .width('100%')
+              .height(50)
+              .fontSize(17)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(AppColors.primary)
+              .backgroundColor(Color.Transparent)
+              .borderRadius(12)
+              .borderWidth(1.5)
+              .borderColor(AppColors.primary)
+              .enabled(!this.loading && !this.importing && !this.webLoginLoading)
+              .onClick(() => {
+                this.openWebLogin()
+              })
+              .margin({ top: 12 })
           }
+          .width('100%')
+          .constraintSize({ maxWidth: 480 })
+          .padding({ left: 24, right: 24 })
         }
-        .width('85%')
-        .margin({ top: 12 })
-      }
-
-      if (this.error) {
-        Text(this.error)
-          .fontSize(13)
-          .fontColor(AppColors.destructive)
-          .margin({ top: 12 })
-          .textAlign(TextAlign.Center)
-      }
-
-      Button(this.loading ? '...' : (this.loginToken ? '继 续' : '登 录'))
-        .width('85%')
-        .height(50)
-        .fontSize(17)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(AppColors.white)
-        .backgroundColor(AppColors.primary)
-        .borderRadius(12)
-        .margin({ top: 20 })
-        .enabled(!this.loading && !this.importing)
-        .onClick(() => {
-          this.handleLogin()
-        })
-
-      Row() {
-        Divider().layoutWeight(1).color(AppColors.separator)
-        Text('或').fontSize(11).fontColor(AppColors.textTertiary).padding({ left: 8, right: 8 })
-        Divider().layoutWeight(1).color(AppColors.separator)
-      }
-      .width('85%')
-      .margin({ top: 24, bottom: 24 })
-
-      Button(this.importing ? '...' : '导入凭据文件')
-        .width('85%')
-        .height(50)
-        .fontSize(17)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(AppColors.primary)
-        .backgroundColor(Color.Transparent)
-        .borderRadius(12)
-        .borderWidth(1.5)
-        .borderColor(AppColors.primary)
-        .enabled(!this.loading && !this.importing)
-        .onClick(() => {
-          this.handleImport()
-        })
-
-      Button('通过网页登录')
-        .width('85%')
-        .height(50)
-        .fontSize(17)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(AppColors.primary)
-        .backgroundColor(Color.Transparent)
-        .borderRadius(12)
-        .borderWidth(1.5)
-        .borderColor(AppColors.primary)
-        .enabled(!this.loading && !this.importing && !this.webLoginLoading)
-        .onClick(() => {
-          this.openWebLogin()
-        })
-        .margin({ top: 12 })
+        .width('100%')
+        .alignItems(HorizontalAlign.Center)
+        .padding({ bottom: 32 + this.navBarHeight })
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(AppColors.bgSecondary)
       .padding({ top: this.statusBarHeight })
-      .alignItems(HorizontalAlign.Center)
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring)
+      .backgroundColor(AppColors.bg)
 
       if (this.showWebLogin) {
         Stack() {
@@ -197,15 +244,21 @@ struct LoginPage {
                 .backgroundColor(Color.Transparent)
                 .onClick(() => { this.closeWebLogin() })
             }
-            .width('100%').height(48).padding({ left: 16, right: 16 })
-            .margin({ top: this.statusBarHeight })
+            .width('100%')
+            .height(48 + this.statusBarHeight)
+            .padding({ left: 16, right: 16, top: this.statusBarHeight })
 
             Web({ src: this.loginDomain + '/nuke.php?__lib=login&__act=account&login', controller: this.webController })
-              .layoutWeight(1).width('100%')
+              .width('100%')
+              .layoutWeight(1)
               .javaScriptAccess(true)
               .domStorageAccess(true)
+              .metaViewport(true)
+              .overviewModeAccess(true)
               .onControllerAttached(() => {
-                this.webController.setCustomUserAgent('Mozilla/5.0 (Linux; Android 10; HarmonyOS) AppleWebKit/537.36')
+                this.webController.setCustomUserAgent(
+                  'Mozilla/5.0 (Linux; Android 10; HarmonyOS) AppleWebKit/537.36 Mobile Safari/537.36'
+                )
               })
               .onPageEnd(() => { this.startCookiePolling() })
               .onConsole((event) => {
@@ -220,15 +273,16 @@ struct LoginPage {
                         this.authTriggered = true
                         this.handleWebLoginResult(String(data['uid']), String(data['token']))
                       }
-                    } catch (e) {
-                      // ignore parse error
+                    } catch (_error) {
                     }
                   }
                 }
                 return false
               })
           }
-          .width('100%').height('100%')
+          .width('100%')
+          .height('100%')
+          .padding({ bottom: this.navBarHeight })
 
           if (this.webLoginLoading) {
             Column() {
@@ -240,11 +294,14 @@ struct LoginPage {
           }
         }
         .backgroundColor(Color.White)
+        .width('100%')
+        .height('100%')
       }
     }
     .width('100%').height('100%')
   }
 
+  /** 使用账号密码或验证码继续登录。 */
   private async handleLogin(): Promise<void> {
     this.error = ''
 
@@ -298,6 +355,7 @@ struct LoginPage {
     }
   }
 
+  /** 选择并导入加密凭据文件。 */
   private async handleImport(): Promise<void> {
     this.error = ''
 
@@ -352,6 +410,7 @@ struct LoginPage {
     }
   }
 
+  /** 解密并验证已经选择的凭据文件。 */
   private async importEncryptedCredential(password: string): Promise<void> {
     this.error = ''
     this.importing = true
@@ -374,6 +433,7 @@ struct LoginPage {
     }
   }
 
+  /** 刷新图形验证码。 */
   private async refreshCaptcha(): Promise<void> {
     const gen: number = this.scope.begin()
     try {
@@ -387,11 +447,11 @@ struct LoginPage {
         this.captchaImage = result.captchaImage
         this.captcha = ''
       }
-    } catch (e) {
-      // ignore
+    } catch (_error) {
     }
   }
 
+  /** 打开响应式网页登录层。 */
   private openWebLogin(): void {
     this.error = ''
     this.loginDomain = getActiveDomain()
@@ -399,11 +459,13 @@ struct LoginPage {
     this.showWebLogin = true
   }
 
+  /** 关闭网页登录层并停止 Cookie 轮询。 */
   private closeWebLogin(): void {
     this.stopCookiePolling()
     this.showWebLogin = false
   }
 
+  /** 开始轮询网页登录 Cookie。 */
   private startCookiePolling(): void {
     if (this.pollingActive) {
       return
@@ -412,6 +474,7 @@ struct LoginPage {
     this.scheduleCookieCheck()
   }
 
+  /** 安排下一次网页登录 Cookie 检查。 */
   private scheduleCookieCheck(): void {
     if (!this.pollingActive || !this.showWebLogin || this.authTriggered) {
       return
@@ -455,6 +518,7 @@ struct LoginPage {
     }
   }
 
+  /** 停止网页登录 Cookie 轮询。 */
   private stopCookiePolling(): void {
     this.pollingActive = false
     if (this.cookiePollTimer !== -1) {
@@ -463,6 +527,7 @@ struct LoginPage {
     }
   }
 
+  /** 验证网页登录凭据并进入主页面。 */
   private async handleWebLoginResult(uid: string, cid: string): Promise<void> {
     this.webLoginLoading = true
     try {
@@ -485,6 +550,7 @@ struct LoginPage {
     }
   }
 
+  /** 结束页面异步会话并释放登录过程资源。 */
   aboutToDisappear(): void {
     this.scope.end()
     this.stopCookiePolling()
