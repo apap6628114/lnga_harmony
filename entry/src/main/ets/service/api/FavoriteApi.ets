@@ -3,7 +3,7 @@
  */
 
 import { ngaClient } from '../NgaClient';
-import { appStore } from '../../store/AppStore';
+import { sessionRegistry } from '../../store/SessionRegistry';
 import { parseNgaError } from '../../parser/ErrorParser';
 import {
   ApiResult, VoteResult, CheckinResult, FavBoardItem, ForumFavoritesResult,
@@ -16,7 +16,7 @@ import { getFavoriteResponseData, parseFavoriteTopicFolders } from '../../parser
 
 export async function fetchForumFavorites(token: string): Promise<ForumFavoritesResult> {
   const result = new ForumFavoritesResult()
-  const session = appStore.getSession(token)
+  const session = sessionRegistry.getSession(token)
   if (!session) {
     result.error = '未登录'
     return result
@@ -55,7 +55,7 @@ export async function fetchForumFavorites(token: string): Promise<ForumFavorites
 
 export async function votePost(token: string, tid: number, pid: number, value: number): Promise<VoteResult> {
   const result = new VoteResult();
-  const session = appStore.getSession(token);
+  const session = sessionRegistry.getSession(token);
   if (!session) {
     result.error = '未登录';
     return result;
@@ -98,7 +98,7 @@ export async function votePost(token: string, tid: number, pid: number, value: n
  */
 export async function fetchFavoriteTopicFolders(token: string): Promise<FavoriteFolderListResult> {
   const result: FavoriteFolderListResult = new FavoriteFolderListResult()
-  const session = appStore.getSession(token)
+  const session = sessionRegistry.getSession(token)
   if (!session) {
     result.error = '未登录'
     return result
@@ -136,7 +136,7 @@ export async function fetchFavoriteTopicFolders(token: string): Promise<Favorite
 export async function createFavoriteTopicFolder(token: string, name: string,
   setDefault: boolean = false): Promise<FavoriteFolderCreateResult> {
   const result: FavoriteFolderCreateResult = new FavoriteFolderCreateResult()
-  const session = appStore.getSession(token)
+  const session = sessionRegistry.getSession(token)
   const normalizedName: string = name.trim()
   if (!session) {
     result.error = '未登录'
@@ -189,7 +189,7 @@ export async function createFavoriteTopicFolder(token: string, name: string,
 async function mutateFavoriteTopicFolder(token: string, folderId: string,
   action: string, fields: Record<string, string>): Promise<ApiResult> {
   const result: ApiResult = new ApiResult()
-  const session = appStore.getSession(token)
+  const session = sessionRegistry.getSession(token)
   if (!session) {
     result.error = '未登录'
     return result
@@ -281,7 +281,7 @@ export async function mutateTopicFavorite(token: string, topicId: string, folder
   const result: TopicFavoriteResult = new TopicFavoriteResult()
   result.folderId = folderId
   result.favored = operation === TopicFavoriteOperation.ADD
-  const session = appStore.getSession(token)
+  const session = sessionRegistry.getSession(token)
   if (!session) {
     result.error = '未登录'
     return result
@@ -319,7 +319,7 @@ export async function mutateTopicFavorite(token: string, topicId: string, folder
 
 export async function checkin(token: string): Promise<CheckinResult> {
   const result = new CheckinResult();
-  const session = appStore.getSession(token);
+  const session = sessionRegistry.getSession(token);
   if (!session) {
     result.error = '未登录';
     return result;

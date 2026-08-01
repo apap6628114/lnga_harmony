@@ -1,6 +1,8 @@
 import { BaseStore } from './BaseStore'
 import { PreferencesStore } from '../common/infra/PreferencesStore'
 import { SerialQueue } from '../common/infra/SerialQueue'
+import { sessionRegistry } from './SessionRegistry'
+import type { Session } from './SessionRegistry'
 
 import { Logger, DOMAIN_STORE } from '../common/utils/Logger'
 
@@ -15,15 +17,6 @@ export class AuthState {
   avatarUrl: string = ''
   isAuthenticated: boolean = false
   initialized: boolean = false
-}
-
-/** 登录会话 */
-export interface Session {
-  uid: string
-  cid: string
-  nickName: string
-  avatarUrl: string
-  createdAt: number
 }
 
 class PersistedAuth {
@@ -41,7 +34,6 @@ const SESSION_KEY: string = 'sessions'
  */
 export class AuthStore extends BaseStore<AuthState> {
   override state: AuthState = new AuthState()
-  private sessions: Map<string, Session> = new Map()
   private sessionsDirty: boolean = false
 
   async init(store: PreferencesStore, queue: SerialQueue): Promise<void> {
@@ -66,7 +58,7 @@ export class AuthStore extends BaseStore<AuthState> {
 
   clearAuth(): void {
     if (this.state.token) {
-      this.sessions.delete(this.state.token)
+      sessionRegistry.deleteSession(this.state.token)
       this.sessionsDirty = true
       this.persistSessions(true)
     }
@@ -120,19 +112,19 @@ export class AuthStore extends BaseStore<AuthState> {
         avatarUrl: String(sessionObj['avatarUrl'] ?? ''),
         createdAt: Number(sessionObj['createdAt'] ?? 0),
       }
-      this.sessions.set(token, session)
+      sessionRegistry.setSession(token, session)
     }
     this.cleanupSessions()
-    logger.info('Sessions loaded: %{public}d', this.sessions.size)
+    logger.info('Sessions loaded: %{public}d', sessionRegistry.getSize())
   }
 
   private persistSessions(immediate: boolean = false): void {
     if (!this.sessionsDirty) return
     this.sessionsDirty = false
     const entries: Array<Array<Object>> = []
-    const keys = Array.from(this.sessions.keys())
+    const keys: string[] = sessionRegistry.getTokens()
     for (const key of keys) {
-      const session = this.sessions.get(key)
+      const session: Session | null = sessionRegistry.getSession(key)
       if (session) {
         entries.push([key, session])
       }
@@ -144,18 +136,19 @@ export class AuthStore extends BaseStore<AuthState> {
 
   async createSession(uid: string, cid: string, nickName: string, avatarUrl: string): Promise<string> {
     const token = this.generateToken()
-    this.sessions.set(token, { uid, cid, nickName, avatarUrl, createdAt: Date.now() })
+    const session: Session = { uid, cid, nickName, avatarUrl, createdAt: Date.now() }
+    sessionRegistry.setSession(token, session)
     this.sessionsDirty = true
     this.persistSessions(true)
     return token
   }
 
   getSession(token: string): Session | null {
-    return this.sessions.get(token) ?? null
+    return sessionRegistry.getSession(token)
   }
 
   async updateSession(token: string, nickName?: string, avatarUrl?: string): Promise<void> {
-    const session = this.sessions.get(token)
+    const session: Session | null = sessionRegistry.getSession(token)
     if (!session) return
     if (nickName !== undefined) session.nickName = nickName
     if (avatarUrl !== undefined) session.avatarUrl = avatarUrl
@@ -164,7 +157,7 @@ export class AuthStore extends BaseStore<AuthState> {
   }
 
   async destroySession(token: string): Promise<void> {
-    if (this.sessions.delete(token)) {
+    if (sessionRegistry.deleteSession(token)) {
       this.sessionsDirty = true
       this.persistSessions(true)
     }
@@ -173,11 +166,14 @@ export class AuthStore extends BaseStore<AuthState> {
   private cleanupSessions(): void {
     const now = Date.now()
     let changed = false
-    const keys = Array.from(this.sessions.keys())
+    const keys: string[] = sessionRegistry.getTokens()
     for (const token of keys) {
-      const session = this.sessions.get(token)!
+      const session: Session | null = sessionRegistry.getSession(token)
+      if (session === null) {
+        continue
+      }
       if (now - session.createdAt > SESSION_MAX_AGE) {
-        this.sessions.delete(token)
+        sessionRegistry.deleteSession(token)
         changed = true
       }
     }

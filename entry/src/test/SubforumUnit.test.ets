@@ -8,6 +8,7 @@ import type { TopicListInfo } from '../main/ets/model/Topic'
  * @returns NGA 主题列表响应
  */
 function createSubforumResponse(): Record<string, Object> {
+  const emptyTopics: Object = JSON.parse('{}')
   const selectedFid: Record<string, Object> = {
     '0': '310',
     '1': '已显示子版块',
@@ -38,7 +39,7 @@ function createSubforumResponse(): Record<string, Object> {
     'sub_forums': subForums,
   }
   const data: Record<string, Object> = {
-    '__T': {},
+    '__T': emptyTopics,
     '__ROWS': 0,
     '__T__ROWS_PAGE': 35,
     '__F': forum,

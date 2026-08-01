@@ -29,14 +29,10 @@ class FavoriteStoreProbe extends FavoriteStore {
 export default function favoriteUnitTest(): void {
   describe('favoriteParser', (): void => {
     it('parsesAndSortsDefaultFolderFirst', 0, (): void => {
-      const folders: FavoriteTopicFolder[] = parseFavoriteTopicFolders({
-        data: {
-          '0': {
-            '8': { id: '8', name: '攻略', length: 12 },
-            '3': { id: '3', name: '默认收藏', length: 4, default: 1 }
-          }
-        }
-      })
+      const raw: object = JSON.parse(
+        '{"data":{"0":{"8":{"id":"8","name":"攻略","length":12},' +
+          '"3":{"id":"3","name":"默认收藏","length":4,"default":1}}}}')
+      const folders: FavoriteTopicFolder[] = parseFavoriteTopicFolders(raw)
       expect(folders.length).assertEqual(2)
       expect(folders[0].id).assertEqual('3')
       expect(folders[0].isDefault).assertTrue()
@@ -45,32 +41,25 @@ export default function favoriteUnitTest(): void {
     })
 
     it('usesContainerKeyWhenFolderIdIsMissing', 0, (): void => {
-      const folders: FavoriteTopicFolder[] = parseFavoriteTopicFolders({
-        data: {
-          '0': {
-            '17': { name: '稍后阅读', length: 2 }
-          }
-        }
-      })
+      const raw: object = JSON.parse(
+        '{"data":{"0":{"17":{"name":"稍后阅读","length":2}}}}')
+      const folders: FavoriteTopicFolder[] = parseFavoriteTopicFolders(raw)
       expect(folders.length).assertEqual(1)
       expect(folders[0].id).assertEqual('17')
       expect(folders[0].isDefault).assertFalse()
     })
 
     it('returnsEmptyListForMalformedPayload', 0, (): void => {
-      const folders: FavoriteTopicFolder[] = parseFavoriteTopicFolders({ data: { '0': 'invalid' } })
+      const raw: object = JSON.parse('{"data":{"0":"invalid"}}')
+      const folders: FavoriteTopicFolder[] = parseFavoriteTopicFolders(raw)
       expect(folders.length).assertEqual(0)
     })
 
     it('normalizesInvalidTopicCount', 0, (): void => {
-      const folders: FavoriteTopicFolder[] = parseFavoriteTopicFolders({
-        data: {
-          '0': {
-            '3': { id: '3', name: '默认收藏', length: 'invalid', default: 1 },
-            '8': { id: '8', name: '攻略', length: -2 }
-          }
-        }
-      })
+      const raw: object = JSON.parse(
+        '{"data":{"0":{"3":{"id":"3","name":"默认收藏","length":"invalid","default":1},' +
+          '"8":{"id":"8","name":"攻略","length":-2}}}}')
+      const folders: FavoriteTopicFolder[] = parseFavoriteTopicFolders(raw)
       expect(folders[0].topicCount).assertEqual(0)
       expect(folders[1].topicCount).assertEqual(0)
     })

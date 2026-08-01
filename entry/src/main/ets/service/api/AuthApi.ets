@@ -5,7 +5,7 @@
 
 import { ngaClient } from '../NgaClient';
 import { appStore } from '../../store/AppStore';
-import type { Session } from '../../store/AuthStore';
+import type { Session } from '../../store/SessionRegistry';
 import { parseNgaError } from '../../parser/ErrorParser';
 import {
   CaptchaResult, LoginStep1Result, LoginStep2Result,
