@@ -460,7 +460,7 @@ export struct CommunityPanel {
             }
           }, (fav: FavBoard) => fav.fid.toString())
         }
-        .width('100%').height('100%')
+        .width('100%').layoutWeight(1)
         .divider({ strokeWidth: 0.5, color: AppColors.separator })
         .scrollBar(BarState.Off)
       }
@@ -522,7 +522,7 @@ export struct CommunityPanel {
                 }
               }, (board: BoardContent) => board.fid.toString())
             }
-            .width('100%').height('100%')
+            .width('100%').layoutWeight(1)
             .divider({ strokeWidth: 0.5, color: AppColors.separator })
             .scrollBar(BarState.Off)
           } else {
