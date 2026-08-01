@@ -59,6 +59,7 @@ export type ScreenType =
   | 'ttsSettings'
   | 'aiSettings'
   | 'fontSizeSettings'
+  | 'favoriteFolders'
 
 export class Screen {
   type: ScreenType = 'thread'
@@ -74,6 +75,8 @@ export class Screen {
   topicListAuthorid: string = ''
   topicListFavor: string = ''
   topicListSearchpost: string = ''
+  /** 进入收藏夹选择模式时对应的 NGA 主题 ID。 */
+  favoriteTopicId: string = ''
   webviewUrl: string = ''
 
   static webview(url: string): Screen {
@@ -168,6 +171,19 @@ export class Screen {
     return s
   }
 
+  /**
+   * 创建收藏夹管理或主题归档选择页面。
+   *
+   * @param topicId - 需要选择收藏夹的 NGA 主题 ID；为空时进入管理模式
+   * @returns 收藏夹页面路由
+   */
+  static favoriteFolders(topicId: string = ''): Screen {
+    const s = new Screen()
+    s.type = 'favoriteFolders'
+    s.favoriteTopicId = topicId
+    return s
+  }
+
   static topicList(
     name: string, fid: number = 0,
     authorid: string = '', favor: string = '',
@@ -200,6 +216,7 @@ export class Screen {
       case 'ttsSettings': return '语音朗读'
       case 'aiSettings': return 'AI 配置'
       case 'fontSizeSettings': return '字体大小'
+      case 'favoriteFolders': return this.favoriteTopicId.length > 0 ? '收藏到…' : '收藏主题'
       default: return ''
     }
   }

@@ -8,6 +8,7 @@ import { ProfileStore } from './ProfileStore'
 import { NotificationStore } from './NotificationStore'
 import { VoteStore } from './VoteStore'
 import { HistoryStore } from './HistoryStore'
+import { FavoriteStore } from './FavoriteStore'
 import { floatingLayerStore } from './FloatingLayerStore'
 import { ToastManager } from '../common/feedback/ToastManager'
 
@@ -51,6 +52,8 @@ class AppStoreClass {
   readonly notificationStore: NotificationStore = new NotificationStore()
   readonly voteStore: VoteStore = new VoteStore()
   readonly historyStore: HistoryStore = new HistoryStore()
+  /** NGA 主题收藏夹与收藏关系状态。 */
+  readonly favoriteStore: FavoriteStore = new FavoriteStore()
   readonly toastManager: ToastManager = new ToastManager()
 
   // ============== Init & Lifecycle ==============
@@ -102,6 +105,7 @@ class AppStoreClass {
     await this.settingsStore.init(this.store, this.writeQueue, this.authStore.state, this.context)
     await this.profileStore.init(this.store, this.writeQueue, this.authStore.state)
     await this.notificationStore.init(this.store, this.writeQueue, this.authStore.state)
+    await this.favoriteStore.init(this.store, this.writeQueue, this.authStore.state)
   }
 
   /** 后台时刷盘 */
@@ -141,6 +145,7 @@ class AppStoreClass {
     this.notificationStore.reset()
     this.voteStore.reset()
     this.historyStore.reset()
+    this.favoriteStore.reset()
     floatingLayerStore.clear()
     routerStore.reset()
   }

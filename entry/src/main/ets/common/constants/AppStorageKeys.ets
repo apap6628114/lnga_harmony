@@ -52,6 +52,12 @@ export const KEY_CAT_VERSION: string = 'catVersion'
 /** 收藏板块版本号（变更时 +1 触发 @Watch） */
 export const KEY_FAV_VERSION: string = 'favVersion'
 
+/** 主题收藏夹列表版本号（变更时 +1 触发 @Watch）。 */
+export const KEY_FAVORITE_FOLDER_VERSION: string = 'favoriteFolderVersion'
+
+/** 主题与收藏夹成员关系版本号（变更时 +1 触发 @Watch）。 */
+export const KEY_FAVORITE_TOPIC_VERSION: string = 'favoriteTopicVersion'
+
 /** 黑名单版本号（变更时 +1，触发列表与帖子内容实时刷新）。 */
 export const KEY_BLACKLIST_VERSION: string = 'blacklistVersion'
 

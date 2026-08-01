@@ -16,6 +16,7 @@ import { TopicListPanel } from './TopicListPanel'
 import { WebViewPanel } from './WebViewPanel'
 import { AiSettingsPanel } from './ai/AiSettingsPanel'
 import { FontSizeSettingsPanel } from './FontSizeSettingsPanel'
+import { FavoriteFoldersPanel } from './FavoriteFoldersPanel'
 import { TtsPlayer } from '../common/media/TtsPlayer'
 
 @Component
@@ -83,11 +84,13 @@ export struct ActivityRouter {
             TopicListPanel({
               boardFid: entry.screen.topicListFid,
               boardName: entry.screen.topicListName,
-              isFavorites: entry.screen.topicListFavor === '1',
+              isFavorites: entry.screen.topicListFavor.length > 0,
               authorid: entry.screen.topicListAuthorid,
               favor: entry.screen.topicListFavor,
               searchpost: entry.screen.topicListSearchpost
             })
+          } else if (entry.screen.type === 'favoriteFolders') {
+            FavoriteFoldersPanel({ topicId: entry.screen.favoriteTopicId })
           } else if (entry.screen.type === 'profile') {
             ProfilePanel({ uid: entry.screen.uid })
           } else if (entry.screen.type === 'ttsSettings') {

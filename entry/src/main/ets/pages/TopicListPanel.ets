@@ -10,7 +10,6 @@ import { appStore } from '../store/AppStore'
 import { routerStore, Screen } from '../store/RouterStore'
 import { withTimeout } from '../common/utils/TimeoutUtils'
 import { getTopicList, createTopicListParams, setSubforumFilter } from '../service/api/ForumApi'
-import { removeFavorite } from '../service/api/FavoriteApi'
 import type { TopicListParams } from '../service/api/ForumApi'
 import type { TopicListResult } from '../model/NgaApiResults'
 import type { SubBoard } from '../model/Forum'
@@ -29,6 +28,7 @@ import {
   ReadingLineHeightRole,
   ReadingTypography
 } from '../common/typography/ReadingTypography'
+import { AuthScope } from '../store/AuthScope'
 
 const logger = new Logger(DOMAIN_UI, 'TopicListPanel')
 
@@ -86,6 +86,11 @@ export struct TopicListPanel {
   @State updatingSubBoardFilterId: string = ''
   /** 收藏板块版本号，用于响应现有收藏功能的变更。 */
   @StorageProp('favVersion') favVersion: number = 0
+  /** 主题收藏关系版本号。 */
+  @StorageProp('favoriteTopicVersion') @Watch('onFavoriteTopicVersionChange')
+  favoriteTopicVersion: number = 0
+  /** 当前收藏夹已经处理的服务端 mutation 版本。 */
+  private handledFavoriteMutationVersion: number = 0
 
   private scroller: Scroller = new Scroller()
 
@@ -124,6 +129,10 @@ export struct TopicListPanel {
 
   aboutToAppear(): void {
     this.showSort = !this.authorid && !this.favor
+    if (this.favor.length > 0) {
+      this.handledFavoriteMutationVersion = appStore.favoriteStore.getFolderMutationVersion(this.favor)
+      appStore.favoriteStore.ensureFolders()
+    }
     this.loadTopics(1)
     appStore.refreshUnreadCount()
     appStore.settingsStore.ensureFavorites()
@@ -147,6 +156,37 @@ export struct TopicListPanel {
     this.updatingSubBoardFilterId = ''
     this.showSort = !this.authorid && !this.favor
     this.loadTopics(1)
+  }
+
+  /**
+   * 响应其他页面完成的服务端主题收藏关系变更。
+   */
+  private onFavoriteTopicVersionChange(): void {
+    if (this.favor.length === 0) {
+      return
+    }
+    const mutationVersion: number = appStore.favoriteStore.getFolderMutationVersion(this.favor)
+    if (mutationVersion <= this.handledFavoriteMutationVersion) {
+      return
+    }
+    this.handledFavoriteMutationVersion = mutationVersion
+    this.loadTopics(1)
+  }
+
+  /**
+   * 从当前收藏列表及其 LazyForEach 数据源中立即移除主题。
+   *
+   * @param topicId - NGA 主题 ID
+   */
+  private removeTopicFromCurrentList(topicId: string): void {
+    this.mgr.clearPrefetchedPages()
+    const filtered: object[] = this.mgr.threads.filter((topic: object): boolean =>
+      String((topic as Record<string, Object>)['tid'] ?? '') !== topicId)
+    if (filtered.length === this.mgr.threads.length) {
+      return
+    }
+    this.mgr.threads = filtered
+    this.threadsDataSource.replaceAll(filtered)
   }
 
   /**
@@ -277,7 +317,7 @@ export struct TopicListPanel {
     const params: TopicListParams = createTopicListParams()
     params.page = String(page)
     if (this.isFavorites || this.favor) {
-      params.favor = '1'
+      params.favor = this.favor || '1'
     } else {
       if (this.boardFid) params.fid = String(this.boardFid)
       if (this.boardStid) params.stid = this.boardStid
@@ -294,6 +334,27 @@ export struct TopicListPanel {
       }
     }
     return params
+  }
+
+  /**
+   * 将收藏夹列表响应中的主题登记到运行期成员关系缓存。
+   *
+   * @param topics - 当前收藏夹响应中的主题列表
+   * @param folderId - 该响应所属的收藏夹 ID
+   */
+  private recordFavoriteTopics(topics: object[], folderId: string = this.favor): void {
+    if (folderId.length === 0) {
+      return
+    }
+    const topicIds: string[] = []
+    for (let i = 0; i < topics.length; i++) {
+      const topic: Record<string, Object> = topics[i] as Record<string, Object>
+      const topicId: string = String(topic['tid'] ?? '')
+      if (topicId.length > 0) {
+        topicIds.push(topicId)
+      }
+    }
+    appStore.favoriteStore.recordTopicMemberships(topicIds, folderId, true)
   }
 
 
@@ -413,6 +474,8 @@ export struct TopicListPanel {
 
   private async loadTopics(page: number): Promise<void> {
     const gen: number = this.mgr.nextGeneration()
+    const authScope: AuthScope = AuthScope.capture(appStore.auth, 0)
+    const favoriteFolderId: string = this.favor
     if (page === 1) {
       this.isLoading = true
       this.loadingContentOpacity = 0
@@ -443,9 +506,11 @@ export struct TopicListPanel {
       const result: TopicListResult = await withTimeout<TopicListResult>(
         getTopicList(appStore.auth.token, params, appStore.settingsStore.getBlacklistIds(),
           appStore.settingsStore.getEnabledKeywords()), 15000)
-      if (gen !== this.mgr.getGeneration()) return
+      if (gen !== this.mgr.getGeneration() || this.favor !== favoriteFolderId ||
+        !authScope.isCurrent(appStore.auth, 0)) return
       if (result.ok && result.data) {
         const list: object[] = result.data.threadPageList
+        this.recordFavoriteTopics(list, favoriteFolderId)
         if (page === 1) {
           this.subBoards = this.canManageCurrentBoard() ? result.data.subBoardList : []
           this.mgr.replaceWith(list, page, result.data.pagination.totalPages)
@@ -519,6 +584,8 @@ export struct TopicListPanel {
   private async startPrefetch(pages: number[]): Promise<void> {
     this.mgr.prefetchInProgress = true
     const gen: number = this.mgr.getGeneration()
+    const favoriteFolderId: string = this.favor
+    const authScope: AuthScope = AuthScope.capture(appStore.auth, 0)
     try {
       const fetchResults: PrefetchPageResult[] = []
       const promises: Promise<void>[] = []
@@ -545,9 +612,11 @@ export struct TopicListPanel {
         )
       }
       await Promise.all(promises)
-      if (gen !== this.mgr.getGeneration()) return
+      if (gen !== this.mgr.getGeneration() || this.favor !== favoriteFolderId ||
+        !authScope.isCurrent(appStore.auth, 0)) return
       for (let i = 0; i < fetchResults.length; i++) {
         const r: PrefetchPageResult = fetchResults[i]
+        this.recordFavoriteTopics(r.threads, favoriteFolderId)
         this.mgr.setPrefetchedPage(r.page, r.threads, r.totalPages)
       }
     } catch (e) {
@@ -558,18 +627,28 @@ export struct TopicListPanel {
   }
 
   private async handleRemoveFav(tid: number): Promise<void> {
+    const generation: number = this.mgr.getGeneration()
+    const favorSnapshot: string = this.favor
+    const authScope: AuthScope = AuthScope.capture(appStore.auth, 0)
     try {
-      const result = await removeFavorite(appStore.auth.token, tid, 0, 1)
+      const folderId: string = favorSnapshot || '1'
+      appStore.favoriteStore.recordTopicMembership(String(tid), folderId, true)
+      const result = await appStore.favoriteStore.setTopicFavorite(String(tid), folderId, false)
+      if (generation !== this.mgr.getGeneration() || this.favor !== favorSnapshot ||
+        !authScope.isCurrent(appStore.auth, 0)) {
+        return
+      }
       if (result.ok) {
-        const filtered = this.mgr.threads.filter((t: object) => Number((t as Record<string, Object>)['tid']) !== tid)
-        this.mgr.threads = filtered
-        this.threadsDataSource.replaceAll(filtered)
+        this.removeTopicFromCurrentList(String(tid))
         appStore.showToast('已取消收藏')
       } else {
         appStore.showToast(result.error || '取消收藏失败')
       }
     } catch (e) {
-      appStore.showToast('取消收藏失败')
+      if (generation === this.mgr.getGeneration() && this.favor === favorSnapshot &&
+        authScope.isCurrent(appStore.auth, 0)) {
+        appStore.showToast('取消收藏失败')
+      }
     }
   }
 
@@ -630,10 +709,13 @@ export struct TopicListPanel {
               ListItem() {
                 TopicCardComponent({
                   thread: thread as Record<string, Object>,
-                  isFavorites: this.isFavorites,
+                  isFavorites: this.isFavorites || this.favor.length > 0,
                   onRemoveFav: (tid: number): void => { this.handleRemoveFav(tid) },
                   onCardClick: (tid: string): void => {
                     if (tid) {
+                      if (this.favor.length > 0) {
+                        appStore.favoriteStore.recordTopicMembership(tid, this.favor, true)
+                      }
                       routerStore.navigateActivity(Screen.thread(tid))
                     }
                   }

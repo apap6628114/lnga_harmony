@@ -7,11 +7,12 @@ import { taskpool } from '@kit.ArkTS'
 import { appStore } from '../store/AppStore'
 import { routerStore, Screen } from '../store/RouterStore'
 import { getThread } from '../service/api/ThreadApi'
-import { addFavorite, removeFavorite, votePost } from '../service/api/FavoriteApi'
+import { votePost } from '../service/api/FavoriteApi'
 import { getActiveDomain } from '../service/api/MiscApi'
 import type { ThreadResult, PostReplyResult } from '../model/ThreadResult'
 import type { PostInfo } from '../model/PostInfo'
 import type { VoteResult } from '../model/NgaApiResults'
+import { FavoriteMembershipState } from '../model/Favorite'
 import { getCachedBBNodes } from '../parser/bbcode/BBCodeCache'
 import { preWarmPosts } from '../common/utils/PostWarmup'
 import { AppColors, ThreadNavMode } from '../common/constants/Constants'
@@ -72,7 +73,9 @@ export struct ThreadPanel {
   @State isLoadingMore: boolean = false
   @State isLoadingPrevious: boolean = false
   @State authorOnly: boolean = false
-  @State favDone: boolean = false
+  @State favoriteState: FavoriteMembershipState = FavoriteMembershipState.UNKNOWN
+  /** 主题收藏关系变更版本号。 */
+  @StorageProp('favoriteTopicVersion') @Watch('onFavoriteTopicVersionChange') favoriteTopicVersion: number = 0
   @State threadSubject: string = '帖子'
   @State threadFid: number = 0
   @State threadAuthorId: string = ''
@@ -161,6 +164,8 @@ export struct ThreadPanel {
     if (this.threadTid) {
       this.loadPosts(initialPage, LOAD_REPLACE)
     }
+    this.syncFavoriteState()
+    appStore.favoriteStore.ensureFolders()
     this.loadPersistedVotes()
     this.startHoldingHandMonitoring()
   }
@@ -186,7 +191,7 @@ export struct ThreadPanel {
     this.isLoadingPrevious = false
     this.hasError = false
     this.authorOnly = false
-    this.favDone = false
+    this.syncFavoriteState()
     this.votedUpPids = new Set()
     this.votedDownPids = new Set()
     this.pageSwitchPending = false
@@ -199,6 +204,37 @@ export struct ThreadPanel {
    */
   private onBlacklistVersionChange(): void {
     applyBlacklistStateToPosts(this.mgr.posts, appStore.settingsStore.getBlacklistIds())
+  }
+
+  /**
+   * 响应主题收藏关系变化并刷新当前帖子收藏状态。
+   */
+  private onFavoriteTopicVersionChange(): void {
+    this.syncFavoriteState()
+  }
+
+  /**
+   * 从全局收藏 Store 同步当前帖子收藏状态。
+   */
+  private syncFavoriteState(): void {
+    this.favoriteState = this.threadTid.length > 0
+      ? appStore.favoriteStore.getTopicFavoriteState(this.threadTid)
+      : FavoriteMembershipState.UNKNOWN
+  }
+
+  /**
+   * 返回当前可信收藏状态对应的菜单文案。
+   *
+   * @returns 收藏操作菜单文案
+   */
+  private getFavoriteMenuLabel(): string {
+    if (this.favoriteState === FavoriteMembershipState.FAVORED) {
+      return '管理收藏'
+    }
+    if (this.favoriteState === FavoriteMembershipState.NOT_FAVORED) {
+      return '收藏到…'
+    }
+    return '收藏夹…'
   }
 
   /**
@@ -631,34 +667,15 @@ export struct ThreadPanel {
     }
   }
 
-  private async handleFavorite(): Promise<void> {
-    if (this.favDone || !this.threadTid) return
-    try {
-      const result = await addFavorite(appStore.auth.token, Number(this.threadTid), 0)
-      if (result.ok) {
-        this.favDone = true
-        appStore.showToast('收藏成功')
-      } else {
-        appStore.showToast(result.error || '收藏失败')
-      }
-    } catch (e) {
-      appStore.showToast('收藏失败')
+  /**
+   * 打开当前主题的收藏夹多选页面。
+   */
+  private openFavoriteFolders(): void {
+    if (this.threadTid.length === 0) {
+      return
     }
-  }
-
-  private async handleUnfavorite(): Promise<void> {
-    if (!this.favDone || !this.threadTid) return
-    try {
-      const result = await removeFavorite(appStore.auth.token, Number(this.threadTid), 0, 1)
-      if (result.ok) {
-        this.favDone = false
-        appStore.showToast('已取消收藏')
-      } else {
-        appStore.showToast(result.error || '取消收藏失败')
-      }
-    } catch (e) {
-      appStore.showToast('取消收藏失败')
-    }
+    this.showMoreMenu = false
+    routerStore.navigateActivity(Screen.favoriteFolders(this.threadTid))
   }
 
   private async handleVote(post: PostInfo, value: number): Promise<void> {
@@ -995,17 +1012,12 @@ export struct ThreadPanel {
 
           Column() {
             Column() {
-              Text(this.favDone ? '取消收藏' : '收藏帖子').fontSize(15)
+              Text(this.getFavoriteMenuLabel()).fontSize(15)
                 .fontColor(AppColors.textPrimary)
                 .padding({ left: 16, right: 16, top: 12, bottom: 12 })
                 .width('100%')
                 .onClick(() => {
-                  if (this.favDone) {
-                    this.handleUnfavorite()
-                  } else {
-                    this.handleFavorite()
-                  }
-                  this.showMoreMenu = false
+                  this.openFavoriteFolders()
                 })
             }
             .width('100%')

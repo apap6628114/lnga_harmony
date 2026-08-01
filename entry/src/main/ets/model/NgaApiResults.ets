@@ -7,6 +7,7 @@ import type { TopicListInfo } from './Topic';
 import type { NgaNotification } from './Notification';
 import type { ProfileData } from './User';
 import type { UserInfo } from './UserInfo';
+import type { FavoriteTopicFolder } from './Favorite';
 
 /**
  * API 调用的通用结果基类。
@@ -146,6 +147,40 @@ export interface FavBoardItem {
  */
 export class ForumFavoritesResult extends ApiResult {
   data: FavBoardItem[] = [];
+}
+
+/**
+ * 主题收藏夹列表结果。
+ */
+export class FavoriteFolderListResult extends ApiResult {
+  /**
+   * 当前账号的服务端收藏夹列表。
+   */
+  data: FavoriteTopicFolder[] = [];
+}
+
+/**
+ * 新建主题收藏夹结果。
+ */
+export class FavoriteFolderCreateResult extends ApiResult {
+  /**
+   * 新收藏夹的服务端 ID。
+   */
+  folderId: string = '';
+}
+
+/**
+ * 主题收藏关系变更结果。
+ */
+export class TopicFavoriteResult extends ApiResult {
+  /**
+   * 被操作的收藏夹 ID。
+   */
+  folderId: string = '';
+  /**
+   * 操作完成后主题是否位于该收藏夹。
+   */
+  favored: boolean = false;
 }
 
 /**
