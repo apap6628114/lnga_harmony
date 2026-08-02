@@ -30,6 +30,16 @@ import {
  * 以及表格/列表的结构化辅助解析。tryMatchBlock 按标签名快速分派到原块级 handler。
  */
 
+/**
+ * 块级解析结果，同时记录触发返回的边界标签。
+ */
+class BlockParseResult {
+  /** 已解析的语义节点。 */
+  nodes: BBNode[] = []
+  /** 已消费的边界标签；解析至正文末尾时为空字符串。 */
+  terminator: string = ''
+}
+
 /** 公共入口：预处理后从顶层解析块级节点。 */
 function parseBBCode(content: string): BBNode[] {
   if (!content) return []
@@ -191,18 +201,37 @@ function appendInlineSegment(segment: string, result: BBNode[], activeTags: stri
   }
 }
 
-/** 块级循环：只在真实块标签处分段，遇指定闭合标签时返回。 */
+/**
+ * 块级循环：只在真实块标签处分段，遇指定边界标签时返回。
+ *
+ * @param state 解析游标
+ * @param closePattern 可选的边界标签表达式
+ * @returns 当前层解析得到的语义节点
+ */
 function parseBlockNodes(state: ParseState, closePattern: RegExp | null): BBNode[] {
-  const result: BBNode[] = []
+  return parseBlockNodesUntil(state, closePattern).nodes
+}
+
+/**
+ * 解析当前层块节点，并返回已消费的边界标签。
+ *
+ * 嵌套块由对应处理器完整消费，因此边界表达式只会截断当前结构层级。
+ *
+ * @param state 解析游标
+ * @param closePattern 可选的边界标签表达式
+ * @returns 节点及触发返回的边界标签
+ */
+function parseBlockNodesUntil(state: ParseState, closePattern: RegExp | null): BlockParseResult {
+  const parsed: BlockParseResult = new BlockParseResult()
   const activeInlineTags: string[] = []
   let inlineStart: number = state.pos
 
   while (state.pos < state.len) {
     const idx: number = state.content.indexOf('[', state.pos)
     if (idx < 0) {
-      appendInlineSegment(state.content.substring(inlineStart, state.len), result, activeInlineTags)
+      appendInlineSegment(state.content.substring(inlineStart, state.len), parsed.nodes, activeInlineTags)
       state.pos = state.len
-      return result
+      return parsed
     }
     state.pos = idx
 
@@ -210,30 +239,31 @@ function parseBlockNodes(state: ParseState, closePattern: RegExp | null): BBNode
       closePattern.lastIndex = idx
       const closeMatch: RegExpExecArray | null = closePattern.exec(state.content)
       if (closeMatch && closeMatch.index === idx) {
-        appendInlineSegment(state.content.substring(inlineStart, idx), result, activeInlineTags)
+        appendInlineSegment(state.content.substring(inlineStart, idx), parsed.nodes, activeInlineTags)
+        parsed.terminator = closeMatch[0]
         state.pos = closePattern.lastIndex
-        return result
+        return parsed
       }
     }
 
     const blockNodes: BBNode[] = []
     if (tryMatchBlock(state, blockNodes)) {
-      appendInlineSegment(state.content.substring(inlineStart, idx), result, activeInlineTags)
+      appendInlineSegment(state.content.substring(inlineStart, idx), parsed.nodes, activeInlineTags)
       for (let i: number = 0; i < blockNodes.length; i++) {
         const inheritedTags: string[] = activeInlineTags.slice()
         for (let j: number = 0; j < blockNodes[i].inheritedFormatTags.length; j++) {
           inheritedTags.push(blockNodes[i].inheritedFormatTags[j])
         }
         blockNodes[i].inheritedFormatTags = inheritedTags
-        result.push(blockNodes[i])
+        parsed.nodes.push(blockNodes[i])
       }
       inlineStart = state.pos
       continue
     }
     state.pos = idx + 1
   }
-  appendInlineSegment(state.content.substring(inlineStart, state.pos), result, activeInlineTags)
-  return result
+  appendInlineSegment(state.content.substring(inlineStart, state.pos), parsed.nodes, activeInlineTags)
+  return parsed
 }
 
 /**
@@ -333,29 +363,58 @@ function parseTableRowCells(state: ParseState): BBNode[] {
   return cells
 }
 
-/** 解析列表项：[*] 分隔，每项 trim 后递归解析。 */
+/**
+ * 移除列表项边缘的空白文本节点，保持原有 itemText.trim() 的显示语义。
+ *
+ * @param nodes 列表项的块级与内联节点
+ */
+function trimListItemWhitespace(nodes: BBNode[]): void {
+  if (nodes.length > 0 && nodes[0].type === BBNodeType.TEXT) {
+    nodes[0].text = nodes[0].text.replace(/^\s+/, '')
+    if (nodes[0].text.length === 0) nodes.splice(0, 1)
+  }
+  if (nodes.length > 0 && nodes[nodes.length - 1].type === BBNodeType.TEXT) {
+    const lastIndex: number = nodes.length - 1
+    nodes[lastIndex].text = nodes[lastIndex].text.replace(/\s+$/, '')
+    if (nodes[lastIndex].text.length === 0) nodes.splice(lastIndex, 1)
+  }
+}
+
+/**
+ * 创建列表项节点并接管给定的子节点。
+ *
+ * @param children 列表项正文节点
+ * @returns 列表项节点
+ */
+function createListItem(children: BBNode[]): BBNode {
+  const item: BBNode = createBBNode()
+  item.type = BBNodeType.LIST_ITEM
+  item.children = children
+  return item
+}
+
+/**
+ * 解析列表项：只在当前列表层级的 [*] 或 [/list] 处截断。
+ *
+ * 嵌套列表与代码、引用等块由 parseBlockNodesUntil 完整消费，内部边界不会泄漏到外层。
+ * 列表开头存在非空正文时将其保留为隐式列表项，避免异常输入丢失内容。
+ *
+ * @param state 已位于 [list] 开始标签之后的解析游标
+ * @returns 当前列表直属的列表项节点
+ */
 function parseListItems(state: ParseState): BBNode[] {
   const items: BBNode[] = []
-  while (state.pos < state.len) {
-    const starIdx = state.content.indexOf('[*]', state.pos)
-    const closeIdx = indexOfIgnoreCase(state.content, '[/list]', state.pos)
-    if (starIdx < 0 || (closeIdx >= 0 && starIdx > closeIdx)) {
-      if (closeIdx >= 0) state.pos = closeIdx + 7
-      else state.pos = state.len
-      break
-    }
-    state.pos = starIdx + 3
-    let itemEnd = state.content.indexOf('[*]', state.pos)
-    const listClose = indexOfIgnoreCase(state.content, '[/list]', state.pos)
-    if (itemEnd < 0 || (listClose >= 0 && itemEnd > listClose)) {
-      itemEnd = listClose >= 0 ? listClose : state.len
-    }
-    const itemText = state.content.substring(state.pos, itemEnd)
-    state.pos = itemEnd
-    const n = createBBNode()
-    n.type = BBNodeType.LIST_ITEM
-    n.children = parseBBCode(itemText.trim())
-    items.push(n)
+  const boundaryPattern: RegExp = /\[\*\]|\[\/list\]/gi
+  const leading: BlockParseResult = parseBlockNodesUntil(state, boundaryPattern)
+  trimListItemWhitespace(leading.nodes)
+  if (leading.nodes.length > 0) items.push(createListItem(leading.nodes))
+
+  let terminator: string = leading.terminator.toLowerCase()
+  while (terminator === '[*]') {
+    const itemBody: BlockParseResult = parseBlockNodesUntil(state, boundaryPattern)
+    trimListItemWhitespace(itemBody.nodes)
+    items.push(createListItem(itemBody.nodes))
+    terminator = itemBody.terminator.toLowerCase()
   }
   return items
 }

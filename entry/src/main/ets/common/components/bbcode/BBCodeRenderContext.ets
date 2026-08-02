@@ -8,14 +8,16 @@ export const QUOTE_BORDER_COLORS: Resource[] = AppColors.quoteBorders
 /**
  * BBCode 渲染上下文，沿节点树向下传递。
  *
- * 用于在递归渲染时记录当前是否处于引用块内以及引用嵌套深度，
- * 以便调整字号、字色、行高等样式。
+ * 用于在递归渲染时记录引用与列表嵌套深度，
+ * 以便调整字号、字色、行高、缩进和项目符号等样式。
  */
 export class RenderContext {
   /** 是否处于引用块（QUOTE）内 */
   inQuote: boolean = false
   /** 引用嵌套深度，根节点为 0 */
   quoteDepth: number = 0
+  /** 列表嵌套深度，根节点为 0。 */
+  listDepth: number = 0
   /** 块节点向后代传递的文字样式。 */
   inlineStyle: InlineTextStyle = new InlineTextStyle()
   /** 当前文字对齐方式。 */

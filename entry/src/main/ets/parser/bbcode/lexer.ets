@@ -88,6 +88,24 @@ function indexOfIgnoreCase(content: string, search: string, start: number): numb
   return -1
 }
 
+/**
+ * 判断指定位置是否以不区分 ASCII 大小写的方式匹配目标文本。
+ *
+ * @param content 完整正文
+ * @param search 待匹配的 ASCII 文本
+ * @param start 匹配起始位置
+ * @returns 指定位置是否完整匹配目标文本
+ */
+function matchesIgnoreCaseAt(content: string, search: string, start: number): boolean {
+  if (start < 0 || start + search.length > content.length) return false
+  for (let i: number = 0; i < search.length; i++) {
+    if (toLowerAsciiCode(content.charCodeAt(start + i)) !== toLowerAsciiCode(search.charCodeAt(i))) {
+      return false
+    }
+  }
+  return true
+}
+
 /** 解析器游标状态：当前内容、位置、总长度。 */
 class ParseState {
   /** 预处理后的完整正文。 */
@@ -96,6 +114,8 @@ class ParseState {
   pos: number = 0
   /** 正文总字符数。 */
   len: number = 0
+  /** 当前正在解析的列表嵌套深度。 */
+  listDepth: number = 0
 }
 
 /** 向节点数组追加已解码文本；相邻文本合并，所有有效换行均保留。 */
@@ -171,6 +191,7 @@ export {
   resolveMediaUrl,
   isSafeUrl,
   indexOfIgnoreCase,
+  matchesIgnoreCaseAt,
   pushTextNode,
   preprocessContent
 }

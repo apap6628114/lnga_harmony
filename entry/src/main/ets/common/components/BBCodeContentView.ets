@@ -782,9 +782,38 @@ export struct BBCodeContentView {
     const result = new RenderContext()
     result.inQuote = parent.inQuote
     result.quoteDepth = parent.quoteDepth
+    result.listDepth = parent.listDepth
     result.inlineStyle = applyInlineFormatTags(node.inheritedFormatTags, parent.inlineStyle)
     result.textAlign = parent.textAlign
     return result
+  }
+
+  /**
+   * 创建列表项后代使用的上下文，并递增列表嵌套深度。
+   *
+   * @param parent 当前列表使用的渲染上下文
+   * @returns 列表项后代上下文
+   */
+  private makeListItemCtx(parent: RenderContext): RenderContext {
+    const result: RenderContext = new RenderContext()
+    result.inQuote = parent.inQuote
+    result.quoteDepth = parent.quoteDepth
+    result.listDepth = parent.listDepth + 1
+    result.inlineStyle = parent.inlineStyle
+    result.textAlign = parent.textAlign
+    return result
+  }
+
+  /**
+   * 返回当前列表层级使用的项目符号。
+   *
+   * @param depth 当前列表嵌套深度
+   * @returns 对应层级的项目符号
+   */
+  private listBullet(depth: number): string {
+    if (depth === 0) return '•'
+    if (depth === 1) return '◦'
+    return '▪'
   }
 
   /**
@@ -798,6 +827,7 @@ export struct BBCodeContentView {
     const result: RenderContext = new RenderContext()
     result.inQuote = parent.inQuote
     result.quoteDepth = parent.quoteDepth
+    result.listDepth = parent.listDepth
     result.inlineStyle = applyInlineFormatTags(node.inheritedFormatTags, parent.inlineStyle)
     result.inlineStyle.bold = true
     result.textAlign = parent.textAlign
@@ -970,6 +1000,7 @@ export struct BBCodeContentView {
     const c = new RenderContext()
     c.inQuote = true
     c.quoteDepth = parent.quoteDepth + 1
+    c.listDepth = parent.listDepth
     c.inlineStyle = parent.inlineStyle
     c.textAlign = parent.textAlign
     return c
@@ -986,6 +1017,7 @@ export struct BBCodeContentView {
     const result = new RenderContext()
     result.inQuote = parent.inQuote
     result.quoteDepth = parent.quoteDepth
+    result.listDepth = parent.listDepth
     const inheritedStyle: InlineTextStyle = applyInlineFormatTags(node.inheritedFormatTags, parent.inlineStyle)
     result.inlineStyle = applyTextStyleDeclaration(node.text, inheritedStyle)
     result.textAlign = this.resolveTextAlign(extractTextStyleAlign(node.text), parent.textAlign)
@@ -1029,6 +1061,7 @@ export struct BBCodeContentView {
     const result = new RenderContext()
     result.inQuote = parent.inQuote
     result.quoteDepth = parent.quoteDepth
+    result.listDepth = parent.listDepth
     result.inlineStyle = applyInlineFormatTags(node.inheritedFormatTags, parent.inlineStyle)
     result.textAlign = this.resolveTextAlign(node.align, parent.textAlign)
     return result
@@ -1154,12 +1187,15 @@ export struct BBCodeContentView {
       ForEach(node.children, (child: BBNode) => {
         if (child.type === BBNodeType.LIST_ITEM) {
           Row() {
-            Text('• ')
+            Text(this.listBullet(ctx.listDepth))
               .fontSize(this.inlineFontSize(ctx))
               .fontColor(ctx.inQuote ? AppColors.textSecondary : AppColors.textPrimary)
+              .lineHeight(this.inlineLineHeight(ctx))
+              .width(16)
+              .textAlign(TextAlign.Start)
             if (child.children.length > 0) {
               Column() {
-                this.RenderChildren(child.children, ctx)
+                this.RenderChildren(child.children, this.makeListItemCtx(ctx))
               }
               .layoutWeight(1)
               .alignItems(HorizontalAlign.Start)
@@ -1172,14 +1208,14 @@ export struct BBCodeContentView {
             }
           }
           .width('100%')
-          .padding({ top: 2, bottom: 2 })
+          .padding({ top: ctx.listDepth === 0 ? 2 : 1, bottom: ctx.listDepth === 0 ? 2 : 1 })
           .alignItems(VerticalAlign.Top)
         }
       }, (child: BBNode) => child.id.toString())
     }
     .width('100%')
-    .padding({ left: 12 })
-    .margin({ top: 4, bottom: 4 })
+    .padding({ left: ctx.listDepth === 0 ? 12 : 16 })
+    .margin({ top: ctx.listDepth === 0 ? 4 : 0, bottom: ctx.listDepth === 0 ? 4 : 0 })
     .alignItems(HorizontalAlign.Start)
   }
 

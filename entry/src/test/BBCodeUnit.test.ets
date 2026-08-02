@@ -2,6 +2,7 @@ import { describe, expect, it } from '@ohos/hypium'
 import { BBNode, BBNodeType } from '../main/ets/model/BBCodeNode'
 import { parseBBCode } from '../main/ets/parser/bbcode/parser'
 import { indexOfIgnoreCase } from '../main/ets/parser/bbcode/lexer'
+import { MAX_LIST_DEPTH } from '../main/ets/parser/bbcode/block-handlers/handleList'
 import {
   applyInlineFormatTags,
   applyTextStyleDeclaration,
@@ -97,6 +98,99 @@ export default function bbcodeUnitTest(): void {
       expect(nodes.length).assertEqual(1)
       expect(nodes[0].type).assertEqual(BBNodeType.CODE)
       expect(nodes[0].text).assertEqual('<div>\nx')
+    })
+
+    it('parsesNgaNestedListsAsRecursiveTree', 0, (): void => {
+      const nodes: BBNode[] = parseBBCode(
+        '[list]\n' +
+          '[*]Did you think we had forgotten?\n' +
+          '[list]\n' +
+          '[*]Did you think we had forgiven?\n' +
+          '[list]\n' +
+          '[*]Behold, now, the terrible vengeance of the Forsaken!\n' +
+          '[/list][/list][/list]')
+      const firstItem: BBNode = nodes[0].children[0]
+      const secondList: BBNode = firstItem.children[1]
+      const secondItem: BBNode = secondList.children[0]
+      const thirdList: BBNode = secondItem.children[1]
+      const thirdItem: BBNode = thirdList.children[0]
+
+      expect(nodes.length).assertEqual(1)
+      expect(nodes[0].type).assertEqual(BBNodeType.LIST)
+      expect(nodes[0].children.length).assertEqual(1)
+      expect(firstItem.type).assertEqual(BBNodeType.LIST_ITEM)
+      expect(firstItem.children[0].text.trim()).assertEqual('Did you think we had forgotten?')
+      expect(secondList.type).assertEqual(BBNodeType.LIST)
+      expect(secondList.children.length).assertEqual(1)
+      expect(secondItem.children[0].text.trim()).assertEqual('Did you think we had forgiven?')
+      expect(thirdList.type).assertEqual(BBNodeType.LIST)
+      expect(thirdList.children.length).assertEqual(1)
+      expect(thirdItem.children[0].text).assertEqual(
+        'Behold, now, the terrible vengeance of the Forsaken!')
+    })
+
+    it('keepsListBoundariesInsideCodeBlocks', 0, (): void => {
+      const nodes: BBNode[] = parseBBCode(
+        '[list][*]前[code][*][/list][/code]后[*][b]第二项[/b][/list]')
+      const list: BBNode = nodes[0]
+      const firstItem: BBNode = list.children[0]
+      const secondItem: BBNode = list.children[1]
+
+      expect(nodes.length).assertEqual(1)
+      expect(list.type).assertEqual(BBNodeType.LIST)
+      expect(list.children.length).assertEqual(2)
+      expect(firstItem.children.length).assertEqual(3)
+      expect(firstItem.children[0].text).assertEqual('前')
+      expect(firstItem.children[1].type).assertEqual(BBNodeType.CODE)
+      expect(firstItem.children[1].text).assertEqual('[*][/list]')
+      expect(firstItem.children[2].text).assertEqual('后')
+      expect(secondItem.children[0].type).assertEqual(BBNodeType.BOLD)
+      expect(secondItem.children[0].children[0].text).assertEqual('第二项')
+    })
+
+    it('recoversUppercaseAndUnclosedListsWithoutDroppingText', 0, (): void => {
+      const nodes: BBNode[] = parseBBCode('[LIST]前置正文[*]显式项目[LIST][*]嵌套项目')
+      const list: BBNode = nodes[0]
+      const explicitItem: BBNode = list.children[1]
+      const nestedList: BBNode = explicitItem.children[1]
+
+      expect(nodes.length).assertEqual(1)
+      expect(list.type).assertEqual(BBNodeType.LIST)
+      expect(list.children.length).assertEqual(2)
+      expect(list.children[0].children[0].text).assertEqual('前置正文')
+      expect(explicitItem.children[0].text).assertEqual('显式项目')
+      expect(nestedList.type).assertEqual(BBNodeType.LIST)
+      expect(nestedList.children[0].children[0].text).assertEqual('嵌套项目')
+    })
+
+    it('limitsPathologicalListNestingAndPreservesOverflowSource', 0, (): void => {
+      let source: string = ''
+      for (let i: number = 0; i < MAX_LIST_DEPTH + 2; i++) source += '[list][*]'
+      source += '底部正文'
+      for (let i: number = 0; i < MAX_LIST_DEPTH + 2; i++) source += '[/list]'
+
+      const nodes: BBNode[] = parseBBCode(source)
+      let currentList: BBNode = nodes[0]
+      let parsedDepth: number = 0
+      while (currentList.type === BBNodeType.LIST) {
+        parsedDepth++
+        const item: BBNode = currentList.children[0]
+        let nestedList: BBNode | undefined = undefined
+        for (let i: number = 0; i < item.children.length; i++) {
+          if (item.children[i].type === BBNodeType.LIST) {
+            nestedList = item.children[i]
+            break
+          }
+        }
+        if (nestedList === undefined) break
+        currentList = nestedList
+      }
+
+      expect(nodes.length).assertEqual(1)
+      expect(parsedDepth).assertEqual(MAX_LIST_DEPTH)
+      expect(currentList.children[0].children[0].type).assertEqual(BBNodeType.TEXT)
+      expect(currentList.children[0].children[0].text.startsWith('[list][*]')).assertTrue()
+      expect(currentList.children[0].children[0].text.indexOf('底部正文') >= 0).assertTrue()
     })
 
     it('continuesInlineStyleAcrossImageBlock', 0, (): void => {
