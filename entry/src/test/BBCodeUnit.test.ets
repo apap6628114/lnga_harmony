@@ -167,6 +167,90 @@ export default function bbcodeUnitTest(): void {
       expect(nodes[1].type).assertEqual(BBNodeType.HR)
     })
 
+    it('parsesBothHeadingFormsAsBlocks', 0, (): void => {
+      const nodes: BBNode[] = parseBBCode('  ===第一条===  \r\n[H][color=red]第二条[/color][/H]')
+
+      expect(nodes.length).assertEqual(3)
+      expect(nodes[0].type).assertEqual(BBNodeType.HEADING)
+      expect(nodes[0].children[0].text).assertEqual('第一条')
+      expect(nodes[1].text).assertEqual('\r\n')
+      expect(nodes[2].type).assertEqual(BBNodeType.HEADING)
+      expect(nodes[2].children[0].type).assertEqual(BBNodeType.COLOR)
+      expect(nodes[2].children[0].children[0].text).assertEqual('第二条')
+    })
+
+    it('normalizesNestedAndInlineFormattedHeadingSeparators', 0, (): void => {
+      const forms: string[] = [
+        '[h]===“乌拉特克的诅咒”内容更新包含内容===[/h]',
+        '[size=150%][b]===“乌拉特克的诅咒”内容更新包含内容===[/b][/size]',
+        '[h][size=150%][b]===“乌拉特克的诅咒”内容更新包含内容===[/b][/size][/h]',
+        '[size=150%][b][h]===“乌拉特克的诅咒”内容更新包含内容===[/h][/b][/size]'
+      ]
+
+      for (let i: number = 0; i < forms.length; i++) {
+        const nodes: BBNode[] = parseBBCode(forms[i])
+        const runs: InlineRun[] = flattenInlineNodes(nodes[0].children)
+        expect(nodes.length).assertEqual(1)
+        expect(nodes[0].type).assertEqual(BBNodeType.HEADING)
+        expect(runs.length).assertEqual(1)
+        expect(runs[0].text).assertEqual('“乌拉特克的诅咒”内容更新包含内容')
+        if (i > 0) {
+          expect(runs[0].style.scalePercent).assertEqual(150)
+          expect(runs[0].style.bold).assertTrue()
+        }
+      }
+    })
+
+    it('limitsHeadingSeparatorsToFullLinesOutsideCode', 0, (): void => {
+      const nodes: BBNode[] = parseBBCode(
+        '公式 a===b===c\n[code]===行内代码===[/code]\n[code]\n===跨行代码===\n[/code]\n===标题===')
+
+      expect(nodes.length).assertEqual(6)
+      expect(nodes[0].type).assertEqual(BBNodeType.TEXT)
+      expect(nodes[0].text).assertEqual('公式 a===b===c\n')
+      expect(nodes[1].type).assertEqual(BBNodeType.CODE)
+      expect(nodes[1].text).assertEqual('===行内代码===')
+      expect(nodes[2].text).assertEqual('\n')
+      expect(nodes[3].type).assertEqual(BBNodeType.CODE)
+      expect(nodes[3].text).assertEqual('\n===跨行代码===\n')
+      expect(nodes[4].text).assertEqual('\n')
+      expect(nodes[5].type).assertEqual(BBNodeType.HEADING)
+      expect(nodes[5].children[0].text).assertEqual('标题')
+    })
+
+    it('parsesHeadingAfterNestedSameTypeBlocks', 0, (): void => {
+      const nodes: BBNode[] = parseBBCode(
+        '[quote][quote]内层引用[/quote]\n===引用内标题===\n[/quote]')
+
+      expect(nodes.length).assertEqual(1)
+      expect(nodes[0].type).assertEqual(BBNodeType.QUOTE)
+      expect(nodes[0].children.length).assertEqual(4)
+      expect(nodes[0].children[0].type).assertEqual(BBNodeType.QUOTE)
+      expect(nodes[0].children[2].type).assertEqual(BBNodeType.HEADING)
+      expect(nodes[0].children[2].children[0].text).assertEqual('引用内标题')
+    })
+
+    it('keepsInvalidHeadingWrappersInTheInlinePipeline', 0, (): void => {
+      const invalidSizeRuns: InlineRun[] = flattenInlineNodes(
+        parseBBCode('[size=invalid]===标题===[/size]'))
+      const crossingRuns: InlineRun[] = flattenInlineNodes(
+        parseBBCode('[b][i]===标题===[/b][/i]'))
+
+      expect(invalidSizeRuns.length).assertEqual(1)
+      expect(invalidSizeRuns[0].text).assertEqual('[size=invalid]===标题===[/size]')
+      expect(crossingRuns.length).assertEqual(2)
+      expect(crossingRuns[0].text).assertEqual('===标题===')
+      expect(crossingRuns[1].text).assertEqual('[/i]')
+    })
+
+    it('keepsTagHeavyContentOnTheNormalInlinePath', 0, (): void => {
+      const runs: InlineRun[] = flattenInlineNodes(parseBBCode('[b]x[/b]'.repeat(1200)))
+
+      expect(runs.length).assertEqual(1)
+      expect(runs[0].text.length).assertEqual(1200)
+      expect(runs[0].style.bold).assertTrue()
+    })
+
     it('removesQuoteHeaderSeparatingBreaks', 0, (): void => {
       const nodes: BBNode[] = parseBBCode(
         '[quote][pid=1,2,1]Reply[/pid] [b]Post by [uid=42]user[/uid] (2026-01-01):[/b]<br/><br/>正文[/quote]')

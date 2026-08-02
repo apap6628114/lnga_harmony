@@ -209,6 +209,7 @@ function collectNodeText(nodes: BBNode[]): string {
         result += '\n---\n'
         break
       case BBNodeType.PARAGRAPH:
+      case BBNodeType.HEADING:
         result += collectNodeText(node.children)
         if (i < nodes.length - 1) result += '\n'
         break
@@ -257,6 +258,7 @@ export function bbNodesToPlainText(nodes: BBNode[]): string {
         result += bbNodesToPlainText(node.children) + '\n'
         break
       case BBNodeType.PARAGRAPH:
+      case BBNodeType.HEADING:
         result += bbNodesToPlainText(node.children)
         if (i < nodes.length - 1) result += '\n'
         break

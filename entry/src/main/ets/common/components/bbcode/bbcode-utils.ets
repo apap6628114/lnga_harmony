@@ -392,11 +392,11 @@ export function applyTextStyleDeclaration(declaration: string, inherited: Inline
 export function applyInlineFormatTags(tags: string[], inherited: InlineTextStyle): InlineTextStyle {
   const style: InlineTextStyle = cloneInlineTextStyle(inherited)
   for (let i: number = 0; i < tags.length; i++) {
-    const match: RegExpExecArray | null = /^\[(b|h|item|i|u|del|color|size|font|sub|sup)(?:=([^\]]*))?\]$/i.exec(tags[i])
+    const match: RegExpExecArray | null = /^\[(b|item|i|u|del|color|size|font|sub|sup)(?:=([^\]]*))?\]$/i.exec(tags[i])
     if (!match) continue
     const name: string = match[1].toLowerCase()
     const value: string = match[2] ?? ''
-    if (name === 'b' || name === 'h' || name === 'item') style.bold = true
+    if (name === 'b' || name === 'item') style.bold = true
     if (name === 'i') style.italic = true
     if (name === 'u') style.underline = true
     if (name === 'del') style.strikethrough = true

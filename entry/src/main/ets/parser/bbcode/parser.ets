@@ -1,7 +1,7 @@
 import { BBNode, BBNodeType } from '../../model/BBCodeNode'
-import { decodeHtmlEntities } from '../_shared/HtmlEntityCodec'
 import { ParseState, preprocessContent, createBBNode, indexOfIgnoreCase } from './lexer'
 import { MAX_INLINE_DEPTH, MAX_INLINE_TAG_LENGTH, parseInlineInto } from './inline-parser'
+import { isInlineStyleTagName, isValidInlineStyleTag } from './inline-tag-policy'
 import { handlePostBy } from './block-handlers/handlePostBy'
 import { handleQuote } from './block-handlers/handleQuote'
 import { handleCollapse } from './block-handlers/handleCollapse'
@@ -19,6 +19,7 @@ import {
   handleStyle,
   handleHip,
   handleComment,
+  handleHeading,
   handleHorizontalRule,
   handleParagraph,
   handleRandomBlock
@@ -93,15 +94,7 @@ function getInlineCloseTag(tag: string): string {
 function isTrackableInlineOpenTag(rawTag: string, name: string): boolean {
   const equalIndex: number = rawTag.indexOf('=')
   const attribute: string = equalIndex >= 0 ? rawTag.substring(equalIndex + 1, rawTag.length - 1).trim() : ''
-  if (name === 'color') {
-    const color: string = decodeHtmlEntities(attribute).trim()
-    return /^(?:#[0-9a-fA-F]{3,8}|[a-zA-Z]+)$/.test(color)
-  }
-  if (name === 'size') return /^(\d+)%$/.test(attribute)
-  if (name === 'font') {
-    const family: string = decodeHtmlEntities(attribute).trim()
-    return family.length > 0 && family.length <= 64
-  }
+  if (isInlineStyleTagName(name)) return isValidInlineStyleTag(name, attribute)
   return true
 }
 
@@ -112,7 +105,7 @@ function isTrackableInlineOpenTag(rawTag: string, name: string): boolean {
  * @param activeTags 当前仍处于打开状态的开始标签
  */
 function updateActiveInlineTags(segment: string, activeTags: string[]): void {
-  const tagPattern: RegExp = /\[(\/)?(b|h|item|i|u|del|color|size|font|sub|sup|url|pid|uid|tid)(?:=[^\]]*)?\]/gi
+  const tagPattern: RegExp = /\[(\/)?(b|item|i|u|del|color|size|font|sub|sup|url|pid|uid|tid)(?:=[^\]]*)?\]/gi
   let match: RegExpExecArray | null = tagPattern.exec(segment)
   while (match) {
     if (match[0].length > MAX_INLINE_TAG_LENGTH) {
@@ -205,7 +198,7 @@ function parseBlockNodes(state: ParseState, closePattern: RegExp | null): BBNode
   let inlineStart: number = state.pos
 
   while (state.pos < state.len) {
-    const idx = state.content.indexOf('[', state.pos)
+    const idx: number = state.content.indexOf('[', state.pos)
     if (idx < 0) {
       appendInlineSegment(state.content.substring(inlineStart, state.len), result, activeInlineTags)
       state.pos = state.len
@@ -254,6 +247,7 @@ function parseBlockNodes(state: ParseState, closePattern: RegExp | null): BBNode
  */
 function tryMatchBlock(state: ParseState, result: BBNode[]): boolean {
   const name: string = getBlockTagNameAt(state.content, state.pos)
+  if (name === 'h') return handleHeading(state, result)
   if (name === 'hr') return handleHorizontalRule(state, result)
   if (name === 'p') return handleParagraph(state, result)
   if (name === 'b') return handlePostBy(state, result)

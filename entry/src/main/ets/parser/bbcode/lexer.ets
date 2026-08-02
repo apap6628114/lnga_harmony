@@ -1,6 +1,7 @@
 import { BBNode, BBNodeType } from '../../model/BBCodeNode'
 import { decodeHtmlEntities } from '../_shared/HtmlEntityCodec'
 import { NGA_CDN_BASE } from '../_shared/AttachUrl'
+import { normalizeHeadingLinesOutsideCode } from './heading-normalizer'
 
 /**
  * 词法/状态层：ParseState、节点工厂、文本预处理与 HTML 转义工具。
@@ -134,7 +135,7 @@ function preprocessContent(s: string): string {
         return _m
       })
     .replace(/<br\s*\/?>/gi, '\n')
-  return stripResidualHtmlOutsideCode(normalized)
+  return normalizeHeadingLinesOutsideCode(stripResidualHtmlOutsideCode(normalized))
 }
 
 /**

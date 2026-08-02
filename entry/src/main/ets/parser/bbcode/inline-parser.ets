@@ -1,6 +1,7 @@
 import { BBNode, BBNodeType } from '../../model/BBCodeNode'
 import { decodeHtmlEntities } from '../_shared/HtmlEntityCodec'
 import { createBBNode, isSafeUrl, pushTextNode } from './lexer'
+import { isInlineStyleTagName, isValidInlineStyleTag } from './inline-tag-policy'
 
 /** 可作为视频播放的常见文件扩展名。 */
 const MEDIA_VIDEO_EXTS: string[] = ['mp4', 'webm', 'ogg', 'mov', '3gp']
@@ -89,17 +90,6 @@ function readInlineTag(segment: string, start: number): InlineTagToken | null {
 }
 
 /**
- * 判断标签是否属于可继承的文字样式。
- *
- * @param name 小写标签名
- * @returns 是否为文字样式标签
- */
-function isInlineStyleTag(name: string): boolean {
-  return name === 'b' || name === 'h' || name === 'item' || name === 'i' || name === 'u' ||
-    name === 'del' || name === 'color' || name === 'size' || name === 'font' || name === 'sub' || name === 'sup'
-}
-
-/**
  * 判断标签是否属于内联链接。
  *
  * @param name 小写标签名
@@ -128,7 +118,7 @@ function currentChildren(root: BBNode[], frames: InlineFrame[]): BBNode[] {
  * @returns 对应节点类型
  */
 function styleNodeType(name: string): BBNodeType {
-  if (name === 'b' || name === 'h' || name === 'item') return BBNodeType.BOLD
+  if (name === 'b' || name === 'item') return BBNodeType.BOLD
   if (name === 'i') return BBNodeType.ITALIC
   if (name === 'u') return BBNodeType.UNDERLINE
   if (name === 'del') return BBNodeType.STRIKETHROUGH
@@ -210,10 +200,11 @@ function createLinkHref(tag: InlineTagToken): string {
  * @returns 是否成功识别并打开
  */
 function openInlineFrame(tag: InlineTagToken, root: BBNode[], frames: InlineFrame[]): boolean {
-  if (!isInlineStyleTag(tag.name) && !isInlineLinkTag(tag.name)) return false
+  if (!isInlineStyleTagName(tag.name) && !isInlineLinkTag(tag.name)) return false
   if (frames.length >= MAX_INLINE_DEPTH) return false
   const node = createBBNode()
-  if (isInlineStyleTag(tag.name)) {
+  if (isInlineStyleTagName(tag.name)) {
+    if (!isValidInlineStyleTag(tag.name, tag.attribute)) return false
     node.type = styleNodeType(tag.name)
     if (!applyStyleAttribute(node, tag)) return false
   } else {

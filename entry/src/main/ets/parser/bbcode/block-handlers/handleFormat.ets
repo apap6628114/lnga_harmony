@@ -26,6 +26,31 @@ export const handleHorizontalRule = (state: ParseState, result: BBNode[]): boole
 }
 
 /**
+ * `[h]...[/h]` 四级标题块处理器。
+ *
+ * @param state 解析游标
+ * @param result 当前块级节点输出数组
+ * @returns 是否匹配并消费了标题块
+ */
+export const handleHeading = (state: ParseState, result: BBNode[]): boolean => {
+  const savedPos: number = state.pos
+  const pattern: RegExp = /\[h\]/gi
+  pattern.lastIndex = state.pos
+  const match: RegExpExecArray | null = pattern.exec(state.content)
+  if (match && match.index === state.pos) {
+    state.pos = pattern.lastIndex
+    const node: BBNode = createBBNode()
+    node.type = BBNodeType.HEADING
+    const closePattern: RegExp = /\[\/h\]/gi
+    node.children = parseBlockNodes(state, closePattern)
+    result.push(node)
+    return true
+  }
+  state.pos = savedPos
+  return false
+}
+
+/**
  * [p] 段落块处理器。
  *
  * @param state 解析游标

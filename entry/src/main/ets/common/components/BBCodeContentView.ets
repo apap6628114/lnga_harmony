@@ -669,6 +669,8 @@ export struct BBCodeContentView {
   RenderBlockNode(node: BBNode, ctx: RenderContext) {
     if (node.type === BBNodeType.HR) {
       this.RenderHorizontalRule()
+    } else if (node.type === BBNodeType.HEADING) {
+      this.RenderHeading(node, this.makeHeadingCtx(node, ctx))
     } else if (node.type === BBNodeType.PARAGRAPH) {
       this.RenderParagraph(node, this.makeBlockCtx(node, ctx))
     } else if (node.type === BBNodeType.IMAGE) {
@@ -732,6 +734,27 @@ export struct BBCodeContentView {
   }
 
   /**
+   * 渲染与 HTML `h4.subtitle` 对应的独立标题块。
+   *
+   * @param node 标题节点
+   * @param ctx 标题后代的渲染上下文
+   */
+  @Builder
+  RenderHeading(node: BBNode, ctx: RenderContext) {
+    Column() {
+      this.RenderChildren(node.children, ctx)
+      Divider()
+        .width('100%')
+        .strokeWidth(1)
+        .color(AppColors.separator)
+        .margin({ top: 6 })
+    }
+    .width('100%')
+    .alignItems(this.horizontalAlignForText(ctx.textAlign))
+    .margin({ top: 10, bottom: 8 })
+  }
+
+  /**
    * 渲染独立段落。
    *
    * @param node 段落节点
@@ -760,6 +783,23 @@ export struct BBCodeContentView {
     result.inQuote = parent.inQuote
     result.quoteDepth = parent.quoteDepth
     result.inlineStyle = applyInlineFormatTags(node.inheritedFormatTags, parent.inlineStyle)
+    result.textAlign = parent.textAlign
+    return result
+  }
+
+  /**
+   * 创建四级标题的粗体文字上下文，并保留外层跨块样式。
+   *
+   * @param node 标题节点
+   * @param parent 父级渲染上下文
+   * @returns 标题后代使用的渲染上下文
+   */
+  private makeHeadingCtx(node: BBNode, parent: RenderContext): RenderContext {
+    const result: RenderContext = new RenderContext()
+    result.inQuote = parent.inQuote
+    result.quoteDepth = parent.quoteDepth
+    result.inlineStyle = applyInlineFormatTags(node.inheritedFormatTags, parent.inlineStyle)
+    result.inlineStyle.bold = true
     result.textAlign = parent.textAlign
     return result
   }

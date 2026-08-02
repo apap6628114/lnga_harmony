@@ -40,6 +40,7 @@ export enum BBNodeType {
   /** 段落。 */ PARAGRAPH,
   /** 下标。 */ SUBSCRIPT,
   /** 上标。 */ SUPERSCRIPT,
+  /** 四级标题分隔块。 */ HEADING,
 }
 
 /**
