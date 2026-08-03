@@ -1,5 +1,5 @@
 import { BBNode, BBNodeType } from '../../model/BBCodeNode'
-import { ParseState, preprocessContent, createBBNode, indexOfIgnoreCase } from './lexer'
+import { ParseState, preprocessContent, createBBNode, indexOfIgnoreCase, matchesIgnoreCaseAt } from './lexer'
 import { MAX_INLINE_DEPTH, MAX_INLINE_TAG_LENGTH, parseInlineInto } from './inline-parser'
 import { isInlineStyleTagName, isValidInlineStyleTag } from './inline-tag-policy'
 import { handlePostBy } from './block-handlers/handlePostBy'
@@ -301,6 +301,82 @@ function tryMatchBlock(state: ParseState, result: BBNode[]): boolean {
   return false
 }
 
+/**
+ * 表格单元格标签属性（colspan/rowspan/colwidth）。
+ */
+class TdAttr {
+  /** 跨列数。 */
+  colSpan: number = 0
+  /** 跨行数。 */
+  rowSpan: number = 0
+  /** 建议列宽。 */
+  colWidth: number = 0
+}
+
+/**
+ * 解析 [td...] 标签属性。
+ *
+ * 支持两种 NGA 真实语法：`[td=N]` / `[td=N,M]` / `[td=N,M,K]`（数字位置参数，
+ * 依次为跨列、跨行、列宽）与 `[td rowspan=N]` / `[td colspan=N]`（空格命名参数，
+ * 可组合）。其余属性形式忽略。
+ *
+ * @param attrRaw 标签内方括号之间的原文
+ * @returns 解析出的单元格属性
+ */
+function parseTdAttributes(attrRaw: string): TdAttr {
+  const attrs = new TdAttr()
+  const trimmed: string = attrRaw.trim()
+  if (trimmed.startsWith('=')) {
+    const parts: string[] = trimmed.substring(1).split(',')
+    if (parts.length >= 1 && /^\d+$/.test(parts[0])) attrs.colSpan = parseInt(parts[0], 10)
+    if (parts.length >= 2 && /^\d+$/.test(parts[1])) attrs.rowSpan = parseInt(parts[1], 10)
+    if (parts.length >= 3 && /^\d+$/.test(parts[2])) attrs.colWidth = parseInt(parts[2], 10)
+    return attrs
+  }
+  const spanPattern: RegExp = /\b(rowspan|colspan)\s*=\s*(\d+)/gi
+  let spanMatch: RegExpExecArray | null = spanPattern.exec(trimmed)
+  while (spanMatch) {
+    if (spanMatch[1].toLowerCase() === 'rowspan') attrs.rowSpan = parseInt(spanMatch[2], 10)
+    else attrs.colSpan = parseInt(spanMatch[2], 10)
+    spanMatch = spanPattern.exec(trimmed)
+  }
+  return attrs
+}
+
+/**
+ * 查找与当前单元格匹配的 [/td] 位置，跳过单元格内嵌套表格的 [/td]。
+ *
+ * 嵌套 [table] 深度不为 0 时的 [/td] 属于内层表格，不作为单元格结束符；
+ * 与 findListBlockEnd 的配对策略一致。嵌套 [table] 未闭合（扫描至正文末尾
+ * 深度仍未归零）时退化为按最近一个 [/td] 结束，避免单元格吞噬整个剩余正文，
+ * 未闭合的 [table] 交由单元格内递归解析降级为文字，后续单元格内容不丢失。
+ *
+ * @param state 已位于单元格内容起点之后的解析游标
+ * @returns 单元格 [/td] 位置；不存在任何 [/td] 时返回 -1
+ */
+function findTdClose(state: ParseState): number {
+  let depth: number = 0
+  let position: number = state.pos
+  const firstTdClose: number = indexOfIgnoreCase(state.content, '[/td]', state.pos)
+  while (position < state.len) {
+    const bracketIndex: number = state.content.indexOf('[', position)
+    if (bracketIndex < 0) return firstTdClose
+    if (matchesIgnoreCaseAt(state.content, '[table]', bracketIndex)) {
+      depth++
+      position = bracketIndex + 7
+    } else if (matchesIgnoreCaseAt(state.content, '[/table]', bracketIndex)) {
+      depth--
+      position = bracketIndex + 8
+    } else if (matchesIgnoreCaseAt(state.content, '[/td]', bracketIndex)) {
+      if (depth === 0) return bracketIndex
+      position = bracketIndex + 5
+    } else {
+      position = bracketIndex + 1
+    }
+  }
+  return firstTdClose
+}
+
 /** 解析表格行：遇 [/table] 返回，遇 [tr] 解析一行单元格。 */
 function parseTableContent(state: ParseState, closePattern: RegExp): BBNode[] {
   const rows: BBNode[] = []
@@ -333,24 +409,28 @@ function parseTableRowCells(state: ParseState): BBNode[] {
   const cells: BBNode[] = []
   while (state.pos < state.len) {
     const trClose = indexOfIgnoreCase(state.content, '[/tr]', state.pos)
-    const tdOpen = state.content.indexOf('[td', state.pos)
+    // 与 trClose 一致使用大小写不敏感查找，避免 [TD ROWSPAN=...] 大写变体整行丢失
+    const tdOpen = indexOfIgnoreCase(state.content, '[td', state.pos)
     if (tdOpen < 0 || (trClose >= 0 && trClose < tdOpen)) {
       if (trClose >= 0) state.pos = trClose + 5
       break
     }
 
-    let pTd: RegExp = /\[td(?:=(\d+))?(?:,(\d+))?(?:,(\d+))?\]/gi
+    let pTd: RegExp = /\[td([^\]]*)\]/gi
     pTd.lastIndex = state.pos
     const tdm = pTd.exec(state.content)
+    // 匹配 [td...] 即视为单元格；未知属性由 parseTdAttributes 忽略，
+    // 确保 [td foo=1] 等非法属性形式的单元格内容不丢失
     if (tdm && tdm.index === state.pos) {
       state.pos = pTd.lastIndex
+      const attr: TdAttr = parseTdAttributes(tdm[1])
       const cell = createBBNode()
       cell.type = BBNodeType.TABLE_CELL
-      if (tdm[1]) cell.colSpan = parseInt(tdm[1], 10)
-      if (tdm[2]) cell.rowSpan = parseInt(tdm[2], 10)
-      if (tdm[3]) cell.colWidth = parseInt(tdm[3], 10)
+      if (attr.colSpan > 0) cell.colSpan = attr.colSpan
+      if (attr.rowSpan > 0) cell.rowSpan = attr.rowSpan
+      if (attr.colWidth > 0) cell.colWidth = attr.colWidth
 
-      const closeTdIdx = indexOfIgnoreCase(state.content, '[/td]', state.pos)
+      const closeTdIdx = findTdClose(state)
       const cellEnd = closeTdIdx >= 0 ? closeTdIdx : state.len
       const cellText = state.content.substring(state.pos, cellEnd)
       state.pos = closeTdIdx >= 0 ? cellEnd + 5 : state.len

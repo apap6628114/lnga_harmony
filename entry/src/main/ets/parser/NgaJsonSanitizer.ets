@@ -5,7 +5,8 @@
  * - 去除 `window.script_muti_get_var_store=` 前缀；
  * - 去除 NGA 插入的 `/* ... * /` 风格非法注释（如 `$js$`、`error fill content`）；
  * - 修复 `"content":+123` / `"subject":+123` 形式的数字字面量为字符串；
- * - 修复 `"content"` / `"subject"` / `"author"` 字段中前导零数字（如 `0123`）为字符串；
+ * - 修复 `"content"` / `"subject"` / `"author"` 字段中前导零数字（如 `0123`、
+ *   `0123.5`，含对象末尾无逗号场景）为字符串；
  * - 转义字符串字面量内的控制字符（制表符、换行等 < 0x20）。
  *
  * @param text NGA 返回的原始文本
@@ -18,9 +19,9 @@ export function preprocessJson(text: string): string {
   t = t.replace(/\/\*error fill content\*\//g, '');
   t = t.replace(/"content":\+(\d+),/g, '"content":"+$1",');
   t = t.replace(/"subject":\+(\d+),/g, '"subject":"+$1",');
-  t = t.replace(/"content":(0\d+),/g, '"content":"$1",');
-  t = t.replace(/"subject":(0\d+),/g, '"subject":"$1",');
-  t = t.replace(/"author":(0\d+),/g, '"author":"$1",');
+  t = t.replace(/"content":(0\d+(?:\.\d+)?)([,\]}])/g, '"content":"$1"$2');
+  t = t.replace(/"subject":(0\d+(?:\.\d+)?)([,\]}])/g, '"subject":"$1"$2');
+  t = t.replace(/"author":(0\d+(?:\.\d+)?)([,\]}])/g, '"author":"$1"$2');
 
   let inString = false;
   let escaped = false;

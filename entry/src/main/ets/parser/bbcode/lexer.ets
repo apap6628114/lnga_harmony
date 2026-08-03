@@ -137,11 +137,55 @@ function pushTextNode(into: BBNode[], text: string): void {
 /**
  * 在实体解码前规范化服务端真实 HTML，并保留转义后应作为文字显示的尖括号。
  *
+ * 所有服务端 HTML 语义替换（blockquote/a/emotion/smile/残余标签）只在代码块之外
+ * 执行，代码正文保持原样，避免污染代码内容。
+ *
  * @param s NGA 返回的原始 BBCode/HTML 混合正文
  * @returns 仅含 BBCode、文字与换行的解析输入
  */
 function preprocessContent(s: string): string {
-  const normalized: string = s
+  const normalized: string = s.replace(/<br\s*\/?>/gi, '\n')
+  return normalizeHeadingLinesOutsideCode(cleanHtmlOutsideCode(normalized))
+}
+
+/**
+ * 清理代码块之外的服务端 HTML 与表情标记，代码正文保持原样。
+ *
+ * @param content 已完成 <br/> 归一化的正文
+ * @returns 清理后的正文
+ */
+function cleanHtmlOutsideCode(content: string): string {
+  const lower: string = content.toLowerCase()
+  let result: string = ''
+  let position: number = 0
+  while (position < content.length) {
+    const codeStart: number = lower.indexOf('[code]', position)
+    if (codeStart < 0) {
+      result += cleanupHtmlSegment(content.substring(position))
+      break
+    }
+    result += cleanupHtmlSegment(content.substring(position, codeStart))
+    const codeEnd: number = lower.indexOf('[/code]', codeStart + 6)
+    if (codeEnd < 0) {
+      result += content.substring(codeStart)
+      break
+    }
+    result += content.substring(codeStart, codeEnd + 7)
+    position = codeEnd + 7
+  }
+  return result
+}
+
+/**
+ * 对非代码段执行服务端 HTML 语义替换与残余标签删除。
+ *
+ * 替换顺序与既有行为一致：blockquote → <a> → 表情 <img> → [img]smile → 残余标签。
+ *
+ * @param segment 不含 [code] 块的正文片段
+ * @returns 语义化后的片段
+ */
+function cleanupHtmlSegment(segment: string): string {
+  return segment
     .replace(/<blockquote[^>]*>/gi, '[quote]')
     .replace(/<\/blockquote>/gi, '[/quote]')
     .replace(/<a\s+href="(https?:\/\/[^"]+)"[^>]*>(.*?)<\/a>/gi, '[url=$1]$2[/url]')
@@ -154,36 +198,7 @@ function preprocessContent(s: string): string {
         if (nm) return `[s:${nm[1]}:${nm[2]}]`
         return _m
       })
-    .replace(/<br\s*\/?>/gi, '\n')
-  return normalizeHeadingLinesOutsideCode(stripResidualHtmlOutsideCode(normalized))
-}
-
-/**
- * 清理代码块之外的残余服务端 HTML，代码正文保持原样。
- *
- * @param content 已完成结构标签规范化的正文
- * @returns 清理后的正文
- */
-function stripResidualHtmlOutsideCode(content: string): string {
-  const lower: string = content.toLowerCase()
-  let result: string = ''
-  let position: number = 0
-  while (position < content.length) {
-    const codeStart: number = lower.indexOf('[code]', position)
-    if (codeStart < 0) {
-      result += content.substring(position).replace(/<\/?[a-z][^>]*>/gi, '')
-      break
-    }
-    result += content.substring(position, codeStart).replace(/<\/?[a-z][^>]*>/gi, '')
-    const codeEnd: number = lower.indexOf('[/code]', codeStart + 6)
-    if (codeEnd < 0) {
-      result += content.substring(codeStart)
-      break
-    }
-    result += content.substring(codeStart, codeEnd + 7)
-    position = codeEnd + 7
-  }
-  return result
+    .replace(/<\/?[a-z][^>]*>/gi, '')
 }
 
 export {
