@@ -1,0 +1,17 @@
+{
+  "name": "nga-bbcode-ts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NGA BBCode 解析器 TS 镜像：以 Node 环境验证解析/渲染逻辑，再机械同步回 ArkTS",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test \"dist/tests/*.test.js\"",
+    "snapshot": "npm run build && node dist/scripts/gen-snapshot.js",
+    "sync": "node scripts/sync-to-ets.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}

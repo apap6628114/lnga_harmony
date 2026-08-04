@@ -13,3 +13,6 @@
 **/language-server.log
 /java
 .zcode/
+# tools/bbcode-ts 构建产物与依赖
+/tools/bbcode-ts/node_modules
+/tools/bbcode-ts/dist
