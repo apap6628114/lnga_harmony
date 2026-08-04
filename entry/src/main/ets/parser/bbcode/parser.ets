@@ -1,5 +1,5 @@
 import { BBNode, BBNodeType } from '../../model/BBCodeNode'
-import { ParseState, preprocessContent, createBBNode, indexOfIgnoreCase, matchesIgnoreCaseAt } from './lexer'
+import { ParseState, preprocessContent, createBBNode, indexOfIgnoreCase, matchesIgnoreCaseAt, pushTextNode } from './lexer'
 import { MAX_INLINE_DEPTH, MAX_INLINE_TAG_LENGTH, parseInlineInto } from './inline-parser'
 import { isInlineStyleTagName, isValidInlineStyleTag } from './inline-tag-policy'
 import { handlePostBy } from './block-handlers/handlePostBy'
@@ -399,7 +399,20 @@ function parseTableContent(state: ParseState, closePattern: RegExp): BBNode[] {
       rows.push(row)
       continue
     }
-    state.pos = state.pos + 1
+    // [tr] 之间的杂散内容（含 <br/> 预处理后的换行分隔）保留为表级文本节点。
+    // 渲染层按 TABLE_ROW 消费时忽略，纯文本提取可保留行间分隔。
+    const nextBracket: number = state.content.indexOf('[', state.pos)
+    if (nextBracket < 0) {
+      pushTextNode(rows, state.content.substring(state.pos, state.len))
+      state.pos = state.len
+      break
+    }
+    if (nextBracket > state.pos) {
+      pushTextNode(rows, state.content.substring(state.pos, nextBracket))
+      state.pos = nextBracket
+    } else {
+      state.pos = state.pos + 1
+    }
   }
   return rows
 }
@@ -437,7 +450,20 @@ function parseTableRowCells(state: ParseState): BBNode[] {
       cell.children = parseBBCode(cellText)
       cells.push(cell)
     } else {
-      state.pos = state.pos + 1
+      // [td] 之间的杂散内容（含 <br/> 预处理后的换行分隔）保留为行级文本节点。
+      // 渲染层按 TABLE_CELL 消费时忽略，纯文本提取可保留单元格间分隔。
+      const nextBracket: number = state.content.indexOf('[', state.pos)
+      if (nextBracket < 0) {
+        pushTextNode(cells, state.content.substring(state.pos, state.len))
+        state.pos = state.len
+        break
+      }
+      if (nextBracket > state.pos) {
+        pushTextNode(cells, state.content.substring(state.pos, nextBracket))
+        state.pos = nextBracket
+      } else {
+        state.pos = state.pos + 1
+      }
     }
   }
   return cells
