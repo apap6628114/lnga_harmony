@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { BBNode } from '../src/model/BBCodeNode'
+import { BBNode, BBNodeType } from '../src/model/BBCodeNode'
 
 /**
  * 仓库根目录（tools/bbcode-ts）。
@@ -181,4 +181,189 @@ export function concatTextNodes(nodes: BBNode[]): string {
     s += concatTextNodes(n.children)
   }
   return s
+}
+
+// ---------------------------------------------------------------------------
+// 官方渲染差分对比公共逻辑（tests/official.test.ts 与 scripts/compare-official.ts 共用）
+// ---------------------------------------------------------------------------
+
+/** 官方渲染 run（浏览器提取脚本输出格式）。 */
+export interface OfficialRun {
+  t: string
+  b: boolean
+  i: boolean
+  u: boolean
+  st: boolean
+  c: string
+  sz: number
+  href: string
+  k: string
+  tbl: boolean
+  col: string
+}
+
+/** 样式上下文（树遍历时逐层累积）。 */
+interface StyleCtx {
+  b: boolean
+  i: boolean
+  u: boolean
+  st: boolean
+  c: string
+  sz: number
+  href: string
+  tbl: boolean
+}
+
+/** 官方 collapse 标题归一：去 "+ " 前缀与 " ..." 截断后缀。 */
+export function normalizeCollapseTitle(t: string): string {
+  return t.replace(/^\+?\s*/, '').replace(/\s*\.\.\.\s*$/, '').trim()
+}
+
+/**
+ * 从解析树生成与官方渲染同构的 run 序列。
+ *
+ * 官方行为对齐：
+ * - COLLAPSE：仅输出标题（官方 collapse_content 服务端截断为空）；children 跳过
+ * - 表格区（tbl=true）：\n 统一删除（官方 td 边界无分隔，解析树行级有）
+ * - IMAGE：跳过（官方懒加载占位）
+ */
+export function treeToRuns(nodes: BBNode[], ctx: StyleCtx = { b: false, i: false, u: false, st: false, c: '', sz: 0, href: '', tbl: false }): OfficialRun[] {
+  const runs: OfficialRun[] = []
+
+  const walk = (nodes: BBNode[], ctx: StyleCtx): void => {
+    const push = (text: string, col: string = ''): void => {
+      if (text.length === 0) return
+      const clean: string = ctx.tbl ? text.replace(/\n/g, '') : text
+      if (clean.length === 0) return
+      const last: OfficialRun | undefined = runs.length > 0 ? runs[runs.length - 1] : undefined
+      if (last !== undefined && last.k === 'text' && last.col === col && last.b === ctx.b && last.i === ctx.i && last.u === ctx.u &&
+        last.st === ctx.st && last.c === ctx.c && last.sz === ctx.sz && last.href === ctx.href && last.tbl === ctx.tbl) {
+        last.t += clean
+        return
+      }
+      runs.push({ t: clean, b: ctx.b, i: ctx.i, u: ctx.u, st: ctx.st, c: ctx.c, sz: ctx.sz, href: ctx.href, k: 'text', tbl: ctx.tbl, col })
+    }
+    for (const node of nodes) {
+      const nctx = { ...ctx }
+      switch (node.type) {
+        case BBNodeType.TEXT:
+          push(node.text)
+          continue
+        case BBNodeType.BOLD: nctx.b = true; break
+        case BBNodeType.ITALIC: nctx.i = true; break
+        case BBNodeType.UNDERLINE: nctx.u = true; break
+        case BBNodeType.STRIKETHROUGH: nctx.st = true; break
+        case BBNodeType.COLOR:
+          if (node.color.length > 0) nctx.c = node.color
+          break
+        case BBNodeType.SIZE:
+          if (node.size > 0) nctx.sz = node.size
+          break
+        case BBNodeType.URL:
+        case BBNodeType.PID_LINK:
+        case BBNodeType.UID_LINK:
+        case BBNodeType.TID_LINK:
+        case BBNodeType.MENTION:
+          if (node.href.length > 0) nctx.href = node.href
+          break
+        case BBNodeType.QUOTE:
+        case BBNodeType.FLOAT_LEFT:
+        case BBNodeType.FLOAT_RIGHT:
+        case BBNodeType.ALIGN:
+        case BBNodeType.STYLE_DIV:
+        case BBNodeType.PARAGRAPH:
+        case BBNodeType.HEADING:
+        case BBNodeType.LIST:
+        case BBNodeType.LIST_ITEM:
+        case BBNodeType.HR:
+        case BBNodeType.DICE:
+        case BBNodeType.POST_BY:
+        case BBNodeType.CODE:
+          walk(node.children, nctx)
+          continue
+        case BBNodeType.TABLE:
+          walk(node.children, { ...nctx, tbl: true })
+          continue
+        case BBNodeType.TABLE_ROW:
+        case BBNodeType.TABLE_CELL:
+          walk(node.children, nctx)
+          continue
+        case BBNodeType.COLLAPSE:
+          push(normalizeCollapseTitle(node.title), normalizeCollapseTitle(node.title))
+          continue
+        case BBNodeType.IMAGE:
+        case BBNodeType.ALBUM:
+        case BBNodeType.VIDEO:
+        case BBNodeType.AUDIO:
+        case BBNodeType.FLASH:
+        case BBNodeType.EMOTION:
+          continue
+        default:
+          if (node.children.length > 0) walk(node.children, nctx)
+          else if (node.text.length > 0) push(node.text)
+          continue
+      }
+      walk(node.children, nctx)
+    }
+  }
+
+  walk(nodes, ctx)
+  return runs
+}
+
+/**
+ * 文本流拼接（表格内 \n 统一删除，两侧对称）。
+ *
+ * 同时模拟官方网页渲染的块级空白折叠：表格块边界（进入/离开表格）的
+ * 连续换行/空格折叠为 1 个换行（NGA 渲染 `[table]` 前后 `<br/><br/>`、
+ * `<br/> <br/>` 时只保留 1 个 `<br>`）。官方文本流已折叠，应用此规则幂等。
+ */
+export function runsText(runs: OfficialRun[]): string {
+  let out: string = ''
+  let prevTbl: boolean = false
+  for (const r of runs) {
+    if (r.k !== 'text') continue
+    let t: string = r.tbl ? r.t.replace(/\n/g, '') : r.t
+    if (r.tbl !== prevTbl) {
+      out = out.replace(/[\n ]+$/, '\n')
+      t = t.replace(/^[\n ]+/, '\n')
+    }
+    prevTbl = r.tbl
+    out += t
+  }
+  return out.trim()
+}
+
+/**
+ * 样式统计。
+ *
+ * chars 复用 runsText（口径一致：表格边界空白折叠）；
+ * 其余字段按 run 累加——表格边界折叠只影响无样式分隔 run，不影响样式统计。
+ */
+export function countStyles(runs: OfficialRun[]): Record<string, number | string[]> {
+  const stats: Record<string, number | string[]> = { chars: 0, boldChars: 0, italicChars: 0, underlineChars: 0, strikeChars: 0, links: 0, imgRuns: 0, tableChars: 0, collapseTitles: [] }
+  for (const r of runs) {
+    if (r.k === 'img') { stats.imgRuns = (stats.imgRuns as number) + 1; continue }
+    const t: string = r.tbl ? r.t.replace(/\n/g, '') : r.t
+    const n: number = t.length
+    if (r.b) stats.boldChars = (stats.boldChars as number) + n
+    if (r.i) stats.italicChars = (stats.italicChars as number) + n
+    if (r.u) stats.underlineChars = (stats.underlineChars as number) + n
+    if (r.st) stats.strikeChars = (stats.strikeChars as number) + n
+    if (r.href.length > 0) stats.links = (stats.links as number) + 1
+    if (r.tbl) stats.tableChars = (stats.tableChars as number) + n
+    if (r.col.length > 0) (stats.collapseTitles as string[]).push(normalizeCollapseTitle(r.col))
+  }
+  stats.chars = runsText(runs).length
+  return stats
+}
+
+/** 拼接全部 COLLAPSE 节点 children 的文本（验证折叠内容在解析树中完整保留）。 */
+export function collectCollapseText(nodes: BBNode[]): string {
+  let text: string = ''
+  for (const n of nodes) {
+    if (n.type === BBNodeType.COLLAPSE) text += concatTextNodes(n.children)
+    text += collectCollapseText(n.children)
+  }
+  return text
 }
