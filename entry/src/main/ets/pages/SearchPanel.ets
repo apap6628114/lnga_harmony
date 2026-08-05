@@ -8,6 +8,7 @@ import { getTopicList, createTopicListParams, searchForum } from '../service/api
 import type { TopicListParams } from '../service/api/ForumApi'
 import type { TopicListResult, SearchForumResult } from '../model/NgaApiResults'
 import { AppColors, FONT_COLORS, BreakpointType } from '../common/constants/Constants'
+import { NGA_IMG4_BASE } from '../common/constants/NgaDomains'
 import { formatTime, escHtml } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { ThreadDataSource } from '../common/datasource/LazyDataSource'
@@ -272,7 +273,7 @@ export struct SearchPanel {
             LazyForEach(this.forumsDataSource, (forum: object) => {
               ListItem() {
                 Row() {
-                  Image(`https://img4.nga.cn/ngabbs/nga_classic/f/app/${(forum as Record<string, Object>)['fid']}.png`)
+                  Image(`${NGA_IMG4_BASE}/ngabbs/nga_classic/f/app/${(forum as Record<string, Object>)['fid']}.png`)
                     .width(40).height(40).borderRadius(10).objectFit(ImageFit.Cover).backgroundColor(AppColors.bgSecondary).margin({ right: 12 }).onError(() => {})
                   Column() {
                     Text(unescapeHtml(String((forum as Record<string, Object>)['name'] ?? ''))).fontSize(15).fontColor(AppColors.textPrimary)

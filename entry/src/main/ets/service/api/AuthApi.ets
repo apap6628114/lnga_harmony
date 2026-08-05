@@ -13,6 +13,7 @@ import {
 } from '../../model/NgaApiResults';
 import { UserInfo } from '../../model/UserInfo';
 import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger';
+import { NGA_AVATAR_BASE } from '../../common/constants/NgaDomains';
 
 // ============== 临时登录会话 ==============
 
@@ -94,7 +95,7 @@ export async function loginStep2(loginToken: string, captchaId: string, captcha:
     loginSessions.delete(loginToken);
 
     let nickName = session.username;
-    const avatarUrl = `https://img4.nga.cn/ngabbs/nga_classic/avatar/${loginResult.uid}.png`;
+    const avatarUrl = NGA_AVATAR_BASE + loginResult.uid + '.png';
 
     // 尝试从 cookie 获取昵称
     const extracted = extractNickName(loginResult.setCookies);
@@ -223,7 +224,7 @@ export async function injectCredentials(uid: string, cid: string): Promise<Injec
 
   try {
     let nickName = uid;
-    const avatarUrl = `https://img4.nga.cn/ngabbs/nga_classic/avatar/${uid}.png`;
+    const avatarUrl = NGA_AVATAR_BASE + uid + '.png';
 
     const fetched = await fetchNickNameFromNga(uid, cid, uid);
     if (fetched) {

@@ -7,6 +7,8 @@
  * - AppColors 通过 $r 引用资源，setColorMode 自动切换
  */
 
+import { NGA_HOSTS } from './NgaDomains'
+
 // 当前激活的主题色（通过 $r 引用资源，setColorMode 自动切换）
 export class AppColors {
   static primary: Resource = $r('app.color.primary')
@@ -156,11 +158,10 @@ export interface DomainOption {
   value: number
 }
 
-export const DOMAIN_OPTIONS: DomainOption[] = [
-  { label: 'bbs.nga.cn', value: 0 },
-  { label: 'ngabbs.com', value: 1 },
-  { label: 'nga.178.com', value: 2 },
-]
+// 由 NGA_HOSTS 派生，保证设置项与请求域名列表一致
+export const DOMAIN_OPTIONS: DomainOption[] = NGA_HOSTS.map(
+  (host: string, index: number): DomainOption => ({ label: host, value: index })
+)
 
 // 标题字体颜色映射
 export const FONT_COLORS: Record<number, string> = {

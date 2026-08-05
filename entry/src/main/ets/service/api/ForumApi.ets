@@ -40,7 +40,8 @@ export async function searchForum(token: string, key: string): Promise<SearchFor
 
   try {
     const params: Record<string, string> = { '__output': '8', 'key': key };
-    result.data = await ngaClient.getWithBaseUrl('/forum.php', params, 'http://bbs.nga.cn', { uid: session.uid, cid: session.cid });
+    // 走默认通道（https + 失败时按 DOMAINS 轮换备用域），与 getTopicList 一致
+    result.data = await ngaClient.get('/forum.php', params, { uid: session.uid, cid: session.cid });
     result.ok = true;
   } catch (e) {
     result.error = (e as Error).message ?? '搜索失败';

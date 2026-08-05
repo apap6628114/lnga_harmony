@@ -216,10 +216,10 @@ P1-1 合并了项目内 4 份重复的 `decodeHtmlEntities` 实现，统一到 `
 
 | 函数 | 用途 | 行号 |
 |------|------|------|
-| `resolveAttachUrl` | 解析 ThreadApi 返回的附件 `attachurl` 字段（相对路径拼 CDN，纯数字/无斜杠视为非法返回空） | `AttachUrl.ets:23-28` |
-| `resolveImgUrl` | 解析 BBCode `[img]` 标签图片地址（http 原样 / `/mon_` / `./mon_` 拼 CDN / `/` 相对，并 `stripImageSuffix` 去杂讯） | `AttachUrl.ets:36-44` |
+| `resolveAttachUrl` | 解析 ThreadApi 返回的附件 `attachurl` 字段（相对路径拼 CDN，纯数字/无斜杠视为非法返回空） | `AttachUrl.ets:24-29` |
+| `resolveImgUrl` | 解析 BBCode `[img]` 标签图片地址（http 原样 / `/mon_` / `./mon_` 拼 CDN / `/` 相对，并 `stripImageSuffix` 去杂讯） | `AttachUrl.ets:37-45` |
 
-`NGA_CDN_BASE = 'https://img.nga.178.com/attachments'`（`AttachUrl.ets:14`）。
+`NGA_CDN_BASE = 'https://img.nga.cn/attachments'`（`AttachUrl.ets:15`，由 `common/constants/NgaDomains.ets` 的 `NGA_IMG_BASE` 拼接，切域只需改 `NgaDomains.ets`）。
 
 ## 错误处理
 

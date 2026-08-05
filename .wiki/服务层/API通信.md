@@ -103,6 +103,8 @@ try {
 } finally { if (!released) ngaThrottler.release(hostname); }
 ```
 
+**域名单一事实源：** `DOMAINS` 由 `common/constants/NgaDomains.ets` 的 `NGA_API_DOMAINS` 导入（`NGA_HOSTS` 加 `https://` 前缀派生）。设置页域名选项（`Constants.ets` `DOMAIN_OPTIONS`）同样由 `NGA_HOSTS` 派生。NGA 切域只需修改 `NgaDomains.ets` 一处。
+
 **保守决策（baseUrl quirk）：** `baseUrl` 形参控制重试是否轮换域名（`NgaClient.ets:213`）：
 
 - `ngaRequest` 传入 `baseUrl = ''`（空串）→ `retryBaseUrl = baseUrl || DOMAINS[retryDomainIdx]` 命中轮换后的域名，**会轮换**。
@@ -118,8 +120,8 @@ try {
 | Multipart | `ngaClient.postMultipart`（`NgaClient.ets:313-320`） | multipart/form-data 表单 |
 | Raw | `ngaClient.getRaw`（`NgaClient.ets:322-326`） | 返回 ArrayBuffer，不解码 |
 | HTML | `ngaClient.getHtmlText`（`NgaClient.ets:328-338`） | 返回 GB18030 解码后的 HTML 文本，不轮换域名 |
-| 指定 baseUrl | `ngaClient.getWithBaseUrl`（`NgaClient.ets:340-343`） | GET 但绑定特定域名 |
-| 附件二进制上传 | `ngaUploadFile`（`NgaClient.ets:613-706`） | 上传到 `img8.nga.cn/attach.php` |
+| 指定 baseUrl | `ngaClient.getWithBaseUrl`（`NgaClient.ets:350-353`） | GET 但绑定特定域名。当前无调用方（ForumApi 搜索已改走 `get` 默认轮换通道） |
+| 附件二进制上传 | `ngaUploadFile`（`NgaClient.ets:640-734`） | 上传到 `img8.nga.cn/attach.php`（`NGA_UPLOAD_URL`） |
 
 ### 错误检测与降级
 

@@ -2,13 +2,7 @@ import { common, Context } from '@kit.AbilityKit'
 import { routerStore, Screen } from '../../store/RouterStore'
 import { floatingLayerStore, FloatingPage } from '../../store/FloatingLayerStore'
 import { KEY_USE_INTERNAL_WEBVIEW } from '../constants/AppStorageKeys'
-
-/** NGA 域名列表 */
-const NGA_DOMAINS: string[] = [
-  'bbs.nga.cn',
-  'ngabbs.com',
-  'nga.178.com',
-]
+import { NGA_HOSTS } from '../constants/NgaDomains'
 
 /**
  * 从 URL 中提取主机名。
@@ -58,11 +52,16 @@ function parseQueryString(qs: string): Map<string, string> {
   return params
 }
 
-/** 判断主机名是否属于 NGA 域名 */
-function isNgaDomain(hostname: string): boolean {
+/**
+ * 判断主机名是否属于 NGA 域名（单一实现，WebViewPanel 等复用）。
+ *
+ * @param hostname - 主机名（不含协议）
+ * @returns 是否属于 NGA 域名
+ */
+export function isNgaDomain(hostname: string): boolean {
   const lower: string = hostname.toLowerCase()
-  for (let i = 0; i < NGA_DOMAINS.length; i++) {
-    if (lower === NGA_DOMAINS[i] || lower.endsWith('.' + NGA_DOMAINS[i])) {
+  for (let i = 0; i < NGA_HOSTS.length; i++) {
+    if (lower === NGA_HOSTS[i] || lower.endsWith('.' + NGA_HOSTS[i])) {
       return true
     }
   }

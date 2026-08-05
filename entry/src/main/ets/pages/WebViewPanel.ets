@@ -8,18 +8,12 @@ import { getActiveDomain } from '../service/api/MiscApi'
 import { appStore } from '../store/AppStore'
 import { Logger, DOMAIN_UI, formatError } from '../common/utils/Logger'
 import { KEY_USE_INTERNAL_WEBVIEW } from '../common/constants/AppStorageKeys'
-import { handleForumLink, openAppLinkOrFallback, openSystemLink } from '../common/utils/LinkUtils'
+import { handleForumLink, isNgaDomain, openAppLinkOrFallback, openSystemLink } from '../common/utils/LinkUtils'
+import { extractHostname } from '../common/utils/UrlUtils'
 import { AppColors } from '../common/constants/Constants'
 import { PageScope } from '../common/concurrency/PageScope'
 
 const logger = new Logger(DOMAIN_UI, 'WebViewPanel')
-
-/** NGA 域名列表（与 LinkUtils 保持同步） */
-const NGA_DOMAINS: string[] = [
-  'bbs.nga.cn',
-  'ngabbs.com',
-  'nga.178.com',
-]
 
 @Component
 export struct WebViewPanel {
@@ -41,7 +35,7 @@ export struct WebViewPanel {
   aboutToAppear(): void {
     this.scope.begin()
     this.injectCookies()
-    this.ngaSession = this.isNgaDomain(this.extractHostname(this.url))
+    this.ngaSession = isNgaDomain(extractHostname(this.url))
     this.internalFallbackUrl = this.url
   }
 
@@ -65,27 +59,6 @@ export struct WebViewPanel {
     } catch (e) {
       logger.error('[WebViewPanel] setCookie failed: %{public}s', formatError(e))
     }
-  }
-
-  /**
-   * 从 URL 中提取主机名。
-   */
-  private extractHostname(url: string): string {
-    const match = url.match(/^https?:\/\/([^/]+)/)
-    return match ? match[1] : url
-  }
-
-  /**
-   * 判断主机名是否属于 NGA 域名。
-   */
-  private isNgaDomain(hostname: string): boolean {
-    const lower: string = hostname.toLowerCase()
-    for (let i = 0; i < NGA_DOMAINS.length; i++) {
-      if (lower === NGA_DOMAINS[i] || lower.endsWith('.' + NGA_DOMAINS[i])) {
-        return true
-      }
-    }
-    return false
   }
 
   /**
@@ -161,16 +134,16 @@ export struct WebViewPanel {
       return false
     }
 
-    const hostname: string = this.extractHostname(targetUrl)
+    const hostname: string = extractHostname(targetUrl)
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext
 
     // ─── NGA 会话模式：用户显式选择了浏览 NGA 网页版，放行所有 NGA 域名链接 ───
-    if (this.ngaSession && this.isNgaDomain(hostname)) {
+    if (this.ngaSession && isNgaDomain(hostname)) {
       return false
     }
 
     // ─── 第一优先级：NGA 链接 → 回归原生页面 ───
-    if (this.isNgaDomain(hostname)) {
+    if (isNgaDomain(hostname)) {
       // 委托 handleForumLink 做原生路由（帖子详情 / 用户主页 / WebView 兜底）
       handleForumLink(targetUrl, context)
       return true

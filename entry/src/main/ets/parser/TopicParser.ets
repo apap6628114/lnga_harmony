@@ -1,6 +1,7 @@
 import type { TopicRaw, ThreadPageInfo, TopicListInfo, Pagination } from '../model/Topic';
 import type { SubBoard } from '../model/Forum';
 import { decodeAnonymousName } from './AnonymousParser';
+import { NGA_IMG4_BASE } from '../common/constants/NgaDomains';
 
 /**
  * 子版块 ID 的 NGA 表示形式。
@@ -169,7 +170,7 @@ function parseSubBoardEntry(raw: Object, fallbackIdKind: SubBoardIdKind): SubBoa
     fid,
     stid,
     name,
-    boardHead: `https://img4.nga.cn/ngabbs/nga_classic/f/app/${id}.png`,
+    boardHead: `${NGA_IMG4_BASE}/ngabbs/nga_classic/f/app/${id}.png`,
     tidStr: filterId,
     type: attributes,
     checked: SELECTED_SUB_BOARD_ATTRIBUTES.has(attributes),

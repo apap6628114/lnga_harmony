@@ -14,6 +14,7 @@ import {
 } from '../common/utils/CodecUtils';
 import { extractHostname, buildUrl } from '../common/utils/UrlUtils';
 import { parseSessionCookies, normalizeCookieList } from '../common/CookieUtils';
+import { NGA_API_DOMAINS as DOMAINS, NGA_UPLOAD_URL } from '../common/constants/NgaDomains';
 
 // ============== 类型定义 ==============
 
@@ -43,12 +44,6 @@ const NGA_RSA_PUBLIC_KEY =
   'qDGw3/34qyF+E/hVgrGF4/CcWNP/LJCdB6DYtx7VPlQZF0tP1s+q/++rC4rQ2wmV' +
   'l2V8zGh1j7ojZbt62hVjy6byK1E/2XYo97ZtL4KDW7F5jJMvSDRFR7901UR8hCdf' +
   '4wIDAQAB';
-
-const DOMAINS: string[] = [
-  'https://bbs.nga.cn',
-  'https://ngabbs.com',
-  'https://nga.178.com',
-];
 
 let activeDomainIndex: number = 0;
 
@@ -649,7 +644,7 @@ export async function ngaUploadFile(
   fid: number,
   cookies: Cookies
 ): Promise<string> {
-  const url: string = 'https://img8.nga.cn/attach.php'
+  const url: string = NGA_UPLOAD_URL
   const boundary: string = '----NGAFormBoundary' + Math.random().toString(36).slice(2, 12)
   const encoder: util.TextEncoder = util.TextEncoder.create()
 
@@ -675,6 +670,7 @@ export async function ngaUploadFile(
     '--' + boundary + '\r\n' +
     'Content-Disposition: form-data; name="attachment_file1_img"\r\n\r\n1\r\n' +
     '--' + boundary + '\r\n' +
+    // origin_domain 为服务端约定值（非连接域名），不随站点域切换修改
     'Content-Disposition: form-data; name="origin_domain"\r\n\r\nbbs.ngacn.cc\r\n'
 
   const fileHeader: string =

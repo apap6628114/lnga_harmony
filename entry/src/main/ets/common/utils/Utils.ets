@@ -1,5 +1,6 @@
 import { BBNode, BBNodeType } from '../../model/BBCodeNode'
 import { unescapeHtml } from '../../parser/_shared/HtmlEntityCodec'
+import { NGA_IMG_BASE, NGA_AVATAR_BASE } from '../constants/NgaDomains'
 
 /**
  * 通用工具函数
@@ -65,8 +66,8 @@ export function escHtml(s: string): string {
 export function getAvatarUrl(avatar: string, uid?: number | string): string {
   if (!avatar) return ''
   if (avatar.startsWith('http')) return avatar
-  if (avatar.startsWith('/')) return `https://img.nga.cn${avatar}`
-  return `https://img4.nga.cn/ngabbs/nga_classic/avatar/${avatar}`
+  if (avatar.startsWith('/')) return NGA_IMG_BASE + avatar
+  return NGA_AVATAR_BASE + avatar
 }
 
 /**
