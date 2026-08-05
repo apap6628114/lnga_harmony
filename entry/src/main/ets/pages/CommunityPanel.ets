@@ -176,7 +176,7 @@ export struct CommunityPanel {
               ForEach(section.items, (item: SidebarBoardItem) => {
                 ListItem() {
                   Row() {
-                    Image(`https://img4.nga.178.com/ngabbs/nga_classic/f/app/${item.fid}.png`)
+                    Image(`https://img4.nga.cn/ngabbs/nga_classic/f/app/${item.fid}.png`)
                       .width(section.collapsible ? 18 : 20)
                       .height(section.collapsible ? 18 : 20)
                       .borderRadius(section.collapsible ? 4 : 5)
@@ -438,7 +438,7 @@ export struct CommunityPanel {
           ForEach(this.favoritesList, (fav: FavBoard) => {
             ListItem() {
               Row() {
-                Image(`https://img4.nga.178.com/ngabbs/nga_classic/f/app/${fav.fid}.png`)
+                Image(`https://img4.nga.cn/ngabbs/nga_classic/f/app/${fav.fid}.png`)
                   .width(36).height(36).borderRadius(8).objectFit(ImageFit.Cover)
                   .onError(() => {})
                 Text(fav.name)
@@ -489,7 +489,7 @@ export struct CommunityPanel {
               ForEach(this.collectBoardsFromCat(cat), (board: BoardContent) => {
                 ListItem() {
                   Row() {
-                    Image(`https://img4.nga.178.com/ngabbs/nga_classic/f/app/${board.fid}.png`)
+                    Image(`https://img4.nga.cn/ngabbs/nga_classic/f/app/${board.fid}.png`)
                       .width(36).height(36).borderRadius(8).objectFit(ImageFit.Cover)
                       .onError(() => {})
                     Column() {
@@ -554,7 +554,7 @@ export struct CommunityPanel {
           GridCol() {
             Column() {
               Stack() {
-                Image(`https://img4.nga.178.com/ngabbs/nga_classic/f/app/${fav.fid}.png`)
+                Image(`https://img4.nga.cn/ngabbs/nga_classic/f/app/${fav.fid}.png`)
                   .width(44).height(44).borderRadius(12).objectFit(ImageFit.Cover)
                   .onError(() => {})
               }
@@ -597,7 +597,7 @@ export struct CommunityPanel {
           GridCol() {
             Column() {
               Stack() {
-                Image(`https://img4.nga.178.com/ngabbs/nga_classic/f/app/${board.fid}.png`)
+                Image(`https://img4.nga.cn/ngabbs/nga_classic/f/app/${board.fid}.png`)
                   .width(40).height(40).borderRadius(10).objectFit(ImageFit.Cover)
                   .onError(() => {})
               }
@@ -623,7 +623,7 @@ export struct CommunityPanel {
   }
 
   private getCategoryIconUrl(catId: string): string {
-    return `https://img4.nga.178.com/ngabbs/nga_classic/f/app/c/${catId}.android_xh.png`
+    return `https://img4.nga.cn/ngabbs/nga_classic/f/app/c/${catId}.android_xh.png`
   }
 
   private isActiveBoard(fid: number): boolean {

@@ -272,7 +272,7 @@ export struct SearchPanel {
             LazyForEach(this.forumsDataSource, (forum: object) => {
               ListItem() {
                 Row() {
-                  Image(`https://img4.nga.178.com/ngabbs/nga_classic/f/app/${(forum as Record<string, Object>)['fid']}.png`)
+                  Image(`https://img4.nga.cn/ngabbs/nga_classic/f/app/${(forum as Record<string, Object>)['fid']}.png`)
                     .width(40).height(40).borderRadius(10).objectFit(ImageFit.Cover).backgroundColor(AppColors.bgSecondary).margin({ right: 12 }).onError(() => {})
                   Column() {
                     Text(unescapeHtml(String((forum as Record<string, Object>)['name'] ?? ''))).fontSize(15).fontColor(AppColors.textPrimary)

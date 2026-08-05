@@ -169,7 +169,7 @@ function parseSubBoardEntry(raw: Object, fallbackIdKind: SubBoardIdKind): SubBoa
     fid,
     stid,
     name,
-    boardHead: `https://img4.nga.178.com/ngabbs/nga_classic/f/app/${id}.png`,
+    boardHead: `https://img4.nga.cn/ngabbs/nga_classic/f/app/${id}.png`,
     tidStr: filterId,
     type: attributes,
     checked: SELECTED_SUB_BOARD_ATTRIBUTES.has(attributes),

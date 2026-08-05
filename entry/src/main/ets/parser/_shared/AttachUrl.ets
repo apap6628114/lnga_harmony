@@ -11,7 +11,7 @@
 import { stripImageSuffix } from '../../common/utils/Utils'
 
 /** NGA 论坛附件 CDN 根路径 */
-export const NGA_CDN_BASE: string = 'https://img.nga.178.com/attachments'
+export const NGA_CDN_BASE: string = 'https://img.nga.cn/attachments'
 
 /**
  * 解析 NGA 附件对象 attachurl 字段为可访问 URL。

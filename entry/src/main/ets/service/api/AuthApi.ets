@@ -94,7 +94,7 @@ export async function loginStep2(loginToken: string, captchaId: string, captcha:
     loginSessions.delete(loginToken);
 
     let nickName = session.username;
-    const avatarUrl = `https://img4.nga.178.com/ngabbs/nga_classic/avatar/${loginResult.uid}.png`;
+    const avatarUrl = `https://img4.nga.cn/ngabbs/nga_classic/avatar/${loginResult.uid}.png`;
 
     // 尝试从 cookie 获取昵称
     const extracted = extractNickName(loginResult.setCookies);
@@ -223,7 +223,7 @@ export async function injectCredentials(uid: string, cid: string): Promise<Injec
 
   try {
     let nickName = uid;
-    const avatarUrl = `https://img4.nga.178.com/ngabbs/nga_classic/avatar/${uid}.png`;
+    const avatarUrl = `https://img4.nga.cn/ngabbs/nga_classic/avatar/${uid}.png`;
 
     const fetched = await fetchNickNameFromNga(uid, cid, uid);
     if (fetched) {

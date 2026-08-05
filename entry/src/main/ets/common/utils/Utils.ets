@@ -65,8 +65,8 @@ export function escHtml(s: string): string {
 export function getAvatarUrl(avatar: string, uid?: number | string): string {
   if (!avatar) return ''
   if (avatar.startsWith('http')) return avatar
-  if (avatar.startsWith('/')) return `https://img.nga.178.com${avatar}`
-  return `https://img4.nga.178.com/ngabbs/nga_classic/avatar/${avatar}`
+  if (avatar.startsWith('/')) return `https://img.nga.cn${avatar}`
+  return `https://img4.nga.cn/ngabbs/nga_classic/avatar/${avatar}`
 }
 
 /**
