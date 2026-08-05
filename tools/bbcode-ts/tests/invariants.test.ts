@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { parseBBCode } from '../src/parser/bbcode/parser'
 import { preprocessContent } from '../src/parser/bbcode/lexer'
 import { decodeHtmlEntities } from '../src/parser/_shared/HtmlEntityCodec'
+import { flattenInlineNodes, InlineRun } from '../src/common/components/bbcode/bbcode-utils'
 import { BBNode, BBNodeType } from '../src/model/BBCodeNode'
 import { loadSampleContent, isSubsequence, concatTextNodes } from './helpers'
 
@@ -215,6 +216,40 @@ describe('边角样例', () => {
       if (c.asserts) c.asserts(nodes)
     })
   }
+})
+
+// ---------------------------------------------------------------------------
+// 渲染层空白行折叠（回归：历史修复 be0ec156 在镜像化时丢失）
+// ---------------------------------------------------------------------------
+
+describe('渲染层空白行折叠（回归 be0ec156）', () => {
+  it('正文连续换行折叠为单个换行', () => {
+    const nodes: BBNode[] = parseBBCode('第一段<br/><br/><br/>第二段')
+    const runs: InlineRun[] = flattenInlineNodes(nodes)
+    assert.equal(runs.length, 1)
+    assert.equal(runs[0].text, '第一段\n第二段')
+  })
+
+  it('引用区连续换行折叠为单个换行', () => {
+    const nodes: BBNode[] = parseBBCode('[quote]引用一<br/><br/><br/>引用二[/quote]')
+    const quote: BBNode | undefined = findType(nodes, BBNodeType.QUOTE)
+    if (!quote) assert.fail('未找到 QUOTE 节点')
+    const runs: InlineRun[] = flattenInlineNodes(quote.children)
+    assert.equal(runs.length, 1)
+    assert.equal(runs[0].text, '引用一\n引用二')
+  })
+
+  it('单个换行原样保留', () => {
+    const nodes: BBNode[] = parseBBCode('第一段<br/>第二段')
+    const runs: InlineRun[] = flattenInlineNodes(nodes)
+    assert.equal(runs.length, 1)
+    assert.equal(runs[0].text, '第一段\n第二段')
+  })
+
+  it('解析树保留原始连续换行（零丢失/快照/官方差分不受影响）', () => {
+    const nodes: BBNode[] = parseBBCode('第一段<br/><br/><br/>第二段')
+    assert.equal(concatTextNodes(nodes), '第一段\n\n\n第二段')
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -326,6 +326,12 @@ export function flattenInlineNodes(nodes: BBNode[], inherited?: InlineTextStyle)
   for (let i: number = 0; i < nodes.length; i++) {
     flattenInlineNode(nodes[i], baseStyle, '', state)
   }
+  // 渲染前压缩连续换行：NGA 楼层正文的空行以 <br/> 序列表达，预处理后成为连续 \n。
+  // 解析树按"文本零丢失"保留原文（快照、官方差分、纯文本提取均依赖原始 \n），
+  // 仅在渲染层把 \n{2,} 折叠为单个 \n，避免 ArkUI Text 渲染出多个空白行。
+  for (let i: number = 0; i < state.runs.length; i++) {
+    state.runs[i].text = state.runs[i].text.replace(/\n{2,}/g, '\n')
+  }
   return state.runs
 }
 
