@@ -67,6 +67,32 @@ export default function bbcodeUnitTest(): void {
       expect(runs[0].style.italic).assertTrue()
     })
 
+    it('keepsHrefOfOverlongTextFragmentUrl', 0, (): void => {
+      const href: string = 'https://example.com/news/2026-08-05/doc-x.shtml#:~:text=' +
+        '%E7%AB%B9%E7%9F%A5%E4%BA%86'.repeat(80)
+      const nodes: BBNode[] = parseBBCode('[url=' + href + ']“竹知了”事件的四点思考[/url]')
+
+      expect(nodes.length).assertEqual(1)
+      expect(nodes[0].type).assertEqual(BBNodeType.URL)
+      expect(nodes[0].href.length).assertLarger(512)
+      expect(nodes[0].href).assertEqual(href)
+      const runs: InlineRun[] = flattenInlineNodes(nodes)
+      expect(runs.length).assertEqual(1)
+      expect(runs[0].kind).assertEqual(InlineRunKind.LINK)
+      expect(runs[0].href).assertEqual(href)
+    })
+
+    it('stillDropsOverlongStyleTagAsPlainText', 0, (): void => {
+      const longAttr: string = 'rgb(' + '1'.repeat(600) + ')'
+      const raw: string = '[color=' + longAttr + ']文字[/color]'
+      const nodes: BBNode[] = parseBBCode(raw)
+      const runs: InlineRun[] = flattenInlineNodes(nodes)
+
+      expect(runs.length).assertEqual(1)
+      expect(runs[0].kind).assertEqual(InlineRunKind.TEXT)
+      expect(runs[0].text).assertEqual(raw)
+    })
+
     it('acceptsUppercaseTagsAndKeepsLineBreaks', 0, (): void => {
       const nodes: BBNode[] = parseBBCode(
         '[B][URL=https://example.com][U]链接[/U][/URL][/B]<br/><br/>&lt;T&gt; &#91;b&#93;')
@@ -76,7 +102,7 @@ export default function bbcodeUnitTest(): void {
       expect(runs[0].kind).assertEqual(InlineRunKind.LINK)
       expect(runs[0].style.bold).assertTrue()
       expect(runs[0].style.underline).assertTrue()
-      expect(runs[1].text).assertEqual('\n\n<T> [b]')
+      expect(runs[1].text).assertEqual('\n<T> [b]')
     })
 
     it('findsClosingTagsWithoutAllocatingLowercaseContent', 0, (): void => {

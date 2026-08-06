@@ -1,6 +1,6 @@
 import { BBNode, BBNodeType } from '../../model/BBCodeNode'
 import { ParseState, preprocessContent, createBBNode, indexOfIgnoreCase, matchesIgnoreCaseAt, pushTextNode } from './lexer'
-import { MAX_INLINE_DEPTH, MAX_INLINE_TAG_LENGTH, parseInlineInto } from './inline-parser'
+import { MAX_INLINE_DEPTH, MAX_INLINE_TAG_LENGTH, MAX_INLINE_LINK_TAG_LENGTH, parseInlineInto } from './inline-parser'
 import { isInlineStyleTagName, isValidInlineStyleTag } from './inline-tag-policy'
 import { handlePostBy } from './block-handlers/handlePostBy'
 import { handleQuote } from './block-handlers/handleQuote'
@@ -118,11 +118,14 @@ function updateActiveInlineTags(segment: string, activeTags: string[]): void {
   const tagPattern: RegExp = /\[(\/)?(b|item|i|u|del|color|size|font|sub|sup|url|pid|uid|tid)(?:=[^\]]*)?\]/gi
   let match: RegExpExecArray | null = tagPattern.exec(segment)
   while (match) {
-    if (match[0].length > MAX_INLINE_TAG_LENGTH) {
+    const name: string = match[2].toLowerCase()
+    // 链接类标签属性是数据而非样式（官方对 URL 长度不设限），按类别选择长度上限
+    const limit: number = /^(url|pid|uid|tid)$/.test(name) ?
+      MAX_INLINE_LINK_TAG_LENGTH : MAX_INLINE_TAG_LENGTH
+    if (match[0].length > limit) {
       match = tagPattern.exec(segment)
       continue
     }
-    const name: string = match[2].toLowerCase()
     if (match[1]) {
       for (let i: number = activeTags.length - 1; i >= 0; i--) {
         if (getInlineTagName(activeTags[i]) === name) {

@@ -9,8 +9,17 @@ const MEDIA_VIDEO_EXTS: string[] = ['mp4', 'webm', 'ogg', 'mov', '3gp']
 /** 可作为音频播放的常见文件扩展名。 */
 const MEDIA_AUDIO_EXTS: string[] = ['mp3', 'wav', 'flac', 'aac', 'm4a']
 
-/** 单个内联标签允许的最大字符数。 */
+/** 单个内联样式标签允许的最大字符数。 */
 const MAX_INLINE_TAG_LENGTH: number = 512
+
+/**
+ * 单个内联链接标签（url/pid/uid/tid）允许的最大字符数。
+ *
+ * 官方网页对 `[url=]` 属性长度不设限（实测渲染 1349 字符的 text fragment
+ * 链接完整保留），链接属性是纯数据而非样式声明；放开上限的同时保留
+ * 极端超长标签的防护。
+ */
+const MAX_INLINE_LINK_TAG_LENGTH: number = 8192
 
 /** 内联格式允许的最大嵌套层数。 */
 const MAX_INLINE_DEPTH: number = 64
@@ -68,22 +77,28 @@ function guessMediaTypeFromExt(rawUrl: string): BBNodeType {
 function readInlineTag(segment: string, start: number): InlineTagToken | null {
   const closeBracket: number = segment.indexOf(']', start + 1)
   if (closeBracket < 0) return null
-  if (closeBracket - start + 1 > MAX_INLINE_TAG_LENGTH) return null
-  const raw: string = segment.substring(start, closeBracket + 1)
   let body: string = segment.substring(start + 1, closeBracket).trim()
   if (body.length === 0) return null
 
-  const token = new InlineTagToken()
-  token.raw = raw
-  token.end = closeBracket + 1
+  let closing: boolean = false
   if (body.startsWith('/')) {
-    token.closing = true
+    closing = true
     body = body.substring(1).trim()
   }
 
   const equalIndex: number = body.indexOf('=')
   const name: string = (equalIndex >= 0 ? body.substring(0, equalIndex) : body).trim()
   if (!/^[a-z]+$/i.test(name)) return null
+  // 链接类标签属性是数据而非样式（官方对 URL 长度不设限），按类别选择长度上限
+  const limit: number = isInlineLinkTag(name.toLowerCase()) ?
+    MAX_INLINE_LINK_TAG_LENGTH : MAX_INLINE_TAG_LENGTH
+  if (closeBracket - start + 1 > limit) return null
+
+  const raw: string = segment.substring(start, closeBracket + 1)
+  const token = new InlineTagToken()
+  token.raw = raw
+  token.end = closeBracket + 1
+  token.closing = closing
   token.name = name.toLowerCase()
   token.attribute = equalIndex >= 0 ? body.substring(equalIndex + 1).trim() : ''
   return token
@@ -355,4 +370,4 @@ function parseInlineInto(segment: string, into: BBNode[]): void {
   }
 }
 
-export { parseInlineInto, guessMediaTypeFromExt, MAX_INLINE_DEPTH, MAX_INLINE_TAG_LENGTH }
+export { parseInlineInto, guessMediaTypeFromExt, MAX_INLINE_DEPTH, MAX_INLINE_TAG_LENGTH, MAX_INLINE_LINK_TAG_LENGTH }

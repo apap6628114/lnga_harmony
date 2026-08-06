@@ -136,6 +136,32 @@ describe('真实样本结构（demo.txt）', () => {
 })
 
 // ---------------------------------------------------------------------------
+// 真实样本结构（demo2.txt）
+// ---------------------------------------------------------------------------
+
+describe('真实样本结构（demo2.txt）', () => {
+  const content: string = loadSampleContent('demo2.txt')
+  const nodes: BBNode[] = parseBBCode(content)
+
+  it('超长 URL（1349 字符 text fragment 链接）被识别为链接而非退化文本', () => {
+    const urls: BBNode[] = []
+    collectType(nodes, BBNodeType.URL, urls)
+    assert.equal(urls.length, 1, `URL 节点应为 1 个，实际 ${urls.length}`)
+    const href: string = urls[0].href
+    assert.ok(href.includes('finance.sina.com.cn'), `href 应为新浪链接: ${href.slice(0, 80)}`)
+    assert.ok(href.length > 512, `href 应完整保留超长片段（超过旧 512 上限）: ${href.length}`)
+    // 显示文字
+    const text: string = concatTextNodes(urls[0].children)
+    assert.ok(text.includes('竹知了'), `链接文字缺失: ${text}`)
+  })
+
+  it('无退化文本残留（[url 标签未被当作文本原样输出）', () => {
+    const actual: string = concatTextNodes(nodes)
+    assert.ok(!actual.includes('[url='), `存在退化标签文本: ${actual.slice(0, 120)}`)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 边角样例（解析器功能面覆盖）
 // ---------------------------------------------------------------------------
 

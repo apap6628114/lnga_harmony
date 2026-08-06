@@ -18,8 +18,8 @@ import {
  * 断言：解析树 run 序列（官方同构格式）与官方渲染 run 序列在
  * 文本流、样式统计、锚点样式链上一致——即"官方网页怎么解释，解析器就怎么解释"。
  *
- * 重新提取官方基准：打开楼层页 → 执行 chrome 脚本（见 compare-official.ts 注释）→
- * 覆盖 samples/official-*-runs.json。
+ * 当前挂载 demo.txt ↔ official-tid46425481-lou0-runs.json（硬编码）；
+ * 新固化样本按 README「异常渲染调试流程」第 8 步产出，需接入差分时改挂载点。
  */
 
 const OFFICIAL_FILE: string = join(process.cwd(), 'samples', 'official-tid46425481-lou0-runs.json')
@@ -31,7 +31,7 @@ const officialData: { runs: OfficialRun[]; tdCount?: number; tableCount?: number
 describe('官方渲染基准差分（tid=46425481 楼主层）', () => {
   it('官方基准样本存在（先通过 chrome devtools 提取）', () => {
     assert.ok(officialData !== null && officialData.runs.length > 0,
-      '官方基准缺失。用 chrome devtools 打开楼层页，执行 run 序列提取脚本并保存为 samples/official-tid46425481-lou0-runs.json')
+      '官方基准缺失。按 README「异常渲染调试流程」第 8 步固化：chrome devtools 对照后保存 runs.json')
   })
 
   // 后续断言依赖官方样本，样本缺失时跳过（上面已失败）
