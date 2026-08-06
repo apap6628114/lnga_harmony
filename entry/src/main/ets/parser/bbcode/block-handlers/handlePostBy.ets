@@ -4,7 +4,7 @@ import { parseInlineInto } from '../inline-parser'
 import { parseBBCode } from '../parser'
 
 /** 回复引用头的完整正则（含惰性匹配，构造与执行成本高）。 */
-const P_REPLY_REF: RegExp = /\[b\]Reply to \[pid=(\d+),(\d+),(\d+)\]Reply\[\/pid\] Post by \[uid=(\d+)\](.*?)\[\/uid\] \(([^)]+)\)/gi
+const P_REPLY_REF: RegExp = /\[b\]Reply to \[pid=(\d+),(\d+),(\d+)\]Reply\[\/pid\] Post by \[uid=(\d+)\](.*?)\[\/uid\] \(([^)]+)\)/iy
 
 /**
  * `[b]Reply to [pid=...]...[/pid] Post by [uid=...]...[/uid] (...):` 块处理器。

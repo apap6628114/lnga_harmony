@@ -46,7 +46,7 @@ function findListBlockEnd(content: string, start: number): number {
  * @returns 是否匹配并消费了 [list] 块
  */
 /** [list] 开始标签正则。 */
-const P_LIST: RegExp = /\[list\]/gi
+const P_LIST: RegExp = /\[list\]/iy
 
 export const handleList = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos

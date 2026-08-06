@@ -169,19 +169,29 @@ function applyStyleAttribute(node: BBNode, tag: InlineTagToken): boolean {
 }
 
 /**
+ * 把节点树中的可见文字追加到分片数组。
+ *
+ * @param nodes 内联节点树
+ * @param parts 文字分片输出数组
+ */
+function appendInlineText(nodes: BBNode[], parts: string[]): void {
+  for (let i: number = 0; i < nodes.length; i++) {
+    const node: BBNode = nodes[i]
+    if (node.text.length > 0) parts.push(node.text)
+    if (node.children.length > 0) appendInlineText(node.children, parts)
+  }
+}
+
+/**
  * 收集节点树的可见文字，供无属性 URL 推导跳转地址。
  *
  * @param nodes 内联节点树
  * @returns 拼接后的可见文字
  */
 function collectInlineText(nodes: BBNode[]): string {
-  let result: string = ''
-  for (let i: number = 0; i < nodes.length; i++) {
-    const node: BBNode = nodes[i]
-    if (node.text.length > 0) result += node.text
-    if (node.children.length > 0) result += collectInlineText(node.children)
-  }
-  return result
+  const parts: string[] = []
+  appendInlineText(nodes, parts)
+  return parts.join('')
 }
 
 /**

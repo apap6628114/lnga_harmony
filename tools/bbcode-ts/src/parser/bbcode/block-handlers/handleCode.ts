@@ -10,7 +10,7 @@ import { createBBNode, indexOfIgnoreCase, ParseState } from '../lexer'
  * @returns 是否匹配并消费了 [code] 块
  */
 /** [code] 开始标签正则。 */
-const P_CODE: RegExp = /\[code\]/gi
+const P_CODE: RegExp = /\[code\]/iy
 
 export const handleCode = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos

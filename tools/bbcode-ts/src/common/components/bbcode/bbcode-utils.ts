@@ -123,6 +123,10 @@ class InlineRunBuildState {
   runs: InlineRun[] = []
   /** 当前文档内 Run 序号。 */
   serial: number = 0
+  /** 等待写入结果数组的可合并 Run。 */
+  pendingRun: InlineRun | null = null
+  /** 等待合并到 pendingRun 的文字分片。 */
+  pendingTextParts: string[] = []
 }
 
 /**
@@ -261,6 +265,19 @@ function areInlineStylesEqual(left: InlineTextStyle, right: InlineTextStyle): bo
 }
 
 /**
+ * 将等待合并的 Run 一次性写入结果数组。
+ *
+ * @param state Run 构建状态
+ */
+function flushPendingRun(state: InlineRunBuildState): void {
+  if (state.pendingRun === null) return
+  state.pendingRun.text = state.pendingTextParts.join('')
+  state.runs.push(state.pendingRun)
+  state.pendingRun = null
+  state.pendingTextParts = []
+}
+
+/**
  * 追加 Run，并合并相邻且语义完全一致的文字。
  *
  * @param state Run 构建状态
@@ -268,15 +285,17 @@ function areInlineStylesEqual(left: InlineTextStyle, right: InlineTextStyle): bo
  */
 function appendRun(state: InlineRunBuildState, run: InlineRun): void {
   if (run.kind !== InlineRunKind.EMOTION && run.text.length === 0) return
-  const previous: InlineRun | undefined = state.runs.length > 0 ? state.runs[state.runs.length - 1] : undefined
-  if (previous !== undefined && previous.kind === run.kind && previous.href === run.href &&
+  const previous: InlineRun | null = state.pendingRun
+  if (previous !== null && previous.kind === run.kind && previous.href === run.href &&
     previous.kind !== InlineRunKind.EMOTION && areInlineStylesEqual(previous.style, run.style)) {
-    previous.text += run.text
+    state.pendingTextParts.push(run.text)
     return
   }
+  flushPendingRun(state)
   run.key = `inline_${state.serial}`
   state.serial++
-  state.runs.push(run)
+  state.pendingRun = run
+  state.pendingTextParts.push(run.text)
 }
 
 /**
@@ -337,6 +356,7 @@ export function flattenInlineNodes(nodes: BBNode[], inherited?: InlineTextStyle)
   for (let i: number = 0; i < nodes.length; i++) {
     flattenInlineNode(nodes[i], baseStyle, '', state)
   }
+  flushPendingRun(state)
   // 渲染前压缩连续换行：NGA 楼层正文的空行以 <br/> 序列表达，预处理后成为连续 \n。
   // 解析树按"文本零丢失"保留原文（快照、官方差分、纯文本提取均依赖原始 \n），
   // 仅在渲染层把 \n{2,} 折叠为单个 \n，避免 ArkUI Text 渲染出多个空白行。

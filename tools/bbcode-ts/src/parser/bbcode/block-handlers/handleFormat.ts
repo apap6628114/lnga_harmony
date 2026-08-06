@@ -3,55 +3,55 @@ import { createBBNode, indexOfIgnoreCase, ParseState } from '../lexer'
 import { parseBlockNodes, parseBBCode } from '../parser'
 
 /** [hr] 水平分隔线标签正则。 */
-const P_HR: RegExp = /\[hr\s*\/?\]/gi
+const P_HR: RegExp = /\[hr\s*\/?\]/iy
 
 /** [h] 标题开始标签正则。 */
-const P_H_OPEN: RegExp = /\[h\]/gi
+const P_H_OPEN: RegExp = /\[h\]/iy
 
-/** [h] 标题闭合标签正则。 */
-const P_H_CLOSE: RegExp = /\[\/h\]/gi
+/** [h] 标题闭合标签集合。 */
+const CLOSE_H_TAGS: string[] = ['[/h]']
 
 /** [p] 段落开始标签正则。 */
-const P_P_OPEN: RegExp = /\[p\]/gi
+const P_P_OPEN: RegExp = /\[p\]/iy
 
-/** [p] 段落闭合标签正则。 */
-const P_P_CLOSE: RegExp = /\[\/p\]/gi
+/** [p] 段落闭合标签集合。 */
+const CLOSE_P_TAGS: string[] = ['[/p]']
 
 /** [dice] 骰子标签正则（含惰性匹配内容捕获）。 */
-const P_DICE: RegExp = /\[dice\](.*?)\[\/dice\]/gi
+const P_DICE: RegExp = /\[dice\](.*?)\[\/dice\]/iy
 
 /** [l] 左浮动开始标签正则。 */
-const P_L_OPEN: RegExp = /\[l\]/gi
+const P_L_OPEN: RegExp = /\[l\]/iy
 
-/** [l] 左浮动闭合标签正则。 */
-const P_L_CLOSE: RegExp = /\[\/l\]/gi
+/** [l] 左浮动闭合标签集合。 */
+const CLOSE_L_TAGS: string[] = ['[/l]']
 
 /** [r] 右浮动开始标签正则。 */
-const P_R_OPEN: RegExp = /\[r\]/gi
+const P_R_OPEN: RegExp = /\[r\]/iy
 
-/** [r] 右浮动闭合标签正则。 */
-const P_R_CLOSE: RegExp = /\[\/r\]/gi
+/** [r] 右浮动闭合标签集合。 */
+const CLOSE_R_TAGS: string[] = ['[/r]']
 
 /** [align=...] 对齐开始标签正则。 */
-const P_ALIGN: RegExp = /\[align=(\w+)\]/gi
+const P_ALIGN: RegExp = /\[align=(\w+)\]/iy
 
-/** [align] 对齐闭合标签正则。 */
-const P_ALIGN_CLOSE: RegExp = /\[\/align\]/gi
+/** [align] 对齐闭合标签集合。 */
+const CLOSE_ALIGN_TAGS: string[] = ['[/align]']
 
 /** [style ...] 样式块开始标签正则。 */
-const P_STYLE: RegExp = /\[style(?:\s+|=)([^\]]*)\]/gi
+const P_STYLE: RegExp = /\[style(?:\s+|=)([^\]]*)\]/iy
 
-/** [style] 样式块闭合标签正则。 */
-const P_STYLE_CLOSE: RegExp = /\[\/style\]/gi
+/** [style] 样式块闭合标签集合。 */
+const CLOSE_STYLE_TAGS: string[] = ['[/style]']
 
 /** [hip] 高亮提示标签正则。 */
-const P_HIP: RegExp = /\[hip\]/gi
+const P_HIP: RegExp = /\[hip\]/iy
 
 /** [comment...] 注释标签正则。 */
-const P_COMMENT: RegExp = /\[comment[^\]]*\]/gi
+const P_COMMENT: RegExp = /\[comment[^\]]*\]/iy
 
 /** [randomblock] 随机块标签正则。 */
-const P_RANDOM: RegExp = /\[randomblock\]/gi
+const P_RANDOM: RegExp = /\[randomblock\]/iy
 
 /**
  * [hr] 水平分隔线处理器。
@@ -90,7 +90,7 @@ export const handleHeading = (state: ParseState, result: BBNode[]): boolean => {
     state.pos = P_H_OPEN.lastIndex
     const node: BBNode = createBBNode()
     node.type = BBNodeType.HEADING
-    node.children = parseBlockNodes(state, P_H_CLOSE)
+    node.children = parseBlockNodes(state, CLOSE_H_TAGS)
     result.push(node)
     return true
   }
@@ -113,7 +113,7 @@ export const handleParagraph = (state: ParseState, result: BBNode[]): boolean =>
     state.pos = P_P_OPEN.lastIndex
     const node = createBBNode()
     node.type = BBNodeType.PARAGRAPH
-    node.children = parseBlockNodes(state, P_P_CLOSE)
+    node.children = parseBlockNodes(state, CLOSE_P_TAGS)
     result.push(node)
     return true
   }
@@ -153,7 +153,7 @@ export const handleFloatLeft = (state: ParseState, result: BBNode[]): boolean =>
     state.pos = P_L_OPEN.lastIndex
     const n = createBBNode()
     n.type = BBNodeType.FLOAT_LEFT
-    n.children = parseBlockNodes(state, P_L_CLOSE)
+    n.children = parseBlockNodes(state, CLOSE_L_TAGS)
     result.push(n)
     return true
   }
@@ -174,7 +174,7 @@ export const handleFloatRight = (state: ParseState, result: BBNode[]): boolean =
     state.pos = P_R_OPEN.lastIndex
     const n = createBBNode()
     n.type = BBNodeType.FLOAT_RIGHT
-    n.children = parseBlockNodes(state, P_R_CLOSE)
+    n.children = parseBlockNodes(state, CLOSE_R_TAGS)
     result.push(n)
     return true
   }
@@ -197,7 +197,7 @@ export const handleAlign = (state: ParseState, result: BBNode[]): boolean => {
     const n = createBBNode()
     n.type = BBNodeType.ALIGN
     n.align = alignVal
-    n.children = parseBlockNodes(state, P_ALIGN_CLOSE)
+    n.children = parseBlockNodes(state, CLOSE_ALIGN_TAGS)
     result.push(n)
     return true
   }
@@ -220,7 +220,7 @@ export const handleStyle = (state: ParseState, result: BBNode[]): boolean => {
     const n = createBBNode()
     n.type = BBNodeType.STYLE_DIV
     n.text = styleVal
-    n.children = parseBlockNodes(state, P_STYLE_CLOSE)
+    n.children = parseBlockNodes(state, CLOSE_STYLE_TAGS)
     result.push(n)
     return true
   }

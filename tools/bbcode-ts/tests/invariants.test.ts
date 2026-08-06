@@ -252,6 +252,49 @@ describe('边角样例', () => {
   }
 })
 
+describe('线性扫描与批量格式化回归', () => {
+  it('引用块中的大量内联标签保持完整样式和文字', () => {
+    const fragmentCount: number = 4000
+    const content: string = `[quote]${'[b]x[/b]'.repeat(fragmentCount)}[/quote]`
+    const nodes: BBNode[] = parseBBCode(content)
+    const quote: BBNode | undefined = findType(nodes, BBNodeType.QUOTE)
+    if (!quote) assert.fail('未找到 QUOTE 节点')
+    const runs: InlineRun[] = flattenInlineNodes(quote.children)
+    assert.equal(runs.length, 1)
+    assert.equal(runs[0].text, 'x'.repeat(fragmentCount))
+    assert.equal(runs[0].style.bold, true)
+  })
+
+  it('单行大量单元格保持数量、顺序与内容', () => {
+    const cellCount: number = 4000
+    const content: string = `[table][tr]${'[td]x[/td]'.repeat(cellCount)}[/tr][/table]`
+    const nodes: BBNode[] = parseBBCode(content)
+    assert.equal(countType(nodes, BBNodeType.TABLE_CELL), cellCount)
+    assert.equal(concatTextNodes(nodes), 'x'.repeat(cellCount))
+  })
+
+  it('表格单元格前后杂散内容沿用既有容错结果', () => {
+    const content: string = '[table][tr]前[foo]中[td foo=1]甲[/td]后[/tr][/table]'
+    const nodes: BBNode[] = parseBBCode(content)
+    const row: BBNode | undefined = findType(nodes, BBNodeType.TABLE_ROW)
+    if (!row) assert.fail('未找到 TABLE_ROW 节点')
+    assert.equal(row.children.length, 2)
+    assert.equal(row.children[0].type, BBNodeType.TEXT)
+    assert.equal(row.children[0].text, '前foo]中')
+    assert.equal(row.children[1].type, BBNodeType.TABLE_CELL)
+    assert.equal(concatTextNodes(row.children[1].children), '甲')
+  })
+
+  it('大小写边界标签保持原有结构解释', () => {
+    const content: string = '[QUOTE]甲[B]乙[/B][/QuOtE][LIST][*]丙[*]丁[/LiSt]'
+    const nodes: BBNode[] = parseBBCode(content)
+    assert.equal(countType(nodes, BBNodeType.QUOTE), 1)
+    assert.equal(countType(nodes, BBNodeType.LIST), 1)
+    assert.equal(countType(nodes, BBNodeType.LIST_ITEM), 2)
+    assert.equal(concatTextNodes(nodes), '甲乙丙丁')
+  })
+})
+
 // ---------------------------------------------------------------------------
 // 渲染层空白行折叠（回归：历史修复 be0ec156 在镜像化时丢失）
 // ---------------------------------------------------------------------------

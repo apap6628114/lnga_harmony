@@ -120,7 +120,7 @@ runs.json 提取方式：浏览器内脚本遍历楼层 DOM，跳过 `.x` 表格
 
 ## 修复记录
 
-- **2026-08-07 解析/渲染效率优化**（demo.txt 基准，效果零变化，45 项测试全绿）：
+- **2026-08-07 解析/渲染效率优化**（效果零变化，50 项测试全绿）：
   - `parseTableContent` 每行 3 次独立扫描（`[/table]` exec + `[tr]` exec + `indexOf`）合并为
     单次扫描 + 字符级 `matchesIgnoreCaseAt`，消除每行正则 exec 扫至表尾的重复扫描
     （签名 `closePattern: RegExp` → `closeTag: string`）；`parseTableRowCells` 的 `[td]`
@@ -135,8 +135,22 @@ runs.json 提取方式：浏览器内脚本遍历楼层 DOM，跳过 `.x` 表格
   - 渲染层 `deriveNodeStyle` 对样式零修改的节点（TEXT/链接/表情等）复用父级样式
     引用（run.style 被 ArkUI 只读消费，值语义与克隆等价）；换行折叠对无连续换行的
     Run 短路
+  - `parseBlockNodesUntil` 的闭合边界由“每遇到 `[` 都用正则向后搜索到块尾”改为
+    当前位置固定标签比较，消除引用、折叠、列表、标题、段落、浮动与样式块中合法
+    大量内联标签触发的 O(n²) 扫描；闭合标签仍从原文截取，大小写与 terminator 语义不变
+  - `parseTableRowCells` 把每个单元格重复搜索 `[/tr]` 与 `[td` 改为单游标结构标签扫描，
+    `[td...]` 在当前位置读取首个 `]`，保留原有未知属性、杂散内容和缺失闭合标签容错语义
+  - Run 合并改为文字分片暂存后一次 `join`，HTML/代码块清理、标题逐行规范化与无属性 URL
+    文字收集同步改为分片合并，避免大量同样式短节点或多行内容反复扩展不可变字符串
+  - 仅用于当前位置校验的 block-handler 正则由全局搜索 `g` 改为 sticky 匹配 `y`；既有代码本就
+    只接受 `match.index === state.pos`，因此捕获与消费结果不变，同时避免畸形同名标签先向后
+    搜索下一处合法标签。4000 个 `[h x]` 畸形标签中位数 33.3ms → 2.8ms（12×）
   - 实测：demo.txt 冷启动 total ~49.5ms → ~40ms（-20%）；4000 行大表格
     218ms → 10ms（21×，消除单元格重复预处理与表格扫描 O(n²)）
+  - 本轮 Node 合成基准中位数（5 次）：4000 个引用内粗体片段解析+格式化
+    72.4ms → 5.2ms（14×）；单行 4000 单元格 522.8ms → 2.2ms（237×）。
+    Git 中优化前实现与当前实现对 3005 组固定及随机畸形输入进行解析树、Run JSON
+    逐字节差分，结果完全一致
 
 - **2026-08-05 域名集中收敛同步**：entry 侧域名收敛到 `common/constants/NgaDomains.ets`
   时直接改动了被镜像的 `AttachUrl.ets` / `Utils.ets`（CDN 域 178.com → nga.cn）。

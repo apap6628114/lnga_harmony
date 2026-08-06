@@ -82,16 +82,16 @@ function normalizeHeadingLine(line: string): string {
   const title: string = (separatorMatch === null ? body : separatorMatch[1]).trim()
   if (title.length === 0 || /^=+$/.test(title)) return line
 
-  let result: string = '[h]'
+  const parts: string[] = ['[h]']
   for (let i: number = 0; i < openTags.length; i++) {
-    if (openTags[i].name !== 'h') result += openTags[i].raw
+    if (openTags[i].name !== 'h') parts.push(openTags[i].raw)
   }
-  result += title
+  parts.push(title)
   for (let i: number = openTags.length - 1; i >= 0; i--) {
-    if (openTags[i].name !== 'h') result += `[/${openTags[i].name}]`
+    if (openTags[i].name !== 'h') parts.push(`[/${openTags[i].name}]`)
   }
-  result += '[/h]'
-  return result
+  parts.push('[/h]')
+  return parts.join('')
 }
 
 /**
@@ -122,7 +122,7 @@ function updateCodeBlockState(line: string, inCode: boolean): boolean {
  * @returns 仅将有效标题行统一为 `[h]...[/h]` 的正文
  */
 export function normalizeHeadingLinesOutsideCode(content: string): string {
-  let result: string = ''
+  const parts: string[] = []
   let position: number = 0
   let inCode: boolean = false
   while (position < content.length) {
@@ -131,11 +131,11 @@ export function normalizeHeadingLinesOutsideCode(content: string): string {
     const rawLine: string = content.substring(position, lineEnd)
     const hasCarriageReturn: boolean = rawLine.endsWith('\r')
     const line: string = hasCarriageReturn ? rawLine.substring(0, rawLine.length - 1) : rawLine
-    result += inCode ? line : normalizeHeadingLine(line)
-    if (hasCarriageReturn) result += '\r'
-    if (newlineIndex >= 0) result += '\n'
+    parts.push(inCode ? line : normalizeHeadingLine(line))
+    if (hasCarriageReturn) parts.push('\r')
+    if (newlineIndex >= 0) parts.push('\n')
     inCode = updateCodeBlockState(line, inCode)
     position = newlineIndex >= 0 ? newlineIndex + 1 : content.length
   }
-  return result
+  return parts.join('')
 }

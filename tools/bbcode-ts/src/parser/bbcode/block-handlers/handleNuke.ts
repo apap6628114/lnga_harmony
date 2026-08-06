@@ -11,13 +11,13 @@ import { parseBlockNodes, parseBBCode } from '../parser'
  * @returns 是否匹配并消费了 [lessernuke] 块
  */
 /** [lessernuke] 开始标签正则。 */
-const P_LESSERNUKE: RegExp = /\[lessernuke\]/gi
+const P_LESSERNUKE: RegExp = /\[lessernuke\]/iy
 
 /** [album=标题] 开始标签正则（含惰性匹配标题捕获）。 */
-const P_ALBUM: RegExp = /\[album=(.*?)\]/gi
+const P_ALBUM: RegExp = /\[album=(.*?)\]/iy
 
-/** [album] 闭合标签正则。 */
-const P_CLOSE_ALBUM: RegExp = /\[\/album\]/gi
+/** [album] 闭合标签集合。 */
+const CLOSE_ALBUM_TAGS: string[] = ['[/album]']
 
 export const handleNuke = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
@@ -59,7 +59,7 @@ export const handleAlbum = (state: ParseState, result: BBNode[]): boolean => {
     const n = createBBNode()
     n.type = BBNodeType.ALBUM
     n.title = decodeHtmlEntities(albumTitle)
-    n.children = parseBlockNodes(state, P_CLOSE_ALBUM)
+    n.children = parseBlockNodes(state, CLOSE_ALBUM_TAGS)
     result.push(n)
     return true
   }

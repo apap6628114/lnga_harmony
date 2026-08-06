@@ -222,11 +222,11 @@ function appendInlineSegment(segment: string, result: BBNode[], activeTags: stri
  * 块级循环：只在真实块标签处分段，遇指定边界标签时返回。
  *
  * @param state 解析游标
- * @param closePattern 可选的边界标签表达式
+ * @param closeTags 可选的边界标签集合
  * @returns 当前层解析得到的语义节点
  */
-function parseBlockNodes(state: ParseState, closePattern: RegExp | null): BBNode[] {
-  return parseBlockNodesUntil(state, closePattern).nodes
+function parseBlockNodes(state: ParseState, closeTags: string[] | null): BBNode[] {
+  return parseBlockNodesUntil(state, closeTags).nodes
 }
 
 /**
@@ -235,10 +235,10 @@ function parseBlockNodes(state: ParseState, closePattern: RegExp | null): BBNode
  * 嵌套块由对应处理器完整消费，因此边界表达式只会截断当前结构层级。
  *
  * @param state 解析游标
- * @param closePattern 可选的边界标签表达式
+ * @param closeTags 可选的边界标签集合
  * @returns 节点及触发返回的边界标签
  */
-function parseBlockNodesUntil(state: ParseState, closePattern: RegExp | null): BlockParseResult {
+function parseBlockNodesUntil(state: ParseState, closeTags: string[] | null): BlockParseResult {
   const parsed: BlockParseResult = new BlockParseResult()
   const activeInlineTags: string[] = []
   let inlineStart: number = state.pos
@@ -252,13 +252,18 @@ function parseBlockNodesUntil(state: ParseState, closePattern: RegExp | null): B
     }
     state.pos = idx
 
-    if (closePattern) {
-      closePattern.lastIndex = idx
-      const closeMatch: RegExpExecArray | null = closePattern.exec(state.content)
-      if (closeMatch && closeMatch.index === idx) {
+    if (closeTags !== null) {
+      let matchedCloseTag: string = ''
+      for (let i: number = 0; i < closeTags.length; i++) {
+        if (matchesIgnoreCaseAt(state.content, closeTags[i], idx)) {
+          matchedCloseTag = state.content.substring(idx, idx + closeTags[i].length)
+          break
+        }
+      }
+      if (matchedCloseTag.length > 0) {
         appendInlineSegment(state.content.substring(inlineStart, idx), parsed.nodes, activeInlineTags)
-        parsed.terminator = closeMatch[0]
-        state.pos = closePattern.lastIndex
+        parsed.terminator = matchedCloseTag
+        state.pos = idx + matchedCloseTag.length
         return parsed
       }
     }
@@ -457,56 +462,107 @@ function parseTableContent(state: ParseState, closeTag: string): BBNode[] {
   return rows
 }
 
-/** 单元格开始标签正则（模块级常量，避免每单元格重复构造）。 */
-const P_TD: RegExp = /\[td([^\]]*)\]/gi
+/** 表格行扫描命中的标签类别。 */
+enum TableRowMarkerType {
+  /** 未找到行内结构标签。 */
+  NONE,
+  /** 找到单元格开始标签。 */
+  CELL,
+  /** 找到表格行结束标签。 */
+  ROW_CLOSE,
+}
+
+/** 表格行中下一个结构标签的位置和类别。 */
+class TableRowMarker {
+  /** 标签起始位置。 */
+  position: number = -1
+  /** 标签类别。 */
+  type: TableRowMarkerType = TableRowMarkerType.NONE
+}
+
+/**
+ * 单次向前扫描表格行中的下一个单元格或行结束标签。
+ *
+ * @param content 完整正文
+ * @param start 扫描起点
+ * @returns 下一个表格行结构标签
+ */
+function findNextTableRowMarker(content: string, start: number): TableRowMarker {
+  const marker = new TableRowMarker()
+  let position: number = start
+  while (position < content.length) {
+    const bracketIndex: number = content.indexOf('[', position)
+    if (bracketIndex < 0) return marker
+    if (matchesIgnoreCaseAt(content, '[/tr]', bracketIndex)) {
+      marker.position = bracketIndex
+      marker.type = TableRowMarkerType.ROW_CLOSE
+      return marker
+    }
+    if (matchesIgnoreCaseAt(content, '[td', bracketIndex)) {
+      marker.position = bracketIndex
+      marker.type = TableRowMarkerType.CELL
+      return marker
+    }
+    position = bracketIndex + 1
+  }
+  return marker
+}
+
+/**
+ * 按既有容错规则保留单元格前的杂散内容，并跳过其中的左方括号。
+ *
+ * @param state 解析游标
+ * @param end 杂散内容结束位置
+ * @param cells 当前行节点输出数组
+ */
+function appendTableRowStrayContent(state: ParseState, end: number, cells: BBNode[]): void {
+  while (state.pos < end) {
+    const nextBracket: number = state.content.indexOf('[', state.pos)
+    if (nextBracket < 0 || nextBracket >= end) {
+      pushTextNode(cells, state.content.substring(state.pos, end))
+      state.pos = end
+      return
+    }
+    if (nextBracket > state.pos) {
+      pushTextNode(cells, state.content.substring(state.pos, nextBracket))
+    }
+    state.pos = nextBracket + 1
+  }
+}
 
 /** 解析表格行内的 [td] 单元格，处理 colspan/rowspan/colwidth 属性。 */
 function parseTableRowCells(state: ParseState): BBNode[] {
   const cells: BBNode[] = []
   while (state.pos < state.len) {
-    const trClose = indexOfIgnoreCase(state.content, '[/tr]', state.pos)
-    // 与 trClose 一致使用大小写不敏感查找，避免 [TD ROWSPAN=...] 大写变体整行丢失
-    const tdOpen = indexOfIgnoreCase(state.content, '[td', state.pos)
-    if (tdOpen < 0 || (trClose >= 0 && trClose < tdOpen)) {
-      if (trClose >= 0) state.pos = trClose + 5
+    const marker: TableRowMarker = findNextTableRowMarker(state.content, state.pos)
+    if (marker.type === TableRowMarkerType.NONE) {
       break
     }
-
-    P_TD.lastIndex = state.pos
-    const tdm = P_TD.exec(state.content)
-    // 匹配 [td...] 即视为单元格；未知属性由 parseTdAttributes 忽略，
-    // 确保 [td foo=1] 等非法属性形式的单元格内容不丢失
-    if (tdm && tdm.index === state.pos) {
-      state.pos = P_TD.lastIndex
-      const attr: TdAttr = parseTdAttributes(tdm[1])
-      const cell = createBBNode()
-      cell.type = BBNodeType.TABLE_CELL
-      if (attr.colSpan > 0) cell.colSpan = attr.colSpan
-      if (attr.rowSpan > 0) cell.rowSpan = attr.rowSpan
-      if (attr.colWidth > 0) cell.colWidth = attr.colWidth
-
-      const closeTdIdx = findTdClose(state)
-      const cellEnd = closeTdIdx >= 0 ? closeTdIdx : state.len
-      const cellText = state.content.substring(state.pos, cellEnd)
-      state.pos = closeTdIdx >= 0 ? cellEnd + 5 : state.len
-      cell.children = parseBBCode(cellText)
-      cells.push(cell)
-    } else {
-      // [td] 之间的杂散内容（含 <br/> 预处理后的换行分隔）保留为行级文本节点。
-      // 渲染层按 TABLE_CELL 消费时忽略，纯文本提取可保留单元格间分隔。
-      const nextBracket: number = state.content.indexOf('[', state.pos)
-      if (nextBracket < 0) {
-        pushTextNode(cells, state.content.substring(state.pos, state.len))
-        state.pos = state.len
-        break
-      }
-      if (nextBracket > state.pos) {
-        pushTextNode(cells, state.content.substring(state.pos, nextBracket))
-        state.pos = nextBracket
-      } else {
-        state.pos = state.pos + 1
-      }
+    if (marker.type === TableRowMarkerType.ROW_CLOSE) {
+      state.pos = marker.position + 5
+      break
     }
+    if (marker.position > state.pos) appendTableRowStrayContent(state, marker.position, cells)
+
+    const closeBracket: number = state.content.indexOf(']', state.pos + 3)
+    if (closeBracket < 0) {
+      state.pos++
+      continue
+    }
+    const attr: TdAttr = parseTdAttributes(state.content.substring(state.pos + 3, closeBracket))
+    state.pos = closeBracket + 1
+    const cell = createBBNode()
+    cell.type = BBNodeType.TABLE_CELL
+    if (attr.colSpan > 0) cell.colSpan = attr.colSpan
+    if (attr.rowSpan > 0) cell.rowSpan = attr.rowSpan
+    if (attr.colWidth > 0) cell.colWidth = attr.colWidth
+
+    const closeTdIdx: number = findTdClose(state)
+    const cellEnd: number = closeTdIdx >= 0 ? closeTdIdx : state.len
+    const cellText: string = state.content.substring(state.pos, cellEnd)
+    state.pos = closeTdIdx >= 0 ? cellEnd + 5 : state.len
+    cell.children = parseBBCode(cellText)
+    cells.push(cell)
   }
   return cells
 }
@@ -552,19 +608,21 @@ function createListItem(children: BBNode[]): BBNode {
  */
 function parseListItems(state: ParseState): BBNode[] {
   const items: BBNode[] = []
-  const boundaryPattern: RegExp = /\[\*\]|\[\/list\]/gi
-  const leading: BlockParseResult = parseBlockNodesUntil(state, boundaryPattern)
+  const leading: BlockParseResult = parseBlockNodesUntil(state, LIST_BOUNDARY_TAGS)
   trimListItemWhitespace(leading.nodes)
   if (leading.nodes.length > 0) items.push(createListItem(leading.nodes))
 
   let terminator: string = leading.terminator.toLowerCase()
   while (terminator === '[*]') {
-    const itemBody: BlockParseResult = parseBlockNodesUntil(state, boundaryPattern)
+    const itemBody: BlockParseResult = parseBlockNodesUntil(state, LIST_BOUNDARY_TAGS)
     trimListItemWhitespace(itemBody.nodes)
     items.push(createListItem(itemBody.nodes))
     terminator = itemBody.terminator.toLowerCase()
   }
   return items
 }
+
+/** 当前列表层级的项目与结束边界。 */
+const LIST_BOUNDARY_TAGS: string[] = ['[*]', '[/list]']
 
 export { parseBBCode, parseBlockNodes, parseTableContent, parseListItems }

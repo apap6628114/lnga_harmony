@@ -12,10 +12,10 @@ import { guessMediaTypeFromExt } from '../inline-parser'
  * @returns 是否匹配并消费了某个 [img] 变体
  */
 /** NGA 相对路径 [img]./mon_...[/img] 标签正则。 */
-const P_NGA_IMG: RegExp = /\[img\]\.(\/mon_\S+?)\[\/img\]/gi
+const P_NGA_IMG: RegExp = /\[img\]\.(\/mon_\S+?)\[\/img\]/iy
 
 /** 普通 [img]URL[/img] 标签正则（含惰性匹配 URL 捕获）。 */
-const P_IMG: RegExp = /\[img\](.*?)\[\/img\]/gi
+const P_IMG: RegExp = /\[img\](.*?)\[\/img\]/iy
 
 export const handleImg = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos

@@ -12,13 +12,13 @@ import { guessMediaTypeFromExt } from '../inline-parser'
  * @returns 是否匹配并消费了某个 [flash] 变体
  */
 /** [flash=video] 标签正则。 */
-const P_FLASH_VIDEO: RegExp = /\[flash=video\]/gi
+const P_FLASH_VIDEO: RegExp = /\[flash=video\]/iy
 
 /** [flash=audio] 标签正则。 */
-const P_FLASH_AUDIO: RegExp = /\[flash=audio\]/gi
+const P_FLASH_AUDIO: RegExp = /\[flash=audio\]/iy
 
 /** 无类型 [flash] 标签正则（含惰性匹配内容捕获）。 */
-const P_FLASH: RegExp = /\[flash\](.*?)\[\/flash\]/gi
+const P_FLASH: RegExp = /\[flash\](.*?)\[\/flash\]/iy
 
 export const handleFlash = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos

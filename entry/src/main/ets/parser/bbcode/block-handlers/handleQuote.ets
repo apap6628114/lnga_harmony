@@ -12,16 +12,16 @@ import { parseBlockNodes } from '../parser'
  * @returns 是否匹配并消费了 [quote] 块
  */
 /** [quote] 开始标签正则。 */
-const P_QUOTE: RegExp = /\[quote\]/gi
+const P_QUOTE: RegExp = /\[quote\]/iy
 
 /** 引用头部（[pid=...]Reply[/pid] [b]Post by ...[/b]）正则。 */
-const P_QUOTE_HEADER: RegExp = /\[pid=(\d+),(\d+),(\d+)\]Reply\[\/pid\] \[b\]Post by \[uid=(\d+)\](.*?)\[\/uid\] \(([^)]+)\):\[\/b\]/gi
+const P_QUOTE_HEADER: RegExp = /\[pid=(\d+),(\d+),(\d+)\]Reply\[\/pid\] \[b\]Post by \[uid=(\d+)\](.*?)\[\/uid\] \(([^)]+)\):\[\/b\]/iy
 
 /** 引用头部后的连续换行正则。 */
-const P_SKIP_BREAK: RegExp = /(?:\r?\n)+/g
+const P_SKIP_BREAK: RegExp = /(?:\r?\n)+/y
 
-/** [quote] 闭合标签正则。 */
-const P_CLOSE_QUOTE: RegExp = /\[\/quote\]/gi
+/** [quote] 闭合标签集合。 */
+const CLOSE_QUOTE_TAGS: string[] = ['[/quote]']
 
 export const handleQuote = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
@@ -51,7 +51,7 @@ export const handleQuote = (state: ParseState, result: BBNode[]): boolean => {
       }
     }
 
-    const bodyChildren = parseBlockNodes(state, P_CLOSE_QUOTE)
+    const bodyChildren = parseBlockNodes(state, CLOSE_QUOTE_TAGS)
     for (let i = 0; i < bodyChildren.length; i++) {
       n.children.push(bodyChildren[i])
     }

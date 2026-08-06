@@ -10,7 +10,7 @@ import { parseTableContent } from '../parser'
  * @returns 是否匹配并消费了 [table] 块
  */
 /** [table] 开始标签正则。 */
-const P_TABLE: RegExp = /\[table\]/gi
+const P_TABLE: RegExp = /\[table\]/iy
 
 export const handleTable = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos

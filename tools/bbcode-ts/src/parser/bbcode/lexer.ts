@@ -156,24 +156,24 @@ function preprocessContent(s: string): string {
  */
 function cleanHtmlOutsideCode(content: string): string {
   const lower: string = content.toLowerCase()
-  let result: string = ''
+  const parts: string[] = []
   let position: number = 0
   while (position < content.length) {
     const codeStart: number = lower.indexOf('[code]', position)
     if (codeStart < 0) {
-      result += cleanupHtmlSegment(content.substring(position))
+      parts.push(cleanupHtmlSegment(content.substring(position)))
       break
     }
-    result += cleanupHtmlSegment(content.substring(position, codeStart))
+    parts.push(cleanupHtmlSegment(content.substring(position, codeStart)))
     const codeEnd: number = lower.indexOf('[/code]', codeStart + 6)
     if (codeEnd < 0) {
-      result += content.substring(codeStart)
+      parts.push(content.substring(codeStart))
       break
     }
-    result += content.substring(codeStart, codeEnd + 7)
+    parts.push(content.substring(codeStart, codeEnd + 7))
     position = codeEnd + 7
   }
-  return result
+  return parts.join('')
 }
 
 /**
