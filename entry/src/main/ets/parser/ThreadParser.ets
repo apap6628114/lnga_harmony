@@ -84,6 +84,19 @@ function mapRow(raw: Record<string, Object>, blacklist: Set<string>,
     }
   }
 
+  const hotReplies: ThreadRowInfo[] = [];
+  const rawHotReply = raw['hotreply'];
+  if (rawHotReply && typeof rawHotReply === 'object') {
+    const hotReplyMap = rawHotReply as Record<string, Object>;
+    const hotReplyKeys = Object.keys(hotReplyMap);
+    for (let j = 0; j < hotReplyKeys.length; j++) {
+      const h = hotReplyMap[hotReplyKeys[j]] as Record<string, Object>;
+      if (!h || typeof h !== 'object') continue;
+      if (hasKeywordMatch(String(h['content'] ?? ''), keywords)) continue;
+      hotReplies.push(mapRow(h, blacklist, keywords, noteMap));
+    }
+  }
+
   const result: ThreadRowInfo = {
     tid: Number(raw['tid'] ?? 0),
     fid: Number(raw['fid'] ?? 0),
@@ -103,7 +116,7 @@ function mapRow(raw: Record<string, Object>, blacklist: Set<string>,
     aurvrc: Number(raw['aurvrc'] ?? 0),
     signature: String(raw['signature'] ?? ''),
     comments,
-    hotReplies: (raw['hotReplies'] as string[]) ?? [],
+    hotReplies,
     from_client: String(raw['from_client'] ?? ''),
     from_client_model: String(raw['from_client_model'] ?? ''),
     isanonymous: !!raw['isanonymous'],

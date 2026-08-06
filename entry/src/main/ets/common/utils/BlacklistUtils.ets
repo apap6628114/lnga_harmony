@@ -66,9 +66,9 @@ export function areBlacklistEntriesEqual(left: BlacklistEntry[], right: Blacklis
 }
 
 /**
- * 递归刷新帖子及其楼中楼评论的黑名单标记。
+ * 递归刷新帖子及其楼中楼评论、热点回复的黑名单标记。
  *
- * 楼层本身仍保留在列表中，由渲染层根据标记遮蔽正文；楼中楼评论由评论组件过滤。
+ * 楼层本身仍保留在列表中，由渲染层根据标记遮蔽正文；楼中楼评论与热点回复由对应组件过滤。
  *
  * @param posts - 待刷新的帖子集合
  * @param blacklistIds - 当前黑名单 UID 集合
@@ -78,5 +78,6 @@ export function applyBlacklistStateToPosts(posts: PostInfo[], blacklistIds: Set<
     const post: PostInfo = posts[i]
     post.isInBlackList = blacklistIds.has(String(post.authorid))
     applyBlacklistStateToPosts(post.comments, blacklistIds)
+    applyBlacklistStateToPosts(post.hotReplies, blacklistIds)
   }
 }

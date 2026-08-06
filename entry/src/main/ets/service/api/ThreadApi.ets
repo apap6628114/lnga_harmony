@@ -219,7 +219,7 @@ function fillThreadResult(raw: Record<string, Object>, result: ThreadResult,
       return info;
     });
     post.comments = row.comments.map(mapRowToPost);
-    post.hotReplies = row.hotReplies;
+    post.hotReplies = row.hotReplies.map(mapRowToPost);
     post.fromClient = parseFromClient(row.from_client);
     post.from_client_model = row.from_client_model;
     post.alterinfo = row.alterinfo;

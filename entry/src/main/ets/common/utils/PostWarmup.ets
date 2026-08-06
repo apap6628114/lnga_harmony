@@ -10,7 +10,7 @@ import { preWarmBatchAwait } from '../../parser/bbcode/BBCodeCache'
 
 /**
  * 收集帖子集合中所有需要预热解析的 BBCode 文本。
- * 收集顺序：content + signature（若 includeSignatures） + 评论 content。
+ * 收集顺序：content + signature（若 includeSignatures） + 评论 content + 热点回复 content。
  *
  * @param posts - 帖子列表
  * @param includeSignatures - 是否收集签名
@@ -28,6 +28,12 @@ export function collectPostContents(posts: PostInfo[], includeSignatures: boolea
     for (let j: number = 0; j < comments.length; j++) {
       if (!comments[j].isInBlackList && comments[j].content) {
         contents.push(comments[j].content)
+      }
+    }
+    const hotReplies: PostInfo[] = p.hotReplies
+    for (let j: number = 0; j < hotReplies.length; j++) {
+      if (!hotReplies[j].isInBlackList && hotReplies[j].content) {
+        contents.push(hotReplies[j].content)
       }
     }
   }

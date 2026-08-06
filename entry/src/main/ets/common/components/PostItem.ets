@@ -7,15 +7,17 @@ import { PostItemHeader } from './post-item/PostItemHeader'
 import { PostAttachments } from './post-item/PostAttachments'
 import { PostVoteBar } from './post-item/PostVoteBar'
 import { PostComments } from './post-item/PostComments'
+import { HotRepliesSection } from './post-item/HotRepliesSection'
 import { appStore } from '../../store/AppStore'
 
 /**
  * 帖子卡片组件（编排层）。
  *
- * 由 4 个独立子组件编排而成：PostItemHeader（顶部）、PostAttachments（附件区）、
- * PostVoteBar（动作栏）、PostComments（评论区）。本组件保留签名折叠区（sigExpanded）
- * 与屏蔽/编辑时间/正文渲染等主体逻辑。所有展开/折叠/菜单状态已下沉对应子组件，
- * 各子组件自持 @State 并在 aboutToReuse 中重置；本组件 aboutToReuse 仅重置 sigExpanded。
+ * 由 5 个独立子组件编排而成：PostItemHeader（顶部）、PostAttachments（附件区）、
+ * PostVoteBar（动作栏）、PostComments（评论区）、HotRepliesSection（热点回复区）。
+ * 本组件保留签名折叠区（sigExpanded）与屏蔽/编辑时间/正文渲染等主体逻辑。
+ * 所有展开/折叠/菜单状态已下沉对应子组件，各子组件自持 @State 并在 aboutToReuse
+ * 中重置；本组件 aboutToReuse 仅重置 sigExpanded。
  */
 @Component
 export struct PostItem {
@@ -162,6 +164,15 @@ export struct PostItem {
 
         if (this.post.comments.length > 0) {
           PostComments({
+            post: this.post,
+            onImageClick: this.onImageClick,
+            onLinkClick: this.onLinkClick,
+            onProfileClick: this.onProfileClick,
+          })
+        }
+
+        if (this.post.hotReplies.length > 0) {
+          HotRepliesSection({
             post: this.post,
             onImageClick: this.onImageClick,
             onLinkClick: this.onLinkClick,

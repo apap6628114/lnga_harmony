@@ -74,6 +74,19 @@ npm run sync       # 把验证过的镜像写回 entry/src/main/ets（.ts → .e
 
 1. 记录用户报告的帖子 URL 与异常楼层号
 2. 取官方 JSON：`https://bbs.nga.cn/read.php?page=<页>&__output=8&tid=<tid>&__inchst=UTF8`
+
+   > **取 JSON 操作要点**（2026-08-07 实测）：
+   > - 从帖子 URL `read.php?tid=<tid>` 提取 tid 构造上 URL（`__output=8` 强制 JSON 输出，
+   >   不加返回服务端渲染 HTML；`__inchst=UTF8`/`noprefix=`/`v2=` 与鸿蒙端 ThreadApi 参数一致）
+   > - 必须带登录 cookie（`ngaPassportUid`/`ngaPassportCid`），游客返回 error 15；
+   >   UA 用 `NGA_WP_JW` + `X-User-Agent: Nga_Official`
+   > - 响应为 GBK 编码：`fetch().text()` 按默认编码解码会产出未转义控制字符（`JSON.parse`
+   >   报 "Bad control character"），须 `arrayBuffer()` + `TextDecoder('gbk')` 显式解码
+   > - NGA JSON 字符串内 tab 未转义：parse 前全局 `replace(/\t/g, '\\t')`
+   >   （即鸿蒙端 `preprocessJson`，见 `entry/.../parser/NgaJsonSanitizer.ets`）
+   > - 楼层字段名是 `data.__R`（双下划线开头、**单下划线结尾**）：检查响应完整性用
+   >   `"__R":`（带引号冒号），用 `__R__` 会误匹配 `__R__ROWS`（分页行数）而误判
+   >   "防爬空响应"——实测该 API 无防爬，请求均完整返回
 3. 响应落盘，用 `tests/helpers.ts::loadSampleContent` 提取目标楼层 `content` 字段
 4. 用 TS 镜像解析该 content，检查解析树/run 序列是否符合预期
 5. devtools 打开帖子页，滚动至异常楼层，取该楼层内容容器

@@ -49,7 +49,7 @@ export interface ThreadRowInfo {
   aurvrc: number;
   signature: string;
   comments: ThreadRowInfo[];
-  hotReplies: string[];
+  hotReplies: ThreadRowInfo[];
   from_client: string;
   from_client_model: string;
   isanonymous: boolean;

@@ -21,7 +21,7 @@ export class PostAttachInfo {
 }
 
 /**
- * 单条帖子（主帖或回复/评论）。
+ * 单条帖子（主帖或回复/评论/热点回复，结构同构可递归）。
  */
 export class PostInfo {
   tid: number = 0;
@@ -38,7 +38,8 @@ export class PostInfo {
   signature: string = '';
   attachs: PostAttachInfo[] = [];
   comments: PostInfo[] = [];
-  hotReplies: string[] = [];
+  /** 热点回复（热门回复），值为完整楼层结构，由楼主楼层 hotreply 字段递归解析 */
+  hotReplies: PostInfo[] = [];
   fromClient: string = '';
   from_client_model: string = '';
   isanonymous: boolean = false;
