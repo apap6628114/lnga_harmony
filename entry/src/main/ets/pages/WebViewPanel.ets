@@ -1,6 +1,6 @@
 import { webview } from '@kit.ArkWeb'
 import { common } from '@kit.AbilityKit'
-import { BusinessError } from '@kit.BasicServicesKit'
+import { BusinessError, pasteboard } from '@kit.BasicServicesKit'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { routerStore } from '../store/RouterStore'
 import { getSession } from '../service/api/AuthApi'
@@ -14,12 +14,18 @@ import { AppColors } from '../common/constants/Constants'
 import { PageScope } from '../common/concurrency/PageScope'
 
 const logger = new Logger(DOMAIN_UI, 'WebViewPanel')
+/** 标题栏高度。 */
+const NAV_BAR_H: number = 44
 
 @Component
 export struct WebViewPanel {
   @Prop url: string = ''
   @StorageProp('navBarHeight') navBarHeight: number = 0
   private controller: webview.WebviewController = new webview.WebviewController()
+  /** 系统状态栏高度。 */
+  @StorageProp('statusBarHeight') statusBarHeight: number = 0
+  /** 是否显示标题栏"更多"下拉菜单。 */
+  @State showMoreMenu: boolean = false
   @State pageTitle: string = ''
   @State isLoading: boolean = true
   @State progress: number = 0
@@ -178,19 +184,82 @@ export struct WebViewPanel {
     }
   }
 
+  /**
+   * 将当前页面 URL 复制到系统剪贴板。
+   */
+  private async copyCurrentUrl(): Promise<void> {
+    try {
+      const currentUrl: string = this.controller.getUrl()
+      if (!currentUrl) {
+        return
+      }
+      const systemPasteboard: pasteboard.SystemPasteboard = pasteboard.getSystemPasteboard()
+      const pasteData: pasteboard.PasteData =
+        pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, currentUrl)
+      await systemPasteboard.setData(pasteData)
+      appStore.showToast('链接已复制')
+    } catch (e) {
+      logger.error('[WebViewPanel] copy url failed: %{public}s', formatError(e))
+    }
+  }
+
+  /**
+   * 构建标题栏"更多"下拉菜单（与帖子页右上角菜单同款样式）。
+   */
+  @Builder
+  moreMenu() {
+    Stack() {
+      Column() {}.width('100%').height('100%').onClick(() => { this.showMoreMenu = false })
+
+      Column() {
+        Column() {
+          Text('浏览器打开').fontSize(15)
+            .fontColor(AppColors.textPrimary)
+            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+            .width('100%')
+            .onClick(() => {
+              this.showMoreMenu = false
+              this.openInBrowser()
+            })
+        }
+        .width('100%')
+
+        Divider().width('100%').color(AppColors.separator)
+
+        Column() {
+          Text('复制URL').fontSize(15)
+            .fontColor(AppColors.textPrimary)
+            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+            .width('100%')
+            .onClick(() => {
+              this.showMoreMenu = false
+              this.copyCurrentUrl()
+            })
+        }
+        .width('100%')
+      }
+      .width(150)
+      .backgroundColor(AppColors.bgTertiary)
+      .borderRadius(10)
+      .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
+      .position({ top: this.statusBarHeight + NAV_BAR_H + 6, right: 16 })
+    }
+    .width('100%').height('100%')
+    .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
+  }
+
   build() {
     Stack() {
       Column() {
-        // ─── 导航栏（标题 + 右侧"浏览器打开"按钮） ───
+        // ─── 导航栏（标题 + 右侧"更多"操作按钮） ───
         PanelNavBar({
           title: this.pageTitle || 'NGA网页版',
           onBack: (): void => {
             routerStore.back()
           },
-          rightLabel: '浏览器打开',
-          rightLabelColor: '#007AFF',
+          rightIcon: $r('app.media.icon_more'),
           onRightClick: (): void => {
-            this.openInBrowser()
+            this.showMoreMenu = !this.showMoreMenu
           }
         })
 
@@ -315,6 +384,10 @@ export struct WebViewPanel {
       .width('100%')
       .justifyContent(FlexAlign.End)
       .padding({ right: 16, bottom: 16 + this.navBarHeight })
+
+      if (this.showMoreMenu) {
+        this.moreMenu()
+      }
     }
     .width('100%').height('100%').alignContent(Alignment.BottomEnd)
   }
