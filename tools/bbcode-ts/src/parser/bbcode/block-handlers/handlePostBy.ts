@@ -1,7 +1,10 @@
 import { BBNode, BBNodeType } from '../../../model/BBCodeNode'
-import { createBBNode, indexOfIgnoreCase, ParseState } from '../lexer'
+import { createBBNode, indexOfIgnoreCase, matchesIgnoreCaseAt, ParseState } from '../lexer'
 import { parseInlineInto } from '../inline-parser'
 import { parseBBCode } from '../parser'
+
+/** 回复引用头的完整正则（含惰性匹配，构造与执行成本高）。 */
+const P_REPLY_REF: RegExp = /\[b\]Reply to \[pid=(\d+),(\d+),(\d+)\]Reply\[\/pid\] Post by \[uid=(\d+)\](.*?)\[\/uid\] \(([^)]+)\)/gi
 
 /**
  * `[b]Reply to [pid=...]...[/pid] Post by [uid=...]...[/uid] (...):` 块处理器。
@@ -14,11 +17,17 @@ import { parseBBCode } from '../parser'
 export const handlePostBy = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pReplyRef: RegExp = /\[b\]Reply to \[pid=(\d+),(\d+),(\d+)\]Reply\[\/pid\] Post by \[uid=(\d+)\](.*?)\[\/uid\] \(([^)]+)\)/gi
-  pReplyRef.lastIndex = state.pos
-  const rrm = pReplyRef.exec(state.content)
+  // 快速路径：正文中绝大多数 [b] 是普通粗体标签而非回复引用头。
+  // 正则以 '[b]Reply to ' 开头，字符级前缀预检不命中时直接返回，
+  // 避免对每个 [b] 都执行含惰性匹配的高成本正则。
+  if (!matchesIgnoreCaseAt(state.content, '[b]Reply to ', state.pos)) {
+    return false
+  }
+
+  P_REPLY_REF.lastIndex = state.pos
+  const rrm = P_REPLY_REF.exec(state.content)
   if (rrm && rrm.index === state.pos) {
-    const headerEnd: number = pReplyRef.lastIndex
+    const headerEnd: number = P_REPLY_REF.lastIndex
     const n = createBBNode()
     n.type = BBNodeType.POST_BY
     const headerBody: string = `pid=${rrm[1]},${rrm[2]},${rrm[3]}]Reply[/pid] Post by [uid=${rrm[4]}]${rrm[5]}[/uid] (${rrm[6]}):`

@@ -2,6 +2,57 @@ import { BBNode, BBNodeType } from '../../../model/BBCodeNode'
 import { createBBNode, indexOfIgnoreCase, ParseState } from '../lexer'
 import { parseBlockNodes, parseBBCode } from '../parser'
 
+/** [hr] 水平分隔线标签正则。 */
+const P_HR: RegExp = /\[hr\s*\/?\]/gi
+
+/** [h] 标题开始标签正则。 */
+const P_H_OPEN: RegExp = /\[h\]/gi
+
+/** [h] 标题闭合标签正则。 */
+const P_H_CLOSE: RegExp = /\[\/h\]/gi
+
+/** [p] 段落开始标签正则。 */
+const P_P_OPEN: RegExp = /\[p\]/gi
+
+/** [p] 段落闭合标签正则。 */
+const P_P_CLOSE: RegExp = /\[\/p\]/gi
+
+/** [dice] 骰子标签正则（含惰性匹配内容捕获）。 */
+const P_DICE: RegExp = /\[dice\](.*?)\[\/dice\]/gi
+
+/** [l] 左浮动开始标签正则。 */
+const P_L_OPEN: RegExp = /\[l\]/gi
+
+/** [l] 左浮动闭合标签正则。 */
+const P_L_CLOSE: RegExp = /\[\/l\]/gi
+
+/** [r] 右浮动开始标签正则。 */
+const P_R_OPEN: RegExp = /\[r\]/gi
+
+/** [r] 右浮动闭合标签正则。 */
+const P_R_CLOSE: RegExp = /\[\/r\]/gi
+
+/** [align=...] 对齐开始标签正则。 */
+const P_ALIGN: RegExp = /\[align=(\w+)\]/gi
+
+/** [align] 对齐闭合标签正则。 */
+const P_ALIGN_CLOSE: RegExp = /\[\/align\]/gi
+
+/** [style ...] 样式块开始标签正则。 */
+const P_STYLE: RegExp = /\[style(?:\s+|=)([^\]]*)\]/gi
+
+/** [style] 样式块闭合标签正则。 */
+const P_STYLE_CLOSE: RegExp = /\[\/style\]/gi
+
+/** [hip] 高亮提示标签正则。 */
+const P_HIP: RegExp = /\[hip\]/gi
+
+/** [comment...] 注释标签正则。 */
+const P_COMMENT: RegExp = /\[comment[^\]]*\]/gi
+
+/** [randomblock] 随机块标签正则。 */
+const P_RANDOM: RegExp = /\[randomblock\]/gi
+
 /**
  * [hr] 水平分隔线处理器。
  *
@@ -11,11 +62,10 @@ import { parseBlockNodes, parseBBCode } from '../parser'
  */
 export const handleHorizontalRule = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos: number = state.pos
-  const pattern: RegExp = /\[hr\s*\/?\]/gi
-  pattern.lastIndex = state.pos
-  const match: RegExpExecArray | null = pattern.exec(state.content)
+  P_HR.lastIndex = state.pos
+  const match: RegExpExecArray | null = P_HR.exec(state.content)
   if (match && match.index === state.pos) {
-    state.pos = pattern.lastIndex
+    state.pos = P_HR.lastIndex
     const node = createBBNode()
     node.type = BBNodeType.HR
     result.push(node)
@@ -34,15 +84,13 @@ export const handleHorizontalRule = (state: ParseState, result: BBNode[]): boole
  */
 export const handleHeading = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos: number = state.pos
-  const pattern: RegExp = /\[h\]/gi
-  pattern.lastIndex = state.pos
-  const match: RegExpExecArray | null = pattern.exec(state.content)
+  P_H_OPEN.lastIndex = state.pos
+  const match: RegExpExecArray | null = P_H_OPEN.exec(state.content)
   if (match && match.index === state.pos) {
-    state.pos = pattern.lastIndex
+    state.pos = P_H_OPEN.lastIndex
     const node: BBNode = createBBNode()
     node.type = BBNodeType.HEADING
-    const closePattern: RegExp = /\[\/h\]/gi
-    node.children = parseBlockNodes(state, closePattern)
+    node.children = parseBlockNodes(state, P_H_CLOSE)
     result.push(node)
     return true
   }
@@ -59,15 +107,13 @@ export const handleHeading = (state: ParseState, result: BBNode[]): boolean => {
  */
 export const handleParagraph = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos: number = state.pos
-  const pattern: RegExp = /\[p\]/gi
-  pattern.lastIndex = state.pos
-  const match: RegExpExecArray | null = pattern.exec(state.content)
+  P_P_OPEN.lastIndex = state.pos
+  const match: RegExpExecArray | null = P_P_OPEN.exec(state.content)
   if (match && match.index === state.pos) {
-    state.pos = pattern.lastIndex
+    state.pos = P_P_OPEN.lastIndex
     const node = createBBNode()
     node.type = BBNodeType.PARAGRAPH
-    const closePattern: RegExp = /\[\/p\]/gi
-    node.children = parseBlockNodes(state, closePattern)
+    node.children = parseBlockNodes(state, P_P_CLOSE)
     result.push(node)
     return true
   }
@@ -81,11 +127,10 @@ export const handleParagraph = (state: ParseState, result: BBNode[]): boolean =>
 export const handleDice = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pDice: RegExp = /\[dice\](.*?)\[\/dice\]/gi
-  pDice.lastIndex = state.pos
-  const dm = pDice.exec(state.content)
+  P_DICE.lastIndex = state.pos
+  const dm = P_DICE.exec(state.content)
   if (dm && dm.index === state.pos) {
-    state.pos = pDice.lastIndex
+    state.pos = P_DICE.lastIndex
     const n = createBBNode()
     n.type = BBNodeType.DICE
     result.push(n)
@@ -102,15 +147,13 @@ export const handleDice = (state: ParseState, result: BBNode[]): boolean => {
 export const handleFloatLeft = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pFloatL: RegExp = /\[l\]/gi
-  pFloatL.lastIndex = state.pos
-  const flm = pFloatL.exec(state.content)
+  P_L_OPEN.lastIndex = state.pos
+  const flm = P_L_OPEN.exec(state.content)
   if (flm && flm.index === state.pos) {
-    state.pos = pFloatL.lastIndex
+    state.pos = P_L_OPEN.lastIndex
     const n = createBBNode()
     n.type = BBNodeType.FLOAT_LEFT
-    let pCloseL: RegExp = /\[\/l\]/gi
-    n.children = parseBlockNodes(state, pCloseL)
+    n.children = parseBlockNodes(state, P_L_CLOSE)
     result.push(n)
     return true
   }
@@ -125,15 +168,13 @@ export const handleFloatLeft = (state: ParseState, result: BBNode[]): boolean =>
 export const handleFloatRight = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pFloatR: RegExp = /\[r\]/gi
-  pFloatR.lastIndex = state.pos
-  const frm = pFloatR.exec(state.content)
+  P_R_OPEN.lastIndex = state.pos
+  const frm = P_R_OPEN.exec(state.content)
   if (frm && frm.index === state.pos) {
-    state.pos = pFloatR.lastIndex
+    state.pos = P_R_OPEN.lastIndex
     const n = createBBNode()
     n.type = BBNodeType.FLOAT_RIGHT
-    let pCloseR: RegExp = /\[\/r\]/gi
-    n.children = parseBlockNodes(state, pCloseR)
+    n.children = parseBlockNodes(state, P_R_CLOSE)
     result.push(n)
     return true
   }
@@ -148,17 +189,15 @@ export const handleFloatRight = (state: ParseState, result: BBNode[]): boolean =
 export const handleAlign = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pAlign: RegExp = /\[align=(\w+)\]/gi
-  pAlign.lastIndex = state.pos
-  const alm = pAlign.exec(state.content)
+  P_ALIGN.lastIndex = state.pos
+  const alm = P_ALIGN.exec(state.content)
   if (alm && alm.index === state.pos) {
     const alignVal: string = alm[1].toLowerCase()
-    state.pos = pAlign.lastIndex
+    state.pos = P_ALIGN.lastIndex
     const n = createBBNode()
     n.type = BBNodeType.ALIGN
     n.align = alignVal
-    let pCloseAlign: RegExp = /\[\/align\]/gi
-    n.children = parseBlockNodes(state, pCloseAlign)
+    n.children = parseBlockNodes(state, P_ALIGN_CLOSE)
     result.push(n)
     return true
   }
@@ -173,17 +212,15 @@ export const handleAlign = (state: ParseState, result: BBNode[]): boolean => {
 export const handleStyle = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pStyle: RegExp = /\[style(?:\s+|=)([^\]]*)\]/gi
-  pStyle.lastIndex = state.pos
-  const sm = pStyle.exec(state.content)
+  P_STYLE.lastIndex = state.pos
+  const sm = P_STYLE.exec(state.content)
   if (sm && sm.index === state.pos) {
     const styleVal = sm[1]
-    state.pos = pStyle.lastIndex
+    state.pos = P_STYLE.lastIndex
     const n = createBBNode()
     n.type = BBNodeType.STYLE_DIV
     n.text = styleVal
-    let pCloseStyle: RegExp = /\[\/style\]/gi
-    n.children = parseBlockNodes(state, pCloseStyle)
+    n.children = parseBlockNodes(state, P_STYLE_CLOSE)
     result.push(n)
     return true
   }
@@ -198,11 +235,10 @@ export const handleStyle = (state: ParseState, result: BBNode[]): boolean => {
 export const handleHip = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pHip: RegExp = /\[hip\]/gi
-  pHip.lastIndex = state.pos
-  const hipm = pHip.exec(state.content)
+  P_HIP.lastIndex = state.pos
+  const hipm = P_HIP.exec(state.content)
   if (hipm && hipm.index === state.pos) {
-    state.pos = pHip.lastIndex
+    state.pos = P_HIP.lastIndex
     let end = indexOfIgnoreCase(state.content, '[/hip]', state.pos)
     if (end < 0) end = state.len
     const body = state.content.substring(state.pos, end)
@@ -224,11 +260,10 @@ export const handleHip = (state: ParseState, result: BBNode[]): boolean => {
 export const handleComment = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pComment: RegExp = /\[comment[^\]]*\]/gi
-  pComment.lastIndex = state.pos
-  const comt = pComment.exec(state.content)
+  P_COMMENT.lastIndex = state.pos
+  const comt = P_COMMENT.exec(state.content)
   if (comt && comt.index === state.pos) {
-    state.pos = pComment.lastIndex
+    state.pos = P_COMMENT.lastIndex
     return true
   }
 
@@ -242,11 +277,10 @@ export const handleComment = (state: ParseState, result: BBNode[]): boolean => {
 export const handleRandomBlock = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pRandom: RegExp = /\[randomblock\]/gi
-  pRandom.lastIndex = state.pos
-  const rbm = pRandom.exec(state.content)
+  P_RANDOM.lastIndex = state.pos
+  const rbm = P_RANDOM.exec(state.content)
   if (rbm && rbm.index === state.pos) {
-    state.pos = pRandom.lastIndex
+    state.pos = P_RANDOM.lastIndex
     const n = createBBNode()
     n.type = BBNodeType.STYLE_DIV
     n.text = 'nga-randomblock'

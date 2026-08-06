@@ -10,20 +10,24 @@ import { parseBlockNodes } from '../parser'
  * @param result 当前块级节点输出数组
  * @returns 是否匹配并消费了 [collapse] 块
  */
+/** [collapse=标题] 开始标签正则（含惰性匹配标题捕获）。 */
+const P_COLLAPSE: RegExp = /\[collapse(?:=(.*?))?\]/gi
+
+/** [collapse] 闭合标签正则。 */
+const P_CLOSE_COLLAPSE: RegExp = /\[\/collapse\]/gi
+
 export const handleCollapse = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pCollapse: RegExp = /\[collapse(?:=(.*?))?\]/gi
-  pCollapse.lastIndex = state.pos
-  const cm = pCollapse.exec(state.content)
+  P_COLLAPSE.lastIndex = state.pos
+  const cm = P_COLLAPSE.exec(state.content)
   if (cm && cm.index === state.pos) {
     const title = cm[1] || '展开/折叠'
-    state.pos = pCollapse.lastIndex
+    state.pos = P_COLLAPSE.lastIndex
     const n = createBBNode()
     n.type = BBNodeType.COLLAPSE
     n.title = decodeHtmlEntities(title)
-    let pCloseCollapse: RegExp = /\[\/collapse\]/gi
-    n.children = parseBlockNodes(state, pCloseCollapse)
+    n.children = parseBlockNodes(state, P_CLOSE_COLLAPSE)
     result.push(n)
     return true
   }

@@ -45,14 +45,16 @@ function findListBlockEnd(content: string, start: number): number {
  * @param result 当前块级节点输出数组
  * @returns 是否匹配并消费了 [list] 块
  */
+/** [list] 开始标签正则。 */
+const P_LIST: RegExp = /\[list\]/gi
+
 export const handleList = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pList: RegExp = /\[list\]/gi
-  pList.lastIndex = state.pos
-  const lm = pList.exec(state.content)
+  P_LIST.lastIndex = state.pos
+  const lm = P_LIST.exec(state.content)
   if (lm && lm.index === state.pos) {
-    state.pos = pList.lastIndex
+    state.pos = P_LIST.lastIndex
     if (state.listDepth >= MAX_LIST_DEPTH) {
       const literalEnd: number = findListBlockEnd(state.content, state.pos)
       pushTextNode(result, state.content.substring(savedPos, literalEnd))

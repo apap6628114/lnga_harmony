@@ -120,6 +120,24 @@ runs.json 提取方式：浏览器内脚本遍历楼层 DOM，跳过 `.x` 表格
 
 ## 修复记录
 
+- **2026-08-07 解析/渲染效率优化**（demo.txt 基准，效果零变化，45 项测试全绿）：
+  - `parseTableContent` 每行 3 次独立扫描（`[/table]` exec + `[tr]` exec + `indexOf`）合并为
+    单次扫描 + 字符级 `matchesIgnoreCaseAt`，消除每行正则 exec 扫至表尾的重复扫描
+    （签名 `closePattern: RegExp` → `closeTag: string`）；`parseTableRowCells` 的 `[td]`
+    正则提升为模块常量
+  - `parseBBCode` 快速路径：无 `[`/`<`/`===` 的纯文本（表格单元格正文）跳过
+    preprocessContent（对该类输入为严格恒等变换，`===` 为标题规范化模式须排除），
+    消除表格单元格递归中每个单元格重复的 6 正则链 + toLowerCase + 逐行扫描
+  - `unescapeHtml` 无 `&` 短路；`cleanupHtmlSegment` 无 `<` 且无 `[img]` 短路；
+    `handlePostBy` exec 前 `[b]Reply to ` 前缀预检；`tryMatchBlock` 20 个 if 改为
+    Map 字典分派；全部 block-handlers 及 parser/heading-normalizer 的正则提升为
+    模块级常量（所有 exec 前显式设 lastIndex，共享有状态正则安全）
+  - 渲染层 `deriveNodeStyle` 对样式零修改的节点（TEXT/链接/表情等）复用父级样式
+    引用（run.style 被 ArkUI 只读消费，值语义与克隆等价）；换行折叠对无连续换行的
+    Run 短路
+  - 实测：demo.txt 冷启动 total ~49.5ms → ~40ms（-20%）；4000 行大表格
+    218ms → 10ms（21×，消除单元格重复预处理与表格扫描 O(n²)）
+
 - **2026-08-05 域名集中收敛同步**：entry 侧域名收敛到 `common/constants/NgaDomains.ets`
   时直接改动了被镜像的 `AttachUrl.ets` / `Utils.ets`（CDN 域 178.com → nga.cn）。
   已按「改完立即反向同步」原则回写镜像（新建 `NgaDomains.ts`、两文件改引用常量），

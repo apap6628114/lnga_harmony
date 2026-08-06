@@ -209,11 +209,22 @@ function combineScalePercent(parentScale: number, childScale: number): number {
 /**
  * 将当前节点的格式语义叠加到父级样式。
  *
+ * 仅样式类节点需要克隆样式对象；TEXT/链接/表情等其他节点对样式零修改，
+ * 直接复用父级样式引用，避免每个节点一次对象分配。共享的 InlineTextStyle
+ * 被 appendRun 合并判断与 ArkUI 渲染只读消费，值语义与克隆完全等价。
+ *
  * @param node 当前格式节点
  * @param inherited 父级样式
  * @returns 当前节点的继承结果
  */
 function deriveNodeStyle(node: BBNode, inherited: InlineTextStyle): InlineTextStyle {
+  if (node.type !== BBNodeType.BOLD && node.type !== BBNodeType.ITALIC &&
+    node.type !== BBNodeType.UNDERLINE && node.type !== BBNodeType.STRIKETHROUGH &&
+    node.type !== BBNodeType.COLOR && node.type !== BBNodeType.SIZE &&
+    node.type !== BBNodeType.FONT && node.type !== BBNodeType.SUBSCRIPT &&
+    node.type !== BBNodeType.SUPERSCRIPT) {
+    return inherited
+  }
   const style: InlineTextStyle = cloneInlineTextStyle(inherited)
   if (node.type === BBNodeType.BOLD) style.bold = true
   if (node.type === BBNodeType.ITALIC) style.italic = true
@@ -330,6 +341,8 @@ export function flattenInlineNodes(nodes: BBNode[], inherited?: InlineTextStyle)
   // 解析树按"文本零丢失"保留原文（快照、官方差分、纯文本提取均依赖原始 \n），
   // 仅在渲染层把 \n{2,} 折叠为单个 \n，避免 ArkUI Text 渲染出多个空白行。
   for (let i: number = 0; i < state.runs.length; i++) {
+    // 快速路径：无连续换行的 Run 无需正则替换
+    if (state.runs[i].text.indexOf('\n\n') < 0) continue
     state.runs[i].text = state.runs[i].text.replace(/\n{2,}/g, '\n')
   }
   return state.runs

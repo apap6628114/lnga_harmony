@@ -11,15 +11,20 @@ import { guessMediaTypeFromExt } from '../inline-parser'
  * @param result 当前块级节点输出数组
  * @returns 是否匹配并消费了某个 [img] 变体
  */
+/** NGA 相对路径 [img]./mon_...[/img] 标签正则。 */
+const P_NGA_IMG: RegExp = /\[img\]\.(\/mon_\S+?)\[\/img\]/gi
+
+/** 普通 [img]URL[/img] 标签正则（含惰性匹配 URL 捕获）。 */
+const P_IMG: RegExp = /\[img\](.*?)\[\/img\]/gi
+
 export const handleImg = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pNgaImg: RegExp = /\[img\]\.(\/mon_\S+?)\[\/img\]/gi
-  pNgaImg.lastIndex = state.pos
-  const ncm = pNgaImg.exec(state.content)
+  P_NGA_IMG.lastIndex = state.pos
+  const ncm = P_NGA_IMG.exec(state.content)
   if (ncm && ncm.index === state.pos) {
     const rawUrl = ncm[1]
-    state.pos = pNgaImg.lastIndex
+    state.pos = P_NGA_IMG.lastIndex
     const n = createBBNode()
     const guessedType: BBNodeType = guessMediaTypeFromExt(rawUrl)
     if (guessedType === BBNodeType.VIDEO || guessedType === BBNodeType.AUDIO) {
@@ -33,12 +38,11 @@ export const handleImg = (state: ParseState, result: BBNode[]): boolean => {
     return true
   }
 
-  let pImg: RegExp = /\[img\](.*?)\[\/img\]/gi
-  pImg.lastIndex = state.pos
-  const im = pImg.exec(state.content)
+  P_IMG.lastIndex = state.pos
+  const im = P_IMG.exec(state.content)
   if (im && im.index === state.pos) {
     const rawUrl = im[1]
-    state.pos = pImg.lastIndex
+    state.pos = P_IMG.lastIndex
     const n = createBBNode()
     const guessedType: BBNodeType = guessMediaTypeFromExt(rawUrl)
     if (guessedType === BBNodeType.VIDEO || guessedType === BBNodeType.AUDIO) {

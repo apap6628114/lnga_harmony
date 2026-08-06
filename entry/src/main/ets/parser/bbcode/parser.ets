@@ -40,11 +40,22 @@ class BlockParseResult {
   terminator: string = ''
 }
 
-/** 公共入口：预处理后从顶层解析块级节点。 */
+/**
+ * 公共入口：预处理后从顶层解析块级节点。
+ *
+ * 快速路径：无 `[`、`<`、`===` 的纯文本（如表格单元格正文）经 preprocessContent
+ * 恒等不变——`<br/>` 替换需 `<`、HTML 清理需 `<`/`[code]`、标题规范化需
+ * `[h]` 标签或 `===...===` 分隔行。跳过预处理省去表格单元格递归中
+ * 每个单元格重复的 6 正则链 + toLowerCase + 逐行扫描。
+ */
 function parseBBCode(content: string): BBNode[] {
   if (!content) return []
   const state = new ParseState()
-  state.content = preprocessContent(content)
+  if (content.indexOf('[') < 0 && content.indexOf('<') < 0 && content.indexOf('===') < 0) {
+    state.content = content
+  } else {
+    state.content = preprocessContent(content)
+  }
   state.pos = 0
   state.len = state.content.length
   return parseBlockNodes(state, null)
@@ -108,6 +119,9 @@ function isTrackableInlineOpenTag(rawTag: string, name: string): boolean {
   return true
 }
 
+/** 跨块内联标签扫描正则（模块级常量，避免每片段重复构造）。 */
+const P_INLINE_TAG: RegExp = /\[(\/)?(b|item|i|u|del|color|size|font|sub|sup|url|pid|uid|tid)(?:=[^\]]*)?\]/gi
+
 /**
  * 更新跨块节点延续的内联样式栈。
  *
@@ -115,15 +129,15 @@ function isTrackableInlineOpenTag(rawTag: string, name: string): boolean {
  * @param activeTags 当前仍处于打开状态的开始标签
  */
 function updateActiveInlineTags(segment: string, activeTags: string[]): void {
-  const tagPattern: RegExp = /\[(\/)?(b|item|i|u|del|color|size|font|sub|sup|url|pid|uid|tid)(?:=[^\]]*)?\]/gi
-  let match: RegExpExecArray | null = tagPattern.exec(segment)
+  P_INLINE_TAG.lastIndex = 0
+  let match: RegExpExecArray | null = P_INLINE_TAG.exec(segment)
   while (match) {
     const name: string = match[2].toLowerCase()
     // 链接类标签属性是数据而非样式（官方对 URL 长度不设限），按类别选择长度上限
     const limit: number = /^(url|pid|uid|tid)$/.test(name) ?
       MAX_INLINE_LINK_TAG_LENGTH : MAX_INLINE_TAG_LENGTH
     if (match[0].length > limit) {
-      match = tagPattern.exec(segment)
+      match = P_INLINE_TAG.exec(segment)
       continue
     }
     if (match[1]) {
@@ -136,7 +150,7 @@ function updateActiveInlineTags(segment: string, activeTags: string[]): void {
     } else if (activeTags.length < MAX_INLINE_DEPTH && isTrackableInlineOpenTag(match[0], name)) {
       activeTags.push(match[0])
     }
-    match = tagPattern.exec(segment)
+    match = P_INLINE_TAG.exec(segment)
   }
 }
 
@@ -269,6 +283,39 @@ function parseBlockNodesUntil(state: ParseState, closePattern: RegExp | null): B
   return parsed
 }
 
+/** 块级 handler 函数签名。 */
+type BlockHandler = (state: ParseState, result: BBNode[]) => boolean
+
+/**
+ * 标签名到块级 handler 的分派表。
+ *
+ * 每个 handler 仍复用原正则完成完整校验（如 [b] 仅 handlePostBy 会完整 exec），
+ * 查表分派只跳过不可能匹配的 handler，不改变校验语义。
+ */
+const BLOCK_HANDLERS: Map<string, BlockHandler> = new Map<string, BlockHandler>([
+  ['h', handleHeading],
+  ['hr', handleHorizontalRule],
+  ['p', handleParagraph],
+  ['b', handlePostBy],
+  ['quote', handleQuote],
+  ['collapse', handleCollapse],
+  ['code', handleCode],
+  ['list', handleList],
+  ['lessernuke', handleNuke],
+  ['album', handleAlbum],
+  ['flash', handleFlash],
+  ['dice', handleDice],
+  ['img', handleImg],
+  ['l', handleFloatLeft],
+  ['r', handleFloatRight],
+  ['align', handleAlign],
+  ['table', handleTable],
+  ['style', handleStyle],
+  ['hip', handleHip],
+  ['comment', handleComment],
+  ['randomblock', handleRandomBlock]
+])
+
 /**
  * 根据已读取的标签名调用唯一可能命中的块级 handler。
  *
@@ -280,28 +327,9 @@ function parseBlockNodesUntil(state: ParseState, closePattern: RegExp | null): B
  */
 function tryMatchBlock(state: ParseState, result: BBNode[]): boolean {
   const name: string = getBlockTagNameAt(state.content, state.pos)
-  if (name === 'h') return handleHeading(state, result)
-  if (name === 'hr') return handleHorizontalRule(state, result)
-  if (name === 'p') return handleParagraph(state, result)
-  if (name === 'b') return handlePostBy(state, result)
-  if (name === 'quote') return handleQuote(state, result)
-  if (name === 'collapse') return handleCollapse(state, result)
-  if (name === 'code') return handleCode(state, result)
-  if (name === 'list') return handleList(state, result)
-  if (name === 'lessernuke') return handleNuke(state, result)
-  if (name === 'album') return handleAlbum(state, result)
-  if (name === 'flash') return handleFlash(state, result)
-  if (name === 'dice') return handleDice(state, result)
-  if (name === 'img') return handleImg(state, result)
-  if (name === 'l') return handleFloatLeft(state, result)
-  if (name === 'r') return handleFloatRight(state, result)
-  if (name === 'align') return handleAlign(state, result)
-  if (name === 'table') return handleTable(state, result)
-  if (name === 'style') return handleStyle(state, result)
-  if (name === 'hip') return handleHip(state, result)
-  if (name === 'comment') return handleComment(state, result)
-  if (name === 'randomblock') return handleRandomBlock(state, result)
-  return false
+  const handler: BlockHandler | undefined = BLOCK_HANDLERS.get(name)
+  if (handler === undefined) return false
+  return handler(state, result)
 }
 
 /**
@@ -336,12 +364,12 @@ function parseTdAttributes(attrRaw: string): TdAttr {
     if (parts.length >= 3 && /^\d+$/.test(parts[2])) attrs.colWidth = parseInt(parts[2], 10)
     return attrs
   }
-  const spanPattern: RegExp = /\b(rowspan|colspan)\s*=\s*(\d+)/gi
-  let spanMatch: RegExpExecArray | null = spanPattern.exec(trimmed)
+  P_SPAN_ATTR.lastIndex = 0
+  let spanMatch: RegExpExecArray | null = P_SPAN_ATTR.exec(trimmed)
   while (spanMatch) {
     if (spanMatch[1].toLowerCase() === 'rowspan') attrs.rowSpan = parseInt(spanMatch[2], 10)
     else attrs.colSpan = parseInt(spanMatch[2], 10)
-    spanMatch = spanPattern.exec(trimmed)
+    spanMatch = P_SPAN_ATTR.exec(trimmed)
   }
   return attrs
 }
@@ -380,22 +408,31 @@ function findTdClose(state: ParseState): number {
   return firstTdClose
 }
 
-/** 解析表格行：遇 [/table] 返回，遇 [tr] 解析一行单元格。 */
-function parseTableContent(state: ParseState, closePattern: RegExp): BBNode[] {
+/** 单元格 span 属性正则（模块级常量，避免每单元格重复构造）。 */
+const P_SPAN_ATTR: RegExp = /\b(rowspan|colspan)\s*=\s*(\d+)/gi
+
+/**
+ * 解析表格行：遇 [/table] 返回，遇 [tr] 解析一行单元格。
+ *
+ * 快路径实现：三个"从 state.pos 找下一个出现"的独立扫描（边界正则 exec、
+ * [tr] 正则 exec、indexOf('[')）合并为单次 indexOf + 当前位置字符级匹配。
+ * 原 closePattern.exec 每轮可能扫描至表尾（284 行 × 表长 的重复扫描），
+ * 现仅对命中的 `[` 位置做常数次 matchesIgnoreCaseAt。
+ *
+ * @param state 解析游标
+ * @param closeTag 表格结束标签（如 '[/table]'，大小写不敏感匹配）
+ * @returns 表格行与表级杂散文本节点
+ */
+function parseTableContent(state: ParseState, closeTag: string): BBNode[] {
   const rows: BBNode[] = []
   while (state.pos < state.len) {
-    closePattern.lastIndex = state.pos
-    const cm = closePattern.exec(state.content)
-    if (cm && cm.index === state.pos) {
-      state.pos = closePattern.lastIndex
+    // 边界优先于 [tr]，与既有行为一致（原 closePattern 检查在前）
+    if (matchesIgnoreCaseAt(state.content, closeTag, state.pos)) {
+      state.pos += closeTag.length
       return rows
     }
-
-    let pTr: RegExp = /\[tr\]/gi
-    pTr.lastIndex = state.pos
-    const trm = pTr.exec(state.content)
-    if (trm && trm.index === state.pos) {
-      state.pos = pTr.lastIndex
+    if (matchesIgnoreCaseAt(state.content, '[tr]', state.pos)) {
+      state.pos += 4
       const row = createBBNode()
       row.type = BBNodeType.TABLE_ROW
       row.children = parseTableRowCells(state)
@@ -420,6 +457,9 @@ function parseTableContent(state: ParseState, closePattern: RegExp): BBNode[] {
   return rows
 }
 
+/** 单元格开始标签正则（模块级常量，避免每单元格重复构造）。 */
+const P_TD: RegExp = /\[td([^\]]*)\]/gi
+
 /** 解析表格行内的 [td] 单元格，处理 colspan/rowspan/colwidth 属性。 */
 function parseTableRowCells(state: ParseState): BBNode[] {
   const cells: BBNode[] = []
@@ -432,13 +472,12 @@ function parseTableRowCells(state: ParseState): BBNode[] {
       break
     }
 
-    let pTd: RegExp = /\[td([^\]]*)\]/gi
-    pTd.lastIndex = state.pos
-    const tdm = pTd.exec(state.content)
+    P_TD.lastIndex = state.pos
+    const tdm = P_TD.exec(state.content)
     // 匹配 [td...] 即视为单元格；未知属性由 parseTdAttributes 忽略，
     // 确保 [td foo=1] 等非法属性形式的单元格内容不丢失
     if (tdm && tdm.index === state.pos) {
-      state.pos = pTd.lastIndex
+      state.pos = P_TD.lastIndex
       const attr: TdAttr = parseTdAttributes(tdm[1])
       const cell = createBBNode()
       cell.type = BBNodeType.TABLE_CELL

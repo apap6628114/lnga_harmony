@@ -45,6 +45,9 @@ const NAMED_ENTITIES: Map<string, string> = new Map<string, string>([
  */
 export function unescapeHtml(s: string): string {
   if (!s) return ''
+  // 快速路径：不含 & 的字符串不可能命中任何实体模式，原串直返
+  //（真实楼层正文绝大多数文本片段无实体，避免每次调用跑 5 个链式 replace）
+  if (s.indexOf('&') < 0) return s
   return s
     .replace(/&#91;/g, '[')
     .replace(/&#93;/g, ']')

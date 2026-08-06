@@ -11,14 +11,22 @@ import { guessMediaTypeFromExt } from '../inline-parser'
  * @param result 当前块级节点输出数组
  * @returns 是否匹配并消费了某个 [flash] 变体
  */
+/** [flash=video] 标签正则。 */
+const P_FLASH_VIDEO: RegExp = /\[flash=video\]/gi
+
+/** [flash=audio] 标签正则。 */
+const P_FLASH_AUDIO: RegExp = /\[flash=audio\]/gi
+
+/** 无类型 [flash] 标签正则（含惰性匹配内容捕获）。 */
+const P_FLASH: RegExp = /\[flash\](.*?)\[\/flash\]/gi
+
 export const handleFlash = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pFv: RegExp = /\[flash=video\]/gi
-  pFv.lastIndex = state.pos
-  const fvm = pFv.exec(state.content)
+  P_FLASH_VIDEO.lastIndex = state.pos
+  const fvm = P_FLASH_VIDEO.exec(state.content)
   if (fvm && fvm.index === state.pos) {
-    state.pos = pFv.lastIndex
+    state.pos = P_FLASH_VIDEO.lastIndex
     let end = indexOfIgnoreCase(state.content, '[/flash]', state.pos)
     if (end < 0) end = state.len
     const rawUrl = state.content.substring(state.pos, end).trim()
@@ -30,11 +38,10 @@ export const handleFlash = (state: ParseState, result: BBNode[]): boolean => {
     return true
   }
 
-  let pFa: RegExp = /\[flash=audio\]/gi
-  pFa.lastIndex = state.pos
-  const fam = pFa.exec(state.content)
+  P_FLASH_AUDIO.lastIndex = state.pos
+  const fam = P_FLASH_AUDIO.exec(state.content)
   if (fam && fam.index === state.pos) {
-    state.pos = pFa.lastIndex
+    state.pos = P_FLASH_AUDIO.lastIndex
     let end = indexOfIgnoreCase(state.content, '[/flash]', state.pos)
     if (end < 0) end = state.len
     const rawUrl = state.content.substring(state.pos, end).trim()
@@ -46,11 +53,10 @@ export const handleFlash = (state: ParseState, result: BBNode[]): boolean => {
     return true
   }
 
-  let pFlash: RegExp = /\[flash\](.*?)\[\/flash\]/gi
-  pFlash.lastIndex = state.pos
-  const ffm = pFlash.exec(state.content)
+  P_FLASH.lastIndex = state.pos
+  const ffm = P_FLASH.exec(state.content)
   if (ffm && ffm.index === state.pos) {
-    state.pos = pFlash.lastIndex
+    state.pos = P_FLASH.lastIndex
     const rawUrl: string = ffm[1].trim()
     const resolved: string = resolveMediaUrl(rawUrl)
     const safeSrc: string = isSafeUrl(resolved) ? resolved : ''

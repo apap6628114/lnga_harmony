@@ -9,18 +9,19 @@ import { parseTableContent } from '../parser'
  * @param result 当前块级节点输出数组
  * @returns 是否匹配并消费了 [table] 块
  */
+/** [table] 开始标签正则。 */
+const P_TABLE: RegExp = /\[table\]/gi
+
 export const handleTable = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pTable: RegExp = /\[table\]/gi
-  pTable.lastIndex = state.pos
-  const tm = pTable.exec(state.content)
+  P_TABLE.lastIndex = state.pos
+  const tm = P_TABLE.exec(state.content)
   if (tm && tm.index === state.pos) {
-    state.pos = pTable.lastIndex
+    state.pos = P_TABLE.lastIndex
     const n = createBBNode()
     n.type = BBNodeType.TABLE
-    let pCloseTable: RegExp = /\[\/table\]/gi
-    n.children = parseTableContent(state, pCloseTable)
+    n.children = parseTableContent(state, '[/table]')
     result.push(n)
     return true
   }

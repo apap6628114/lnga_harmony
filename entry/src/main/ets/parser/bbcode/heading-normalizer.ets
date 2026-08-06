@@ -101,13 +101,16 @@ function normalizeHeadingLine(line: string): string {
  * @param inCode 行开始位置是否处于代码块
  * @returns 下一行开始位置是否处于代码块
  */
+/** [code] 开始/闭合标签正则（模块级常量，避免每行重复构造）。 */
+const P_CODE_TAG: RegExp = /\[(\/)?code\]/gi
+
 function updateCodeBlockState(line: string, inCode: boolean): boolean {
   let result: boolean = inCode
-  const pattern: RegExp = /\[(\/)?code\]/gi
-  let match: RegExpExecArray | null = pattern.exec(line)
+  P_CODE_TAG.lastIndex = 0
+  let match: RegExpExecArray | null = P_CODE_TAG.exec(line)
   while (match !== null) {
     result = match[1] === undefined
-    match = pattern.exec(line)
+    match = P_CODE_TAG.exec(line)
   }
   return result
 }

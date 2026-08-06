@@ -10,20 +10,28 @@ import { parseBlockNodes, parseBBCode } from '../parser'
  * @param result 当前块级节点输出数组
  * @returns 是否匹配并消费了 [lessernuke] 块
  */
+/** [lessernuke] 开始标签正则。 */
+const P_LESSERNUKE: RegExp = /\[lessernuke\]/gi
+
+/** [album=标题] 开始标签正则（含惰性匹配标题捕获）。 */
+const P_ALBUM: RegExp = /\[album=(.*?)\]/gi
+
+/** [album] 闭合标签正则。 */
+const P_CLOSE_ALBUM: RegExp = /\[\/album\]/gi
+
 export const handleNuke = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pNuke: RegExp = /\[lessernuke\]/gi
-  pNuke.lastIndex = state.pos
-  const lnm = pNuke.exec(state.content)
+  P_LESSERNUKE.lastIndex = state.pos
+  const lnm = P_LESSERNUKE.exec(state.content)
   if (lnm && lnm.index === state.pos) {
-    state.pos = pNuke.lastIndex
+    state.pos = P_LESSERNUKE.lastIndex
     let end = indexOfIgnoreCase(state.content, '[/lessernuke]', state.pos)
     if (end < 0) end = state.len
     state.pos = end < state.len ? end + 13 : state.len
     const n = createBBNode()
     n.type = BBNodeType.WARN
-    const bodyContent = parseBBCode(state.content.substring(pNuke.lastIndex, end < state.len ? end : state.len))
+    const bodyContent = parseBBCode(state.content.substring(P_LESSERNUKE.lastIndex, end < state.len ? end : state.len))
     n.children = bodyContent
     result.push(n)
     return true
@@ -43,17 +51,15 @@ export const handleNuke = (state: ParseState, result: BBNode[]): boolean => {
 export const handleAlbum = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pAlbum: RegExp = /\[album=(.*?)\]/gi
-  pAlbum.lastIndex = state.pos
-  const am = pAlbum.exec(state.content)
+  P_ALBUM.lastIndex = state.pos
+  const am = P_ALBUM.exec(state.content)
   if (am && am.index === state.pos) {
     const albumTitle = am[1]
-    state.pos = pAlbum.lastIndex
+    state.pos = P_ALBUM.lastIndex
     const n = createBBNode()
     n.type = BBNodeType.ALBUM
     n.title = decodeHtmlEntities(albumTitle)
-    let pCloseAlbum: RegExp = /\[\/album\]/gi
-    n.children = parseBlockNodes(state, pCloseAlbum)
+    n.children = parseBlockNodes(state, P_CLOSE_ALBUM)
     result.push(n)
     return true
   }

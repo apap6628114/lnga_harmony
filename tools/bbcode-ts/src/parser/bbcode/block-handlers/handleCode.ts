@@ -9,14 +9,16 @@ import { createBBNode, indexOfIgnoreCase, ParseState } from '../lexer'
  * @param result 当前块级节点输出数组
  * @returns 是否匹配并消费了 [code] 块
  */
+/** [code] 开始标签正则。 */
+const P_CODE: RegExp = /\[code\]/gi
+
 export const handleCode = (state: ParseState, result: BBNode[]): boolean => {
   const savedPos = state.pos
 
-  let pCode: RegExp = /\[code\]/gi
-  pCode.lastIndex = state.pos
-  const cdm = pCode.exec(state.content)
+  P_CODE.lastIndex = state.pos
+  const cdm = P_CODE.exec(state.content)
   if (cdm && cdm.index === state.pos) {
-    state.pos = pCode.lastIndex
+    state.pos = P_CODE.lastIndex
     let end = indexOfIgnoreCase(state.content, '[/code]', state.pos)
     if (end < 0) end = state.len
     const codeText = state.content.substring(state.pos, end)

@@ -184,7 +184,15 @@ function cleanHtmlOutsideCode(content: string): string {
  * @param segment 不含 [code] 块的正文片段
  * @returns 语义化后的片段
  */
+/** [img] 标签扫描正则（无 g 标志，test 无 lastIndex 状态，模块共享安全）。 */
+const P_IMG_TAG_SCAN: RegExp = /\[img\]/i
+
 function cleanupHtmlSegment(segment: string): string {
+  // 快速路径：无 < 且无 [img]（大小写不敏感）的段不可能命中任何 HTML/表情替换模式，
+  // 原样直返，避免每次调用跑 6 个链式 replace。
+  // [img] 检查是必需的：smile 表情替换模式不含尖括号，且其正则本身带 i 标志
+  // 支持大写变体，快速路径必须与之对齐。
+  if (segment.indexOf('<') < 0 && !P_IMG_TAG_SCAN.test(segment)) return segment
   return segment
     .replace(/<blockquote[^>]*>/gi, '[quote]')
     .replace(/<\/blockquote>/gi, '[/quote]')

@@ -215,6 +215,14 @@ describe('边角样例', () => {
     { name: '特殊字符实体', input: '实体 &amp;&lt;&gt;&quot;&#91;字面&#93; 与 裸 [ 方括号' },
     { name: '大小写标签', input: '[B]大写粗体[/B] [COLOR=BLUE]大写颜色[/COLOR]' },
     { name: '表情标签', input: '表情 [s:ac:01] 之后文字' },
+    {
+      name: '大写变体 smile 表情（回归：快速路径 [img] 大小写敏感）',
+      input: '表情 [IMG]https://img4.nga.cn/ngabbs/post/smile/a_1.png[/IMG] 之后',
+      asserts: (nodes: BBNode[]) => {
+        assert.equal(countType(nodes, BBNodeType.EMOTION), 1, '大写 [IMG] smile 链接应解析为表情')
+        assert.equal(countType(nodes, BBNodeType.IMAGE), 0, '不应退化为图片节点')
+      }
+    },
     { name: '闪存媒体', input: '[flash=video]https://video.example.com/a.mp4[/flash]' },
     { name: '上下标', input: '化学 H[sub]2[/sub]O 与 x[sup]2[/sup]' },
     {
