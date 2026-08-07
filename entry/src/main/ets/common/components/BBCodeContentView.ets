@@ -38,6 +38,12 @@ import {
   QUOTE_BORDER_COLORS,
   QuoteSplit,
 } from './bbcode/BBCodeRenderContext'
+import {
+  buildTableLayout,
+  TableLayout,
+  TableLayoutCell,
+  TableLayoutRow,
+} from './bbcode/table-layout'
 import { appStore } from '../../store/AppStore'
 
 /** 单个 BBCode 视图允许缓存的最大内联节点组数量。 */
@@ -1051,22 +1057,13 @@ export struct BBCodeContentView {
   }
 
   /**
-   * 判断表格是否为宽表（最大列数 ≥ 4），需要横向滚动避免列宽被压缩。
+   * 判断归一化表格是否需要横向滚动。
    *
-   * 遍历所有行取最大列数，避免某行因 colSpan 导致列数统计不全。
-   *
-   * @param node TABLE 节点
-   * @returns 最大列数 ≥ 4 时返回 true
+   * @param layout 表格逻辑网格
+   * @returns 逻辑列数不少于 4 时返回 true
    */
-  private isWideTable(node: BBNode): boolean {
-    let maxCols = 0
-    for (const row of node.children) {
-      if (row.type === BBNodeType.TABLE_ROW) {
-        const cols = row.children.filter((c: BBNode) => c.type === BBNodeType.TABLE_CELL).length
-        if (cols > maxCols) maxCols = cols
-      }
-    }
-    return maxCols >= 4
+  private isWideTable(layout: TableLayout): boolean {
+    return layout.columnCount >= 4
   }
 
   /**
@@ -1075,13 +1072,42 @@ export struct BBCodeContentView {
    * 优先使用解析阶段获得的 colWidth，否则按默认列宽 120vp × colSpan。
    * 固定列宽保证所有行同列宽度一致，避免内容跨分隔线错位。
    *
-   * @param cell TABLE_CELL 节点
+   * @param cell 已归一化的渲染片段
    * @returns 单元格宽度（vp）
    */
-  private tableCellFixedWidth(cell: BBNode): number {
-    const span = cell.colSpan > 1 ? cell.colSpan : 1
-    if (cell.colWidth > 0) return cell.colWidth
-    return 120 * span
+  private tableCellFixedWidth(cell: TableLayoutCell): number {
+    const colWidth: number = cell.node?.colWidth ?? 0
+    if (colWidth > 0) return colWidth
+    return 120 * cell.columnSpan
+  }
+
+  /**
+   * 计算归一化表格片段的边框宽度。
+   *
+   * 跨行连接片段隐藏内部横边框，使多个自适应高度的行在视觉上形成一个合并单元格。
+   *
+   * @param cell 已归一化的渲染片段
+   * @returns ArkUI 四边边框宽度
+   */
+  private tableCellBorderWidth(cell: TableLayoutCell): EdgeWidths {
+    return {
+      top: cell.connectsAbove ? 0 : 0.5,
+      right: 0.5,
+      bottom: cell.connectsBelow ? 0 : 0.5,
+      left: 0.5,
+    }
+  }
+
+  /**
+   * 计算表格片段内容的垂直对齐方式。
+   *
+   * rowspan 连接片段在承载内容的中间逻辑行内继续垂直居中；普通单元格保持顶部对齐。
+   *
+   * @param cell 已归一化的渲染片段
+   * @returns ArkUI 主轴对齐方式
+   */
+  private tableCellVerticalAlign(cell: TableLayoutCell): FlexAlign {
+    return cell.connectsAbove || cell.connectsBelow ? FlexAlign.Center : FlexAlign.Start
   }
 
   /**
@@ -1355,26 +1381,36 @@ export struct BBCodeContentView {
    */
   @Builder
   RenderTable(node: BBNode, ctx: RenderContext) {
-    if (this.isWideTable(node)) {
+    this.RenderTableLayout(buildTableLayout(node), ctx)
+  }
+
+  /**
+   * 渲染已经过 rowspan/colspan 归一化的表格逻辑网格。
+   *
+   * @param layout 表格逻辑网格
+   * @param ctx 渲染上下文
+   */
+  @Builder
+  RenderTableLayout(layout: TableLayout, ctx: RenderContext) {
+    if (this.isWideTable(layout)) {
       Scroll() {
         Column() {
-          ForEach(node.children, (row: BBNode) => {
-            if (row.type === BBNodeType.TABLE_ROW) {
-              Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Stretch }) {
-                ForEach(row.children, (cell: BBNode) => {
-                  if (cell.type === BBNodeType.TABLE_CELL) {
-                    Column() {
-                      this.RenderChildren(cell.children, ctx)
-                    }
-                    .padding(6)
-                    .width(this.tableCellFixedWidth(cell))
-                    .border({ width: 0.5, color: AppColors.separator })
-                    .alignItems(HorizontalAlign.Start)
+          ForEach(layout.rows, (row: TableLayoutRow) => {
+            Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Stretch }) {
+              ForEach(row.cells, (cell: TableLayoutCell) => {
+                Column() {
+                  if (cell.rendersContent && cell.node !== null) {
+                    this.RenderChildren(cell.node.children, ctx)
                   }
-                }, (cell: BBNode) => cell.id.toString())
-              }
+                }
+                .padding(6)
+                .width(this.tableCellFixedWidth(cell))
+                .border({ width: this.tableCellBorderWidth(cell), color: AppColors.separator })
+                .alignItems(HorizontalAlign.Start)
+                .justifyContent(this.tableCellVerticalAlign(cell))
+              }, (cell: TableLayoutCell) => cell.key)
             }
-          }, (row: BBNode) => row.id.toString())
+          }, (row: TableLayoutRow) => row.key)
         }
         .border({ width: 0.5, color: AppColors.separator })
         .borderRadius(4)
@@ -1386,24 +1422,23 @@ export struct BBCodeContentView {
       .margin({ top: 6, bottom: 4 })
     } else {
       Column() {
-        ForEach(node.children, (row: BBNode) => {
-          if (row.type === BBNodeType.TABLE_ROW) {
-            Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Stretch }) {
-              ForEach(row.children, (cell: BBNode) => {
-                if (cell.type === BBNodeType.TABLE_CELL) {
-                  Column() {
-                    this.RenderChildren(cell.children, ctx)
-                  }
-                  .padding(6)
-                  .layoutWeight(cell.colSpan > 1 ? cell.colSpan : 1)
-                  .border({ width: 0.5, color: AppColors.separator })
-                  .alignItems(HorizontalAlign.Start)
+        ForEach(layout.rows, (row: TableLayoutRow) => {
+          Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Stretch }) {
+            ForEach(row.cells, (cell: TableLayoutCell) => {
+              Column() {
+                if (cell.rendersContent && cell.node !== null) {
+                  this.RenderChildren(cell.node.children, ctx)
                 }
-              }, (cell: BBNode) => cell.id.toString())
-            }
-            .width('100%')
+              }
+              .padding(6)
+              .layoutWeight(cell.columnSpan)
+              .border({ width: this.tableCellBorderWidth(cell), color: AppColors.separator })
+              .alignItems(HorizontalAlign.Start)
+              .justifyContent(this.tableCellVerticalAlign(cell))
+            }, (cell: TableLayoutCell) => cell.key)
           }
-        }, (row: BBNode) => row.id.toString())
+          .width('100%')
+        }, (row: TableLayoutRow) => row.key)
       }
       .width('100%')
       .margin({ top: 6, bottom: 4 })

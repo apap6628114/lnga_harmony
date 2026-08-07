@@ -14,6 +14,10 @@ import {
   InlineTextStyle,
   isInlineRunsBlank
 } from '../main/ets/common/components/bbcode/bbcode-utils'
+import {
+  buildTableLayout,
+  TableLayout,
+} from '../main/ets/common/components/bbcode/table-layout'
 
 /**
  * 注册 BBCode 解析与文字样式规范化回归测试。
@@ -465,6 +469,31 @@ export default function bbcodeUnitTest(): void {
       expect(style.fontFamily).assertEqual('HarmonyOS Sans')
       expect(extractTextStyleAlign('color:red; text-align: CENTER')).assertEqual('center')
       expect(extractTextStyleAlign('color:red')).assertEqual('')
+    })
+
+    it('keepsColumnsAlignedAcrossRowSpan', 0, (): void => {
+      const nodes: BBNode[] = parseBBCode(
+        '[table][tr][td rowspan=2]合并行[/td][td]普通[/td][/tr][tr][td]第二行[/td][/tr][/table]')
+      const layout: TableLayout = buildTableLayout(nodes[0])
+
+      expect(layout.columnCount).assertEqual(2)
+      expect(layout.rows.length).assertEqual(2)
+      expect(layout.rows[1].cells.length).assertEqual(2)
+      expect(layout.rows[0].cells[0].rendersContent).assertFalse()
+      expect(layout.rows[1].cells[0].rendersContent).assertTrue()
+      expect(layout.rows[1].cells[0].connectsAbove).assertTrue()
+      expect(layout.rows[1].cells[1].columnStart).assertEqual(1)
+      expect(layout.rows[1].cells[1].rendersContent).assertTrue()
+    })
+
+    it('keepsRectangularAreaForCombinedRowAndColumnSpan', 0, (): void => {
+      const nodes: BBNode[] = parseBBCode(
+        '[table][tr][td rowspan=2 colspan=2]合并[/td][td]右上[/td][/tr][tr][td]右下[/td][/tr][/table]')
+      const layout: TableLayout = buildTableLayout(nodes[0])
+
+      expect(layout.columnCount).assertEqual(3)
+      expect(layout.rows[1].cells[0].columnSpan).assertEqual(2)
+      expect(layout.rows[1].cells[1].columnStart).assertEqual(2)
     })
 
     it('resolvesRelativeAttachTagToCdnLink', 0, (): void => {
