@@ -15,10 +15,8 @@ import { FilterKeywordSettings } from './settings/domain/FilterKeywordSettings'
 import { NoteSettings } from './settings/domain/NoteSettings'
 import { CheckinSettings } from './settings/domain/CheckinSettings'
 import { AiSettings } from './settings/domain/AiSettings'
-import { WebSearchSettings } from './settings/domain/WebSearchSettings'
 import type { AuthState } from './AuthStore'
 import type { AiProviderProfile } from '../model/AiConfig'
-import type { WebSearchProviderProfile } from '../model/WebSearchConfig'
 import {
   KEY_SHOW_SIGNATURE,
   KEY_IMAGE_LOAD_STRATEGY,
@@ -50,7 +48,6 @@ export class SettingsStore extends BaseStore<SettingsState> {
   readonly noteSettings: NoteSettings
   readonly checkinSettings: CheckinSettings
   readonly aiSettings: AiSettings
-  readonly webSearchSettings: WebSearchSettings
 
   constructor() {
     super()
@@ -64,7 +61,6 @@ export class SettingsStore extends BaseStore<SettingsState> {
     this.noteSettings = new NoteSettings(this.ctx)
     this.checkinSettings = new CheckinSettings(this.ctx)
     this.aiSettings = new AiSettings(this.ctx)
-    this.webSearchSettings = new WebSearchSettings(this.ctx)
   }
 
   async init(store: PreferencesStore, queue: SerialQueue, auth: AuthState, ctx?: Context): Promise<void> {
@@ -85,7 +81,6 @@ export class SettingsStore extends BaseStore<SettingsState> {
     this.filterKeywordSettings.reset()
     this.noteSettings.reset()
     this.aiSettings.reset()
-    this.webSearchSettings.reset()
     super.reset()
   }
 
@@ -116,7 +111,6 @@ export class SettingsStore extends BaseStore<SettingsState> {
       this.noteSettings.load(saved)
       this.checkinSettings.load(saved)
       this.aiSettings.load(saved)
-      this.webSearchSettings.load(saved)
       if (saved.useInternalWebView !== undefined) {
         this.state.useInternalWebView = saved.useInternalWebView
       }
@@ -215,11 +209,4 @@ export class SettingsStore extends BaseStore<SettingsState> {
   getScenarioPrompt(scenario: string): string { return this.aiSettings.getScenarioPrompt(scenario) }
   setScenarioPrompt(scenario: string, prompt: string): void { this.aiSettings.setScenarioPrompt(scenario, prompt) }
   resetScenarioPrompt(scenario: string): void { this.aiSettings.resetScenarioPrompt(scenario) }
-
-  // --- Web Search ---
-  addWebSearchProfile(profile: WebSearchProviderProfile): void { this.webSearchSettings.addProfile(profile) }
-  updateWebSearchProfile(profile: WebSearchProviderProfile): void { this.webSearchSettings.updateProfile(profile) }
-  deleteWebSearchProfile(id: string): void { this.webSearchSettings.deleteProfile(id) }
-  setActiveWebSearchProfile(id: string): void { this.webSearchSettings.setActiveProfile(id) }
-  getActiveWebSearchProfile(): WebSearchProviderProfile | null { return this.webSearchSettings.getActiveProfile() }
 }

@@ -1,9 +1,10 @@
 /**
  * AI 配置管理面板。
  *
- * 管理自定义 AI 提供方配置：创建、编辑、删除、测试连接。
+ * 管理 DeepSeek Responses API 配置：创建、编辑、删除、测试连接。
  * 采用内联可展开卡片模式，新建/编辑在同一页面内完成，
- * 无需切换模式。新建时先选择平台预设或自定义端点。
+ * 无需切换模式。端点固定为 https://api.deepseek.com，
+ * 联网搜索由服务端内置 web_search 工具完成，无需额外配置。
  */
 
 import { appStore } from '../../store/AppStore'
@@ -15,19 +16,14 @@ import {
   AiProviderProfile,
   DEFAULT_AI_MAX_TOKENS,
   DEFAULT_AI_TEMPERATURE,
+  DEFAULT_DEEPSEEK_ENDPOINT,
   MAX_AI_MAX_TOKENS,
   MAX_AI_TEMPERATURE,
   MIN_AI_MAX_TOKENS,
   MIN_AI_TEMPERATURE
 } from '../../model/AiConfig'
 import { PROVIDER_PRESETS } from '../../service/ai/AiModelPresets'
-import {
-  WebSearchProviderProfile,
-  WebSearchProviderPreset,
-  WEB_SEARCH_PROVIDER_PRESETS,
-  type WebSearchProviderType
-} from '../../model/WebSearchConfig'
-import { testConnection, listModels } from '../../service/ai/OpenAiCompatibleClient'
+import { testConnection } from '../../service/ai/ResponsesApiClient'
 import type { ActionOption } from '../../common/dialogs/Dialogs'
 import type { AiTestResult } from '../../model/AiConfig'
 import type { AiProviderPreset } from '../../service/ai/AiModelPresets'
@@ -56,8 +52,6 @@ export struct AiSettingsPanel {
   @State editApiKeyInput: string = ''
   /** 模型名称输入值。 */
   @State editModelInput: string = ''
-  /** 是否启用流式输出。 */
-  @State editStreamingInput: boolean = true
   /** 温度参数输入值。 */
   @State editTemperatureInput: number = DEFAULT_AI_TEMPERATURE
   /** 输出上限输入值。 */
@@ -83,32 +77,8 @@ export struct AiSettingsPanel {
   @State testSuccess: boolean = false
   /** 是否正在测试连接。 */
   @State testing: boolean = false
-  /** 是否正在获取模型列表。 */
-  @State fetchingModels: boolean = false
-  /** 端点返回的模型列表。 */
-  @State fetchedModels: string[] = []
-  /** 获取模型列表请求序号。 */
-  private fetchModelsRequestId: number = 0
   /** 测试连接请求序号。 */
   private testConnectionRequestId: number = 0
-
-  // --- Web Search 编辑状态 ---
-  /** 搜索提供商配置列表快照。 */
-  @State searchProfiles: WebSearchProviderProfile[] = []
-  /** 当前展开编辑的搜索提供商 ID。 */
-  @State expandedSearchProfileId: string = ''
-  /** 搜索提供商名称输入值。 */
-  @State editSearchNameInput: string = ''
-  /** 搜索提供商类型。 */
-  @State editSearchProviderType: WebSearchProviderType = 'tavily'
-  /** 搜索 API Key 输入值。 */
-  @State editSearchApiKeyInput: string = ''
-  /** 搜索自定义端点输入值。 */
-  @State editSearchEndpointInput: string = ''
-  /** 搜索提供商预设选择弹窗控制器。 */
-  searchProviderPickerController?: CustomDialogController
-  /** 搜索删除确认弹窗控制器。 */
-  searchDeleteConfirmController?: CustomDialogController
 
   /** 是否正在新建方案 */
   private isNew(): boolean {
@@ -125,7 +95,6 @@ export struct AiSettingsPanel {
   /** 页面出现时同步配置列表并注册返回拦截。 */
   aboutToAppear(): void {
     this.syncProfiles()
-    this.syncSearchProfiles()
     const entry = routerStore.topActivity
     if (entry) {
       entry.preBack = (): boolean => {
@@ -153,8 +122,6 @@ export struct AiSettingsPanel {
     this.deleteConfirmController = undefined
     this.providerPickerController = undefined
     this.discardConfirmController = undefined
-    this.searchProviderPickerController = undefined
-    this.searchDeleteConfirmController = undefined
   }
 
   /** 同步当前持久化配置列表到页面状态。 */
@@ -192,14 +159,12 @@ export struct AiSettingsPanel {
     this.expandedProfileId = profileId
     this.testResultMessage = ''
     this.testSuccess = false
-    this.fetchedModels = []
 
     if (profileId === NEW_ID) {
       this.editNameInput = ''
-      this.editEndpointInput = ''
+      this.editEndpointInput = DEFAULT_DEEPSEEK_ENDPOINT
       this.editApiKeyInput = ''
       this.editModelInput = ''
-      this.editStreamingInput = true
       this.editTemperatureInput = DEFAULT_AI_TEMPERATURE
       this.editMaxTokensInput = DEFAULT_AI_MAX_TOKENS
       this.showAdvancedParams = false
@@ -207,10 +172,9 @@ export struct AiSettingsPanel {
       const profile: AiProviderProfile | null = this.findProfile(profileId)
       if (profile) {
         this.editNameInput = profile.name
-        this.editEndpointInput = profile.endpoint
+        this.editEndpointInput = DEFAULT_DEEPSEEK_ENDPOINT
         this.editApiKeyInput = profile.apiKey
         this.editModelInput = profile.modelName
-        this.editStreamingInput = profile.streaming
         this.editTemperatureInput = this.clampTemperature(profile.temperature)
         this.editMaxTokensInput = this.clampMaxTokens(profile.maxTokens)
         this.showAdvancedParams = false
@@ -238,9 +202,7 @@ export struct AiSettingsPanel {
 
   /** 使正在返回途中的异步结果失效 */
   private invalidatePendingRequests(): void {
-    this.fetchModelsRequestId++
     this.testConnectionRequestId++
-    this.fetchingModels = false
     this.testing = false
   }
 
@@ -276,10 +238,8 @@ export struct AiSettingsPanel {
     }
     if (this.expandedProfileId === NEW_ID) {
       return this.editNameInput.length > 0 ||
-        this.editEndpointInput.length > 0 ||
         this.editApiKeyInput.length > 0 ||
         this.editModelInput.length > 0 ||
-        !this.editStreamingInput ||
         this.editTemperatureInput !== DEFAULT_AI_TEMPERATURE ||
         this.editMaxTokensInput !== DEFAULT_AI_MAX_TOKENS
     }
@@ -288,10 +248,8 @@ export struct AiSettingsPanel {
       return false
     }
     return this.editNameInput !== profile.name ||
-      this.editEndpointInput !== profile.endpoint ||
       this.editApiKeyInput !== profile.apiKey ||
       this.editModelInput !== profile.modelName ||
-      this.editStreamingInput !== profile.streaming ||
       this.editTemperatureInput !== this.clampTemperature(profile.temperature) ||
       this.editMaxTokensInput !== this.clampMaxTokens(profile.maxTokens)
   }
@@ -299,16 +257,14 @@ export struct AiSettingsPanel {
   /** 清空编辑表单缓存和异步结果。 */
   private clearEditBuffers(): void {
     this.editNameInput = ''
-    this.editEndpointInput = ''
+    this.editEndpointInput = DEFAULT_DEEPSEEK_ENDPOINT
     this.editApiKeyInput = ''
     this.editModelInput = ''
-    this.editStreamingInput = true
     this.editTemperatureInput = DEFAULT_AI_TEMPERATURE
     this.editMaxTokensInput = DEFAULT_AI_MAX_TOKENS
     this.showAdvancedParams = false
     this.testResultMessage = ''
     this.testSuccess = false
-    this.fetchedModels = []
   }
 
   /**
@@ -364,10 +320,6 @@ export struct AiSettingsPanel {
       appStore.showToast('请输入方案名称')
       return
     }
-    if (!this.editEndpointInput || this.editEndpointInput.trim().length === 0) {
-      appStore.showToast('请输入服务地址')
-      return
-    }
     if (!this.editModelInput || this.editModelInput.trim().length === 0) {
       appStore.showToast('请输入模型名称')
       return
@@ -375,9 +327,8 @@ export struct AiSettingsPanel {
 
     const profile: AiProviderProfile = new AiProviderProfile()
     profile.name = this.editNameInput.trim()
-    profile.endpoint = this.editEndpointInput.trim()
+    profile.endpoint = DEFAULT_DEEPSEEK_ENDPOINT
     profile.modelName = this.editModelInput.trim()
-    profile.streaming = this.editStreamingInput
     profile.temperature = this.clampTemperature(this.editTemperatureInput)
     profile.maxTokens = this.clampMaxTokens(this.editMaxTokensInput)
 
@@ -456,13 +407,11 @@ export struct AiSettingsPanel {
           this.invalidatePendingRequests()
           const preset: AiProviderPreset = PROVIDER_PRESETS[v]
           this.editNameInput = preset.name
-          this.editEndpointInput = preset.endpoint
+          this.editEndpointInput = DEFAULT_DEEPSEEK_ENDPOINT
           this.editApiKeyInput = ''
           this.editModelInput = preset.defaultModelName
-          this.editStreamingInput = true
           this.testResultMessage = ''
           this.testSuccess = false
-          this.fetchedModels = []
           this.expandedProfileId = NEW_ID
         }
       }),
@@ -473,45 +422,12 @@ export struct AiSettingsPanel {
   }
 
   /**
-   * 规格化端点地址用于匹配预设。
-   *
-   * @param endpoint - 用户输入或预设端点
-   * @returns 规格化后的端点地址
-   */
-  private normalizeEndpoint(endpoint: string): string {
-    return endpoint.trim()
-      .replace(/\/chat\/completions\/?$/, '')
-      .replace(/\/+$/, '')
-      .toLowerCase()
-  }
-
-  /**
-   * 按当前服务地址匹配平台预设。
-   *
-   * @param endpoint - 服务地址
-   * @returns 匹配的平台预设
-   */
-  private findPresetByEndpoint(endpoint: string): AiProviderPreset | null {
-    const normalized: string = this.normalizeEndpoint(endpoint)
-    if (normalized.length === 0) {
-      return null
-    }
-    for (let i = 0; i < PROVIDER_PRESETS.length; i++) {
-      if (PROVIDER_PRESETS[i].endpoint.length > 0 &&
-        this.normalizeEndpoint(PROVIDER_PRESETS[i].endpoint) === normalized) {
-        return PROVIDER_PRESETS[i]
-      }
-    }
-    return null
-  }
-
-  /**
    * 获取模型输入框占位提示。
    *
    * @returns 当前平台默认模型或通用提示
    */
   private getModelPlaceholder(): string {
-    const preset: AiProviderPreset | null = this.findPresetByEndpoint(this.editEndpointInput)
+    const preset: AiProviderPreset | null = this.getPreset()
     if (preset && preset.defaultModelName.length > 0) {
       return preset.defaultModelName
     }
@@ -519,28 +435,12 @@ export struct AiSettingsPanel {
   }
 
   /**
-   * 获取端点输入框占位提示。
-   *
-   * @returns 当前平台端点或通用 OpenAI 兼容端点示例
-   */
-  private getEndpointPlaceholder(): string {
-    const preset: AiProviderPreset | null = this.findPresetByEndpoint(this.editEndpointInput)
-    if (preset && preset.endpoint.length > 0) {
-      return preset.endpoint
-    }
-    return 'https://api.example.com/v1'
-  }
-
-  /**
    * 获取 API Key 输入框占位提示。
    *
-   * 根据已匹配的平台预设返回对应格式的占位符，
-   * 未匹配时返回通用提示。
-   *
-   * @returns 当前平台的 API Key 格式提示
+   * @returns DeepSeek 的 API Key 格式提示
    */
   private getApiKeyPlaceholder(): string {
-    const preset: AiProviderPreset | null = this.findPresetByEndpoint(this.editEndpointInput)
+    const preset: AiProviderPreset | null = this.getPreset()
     if (preset && preset.apiKeyPlaceholder.length > 0) {
       return preset.apiKeyPlaceholder
     }
@@ -548,16 +448,15 @@ export struct AiSettingsPanel {
   }
 
   /**
-   * 判断当前端点是否支持获取模型列表。
+   * 获取当前唯一预设（DeepSeek）。
    *
-   * @returns 是否支持获取模型列表
+   * @returns DeepSeek 预设，列表为空时返回 null
    */
-  private supportsCurrentModelList(): boolean {
-    const preset: AiProviderPreset | null = this.findPresetByEndpoint(this.editEndpointInput)
-    if (!preset) {
-      return true
+  private getPreset(): AiProviderPreset | null {
+    if (PROVIDER_PRESETS.length > 0) {
+      return PROVIDER_PRESETS[0]
     }
-    return preset.supportsModelList
+    return null
   }
 
   /**
@@ -569,87 +468,6 @@ export struct AiSettingsPanel {
    */
   private resolveApiKey(): string {
     return this.editApiKeyInput.trim()
-  }
-
-  /** 从当前服务端点获取模型列表。 */
-  async fetchModels(): Promise<void> {
-    if (this.fetchingModels) {
-      return
-    }
-    if (!this.editEndpointInput || this.editEndpointInput.trim().length === 0) {
-      appStore.showToast('请先填写服务地址')
-      return
-    }
-    if (!this.supportsCurrentModelList()) {
-      appStore.showToast('该平台未提供可直接调用的模型列表接口，请手动输入模型名称')
-      return
-    }
-    if (!this.resolveApiKey()) {
-      appStore.showToast('请先填写 API 密钥')
-      return
-    }
-
-    const requestId: number = this.fetchModelsRequestId + 1
-    const profileId: string = this.expandedProfileId
-    const endpoint: string = this.editEndpointInput.trim()
-    const apiKey: string = this.resolveApiKey()
-
-    this.fetchModelsRequestId = requestId
-    this.fetchingModels = true
-    this.fetchedModels = []
-
-    const tempProfile: AiProviderProfile = new AiProviderProfile()
-    tempProfile.endpoint = endpoint
-    tempProfile.apiKey = apiKey
-
-    try {
-      const models: string[] = await listModels(tempProfile)
-      if (this.isCurrentFetchModelsRequest(requestId, profileId, endpoint, apiKey)) {
-        this.fetchedModels = models
-      }
-      if (models.length === 0 && this.isCurrentFetchModelsRequest(requestId, profileId, endpoint, apiKey)) {
-        appStore.showToast('未获取到模型列表，请手动输入')
-      }
-    } catch (e) {
-      const err: Error = e as Error
-      if (this.isCurrentFetchModelsRequest(requestId, profileId, endpoint, apiKey)) {
-        appStore.showToast('获取模型列表失败：' + (err.message || '未知错误'))
-      }
-    } finally {
-      if (this.fetchModelsRequestId === requestId) {
-        this.fetchingModels = false
-      }
-    }
-  }
-
-  /**
-   * 判断模型列表请求返回时是否仍属于当前编辑上下文。
-   *
-   * @param requestId - 请求序号
-   * @param profileId - 发起请求时展开的配置 ID
-   * @param endpoint - 发起请求时的端点
-   * @param apiKey - 发起请求时的密钥
-   * @returns 是否仍为当前请求
-   */
-  private isCurrentFetchModelsRequest(
-    requestId: number,
-    profileId: string,
-    endpoint: string,
-    apiKey: string
-  ): boolean {
-    return this.fetchModelsRequestId === requestId &&
-      this.expandedProfileId === profileId &&
-      this.editEndpointInput.trim() === endpoint &&
-      this.resolveApiKey() === apiKey
-  }
-
-  /**
-   * 选择模型列表中的模型名称。
-   *
-   * @param modelName - 模型名称
-   */
-  selectModel(modelName: string): void {
-    this.editModelInput = modelName
   }
 
   /** 测试当前表单中的 AI 连接配置。 */
@@ -761,7 +579,7 @@ export struct AiSettingsPanel {
 	              .width('92%')
 	              .margin({ top: 8, bottom: 2 })
 
-	            Text('配置 OpenAI 兼容 API 的连接信息和模型参数')
+	            Text('配置 DeepSeek Responses API 连接信息和模型参数，联网搜索由服务端内置完成')
 	              .fontSize(11)
 	              .fontColor(AppColors.textTertiary)
 	              .lineHeight(16)
@@ -782,8 +600,6 @@ export struct AiSettingsPanel {
 
             this.AddButton()
 
-            this.WebSearchSection()
-
             this.ScenarioSection()
 	          }
 	          .width('100%')
@@ -802,555 +618,6 @@ export struct AiSettingsPanel {
     .height('100%')
   }
 
-  // ============================================================
-  // 联网搜索提供商
-  // ============================================================
-
-  /** 同步搜索提供商配置列表到页面状态。 */
-  private syncSearchProfiles(): void {
-    this.searchProfiles = appStore.settings.webSearchProfiles
-  }
-
-  /** 判断指定搜索配置是否为当前激活的。 */
-  private isActiveSearchProfile(id: string): boolean {
-    return appStore.settings.activeWebSearchProfileId === id
-  }
-
-  /**
-   * 获取提供商类型的显示名称。
-   *
-   * @param providerType - 提供商类型标识
-   * @returns 可读的提供商名称
-   */
-  private getSearchProviderTypeLabel(providerType: WebSearchProviderType): string {
-    for (let i = 0; i < WEB_SEARCH_PROVIDER_PRESETS.length; i++) {
-      if (WEB_SEARCH_PROVIDER_PRESETS[i].id === providerType) {
-        return WEB_SEARCH_PROVIDER_PRESETS[i].name
-      }
-    }
-    return providerType
-  }
-
-  /**
-   * 判断搜索提供商编辑是否有未保存修改。
-   *
-   * @returns 是否有未保存修改
-   */
-  private hasUnsavedSearchEdit(): boolean {
-    if (this.expandedSearchProfileId.length === 0) {
-      return false
-    }
-    if (this.expandedSearchProfileId === NEW_ID) {
-      return this.editSearchNameInput.length > 0 ||
-        this.editSearchApiKeyInput.length > 0 ||
-        this.editSearchEndpointInput.length > 0
-    }
-    for (let i = 0; i < this.searchProfiles.length; i++) {
-      if (this.searchProfiles[i].id === this.expandedSearchProfileId) {
-        const p = this.searchProfiles[i]
-        return this.editSearchNameInput !== p.name ||
-          this.editSearchApiKeyInput !== p.apiKey ||
-          this.editSearchProviderType !== p.providerType ||
-          this.editSearchEndpointInput !== p.endpoint
-      }
-    }
-    return false
-  }
-
-  /**
-   * 展开搜索提供商编辑卡片（检查未保存修改后执行）。
-   *
-   * @param profileId - 已有配置的 ID，或 NEW_ID 表示新建
-   */
-  private expandSearchCard(profileId: string): void {
-    if (this.expandedSearchProfileId === profileId) {
-      return
-    }
-    if (this.hasUnsavedSearchEdit()) {
-      // 有未保存修改时直接放弃（简化处理）
-      this.doExpandSearchCard(profileId)
-      return
-    }
-    this.doExpandSearchCard(profileId)
-  }
-
-  /**
-   * 执行搜索提供商卡片展开并初始化表单。
-   *
-   * @param profileId - 已有配置的 ID，或 NEW_ID 表示新建
-   */
-  private doExpandSearchCard(profileId: string): void {
-    this.expandedSearchProfileId = profileId
-    if (profileId === NEW_ID) {
-      this.editSearchNameInput = ''
-      this.editSearchProviderType = 'tavily'
-      this.editSearchApiKeyInput = ''
-      this.editSearchEndpointInput = ''
-    } else {
-      for (let i = 0; i < this.searchProfiles.length; i++) {
-        if (this.searchProfiles[i].id === profileId) {
-          this.editSearchNameInput = this.searchProfiles[i].name
-          this.editSearchProviderType = this.searchProfiles[i].providerType
-          this.editSearchApiKeyInput = this.searchProfiles[i].apiKey
-          this.editSearchEndpointInput = this.searchProfiles[i].endpoint
-          break
-        }
-      }
-    }
-  }
-
-  /**
-   * 折叠搜索提供商编辑卡片（检查未保存修改后执行）。
-   */
-  private collapseSearchCard(): void {
-    if (this.hasUnsavedSearchEdit()) {
-      // 简化处理：直接放弃并折叠
-      this.doCollapseSearchCard()
-      return
-    }
-    this.doCollapseSearchCard()
-  }
-
-  /** 执行搜索提供商卡片折叠并清空表单。 */
-  private doCollapseSearchCard(): void {
-    this.expandedSearchProfileId = ''
-    this.editSearchNameInput = ''
-    this.editSearchApiKeyInput = ''
-    this.editSearchEndpointInput = ''
-  }
-
-  /** 保存搜索提供商配置。 */
-  private saveSearchProfile(): void {
-    if (!this.editSearchNameInput || this.editSearchNameInput.trim().length === 0) {
-      appStore.showToast('请输入方案名称')
-      return
-    }
-    if (!this.editSearchApiKeyInput || this.editSearchApiKeyInput.trim().length === 0) {
-      appStore.showToast('请输入 API Key')
-      return
-    }
-    if (this.editSearchProviderType === 'custom' &&
-      (!this.editSearchEndpointInput || this.editSearchEndpointInput.trim().length === 0)) {
-      appStore.showToast('自定义类型需填写端点地址')
-      return
-    }
-
-    const profile: WebSearchProviderProfile = new WebSearchProviderProfile()
-    profile.name = this.editSearchNameInput.trim()
-    profile.providerType = this.editSearchProviderType
-    profile.apiKey = this.editSearchApiKeyInput.trim()
-    profile.endpoint = this.editSearchEndpointInput.trim()
-
-    if (this.expandedSearchProfileId === NEW_ID) {
-      appStore.settingsStore.addWebSearchProfile(profile)
-      appStore.settingsStore.setActiveWebSearchProfile(profile.id)
-      appStore.showToast('已添加并切换到 ' + profile.name)
-    } else {
-      profile.id = this.expandedSearchProfileId
-      appStore.settingsStore.updateWebSearchProfile(profile)
-      appStore.showToast('配置已更新')
-    }
-
-    this.syncSearchProfiles()
-    this.doCollapseSearchCard()
-  }
-
-  /** 删除搜索提供商配置。 */
-  private deleteSearchProfile(id: string): void {
-    for (let i = 0; i < this.searchProfiles.length; i++) {
-      if (this.searchProfiles[i].id === id) {
-        const name: string = this.searchProfiles[i].name
-        this.searchDeleteConfirmController = new CustomDialogController({
-          builder: ConfirmDialog({
-            title: '删除搜索提供商',
-            message: this.isActiveSearchProfile(id)
-              ? '你将删除当前正在使用的配置「' + name + '」。\n删除后会自动切换到剩余配置；若没有其他配置，联网搜索功能将不可用。'
-              : '确定要删除配置「' + name + '」吗？',
-            confirmLabel: '删除',
-            destructive: true,
-            icon: $r('app.media.icon_delete'),
-            onConfirm: (): void => {
-              appStore.settingsStore.deleteWebSearchProfile(id)
-              this.syncSearchProfiles()
-              if (this.expandedSearchProfileId === id) {
-                this.doCollapseSearchCard()
-              }
-            },
-            onCancel: (): void => {}
-          }),
-          autoCancel: true,
-          customStyle: true
-        })
-        this.searchDeleteConfirmController.open()
-        return
-      }
-    }
-  }
-
-  /** 显示搜索提供商预设选择弹窗。 */
-  private showSearchProviderPresetPicker(): void {
-    const options: ActionOption[] = []
-    for (let i = 0; i < WEB_SEARCH_PROVIDER_PRESETS.length; i++) {
-      const opt: ActionOption = {
-        label: WEB_SEARCH_PROVIDER_PRESETS[i].name + ' - ' + WEB_SEARCH_PROVIDER_PRESETS[i].description,
-        value: i
-      }
-      options.push(opt)
-    }
-
-    this.searchProviderPickerController = new CustomDialogController({
-      builder: ActionSheetDialog({
-        title: '选择搜索提供商',
-        options: options,
-        selected: -1,
-        onSelect: (v: number): void => {
-          const preset: WebSearchProviderPreset = WEB_SEARCH_PROVIDER_PRESETS[v]
-          this.editSearchNameInput = preset.name
-          this.editSearchProviderType = preset.id
-          this.editSearchApiKeyInput = ''
-          this.editSearchEndpointInput = ''
-          this.doExpandSearchCard(NEW_ID)
-        }
-      }),
-      autoCancel: true,
-      customStyle: true
-    })
-    this.searchProviderPickerController.open()
-  }
-
-  /**
-   * 获取搜索 API Key 输入框占位提示。
-   *
-   * @returns 当前提供商类型的 API Key 格式提示
-   */
-  private getSearchApiKeyPlaceholder(): string {
-    for (let i = 0; i < WEB_SEARCH_PROVIDER_PRESETS.length; i++) {
-      if (WEB_SEARCH_PROVIDER_PRESETS[i].id === this.editSearchProviderType) {
-        return WEB_SEARCH_PROVIDER_PRESETS[i].apiKeyPlaceholder
-      }
-    }
-    return '请输入 API Key'
-  }
-
-  /** 构建搜索提供商区域。 */
-  @Builder
-  WebSearchSection() {
-    Column() {
-      Text('搜索提供商')
-        .fontSize(14)
-        .fontColor(AppColors.textPrimary)
-        .fontWeight(FontWeight.Medium)
-        .width('92%')
-        .margin({ top: 20, bottom: 2 })
-
-      Text('配置联网搜索 API。至少激活一个提供商后，AI 即可在需要时自动搜索互联网')
-        .fontSize(11)
-        .fontColor(AppColors.textTertiary)
-        .lineHeight(16)
-        .width('92%')
-        .margin({ bottom: 8, top: 2 })
-
-      if (this.searchProfiles.length === 0 &&
-        this.expandedSearchProfileId !== NEW_ID) {
-        Column() {
-          Text('🔍')
-            .fontSize(28)
-
-          Text('还没有搜索提供商')
-            .fontSize(14)
-            .fontColor(AppColors.textPrimary)
-            .fontWeight(FontWeight.Medium)
-            .margin({ top: 8 })
-
-          Text('添加 Tavily 等搜索 API 后，\nAI 将自动判断是否需要联网搜索')
-            .fontSize(11)
-            .fontColor(AppColors.textTertiary)
-            .textAlign(TextAlign.Center)
-            .margin({ top: 4 })
-            .lineHeight(16)
-        }
-        .width('92%')
-        .padding({ top: 16, bottom: 8 })
-        .alignItems(HorizontalAlign.Center)
-      } else {
-        ForEach(this.searchProfiles, (profile: WebSearchProviderProfile) => {
-          this.SearchProviderCard(profile)
-        }, (profile: WebSearchProviderProfile): string => profile.id)
-      }
-
-      if (this.expandedSearchProfileId === NEW_ID) {
-        this.NewSearchProviderCard()
-      }
-
-      Row() {
-        Text('+ 添加搜索提供商')
-          .fontSize(15)
-          .fontColor(AppColors.primary)
-          .fontWeight(FontWeight.Medium)
-      }
-      .width('92%')
-      .height(44)
-      .justifyContent(FlexAlign.Center)
-      .backgroundColor(AppColors.bgTertiary)
-      .borderRadius(12)
-      .margin({ top: 8 })
-      .onClick(() => {
-        if (this.hasUnsavedSearchEdit()) {
-          this.doCollapseSearchCard()
-        }
-        this.showSearchProviderPresetPicker()
-      })
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Center)
-  }
-
-  /**
-   * 构建已有搜索提供商卡片。
-   *
-   * @param profile - 搜索提供商配置
-   */
-  @Builder
-  SearchProviderCard(profile: WebSearchProviderProfile) {
-    Column() {
-      this.SearchProviderCardHeader(profile)
-
-      if (this.expandedSearchProfileId === profile.id) {
-        Divider().color(AppColors.separator).width('100%').margin({ bottom: 4 })
-        this.SearchProviderCardBody()
-      }
-    }
-    .width('92%')
-    .backgroundColor(AppColors.bgTertiary)
-    .borderRadius(12)
-    .margin({ top: 8 })
-  }
-
-  /**
-   * 构建搜索提供商卡片头部。
-   *
-   * @param profile - 搜索提供商配置
-   */
-  @Builder
-  SearchProviderCardHeader(profile: WebSearchProviderProfile) {
-    Row() {
-      Row() {
-        Radio({ value: profile.id, group: 'searchProvider' })
-          .checked(this.isActiveSearchProfile(profile.id))
-          .onChange((checked: boolean) => {
-            if (checked) {
-              appStore.settingsStore.setActiveWebSearchProfile(profile.id)
-              this.syncSearchProfiles()
-            }
-          })
-          .width(20)
-          .height(20)
-      }
-      .width(36)
-      .height(48)
-      .justifyContent(FlexAlign.Center)
-
-      Column() {
-        Text(profile.name)
-          .fontSize(15)
-          .fontColor(AppColors.textPrimary)
-          .fontWeight(FontWeight.Medium)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-        Text(this.getSearchProviderTypeLabel(profile.providerType))
-          .fontSize(11)
-          .fontColor(AppColors.textTertiary)
-          .margin({ top: 2 })
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-      }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
-      .onClick(() => {
-        if (this.expandedSearchProfileId === profile.id) {
-          this.collapseSearchCard()
-        } else {
-          this.expandSearchCard(profile.id)
-        }
-      })
-
-      Text('删除')
-        .fontSize(12)
-        .fontColor(AppColors.destructive)
-        .padding({ left: 6, right: 6, top: 4, bottom: 4 })
-        .onClick(() => {
-          this.deleteSearchProfile(profile.id)
-        })
-    }
-    .width('100%')
-    .padding({ left: 12, right: 8, top: 12, bottom: 12 })
-  }
-
-  /**
-   * 构建搜索提供商编辑表单（已有配置卡片展开时）。
-   *
-   * 与 NewSearchProviderCard 共享表单字段。
-   */
-  @Builder
-  SearchProviderCardBody() {
-    Column() {
-      this.SearchProviderFormFields()
-    }
-    .width('100%')
-    .padding({ left: 12, right: 12, top: 8, bottom: 12 })
-  }
-
-  /** 构建新建搜索提供商卡片。 */
-  @Builder
-  NewSearchProviderCard() {
-    Column() {
-      Row() {
-        Column() {
-          Text(this.editSearchNameInput.length > 0 ? this.editSearchNameInput : '新建搜索提供商')
-            .fontSize(15)
-            .fontColor(AppColors.textPrimary)
-            .fontWeight(FontWeight.Medium)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-          Text(this.getSearchProviderTypeLabel(this.editSearchProviderType))
-            .fontSize(11)
-            .fontColor(AppColors.textTertiary)
-            .margin({ top: 2 })
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-
-        Text('放弃')
-          .fontSize(12)
-          .fontColor(AppColors.textTertiary)
-          .padding({ left: 6, right: 6, top: 4, bottom: 4 })
-          .onClick(() => {
-            this.doCollapseSearchCard()
-          })
-      }
-      .width('100%')
-      .padding({ left: 12, right: 8, top: 12, bottom: 4 })
-
-      Divider().color(AppColors.separator).width('100%').margin({ bottom: 4 })
-
-      Column() {
-        this.SearchProviderFormFields()
-      }
-      .width('100%')
-      .padding({ left: 12, right: 12, top: 8, bottom: 12 })
-    }
-    .width('92%')
-    .backgroundColor(AppColors.bgTertiary)
-    .borderRadius(12)
-    .margin({ top: 8 })
-  }
-
-  /**
-   * 构建搜索提供商表单字段。
-   *
-   * 由 SearchProviderCardBody 和 NewSearchProviderCard 共享。
-   */
-  @Builder
-  SearchProviderFormFields() {
-    Column() {
-      Text('方案名称')
-        .fontSize(13)
-        .fontColor(AppColors.textSecondary)
-        .width('100%')
-        .margin({ bottom: 4 })
-
-      TextInput({ placeholder: '为这个方案起个名字', text: this.editSearchNameInput })
-        .onChange((v: string) => {
-          this.editSearchNameInput = v
-        })
-        .width('100%')
-        .height(40)
-        .backgroundColor(AppColors.bgSecondary)
-        .borderRadius(8)
-        .fontSize(14)
-        .padding({ left: 12, right: 12 })
-    }
-    .width('100%')
-    .margin({ bottom: 10 })
-
-    Column() {
-      Text('API Key')
-        .fontSize(13)
-        .fontColor(AppColors.textSecondary)
-        .width('100%')
-        .margin({ bottom: 4 })
-
-      TextInput({
-        placeholder: this.getSearchApiKeyPlaceholder(),
-        text: this.editSearchApiKeyInput
-      })
-        .type(InputType.Password)
-        .onChange((v: string) => {
-          this.editSearchApiKeyInput = v
-        })
-        .width('100%')
-        .height(40)
-        .backgroundColor(AppColors.bgSecondary)
-        .borderRadius(8)
-        .fontSize(14)
-        .padding({ left: 12, right: 12 })
-    }
-    .width('100%')
-    .margin({ bottom: 10 })
-
-    if (this.editSearchProviderType === 'custom') {
-      Column() {
-        Text('端点地址')
-          .fontSize(13)
-          .fontColor(AppColors.textSecondary)
-          .width('100%')
-          .margin({ bottom: 4 })
-
-        TextInput({ placeholder: 'https://api.example.com/search', text: this.editSearchEndpointInput })
-          .onChange((v: string) => {
-            this.editSearchEndpointInput = v
-          })
-          .width('100%')
-          .height(40)
-          .backgroundColor(AppColors.bgSecondary)
-          .borderRadius(8)
-          .fontSize(14)
-          .padding({ left: 12, right: 12 })
-      }
-      .width('100%')
-      .margin({ bottom: 10 })
-    }
-
-    Row() {
-      Text('取消')
-        .fontSize(14)
-        .fontColor(AppColors.textSecondary)
-        .layoutWeight(1)
-        .height(38)
-        .textAlign(TextAlign.Center)
-        .onClick(() => {
-          this.doCollapseSearchCard()
-        })
-
-      Text('保存')
-        .fontSize(14)
-        .fontColor(AppColors.white)
-        .layoutWeight(1)
-        .height(38)
-        .textAlign(TextAlign.Center)
-        .backgroundColor(AppColors.primary)
-        .borderRadius(10)
-        .onClick(() => {
-          this.saveSearchProfile()
-        })
-    }
-    .width('100%')
-    .margin({ top: 4 })
-  }
 
   // ============================================================
   // AI 场景 Prompt 模板
@@ -1693,7 +960,7 @@ export struct AiSettingsPanel {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-        Text(profile.endpoint)
+        Text('DeepSeek Responses API')
           .fontSize(11)
           .fontColor(AppColors.textTertiary)
           .margin({ top: 2 })
@@ -1723,8 +990,8 @@ export struct AiSettingsPanel {
   }
 
   /**
-   * 公共表单字段 — 按操作顺序排列：方案名称、服务地址、API 密钥、
-   * 模型名称（获取/手动输入）、联通测试及保存/取消按钮。
+   * 公共表单字段 — 按操作顺序排列：方案名称、服务地址（只读）、API 密钥、
+   * 模型名称（手动输入）、联通测试及保存/取消按钮。
    *
    * 由 ProfileCardBody 和 NewProfileCard 共享，
    * 避免两处各维护一份相同的表单代码。
@@ -1759,18 +1026,19 @@ export struct AiSettingsPanel {
         .width('100%')
         .margin({ bottom: 4 })
 
-      TextInput({ placeholder: this.getEndpointPlaceholder(), text: this.editEndpointInput })
-        .onChange((v: string) => {
-          this.editEndpointInput = v
-          this.fetchedModels = []
-          this.invalidatePendingRequests()
-        })
-        .width('100%')
-        .height(40)
-        .backgroundColor(AppColors.bgSecondary)
-        .borderRadius(8)
-        .fontSize(14)
-        .padding({ left: 12, right: 12 })
+      Row() {
+        Text('🔒 ' + this.editEndpointInput)
+          .fontSize(13)
+          .fontColor(AppColors.textTertiary)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .width('100%')
+      .height(40)
+      .alignItems(VerticalAlign.Center)
+      .backgroundColor(AppColors.bgSecondary)
+      .borderRadius(8)
+      .padding({ left: 12, right: 12 })
     }
     .width('100%')
     .margin({ bottom: 10 })
@@ -1797,77 +1065,26 @@ export struct AiSettingsPanel {
     .width('100%')
     .margin({ bottom: 10 })
 
-    Row() {
-      Column() {
-        Text('模型名称')
-          .fontSize(13)
-          .fontColor(AppColors.textSecondary)
-          .width('100%')
-          .margin({ bottom: 4 })
+    Column() {
+      Text('模型名称')
+        .fontSize(13)
+        .fontColor(AppColors.textSecondary)
+        .width('100%')
+        .margin({ bottom: 4 })
 
-        TextInput({ placeholder: this.getModelPlaceholder(), text: this.editModelInput })
-          .onChange((v: string) => {
-            this.editModelInput = v
-          })
-          .width('100%')
-          .height(40)
-          .backgroundColor(AppColors.bgSecondary)
-          .borderRadius(8)
-          .fontSize(14)
-          .padding({ left: 12, right: 12 })
-      }
-      .layoutWeight(1)
-
-      if (this.supportsCurrentModelList()) {
-        Text(this.fetchingModels ? '获取中...' : '获取模型列表')
-          .fontSize(12)
-          .fontColor(this.fetchingModels ? AppColors.textTertiary : AppColors.primary)
-          .padding({ left: 10, right: 10, top: 8, bottom: 8 })
-          .margin({ left: 8, top: 18 })
-          .border({
-            width: 1,
-            color: this.fetchingModels ? AppColors.textTertiary : AppColors.primary,
-            style: BorderStyle.Solid
-          })
-          .borderRadius(6)
-          .onClick(() => {
-            this.fetchModels()
-          })
-      } else {
-        Text('手动输入')
-          .fontSize(12)
-          .fontColor(AppColors.textTertiary)
-          .padding({ left: 10, right: 10, top: 8, bottom: 8 })
-          .margin({ left: 8, top: 18 })
-          .border({
-            width: 1,
-            color: AppColors.textTertiary,
-            style: BorderStyle.Solid
-          })
-          .borderRadius(6)
-      }
+      TextInput({ placeholder: this.getModelPlaceholder(), text: this.editModelInput })
+        .onChange((v: string) => {
+          this.editModelInput = v
+        })
+        .width('100%')
+        .height(40)
+        .backgroundColor(AppColors.bgSecondary)
+        .borderRadius(8)
+        .fontSize(14)
+        .padding({ left: 12, right: 12 })
     }
     .width('100%')
-    .margin({ bottom: 4 })
-
-    if (this.fetchedModels.length > 0) {
-      Row() {
-        ForEach(this.fetchedModels, (model: string) => {
-          Text(model)
-            .fontSize(12)
-            .fontColor(this.editModelInput === model ? AppColors.white : AppColors.primary)
-            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-            .backgroundColor(this.editModelInput === model ? AppColors.primary : AppColors.primaryLight)
-            .borderRadius(12)
-            .margin({ right: 6, bottom: 4 })
-            .onClick(() => {
-              this.selectModel(model)
-            })
-        }, (model: string): string => model)
-      }
-      .width('100%')
-      .margin({ bottom: 12 })
-    }
+    .margin({ bottom: 10 })
 
     this.AdvancedParameterFields()
 
@@ -1962,32 +1179,6 @@ export struct AiSettingsPanel {
         Divider().color(AppColors.separator).margin({ left: 12, right: 12 })
 
         Column() {
-          Row() {
-            Column() {
-              Text('流式输出')
-                .fontSize(13)
-                .fontColor(AppColors.textPrimary)
-                .width('100%')
-              Text('开启后 AI 结果会边生成边显示')
-                .fontSize(11)
-                .fontColor(AppColors.textTertiary)
-                .width('100%')
-                .margin({ top: 2 })
-            }
-            .layoutWeight(1)
-            .alignItems(HorizontalAlign.Start)
-
-            Toggle({ type: ToggleType.Switch, isOn: this.editStreamingInput })
-              .onChange((value: boolean): void => {
-                this.editStreamingInput = value
-              })
-          }
-          .width('100%')
-          .height(48)
-          .alignItems(VerticalAlign.Center)
-
-	        Divider().color(AppColors.separator).margin({ bottom: 4 })
-
           Row() {
             Text('温度')
               .fontSize(13)
@@ -2166,7 +1357,7 @@ export struct AiSettingsPanel {
         .fontWeight(FontWeight.Medium)
         .margin({ top: 10 })
 
-      Text('添加 DeepSeek、智谱GLM 等 AI 服务，\n让帖子总结和用户分析更快更智能')
+      Text('添加 DeepSeek AI 服务后，\n帖子总结、用户分析即可使用，联网搜索由服务端内置完成')
         .fontSize(12)
         .fontColor(AppColors.textTertiary)
         .textAlign(TextAlign.Center)

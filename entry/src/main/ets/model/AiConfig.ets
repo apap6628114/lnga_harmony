@@ -1,7 +1,7 @@
 /**
  * AI 配置数据模型。
  *
- * 定义自定义 AI 提供方配置的数据结构。
+ * 定义 DeepSeek Responses API 提供方配置的数据结构。
  */
 
 /** AI 温度参数默认值。 */
@@ -16,25 +16,26 @@ export const DEFAULT_AI_MAX_TOKENS: number = 2000
 export const MIN_AI_MAX_TOKENS: number = 400
 /** AI 输出上限最大值。 */
 export const MAX_AI_MAX_TOKENS: number = 20000
+/** DeepSeek Responses API 固定端点。 */
+export const DEFAULT_DEEPSEEK_ENDPOINT: string = 'https://api.deepseek.com'
+
 /**
- * 自定义 AI 提供方配置。
+ * DeepSeek AI 提供方配置。
  *
- * 每个配置代表一个第三方 OpenAI 兼容端点，
- * 包含连接信息、认证凭证及模型选择。
+ * 通过 DeepSeek Responses API 接入，端点固定为 api.deepseek.com，
+ * 用户仅需提供 API Key 与模型名称。
  */
 export class AiProviderProfile {
   /** 唯一标识（生成时赋值） */
   id: string = ''
   /** 用户命名的方案名称 */
   name: string = ''
-  /** OpenAI 兼容 API 端点地址（如 https://api.deepseek.com） */
-  endpoint: string = ''
+  /** DeepSeek API 端点地址（固定为 https://api.deepseek.com） */
+  endpoint: string = DEFAULT_DEEPSEEK_ENDPOINT
   /** API 密钥（不记录到日志） */
   apiKey: string = ''
   /** 模型名称 */
   modelName: string = ''
-  /** 是否启用流式输出 */
-  streaming: boolean = true
   /** 温度参数（0.0 - 1.5，默认 0.7） */
   temperature: number = DEFAULT_AI_TEMPERATURE
   /** 输出上限（400 - 20000，默认 2000） */

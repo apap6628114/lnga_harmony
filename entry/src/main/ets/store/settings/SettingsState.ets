@@ -4,7 +4,6 @@ import type { BlacklistEntry } from '../../model/SocialEntries'
 import { FilterKeyword } from '../../model/FilterKeyword'
 import type { UserNoteEntry } from '../../model/NoteInfo'
 import type { AiProviderProfile } from '../../model/AiConfig'
-import type { WebSearchProviderProfile } from '../../model/WebSearchConfig'
 
 
 /**
@@ -47,8 +46,4 @@ export class SettingsState {
   activeAiProfileId: string = ''
   /** 各场景自定义 system prompt（key=场景ID, value=用户自定义文本） */
   scenarioSystemPrompts: Record<string, string> = {}
-  /** 联网搜索提供商配置列表 */
-  webSearchProfiles: WebSearchProviderProfile[] = []
-  /** 当前激活的联网搜索配置 ID */
-  activeWebSearchProfileId: string = ''
 }

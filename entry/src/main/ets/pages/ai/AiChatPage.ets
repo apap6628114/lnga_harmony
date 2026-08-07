@@ -1,5 +1,10 @@
-import { ChatMessage } from '../../service/ai/OpenAiCompatibleClient'
-import { chatCompleteWithActiveAiStream, formatAiCompletionError, ToolCallInfo } from '../../service/ai/ActiveAiService'
+import { ChatMessage, RequestCanceller } from '../../service/ai/ResponsesApiClient'
+import {
+  chatCompleteWithActiveAiStream,
+  formatAiCompletionError,
+  ToolCallInfo,
+  AiChatResult
+} from '../../service/ai/ActiveAiService'
 import { MdContentView } from '../../common/components/MdContentView'
 import { MdStreamingContentView } from '../../common/components/MdStreamingContentView'
 import { PanelNavBar } from '../../common/components/PanelNavBar'
@@ -39,6 +44,8 @@ class ChatBubble {
   isStreaming: boolean = false
   /** 工具调用信息（仅 assistant 角色，联网搜索时记录搜索过程） */
   toolCallInfo?: ToolCallInfo
+  /** 该轮 assistant 响应的原始输出 items（含 web_search_call，多轮回传用） */
+  outputItems?: Object[]
 
   constructor(role: string, content: string, isStreaming: boolean) {
     this.id = 'cb_' + Date.now() + '_' + Math.floor(Math.random() * 100000)
@@ -72,8 +79,8 @@ struct AiChatPage {
   @State private aiStatus: string = ''
   /** 工具调用当前阶段（空字符串=无工具调用，analyzing/searching/compiling/complete） */
   @State private toolPhase: string = ''
-  /** 工具调用阶段图标 */
-  @State private toolIcon: string = ''
+  /** 工具调用阶段图标（SVG 资源，按主题着色） */
+  @State private toolIcon: Resource = $r('app.media.icon_ai_analyzing')
   /** 工具调用阶段描述 */
   @State private toolDescription: string = ''
   /** 搜索关键词（仅 searching/compiling/complete 阶段） */
@@ -100,6 +107,8 @@ struct AiChatPage {
   private adaptiveFlushMs: number = DEFAULT_FLUSH_INTERVAL_MS
   /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
   private scope: PageScope = new PageScope()
+  /** 当前请求取消令牌（页面销毁时中断进行中的流式请求）。 */
+  private requestCanceller: RequestCanceller = new RequestCanceller()
 
   /** 滚动控制器 */
   private scroller: Scroller = new Scroller()
@@ -128,6 +137,8 @@ struct AiChatPage {
 
   aboutToDisappear(): void {
     this.scope.end()
+    // 中断仍在进行中的 AI 流式请求，避免网络与解析资源空耗
+    this.requestCanceller.cancel()
     this.isSending = false
     this.resetStreamingState()
   }
@@ -158,6 +169,7 @@ struct AiChatPage {
     this.inputText = ''
     this.isSending = true
     this.resetStreamingState()
+    this.requestCanceller = new RequestCanceller()
 
     // 构建对话历史（不含正在生成的 AI 回复）
     const history: ChatMessage[] = this.buildHistory()
@@ -170,7 +182,7 @@ struct AiChatPage {
     }, 0)
 
 	    try {
-	      const finalText: string = await chatCompleteWithActiveAiStream(
+	      const result: AiChatResult = await chatCompleteWithActiveAiStream(
 	        history,
 	        (chunk: string): void => {
             if (!this.isActiveRequest(requestId)) {
@@ -194,12 +206,20 @@ struct AiChatPage {
 	          this.toolDescription = info.phaseDescription
 	          this.toolSummary = info.summary
 	          this.toolCount = info.count
-	        }
+	        },
+	        this.requestCanceller
 	      )
         if (!this.isActiveRequest(requestId)) {
           return
         }
+	      // 流式完成 — 强制同步缓冲到状态，避免添加气泡前闪现「思考中」帧
+	      this.flushStreamingText()
 	      // 流式完成 — 添加完整的 AI 气泡
+	      let finalText: string = result.text
+	      // 部分内容被截断时追加弱提示，避免用户误以为回答已完整结束
+	      if (result.truncated) {
+	        finalText += '\n\n⚠️ 回答已因长度上限被截断，可增大输出上限后重试'
+	      }
 	      if (this.toolPhase.length > 0) {
 	        const savedInfo: ToolCallInfo = new ToolCallInfo()
 	        savedInfo.phase = this.toolPhase
@@ -209,9 +229,11 @@ struct AiChatPage {
 	        savedInfo.count = this.toolCount
 	        const aiBubble: ChatBubble = new ChatBubble('assistant', finalText, false)
 	        aiBubble.toolCallInfo = savedInfo
+	        aiBubble.outputItems = result.outputItems.length > 0 ? result.outputItems : undefined
 	        this.bubbles.push(aiBubble)
 	      } else {
 	        const aiBubble: ChatBubble = new ChatBubble('assistant', finalText, false)
+	        aiBubble.outputItems = result.outputItems.length > 0 ? result.outputItems : undefined
 	        this.bubbles.push(aiBubble)
 	      }
     } catch (err) {
@@ -351,7 +373,7 @@ struct AiChatPage {
     this.streamingText = ''
     this.aiStatus = ''
     this.toolPhase = ''
-    this.toolIcon = ''
+    this.toolIcon = $r('app.media.icon_ai_analyzing')
     this.toolDescription = ''
     this.toolSummary = ''
     this.toolCount = 0
@@ -363,6 +385,8 @@ struct AiChatPage {
    * 从已完成的对话气泡中构建 ChatMessage 数组。
    *
    * 若有场景 system prompt，在消息数组开头插入 system role 消息。
+   * assistant 消息携带该轮原始输出 items（含 web_search_call），
+   * 由客户端序列化为 Responses API 输入时原样回传。
    *
    * @returns API 调用的对话历史
    */
@@ -377,7 +401,11 @@ struct AiChatPage {
       if (b.role === 'user') {
         messages.push(new ChatMessage('user', b.content))
       } else if (b.role === 'assistant' && !b.isStreaming && b.content.length > 0) {
-        messages.push(new ChatMessage('assistant', b.content))
+        const assistantMsg: ChatMessage = new ChatMessage('assistant', b.content)
+        if (b.outputItems && b.outputItems.length > 0) {
+          assistantMsg.outputItems = b.outputItems
+        }
+        messages.push(assistantMsg)
       }
     }
     return messages
@@ -418,29 +446,14 @@ struct AiChatPage {
 		          if (this.isSending) {
 		            Row() {
 		              Column() {
-		                // === 工具调用指示器（ChatGPT 风格紧凑 pill） ===
 		                // === 工具调用指示器（纯文本沉浸式，无背景无边框） ===
 		                if (this.toolPhase.length > 0) {
-		                  if (this.streamingText.length > 0 && this.toolPhase === 'compiling') {
-		                    // 流式已开始，指示器缩为最小一行
-		                    Row() {
-		                      Text('📝 ')
-		                        .fontSize(12)
-		                      Text(this.toolDescription)
-		                        .fontSize(12)
-		                        .fontColor(AppColors.textTertiary)
-		                        .layoutWeight(1)
-		                        .maxLines(1)
-		                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-		                    }
-		                    .width('100%')
-		                    .alignItems(VerticalAlign.Center)
-		                    .padding({ bottom: 4 })
-		                  } else if (this.toolPhase === 'complete') {
+		                  if (this.toolPhase === 'complete') {
 		                    // 完成态：很淡的一行
 		                    Row() {
-		                      Text('✅ ')
-		                        .fontSize(12)
+		                      Image($r('app.media.icon_checkmark'))
+		                        .width(12).height(12)
+		                        .fillColor(AppColors.textTertiary)
 		                      Text(this.toolDescription)
 		                        .fontSize(12)
 		                        .fontColor(AppColors.textTertiary)
@@ -452,18 +465,19 @@ struct AiChatPage {
 		                    .alignItems(VerticalAlign.Center)
 		                    .padding({ bottom: 6 })
 		                  } else {
-			                    // 活跃态：单行，无装饰
+			                    // 活跃态：统一所有进行中状态（分析/搜索/生成），无装饰
 			                    Row() {
-			                      Text(this.toolIcon)
-			                        .fontSize(15)
-			                      Text(this.toolDescription)
+			                      Image(this.toolIcon)
+			                        .width(15).height(15)
+			                        .fillColor(AppColors.primary)
+			                      Text(this.streamingText.length > 0 ? '正在生成回答...' : this.toolDescription)
 			                        .fontSize(14)
 			                        .fontColor(AppColors.textPrimary)
 			                        .layoutWeight(1)
 			                        .margin({ left: 5 })
 			                        .maxLines(2)
 			                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-			                      if (this.toolPhase === 'analyzing' || this.toolPhase === 'searching') {
+			                      if (this.streamingText.length === 0) {
 			                        LoadingProgress()
 			                          .width(14).height(14)
 			                          .color(AppColors.primary)
@@ -552,8 +566,9 @@ struct AiChatPage {
 	          // 工具调用摘要（ChatGPT 风格：紧凑一行，无分隔线）
 	          if (bubble.toolCallInfo) {
 	            Row() {
-	              Text('🌐 ')
-	                .fontSize(12)
+	              Image($r('app.media.icon_globe'))
+	                .width(12).height(12)
+	                .fillColor(AppColors.textTertiary)
 		              Text(bubble.toolCallInfo.summary.length > 0 ?
 		                '"' + bubble.toolCallInfo.summary + '"' :
 		                '已搜索互联网')
