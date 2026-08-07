@@ -60,13 +60,27 @@ export function resolveAttachBBCodeUrl(raw: string): string {
 }
 
 /**
+ * NGA 附件图片绝对 URL 归一化正则（官方 commonui.correctAttachUrl 移植）。
+ *
+ * 匹配 `http(s)://img<7>.<附件域>/` 的旧域图片 URL（nga.178.com / ngacn.cc 等
+ * 历史附件域，其中 img.nga.178.com 已不可解析），官方渲染 [img] 时统一替换为
+ * 当前附件基域（img.nga.cn），此处同构。`img7?` 与官方逐字一致：只匹配
+ * `img` 与 `img7`，其余子域（如 img4.nga.178.com）官方不动，此处也不动。
+ */
+const NGA_ATTACH_IMG_RE: RegExp = /^https?:\/\/img7?\.(?:nga\.cn|ngacn\.cc|nga\.178\.com|nga\.donews\.com|ngabbs\.com)\//
+
+/**
  * 解析 BBCode `[img]` 标签内的图片地址为可访问 URL，并去除后缀杂讯。
+ *
+ * 绝对 URL：NGA 附件域（img/img7.nga.cn、ngacn.cc、nga.178.com、nga.donews.com、
+ * ngabbs.com）统一归一化到当前附件 CDN 根（官方 correctAttachUrl 语义，旧域
+ * img.nga.178.com 等已不可解析）；其余绝对 URL 原样保留。
  *
  * @param raw `[img]` 标签原始内容
  * @returns 完整可访问 URL（已 strip 后缀）
  */
 export function resolveImgUrl(raw: string): string {
-  if (raw.startsWith('http')) return stripImageSuffix(raw)
+  if (raw.startsWith('http')) return stripImageSuffix(raw.replace(NGA_ATTACH_IMG_RE, NGA_IMG_BASE + '/'))
   if (raw.startsWith('/mon_') || raw.startsWith('./mon_')) {
     const path = raw.startsWith('./') ? raw.substring(1) : raw
     return NGA_CDN_BASE + stripImageSuffix(path)

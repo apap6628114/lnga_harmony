@@ -497,4 +497,32 @@ export default function bbcodeUnitTest(): void {
       expect(nodes[0].text).assertEqual('[attach]./mon_202608/03/unclosed.mp4')
     })
   })
+
+  it('normalizesLegacyAttachDomainImgToNgaCn', 0, (): void => {
+    // 官方 commonui.correctAttachUrl 语义：img.nga.178.com 等旧附件域统一迁移到 img.nga.cn
+    const nodes: BBNode[] = parseBBCode(
+      '[img]https://img.nga.178.com/attachments/mon_202112/05/x.png[/img]')
+
+    expect(nodes.length).assertEqual(1)
+    expect(nodes[0].type).assertEqual(BBNodeType.IMAGE)
+    expect(nodes[0].src).assertEqual('https://img.nga.cn/attachments/mon_202112/05/x.png')
+  })
+
+  it('keepsNonNgaDomainImgUrlUnchanged', 0, (): void => {
+    const nodes: BBNode[] = parseBBCode('[img]https://example.com/a.png[/img]')
+
+    expect(nodes.length).assertEqual(1)
+    expect(nodes[0].type).assertEqual(BBNodeType.IMAGE)
+    expect(nodes[0].src).assertEqual('https://example.com/a.png')
+  })
+
+  it('normalizesImgInTableCells', 0, (): void => {
+    const nodes: BBNode[] = parseBBCode(
+      '[table][tr][td][img]https://img.nga.178.com/attachments/mon_202112/05/x.png[/img]AL[/td][/tr][/table]')
+    expect(nodes.length).assertEqual(1)
+    const cell: BBNode = nodes[0].children[0].children[0]
+    expect(cell.type).assertEqual(BBNodeType.TABLE_CELL)
+    expect(cell.children[0].type).assertEqual(BBNodeType.IMAGE)
+    expect(cell.children[0].src).assertEqual('https://img.nga.cn/attachments/mon_202112/05/x.png')
+  })
 }

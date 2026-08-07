@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { parseBBCode } from '../src/parser/bbcode/parser'
 import { preprocessContent } from '../src/parser/bbcode/lexer'
 import { decodeHtmlEntities } from '../src/parser/_shared/HtmlEntityCodec'
-import { resolveAttachBBCodeUrl } from '../src/parser/_shared/AttachUrl'
+import { resolveAttachBBCodeUrl, resolveImgUrl } from '../src/parser/_shared/AttachUrl'
 import { flattenInlineNodes, InlineRun, InlineRunKind } from '../src/common/components/bbcode/bbcode-utils'
 import { BBNode, BBNodeType } from '../src/model/BBCodeNode'
 import { loadSampleContent, isSubsequence, concatTextNodes } from './helpers'
@@ -354,6 +354,53 @@ describe('attach 渲染层', () => {
     assert.equal(runs.length, 1)
     assert.equal(runs[0].kind, InlineRunKind.TEXT)
     assert.equal(runs[0].text, '前文 [attach]https://evil.example.com/a.zip[/attach] 后文')
+  })
+})
+
+describe('img 域名归一化（对齐官方 commonui.correctAttachUrl）', () => {
+  it('旧附件域 img.nga.178.com 绝对 URL 归一化到 img.nga.cn', () => {
+    assert.equal(
+      resolveImgUrl('https://img.nga.178.com/attachments/mon_202112/05/-40v3zQ2p-ccrhK3S1o-p.png'),
+      'https://img.nga.cn/attachments/mon_202112/05/-40v3zQ2p-ccrhK3S1o-p.png'
+    )
+  })
+
+  it('http 旧域 ngacn.cc / nga.donews.com / ngabbs.com 同样归一化', () => {
+    assert.equal(
+      resolveImgUrl('http://img.ngacn.cc/attachments/mon_202001/01/x.png'),
+      'https://img.nga.cn/attachments/mon_202001/01/x.png'
+    )
+    assert.equal(
+      resolveImgUrl('http://img.nga.donews.com/attachments/mon_202001/01/x.png'),
+      'https://img.nga.cn/attachments/mon_202001/01/x.png'
+    )
+    assert.equal(
+      resolveImgUrl('http://img.ngabbs.com/attachments/mon_202001/01/x.png'),
+      'https://img.nga.cn/attachments/mon_202001/01/x.png'
+    )
+  })
+
+  it('img7 子域匹配、img4 等其余数字子域不匹配（官方 img7? 逐字一致）', () => {
+    assert.equal(
+      resolveImgUrl('https://img7.nga.cn/attachments/mon_202001/01/x.png'),
+      'https://img.nga.cn/attachments/mon_202001/01/x.png'
+    )
+    assert.equal(
+      resolveImgUrl('https://img4.nga.178.com/attachments/mon_202001/01/x.png'),
+      'https://img4.nga.178.com/attachments/mon_202001/01/x.png'
+    )
+  })
+
+  it('非 NGA 附件域绝对 URL 原样保留', () => {
+    const raw: string = 'https://example.com/attachments/mon_202001/01/x.png'
+    assert.equal(resolveImgUrl(raw), raw)
+  })
+
+  it('表格内旧域 [img] 解析后 src 为新域', () => {
+    const nodes: BBNode[] = parseBBCode('[table][tr][td][img]https://img.nga.178.com/attachments/mon_202112/05/x.png[/img]AL[/td][/tr][/table]')
+    const img: BBNode | undefined = findType(nodes, BBNodeType.IMAGE)
+    if (!img) assert.fail('未找到 IMAGE 节点')
+    assert.equal(img.src, 'https://img.nga.cn/attachments/mon_202112/05/x.png')
   })
 })
 

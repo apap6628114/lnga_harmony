@@ -120,6 +120,30 @@ runs.json 提取方式：浏览器内脚本遍历楼层 DOM，跳过 `.x` 表格
 
 ## 修复记录
 
+- **2026-08-07 [img] 旧附件域归一化**（tid=47228037 主楼表格内图片裂图修复，镜像 71 项 + Hypium 80 项全绿）：
+  - 症状：主楼表格 `[td]` 内 `[img]https://img.nga.178.com/...[/img]` 解析为 IMAGE 但
+    src 保留旧域 `img.nga.178.com`，该域已不可解析（实测 HTTP 000 / DNS 落保留地址），
+    图片加载失败；而 `./mon_...` 相对路径图片（拼新域 img.nga.cn）显示正常
+  - 官方行为（js_default.js `commonui.correctAttachUrl`，imgGen 对全部 [img] src 调用）：
+    匹配 `^https?://img7?\.(?:nga\.cn|ngacn\.cc|nga\.178\.com|nga\.donews\.com|ngabbs\.com)/`
+    的附件域绝对 URL 统一替换为当前附件基域（官方 `_P_ATTACH_BASE_VIEW =
+    https://img.nga.cn/attachments`，host 由 `_ATTACH_BASE_VIEW` 提供；页面 JSON
+    `__GLOBAL._ATTACH_BASE_VIEW=img.nga.cn` 与之呼应）
+  - 对齐实现：`AttachUrl.ts` 新增 `NGA_ATTACH_IMG_RE`（与官方正则逐字一致，`img7?` 只匹配
+    img/img7，img4 等其余子域官方不动、此处也不动），`resolveImgUrl` 绝对 URL 分支先
+    replace 再 strip 后缀；相对路径与其余 URL 行为不变。[attach] 链路官方不归一化（白名单
+    放行旧域、渲染为链接文本），维持既有实现。替换协议固定 https（应用侧无 http 页面，
+    官方 `HTTPS||$1` 的 http 分支不适用；http 输入同样归一化为 https 基域）
+  - 样本 `tid47228037-lou0.txt`（LPL 赛程主楼，2 表格 310 单元格 93 图）固化 + 快照基线
+    （基线内 178.com 零残留）；镜像新增 5 用例（旧域归一化 / http 旧域 / img7 匹配而 img4
+    不匹配 / 非附件域保留 / 表格内解析后 src）；Hypium 3 例
+    （`normalizesLegacyAttachDomainImgToNgaCn` / `keepsNonNgaDomainImgUrlUnchanged` /
+    `normalizesImgInTableCells`）
+  - 官方差分未接入：网页表格为 `.x` 占位客户端渲染，静态 HTML 无渲染后 DOM
+  - 官方调研要点（2026-08-07 实测）：`commonSpec` 脚本在 `__RES_STYLE =
+    http://img4.nga.cn/ngabbs/nga_classic`（README 之前记录的 common_res 路径仅 `lib`/`common`
+    等适用）；页面 JSON 顶层 `data.__GLOBAL._ATTACH_BASE_VIEW` 即官方当前附件基域
+
 - **2026-08-07 [attach] 附件标签支持**（tid=47307683 1 楼修复，59 项测试全绿）：
   - 此前 `[attach]` 无 handler，正文原样显示 `[attach]./mon_xxx.mp4[/attach]` 文本；
     官方网页由 `ubbcode.attach.load()` JS 将正文 `[attach]` 替换为附件链接
