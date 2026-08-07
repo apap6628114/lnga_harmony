@@ -466,5 +466,35 @@ export default function bbcodeUnitTest(): void {
       expect(extractTextStyleAlign('color:red; text-align: CENTER')).assertEqual('center')
       expect(extractTextStyleAlign('color:red')).assertEqual('')
     })
+
+    it('resolvesRelativeAttachTagToCdnLink', 0, (): void => {
+      const nodes: BBNode[] = parseBBCode(
+        '[attach]./mon_202608/03/k2Q81-97rkXrT6wSk0-zk.mp4[/attach]')
+
+      expect(nodes.length).assertEqual(1)
+      expect(nodes[0].type).assertEqual(BBNodeType.URL)
+      expect(nodes[0].href).assertEqual(
+        'https://img.nga.cn/attachments/mon_202608/03/k2Q81-97rkXrT6wSk0-zk.mp4')
+      expect(nodes[0].text).assertEqual(nodes[0].href)
+      const runs: InlineRun[] = flattenInlineNodes(nodes)
+      expect(runs.length).assertEqual(1)
+      expect(runs[0].kind).assertEqual(InlineRunKind.LINK)
+    })
+
+    it('keepsNonNgaAttachTagAsPlainText', 0, (): void => {
+      const nodes: BBNode[] = parseBBCode('[attach]https://evil.example.com/a.zip[/attach]')
+
+      expect(nodes.length).assertEqual(1)
+      expect(nodes[0].type).assertEqual(BBNodeType.TEXT)
+      expect(nodes[0].text).assertEqual('[attach]https://evil.example.com/a.zip[/attach]')
+    })
+
+    it('keepsUnclosedAttachTagAsPlainText', 0, (): void => {
+      const nodes: BBNode[] = parseBBCode('[attach]./mon_202608/03/unclosed.mp4')
+
+      expect(nodes.length).assertEqual(1)
+      expect(nodes[0].type).assertEqual(BBNodeType.TEXT)
+      expect(nodes[0].text).assertEqual('[attach]./mon_202608/03/unclosed.mp4')
+    })
   })
 }

@@ -120,6 +120,27 @@ runs.json 提取方式：浏览器内脚本遍历楼层 DOM，跳过 `.x` 表格
 
 ## 修复记录
 
+- **2026-08-07 [attach] 附件标签支持**（tid=47307683 1 楼修复，59 项测试全绿）：
+  - 此前 `[attach]` 无 handler，正文原样显示 `[attach]./mon_xxx.mp4[/attach]` 文本；
+    官方网页由 `ubbcode.attach.load()` JS 将正文 `[attach]` 替换为附件链接
+  - 对齐官方 ubbcode.js 语义：`./` 前缀拼 CDN 根（`getAttachBase` 同构），
+    `commonui.ifUrlAttach` 附件域白名单校验（`NgaDomains.ts` 新增 `NGA_ATTACH_HOSTS`，
+    含旧域），合法渲染为 URL 链接（显示文本 = 完整 URL，官方 `writelink` 语义）
+  - 保留原文的情形与官方逐条对齐（独立 review 验证）：非 NGA 附件域、
+    未闭合 `[attach]`（官方正则无匹配）、内容前后含空白/换行（官方不 trim、
+    `.` 不匹配 `\n`）、`[attach=属性]` 形式（官方 `\[attach\]` 精确匹配）
+  - 实现：`AttachUrl.ts` 新增 `resolveAttachBBCodeUrl`；`inline-parser.ts` 将 attach
+    纳入链接标签族（open/close 栈帧记录原始标签文本供退化保留），闭合/段尾
+    finalize 时解析并校验
+  - 样本 `tid47307683-lou0.txt` 固化 + 快照基线；边角样例 4 例 + 渲染 Run 断言 +
+    Hypium 2 例（`BBCodeUnit.test.ets`）
+  - 官方差分未接入：正文 [attach] 替换依赖 JS 渲染，静态 HTML 无渲染后 DOM
+  - 官方渲染调研要点（2026-08-07 实测）：read.php 网页 HTML 按 UA 反爬
+    （Mozilla UA 403，`NGA_WP_JW` 可过）；脚本清单在页面 `__SCRIPTS` 配置，
+    基础路径 `__COMMONRES_PATH = http://img4.nga.cn/common_res`，
+    [attach] 替换逻辑在 `js_bbscode_core.js?1342409`（正则 `\[attach\](.+?)\[\/attach\]`），
+    `getAttachBase`/`ifUrlAttach` 在 `js_default.js?9965017`（`_ATTACH_BASE_VIEW='img.nga.cn'`）
+
 - **2026-08-07 解析/渲染效率优化**（效果零变化，50 项测试全绿）：
   - `parseTableContent` 每行 3 次独立扫描（`[/table]` exec + `[tr]` exec + `indexOf`）合并为
     单次扫描 + 字符级 `matchesIgnoreCaseAt`，消除每行正则 exec 扫至表尾的重复扫描

@@ -18,6 +18,22 @@ export const NGA_API_DOMAINS: string[] = NGA_HOSTS.map((host: string): string =>
 /** 附件图片 CDN 根（img.nga.cn，2026-08-05 从 img.nga.178.com 切换） */
 export const NGA_IMG_BASE: string = 'https://img.nga.cn'
 
+/**
+ * 附件 URL 合法主机列表（官方 commonui.ifUrlAttach 白名单，正则片段）。
+ *
+ * 用于 [attach] 标签内容校验：仅 NGA 附件域（含旧域，部分仍 301 存活）的
+ * http(s) URL 视为合法附件地址，与官方 ubbcode.js 替换规则一致。
+ */
+export const NGA_ATTACH_HOSTS: string[] = [
+  'img\\d?\\.ngacn\\.cc',
+  'img\\d?\\.nga\\.cn',
+  'ngaimg\\.178\\.com',
+  'img\\d?\\.nga\\.178\\.com',
+  'img\\.nga\\.donews\\.com',
+  'img\\.nga\\.bnbsky\\.com',
+  'user-file\\.nga\\.178\\.com',
+]
+
 /** 静态资源 CDN 根（img4.nga.cn：版块图标/表情/徽章等） */
 export const NGA_IMG4_BASE: string = 'https://img4.nga.cn'
 

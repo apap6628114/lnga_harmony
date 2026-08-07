@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { parseBBCode } from '../src/parser/bbcode/parser'
 import { preprocessContent } from '../src/parser/bbcode/lexer'
 import { decodeHtmlEntities } from '../src/parser/_shared/HtmlEntityCodec'
-import { flattenInlineNodes, InlineRun } from '../src/common/components/bbcode/bbcode-utils'
+import { resolveAttachBBCodeUrl } from '../src/parser/_shared/AttachUrl'
+import { flattenInlineNodes, InlineRun, InlineRunKind } from '../src/common/components/bbcode/bbcode-utils'
 import { BBNode, BBNodeType } from '../src/model/BBCodeNode'
 import { loadSampleContent, isSubsequence, concatTextNodes } from './helpers'
 
@@ -22,7 +23,8 @@ function stripBBCodeTags(s: string): string {
  * 计算某个正文的期望纯文本（预处理 + 剥离标签 + 解码实体）。
  *
  * 两侧语义对齐（解析器的真实设计行为）：媒体类标签（img/flash/album）
- * 整体丢弃含内容（解析器产出 IMAGE 等节点，无 TEXT）。
+ * 整体丢弃含内容（解析器产出 IMAGE 等节点，无 TEXT）；[attach] 按官方
+ * ubbcode.js 替换语义处理——合法附件 URL 渲染为完整链接文本，非法保留原文。
  *
  * @param content 原始正文
  * @returns 期望纯文本
@@ -30,6 +32,11 @@ function stripBBCodeTags(s: string): string {
 function expectedPlainText(content: string): string {
   let preprocessed: string = preprocessContent(content)
   preprocessed = preprocessed.replace(/\[(img|flash|album|video|audio)(?:=[^\]]*)?\][\s\S]*?\[\/\1\]/gi, '')
+  preprocessed = preprocessed.replace(/\[attach\](.+?)\[\/attach\]/gi,
+    (match: string, url: string): string => {
+      const resolved: string = resolveAttachBBCodeUrl(url)
+      return resolved.length > 0 ? resolved : match
+    })
   return decodeHtmlEntities(stripBBCodeTags(preprocessed)).replace(/\n{3,}/g, '\n\n').trim()
 }
 
@@ -224,6 +231,85 @@ describe('边角样例', () => {
       }
     },
     { name: '闪存媒体', input: '[flash=video]https://video.example.com/a.mp4[/flash]' },
+    {
+      name: 'attach 相对路径拼 CDN（官方 [attach] 语义）',
+      input: '[attach]./mon_202608/03/k2Q81-97rkXrT6wSk0-zk.mp4[/attach]',
+      asserts: (nodes: BBNode[]) => {
+        const url: BBNode | undefined = findType(nodes, BBNodeType.URL)
+        if (!url) assert.fail('未找到 URL 节点')
+        assert.equal(url.href, 'https://img.nga.cn/attachments/mon_202608/03/k2Q81-97rkXrT6wSk0-zk.mp4',
+          '相对附件地址应拼 CDN 根')
+        assert.equal(url.text, url.href, '显示文本应为完整 URL（官方 writelink 语义）')
+      }
+    },
+    {
+      name: 'attach 绝对附件域 URL 原样保留',
+      input: '附件 [attach]https://img.nga.cn/attachments/mon_202608/03/a.mp4[/attach] 结束',
+      asserts: (nodes: BBNode[]) => {
+        const url: BBNode | undefined = findType(nodes, BBNodeType.URL)
+        if (!url) assert.fail('未找到 URL 节点')
+        assert.equal(url.href, 'https://img.nga.cn/attachments/mon_202608/03/a.mp4')
+      }
+    },
+    {
+      name: 'attach 非 NGA 附件域退化为原文（官方保留 $0 行为）',
+      input: '前文 [attach]https://evil.example.com/a.zip[/attach] 后文',
+      asserts: (nodes: BBNode[]) => {
+        const actual: string = concatTextNodes(nodes)
+        assert.ok(actual.includes('[attach]https://evil.example.com/a.zip[/attach]'),
+          `应保留 [attach] 原文: ${actual}`)
+        assert.equal(countType(nodes, BBNodeType.URL), 0, '不应生成链接节点')
+      }
+    },
+    {
+      name: 'attach 大小写标签',
+      input: '[ATTACH]./mon_202608/03/b.png[/ATTACH]',
+      asserts: (nodes: BBNode[]) => {
+        const url: BBNode | undefined = findType(nodes, BBNodeType.URL)
+        if (!url) assert.fail('未找到 URL 节点')
+        assert.equal(url.href, 'https://img.nga.cn/attachments/mon_202608/03/b.png')
+      }
+    },
+    {
+      name: 'attach 未闭合保留原文（官方正则无匹配）',
+      input: '前文 [attach]./mon_202608/03/unclosed.mp4 后文',
+      asserts: (nodes: BBNode[]) => {
+        const actual: string = concatTextNodes(nodes)
+        assert.ok(actual.includes('[attach]./mon_202608/03/unclosed.mp4'),
+          `未闭合 [attach] 应保留标记原文: ${actual}`)
+        assert.equal(countType(nodes, BBNodeType.URL), 0, '不应生成链接节点')
+      }
+    },
+    {
+      name: 'attach 换行包裹保留原文（官方 . 不匹配 \\n）',
+      input: '[attach]\n./mon_202608/03/c.png\n[/attach]',
+      asserts: (nodes: BBNode[]) => {
+        const actual: string = concatTextNodes(nodes)
+        assert.ok(actual.includes('[attach]\n./mon_202608/03/c.png\n[/attach]'),
+          `换行包裹应保留原文: ${JSON.stringify(actual)}`)
+        assert.equal(countType(nodes, BBNodeType.URL), 0, '不应生成链接节点')
+      }
+    },
+    {
+      name: 'attach 内容前后空白保留原文（官方不 trim）',
+      input: '[attach] ./mon_202608/03/d.png [/attach]',
+      asserts: (nodes: BBNode[]) => {
+        const actual: string = concatTextNodes(nodes)
+        assert.ok(actual.includes('[attach] ./mon_202608/03/d.png [/attach]'),
+          `空白包裹应保留原文: ${JSON.stringify(actual)}`)
+        assert.equal(countType(nodes, BBNodeType.URL), 0, '不应生成链接节点')
+      }
+    },
+    {
+      name: 'attach 带属性形式整体保留原文（官方 `\\[attach\\]` 精确匹配）',
+      input: '[attach=1]./mon_202608/03/e.png[/attach]',
+      asserts: (nodes: BBNode[]) => {
+        const actual: string = concatTextNodes(nodes)
+        assert.ok(actual.includes('[attach=1]./mon_202608/03/e.png[/attach]'),
+          `属性形式应保留原文: ${actual}`)
+        assert.equal(countType(nodes, BBNodeType.URL), 0, '不应生成链接节点')
+      }
+    },
     { name: '上下标', input: '化学 H[sub]2[/sub]O 与 x[sup]2[/sup]' },
     {
       name: '横线与段落',
@@ -250,6 +336,25 @@ describe('边角样例', () => {
       if (c.asserts) c.asserts(nodes)
     })
   }
+})
+
+describe('attach 渲染层', () => {
+  it('合法 [attach] 渲染为单个链接 Run（显示文本 = 完整 URL）', () => {
+    const nodes: BBNode[] = parseBBCode('[attach]./mon_202608/03/k2Q81-97rkXrT6wSk0-zk.mp4[/attach]')
+    const runs: InlineRun[] = flattenInlineNodes(nodes)
+    assert.equal(runs.length, 1)
+    assert.equal(runs[0].kind, InlineRunKind.LINK)
+    assert.equal(runs[0].href, 'https://img.nga.cn/attachments/mon_202608/03/k2Q81-97rkXrT6wSk0-zk.mp4')
+    assert.equal(runs[0].text, runs[0].href)
+  })
+
+  it('非法 [attach] 退化为普通文字 Run', () => {
+    const nodes: BBNode[] = parseBBCode('前文 [attach]https://evil.example.com/a.zip[/attach] 后文')
+    const runs: InlineRun[] = flattenInlineNodes(nodes)
+    assert.equal(runs.length, 1)
+    assert.equal(runs[0].kind, InlineRunKind.TEXT)
+    assert.equal(runs[0].text, '前文 [attach]https://evil.example.com/a.zip[/attach] 后文')
+  })
 })
 
 describe('线性扫描与批量格式化回归', () => {

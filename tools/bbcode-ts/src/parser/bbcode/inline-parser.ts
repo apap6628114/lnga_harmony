@@ -1,5 +1,6 @@
 import { BBNode, BBNodeType } from '../../model/BBCodeNode'
 import { decodeHtmlEntities } from '../_shared/HtmlEntityCodec'
+import { resolveAttachBBCodeUrl } from '../_shared/AttachUrl'
 import { createBBNode, isSafeUrl, pushTextNode } from './lexer'
 import { isInlineStyleTagName, isValidInlineStyleTag } from './inline-tag-policy'
 
@@ -50,6 +51,10 @@ class InlineFrame {
   node: BBNode = new BBNode()
   /** 无属性 URL 是否需要从显示文字推导地址。 */
   deriveUrlFromText: boolean = false
+  /** 开始标签原文（退化保留时使用）。 */
+  openRaw: string = ''
+  /** 闭合标签原文（退化保留时使用）。 */
+  closeRaw: string = ''
 }
 
 /**
@@ -111,7 +116,7 @@ function readInlineTag(segment: string, start: number): InlineTagToken | null {
  * @returns 是否为链接标签
  */
 function isInlineLinkTag(name: string): boolean {
-  return name === 'url' || name === 'pid' || name === 'uid' || name === 'tid'
+  return name === 'url' || name === 'pid' || name === 'uid' || name === 'tid' || name === 'attach'
 }
 
 /**
@@ -233,10 +238,14 @@ function openInlineFrame(tag: InlineTagToken, root: BBNode[], frames: InlineFram
     node.type = styleNodeType(tag.name)
     if (!applyStyleAttribute(node, tag)) return false
   } else {
+    // [attach] 的地址在闭合时从内容推导（官方 ubbcode.js 语义），打开时暂空；
+    // 官方正则 `\[attach\]` 精确匹配，带属性形式（[attach=x]）整体不识别
+    if (tag.name === 'attach' && tag.attribute.length > 0) return false
     node.type = tag.name === 'url' ? BBNodeType.URL :
       tag.name === 'pid' ? BBNodeType.PID_LINK :
-        tag.name === 'uid' ? BBNodeType.UID_LINK : BBNodeType.TID_LINK
-    node.href = createLinkHref(tag)
+        tag.name === 'uid' ? BBNodeType.UID_LINK :
+          tag.name === 'attach' ? BBNodeType.URL : BBNodeType.TID_LINK
+    node.href = tag.name === 'attach' ? '' : createLinkHref(tag)
   }
 
   currentChildren(root, frames).push(node)
@@ -244,6 +253,7 @@ function openInlineFrame(tag: InlineTagToken, root: BBNode[], frames: InlineFram
   frame.tagName = tag.name
   frame.node = node
   frame.deriveUrlFromText = tag.name === 'url' && tag.attribute.length === 0
+  frame.openRaw = tag.raw
   frames.push(frame)
   return true
 }
@@ -254,6 +264,26 @@ function openInlineFrame(tag: InlineTagToken, root: BBNode[], frames: InlineFram
  * @param frame 即将关闭的栈帧
  */
 function finalizeFrame(frame: InlineFrame): void {
+  if (frame.tagName === 'attach') {
+    // 官方 ubbcode.js：[attach] 内容即附件地址，合法时渲染为完整 URL 链接，
+    // 非法（非 NGA 附件域）或未闭合时原样保留 [attach]...[/attach] 原文。
+    // 未闭合（closeRaw 为空，如段尾收尾）官方正则无匹配，必须走退化分支，
+    // 否则 [attach] 标记文本会从纯文本中丢失
+    const content: string = collectInlineText(frame.node.children)
+    if (frame.closeRaw.length > 0) {
+      const url: string = resolveAttachBBCodeUrl(content)
+      if (url.length > 0) {
+        frame.node.href = url
+        frame.node.text = url
+        frame.node.children = []
+        return
+      }
+    }
+    frame.node.type = BBNodeType.TEXT
+    frame.node.text = frame.openRaw + content + frame.closeRaw
+    frame.node.children = []
+    return
+  }
   if (frame.deriveUrlFromText) {
     const href: string = collectInlineText(frame.node.children).trim()
     frame.node.href = isSafeUrl(href) ? href : ''
@@ -264,10 +294,11 @@ function finalizeFrame(frame: InlineFrame): void {
  * 闭合最近的同名标签；交叉标签按容错规则自动闭合其上的栈帧。
  *
  * @param name 小写闭合标签名
+ * @param raw 闭合标签原文（退化保留时使用）
  * @param frames 开放标签栈
  * @returns 是否找到匹配的开始标签
  */
-function closeInlineFrame(name: string, frames: InlineFrame[]): boolean {
+function closeInlineFrame(name: string, raw: string, frames: InlineFrame[]): boolean {
   let matchIndex: number = -1
   for (let i: number = frames.length - 1; i >= 0; i--) {
     if (frames[i].tagName === name) {
@@ -277,6 +308,8 @@ function closeInlineFrame(name: string, frames: InlineFrame[]): boolean {
   }
   if (matchIndex < 0) return false
   for (let i: number = frames.length - 1; i >= matchIndex; i--) {
+    // 仅匹配帧持有本次闭合标签原文；上方被自动闭合的交叉帧按未闭合处理
+    frames[i].closeRaw = i === matchIndex ? raw : ''
     finalizeFrame(frames[i])
     frames.pop()
   }
@@ -356,7 +389,7 @@ function parseInlineInto(segment: string, into: BBNode[]): void {
 
     const tag: InlineTagToken | null = readInlineTag(segment, bracketIndex)
     if (tag !== null) {
-      const handled: boolean = tag.closing ? closeInlineFrame(tag.name, frames) : openInlineFrame(tag, into, frames)
+      const handled: boolean = tag.closing ? closeInlineFrame(tag.name, tag.raw, frames) : openInlineFrame(tag, into, frames)
       if (handled) {
         index = tag.end
         continue
