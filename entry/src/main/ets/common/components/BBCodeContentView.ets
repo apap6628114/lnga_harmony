@@ -1051,6 +1051,40 @@ export struct BBCodeContentView {
   }
 
   /**
+   * 判断表格是否为宽表（最大列数 ≥ 4），需要横向滚动避免列宽被压缩。
+   *
+   * 遍历所有行取最大列数，避免某行因 colSpan 导致列数统计不全。
+   *
+   * @param node TABLE 节点
+   * @returns 最大列数 ≥ 4 时返回 true
+   */
+  private isWideTable(node: BBNode): boolean {
+    let maxCols = 0
+    for (const row of node.children) {
+      if (row.type === BBNodeType.TABLE_ROW) {
+        const cols = row.children.filter((c: BBNode) => c.type === BBNodeType.TABLE_CELL).length
+        if (cols > maxCols) maxCols = cols
+      }
+    }
+    return maxCols >= 4
+  }
+
+  /**
+   * 计算宽表模式下单元格的固定宽度。
+   *
+   * 优先使用解析阶段获得的 colWidth，否则按默认列宽 120vp × colSpan。
+   * 固定列宽保证所有行同列宽度一致，避免内容跨分隔线错位。
+   *
+   * @param cell TABLE_CELL 节点
+   * @returns 单元格宽度（vp）
+   */
+  private tableCellFixedWidth(cell: BBNode): number {
+    const span = cell.colSpan > 1 ? cell.colSpan : 1
+    if (cell.colWidth > 0) return cell.colWidth
+    return 120 * span
+  }
+
+  /**
    * 为显式 `[align]` 块创建可向后代传递的对齐上下文。
    *
    * @param node ALIGN 节点
@@ -1309,38 +1343,74 @@ export struct BBCodeContentView {
   }
 
   /**
-   * 渲染表格块，暂时保持既有实现。
+   * 渲染表格块。
+   *
+   * 按列数区分两种渲染模式，确保列对齐正确：
+   * - 宽表（最大列数 ≥ 4）：固定列宽 + 横向 Scroll，避免列宽被压缩；
+   *   所有行同列使用相同固定宽度，列分隔线对齐一致。
+   * - 窄表（列数 < 4）：layoutWeight 平均分配容器宽度，与原版行为一致。
    *
    * @param node 表格节点
    * @param ctx 渲染上下文
    */
   @Builder
   RenderTable(node: BBNode, ctx: RenderContext) {
-    Column() {
-      ForEach(node.children, (row: BBNode) => {
-        if (row.type === BBNodeType.TABLE_ROW) {
-          Row() {
-            ForEach(row.children, (cell: BBNode) => {
-              if (cell.type === BBNodeType.TABLE_CELL) {
-                Column() {
-                  this.RenderChildren(cell.children, ctx)
-                }
-                .padding(6)
-                .layoutWeight(cell.colSpan > 1 ? cell.colSpan : 1)
-                .border({ width: 0.5, color: AppColors.separator })
-                .alignItems(HorizontalAlign.Start)
+    if (this.isWideTable(node)) {
+      Scroll() {
+        Column() {
+          ForEach(node.children, (row: BBNode) => {
+            if (row.type === BBNodeType.TABLE_ROW) {
+              Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Stretch }) {
+                ForEach(row.children, (cell: BBNode) => {
+                  if (cell.type === BBNodeType.TABLE_CELL) {
+                    Column() {
+                      this.RenderChildren(cell.children, ctx)
+                    }
+                    .padding(6)
+                    .width(this.tableCellFixedWidth(cell))
+                    .border({ width: 0.5, color: AppColors.separator })
+                    .alignItems(HorizontalAlign.Start)
+                  }
+                }, (cell: BBNode) => cell.id.toString())
               }
-            }, (cell: BBNode) => cell.id.toString())
-          }
-          .width('100%')
+            }
+          }, (row: BBNode) => row.id.toString())
         }
-      }, (row: BBNode) => row.id.toString())
+        .border({ width: 0.5, color: AppColors.separator })
+        .borderRadius(4)
+        .alignItems(HorizontalAlign.Start)
+      }
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Auto)
+      .width('100%')
+      .margin({ top: 6, bottom: 4 })
+    } else {
+      Column() {
+        ForEach(node.children, (row: BBNode) => {
+          if (row.type === BBNodeType.TABLE_ROW) {
+            Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Stretch }) {
+              ForEach(row.children, (cell: BBNode) => {
+                if (cell.type === BBNodeType.TABLE_CELL) {
+                  Column() {
+                    this.RenderChildren(cell.children, ctx)
+                  }
+                  .padding(6)
+                  .layoutWeight(cell.colSpan > 1 ? cell.colSpan : 1)
+                  .border({ width: 0.5, color: AppColors.separator })
+                  .alignItems(HorizontalAlign.Start)
+                }
+              }, (cell: BBNode) => cell.id.toString())
+            }
+            .width('100%')
+          }
+        }, (row: BBNode) => row.id.toString())
+      }
+      .width('100%')
+      .margin({ top: 6, bottom: 4 })
+      .border({ width: 0.5, color: AppColors.separator })
+      .borderRadius(4)
+      .alignItems(HorizontalAlign.Start)
     }
-    .width('100%')
-    .margin({ top: 6, bottom: 4 })
-    .border({ width: 0.5, color: AppColors.separator })
-    .borderRadius(4)
-    .alignItems(HorizontalAlign.Start)
   }
 
   /**
