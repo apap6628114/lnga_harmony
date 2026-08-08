@@ -6,6 +6,8 @@ import { getEmotionResource, CATEGORY_KEYS, getCategoryLabel, getCategoryNames, 
 import fileIo from '@ohos.file.fs'
 import { photoAccessHelper } from '@kit.MediaLibraryKit'
 import { Logger, DOMAIN_UI } from '../utils/Logger'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../constants/AppStorageKeys'
+import { UIMaterialManager } from '../managers/UIMaterialManager'
 
 const logger = new Logger(DOMAIN_UI, 'ReplyDialog')
 
@@ -40,6 +42,7 @@ export struct ReplyDialog {
   @State showEmojiPanel: boolean = false
   @State selectedCatKey: string = 'ac'
   @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   private textAreaController: TextAreaController = new TextAreaController()
   onSend?: (text: string, isAnony: boolean) => Promise<void>
   onClose: () => void = () => {}
@@ -291,7 +294,8 @@ export struct ReplyDialog {
       // 正文输入
       TextArea({ text: this.replyText, placeholder: '输入内容...', controller: this.textAreaController })
         .width('100%').height(220).padding(12).fontSize(15)
-        .borderRadius(8).backgroundColor(AppColors.bgSecondary)
+        .borderRadius(8).backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
         .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
         .onChange((value: string) => { this.replyText = value })
         .onTextSelectionChange((start: number, end: number) => {
@@ -321,6 +325,7 @@ export struct ReplyDialog {
       .width('100%').margin({ top: 6, bottom: 4 }).alignItems(VerticalAlign.Center)
     }
     .width('100%').constraintSize({ maxWidth: 576 }).padding({ left: 16, right: 16, bottom: 16 })
-    .backgroundColor(AppColors.bg).borderRadius(16)
+    .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bg).borderRadius(16)
+    .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
   }
 }

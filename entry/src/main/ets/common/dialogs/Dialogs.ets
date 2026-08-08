@@ -2,6 +2,8 @@
  * 确认对话框 + ActionSheet 组件 + 备注编辑对话框
  */
 import { AppColors } from '../constants/Constants'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../constants/AppStorageKeys'
+import { UIMaterialManager } from '../managers/UIMaterialManager'
 import { normalizeBlacklistUserId } from '../utils/BlacklistUtils'
 
 // 确认对话框
@@ -15,6 +17,7 @@ export struct ConfirmDialog {
   onConfirm?: () => void
   onCancel?: () => void
   icon?: Resource
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
 
   build() {
     Column() {
@@ -64,9 +67,10 @@ export struct ConfirmDialog {
     }
     .constraintSize({ maxWidth: 340, minWidth: 260 })
     .padding({ left: 20, right: 20 })
-      .backgroundColor(AppColors.bgTertiary)
+      .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
     .borderRadius(14)
     .alignItems(HorizontalAlign.Center)
+    .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
   }
 }
 
@@ -86,6 +90,7 @@ export struct ActionSheetDialog {
   onSelect?: (value: number) => void
   onCancel?: () => void
   getLabelFontSize?: (value: number) => number
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
 
   build() {
     Column() {
@@ -146,9 +151,10 @@ export struct ActionSheetDialog {
         })
     }
     .width('100%').constraintSize({ maxWidth: 420 })
-      .backgroundColor(AppColors.bgTertiary)
+      .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
     .borderRadius({ topLeft: 16, topRight: 16 })
     .padding({ bottom: 20 })
+    .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
   }
 }
 
@@ -163,6 +169,7 @@ export struct CredentialPasswordDialog {
   @State password: string = ''
   onConfirm?: (password: string) => void
   onCancel?: () => void
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
 
   build() {
     Column() {
@@ -184,7 +191,8 @@ export struct CredentialPasswordDialog {
         .height(44)
         .fontSize(15)
         .borderRadius(12)
-        .backgroundColor(AppColors.bgSecondary)
+        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
         .onChange((value: string) => { this.password = value })
 
       Text('至少 ' + this.minLength + ' 位，请妥善保存')
@@ -227,8 +235,9 @@ export struct CredentialPasswordDialog {
     }
     .constraintSize({ maxWidth: 340 })
     .padding({ left: 20, right: 20, bottom: 12 })
-    .backgroundColor(AppColors.bgTertiary)
+    .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
     .borderRadius(14)
+    .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
   }
 }
 
@@ -240,6 +249,7 @@ export struct MakeNoteDialog {
   @Prop currentNote: string = ''
   @State noteText: string = ''
   onConfirm?: (note: string, uid: string, userName: string) => void
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
 
   aboutToAppear(): void {
     this.noteText = this.currentNote
@@ -259,7 +269,8 @@ export struct MakeNoteDialog {
 
       TextInput({ text: this.noteText, placeholder: '输入备注内容(1-20字)' })
         .height(44).fontSize(15).borderRadius(12)
-        .backgroundColor(AppColors.bgSecondary)
+        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
         .onChange((value: string) => { this.noteText = value })
 
       Text(String(this.noteText.length) + '/20')
@@ -291,8 +302,9 @@ export struct MakeNoteDialog {
     }
     .constraintSize({ maxWidth: 340 })
     .padding({ left: 20, right: 20, bottom: 12 })
-    .backgroundColor(AppColors.bgTertiary)
+    .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
     .borderRadius(14)
+    .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
   }
 }
 
@@ -310,6 +322,7 @@ export struct AddBlacklistDialog {
   @Prop existingUserIds: string[] = []
   /** UID 校验通过后的确认回调。 */
   onConfirm?: (uid: string) => void
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
 
   /**
    * 获取当前 UID 输入的校验错误。
@@ -356,7 +369,8 @@ export struct AddBlacklistDialog {
 
       TextInput({ text: this.uid, placeholder: '输入 UID' })
         .height(44).fontSize(15).borderRadius(12)
-        .backgroundColor(AppColors.bgSecondary)
+        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
         .onChange((value: string) => {
           this.uid = value
           this.validationError = ''
@@ -400,8 +414,9 @@ export struct AddBlacklistDialog {
     }
     .constraintSize({ maxWidth: 340 })
     .padding({ left: 20, right: 20, bottom: 12 })
-    .backgroundColor(AppColors.bgTertiary)
+    .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
     .borderRadius(14)
+    .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
   }
 }
 
@@ -411,6 +426,7 @@ export struct AddKeywordDialog {
   controller: CustomDialogController
   @State keyword: string = ''
   onConfirm?: (keyword: string) => void
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
 
   build() {
     Column() {
@@ -426,7 +442,8 @@ export struct AddKeywordDialog {
 
       TextInput({ text: this.keyword, placeholder: '输入关键词' })
         .height(44).fontSize(15).borderRadius(12)
-        .backgroundColor(AppColors.bgSecondary)
+        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
         .onChange((value: string) => { this.keyword = value })
 
       Divider().color(AppColors.separator).margin({ top: 12 })
@@ -453,8 +470,9 @@ export struct AddKeywordDialog {
     }
     .constraintSize({ maxWidth: 340 })
     .padding({ left: 20, right: 20, bottom: 12 })
-    .backgroundColor(AppColors.bgTertiary)
+    .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
     .borderRadius(14)
+    .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
   }
 }
 
@@ -465,6 +483,7 @@ export struct AddNoteDialog {
   @State nickName: string = ''
   @State uid: string = ''
   onConfirm?: (nickName: string, uid: string) => void
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
 
   build() {
     Column() {
@@ -480,12 +499,14 @@ export struct AddNoteDialog {
 
       TextInput({ text: this.nickName, placeholder: '输入用户昵称' })
         .height(44).fontSize(15).borderRadius(12)
-        .backgroundColor(AppColors.bgSecondary)
+        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
         .onChange((value: string) => { this.nickName = value })
 
       TextInput({ text: this.uid, placeholder: '输入用户 UID' })
         .height(44).fontSize(15).borderRadius(12)
-        .backgroundColor(AppColors.bgSecondary)
+        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
         .margin({ top: 8 })
         .onChange((value: string) => { this.uid = value })
 
@@ -513,8 +534,9 @@ export struct AddNoteDialog {
     }
     .constraintSize({ maxWidth: 340 })
     .padding({ left: 20, right: 20, bottom: 12 })
-    .backgroundColor(AppColors.bgTertiary)
+    .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
     .borderRadius(14)
+    .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
   }
 }
 

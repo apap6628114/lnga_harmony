@@ -11,6 +11,8 @@ import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { Avatar } from '../common/components/Avatar'
 import { MessageArticleDataSource } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/components/PageStateView'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
+import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
 @Component
 export struct MessageDetailPanel {
@@ -22,6 +24,7 @@ export struct MessageDetailPanel {
   @State replyText: string = ''
   @State sending: boolean = false
   @StorageProp('navBarHeight') navBarHeight: number = 0
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
 
   private scroller: Scroller = new Scroller()
   private messagesDataSource: MessageArticleDataSource = new MessageArticleDataSource()
@@ -137,7 +140,8 @@ export struct MessageDetailPanel {
         Row() {
           TextInput({ text: this.replyText, placeholder: '写回复...' })
             .layoutWeight(1).fontSize(15).borderRadius(12)
-            .backgroundColor(AppColors.bgSecondary).height(40).padding({ left: 12, right: 12 })
+            .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary).height(40).padding({ left: 12, right: 12 })
+            .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
             .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
             .onChange((value: string) => { this.replyText = value })
             .onSubmit(() => this.handleReply())
@@ -148,9 +152,10 @@ export struct MessageDetailPanel {
             .onClick(() => this.handleReply())
         }
         .width('100%').padding({ left: 12, right: 12, top: 8, bottom: 8 + this.navBarHeight })
-        .backgroundColor(AppColors.bgTertiary)
+        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
         .border({ width: { top: 0.5 }, color: AppColors.separator })
         .alignItems(VerticalAlign.Center)
+        .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
       }
     }
     .width('100%').height('100%').backgroundColor(AppColors.bg)

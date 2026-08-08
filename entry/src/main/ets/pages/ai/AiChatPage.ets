@@ -11,6 +11,8 @@ import { PanelNavBar } from '../../common/components/PanelNavBar'
 import { AppColors } from '../../common/constants/Constants'
 import { appStore } from '../../store/AppStore'
 import { PageScope } from '../../common/concurrency/PageScope'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../../common/constants/AppStorageKeys'
+import { UIMaterialManager } from '../../common/managers/UIMaterialManager'
 
 /** 流式输出默认刷新间隔毫秒数 */
 const DEFAULT_FLUSH_INTERVAL_MS: number = 80
@@ -89,6 +91,8 @@ struct AiChatPage {
   @State private toolCount: number = 0
   /** 导航栏标题 */
   @State private title: string = 'AI 对话'
+  /** 沉浸光感开关 */
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 初始 prompt */
   private initialPrompt: string = ''
   /** AI 场景标识（空字符串表示自由聊天，不注入 system prompt） */
@@ -611,7 +615,8 @@ struct AiChatPage {
         .layoutWeight(1)
         .fontSize(15)
         .borderRadius(20)
-        .backgroundColor(AppColors.bgSecondary)
+        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
         .height(40)
         .padding({ left: 16, right: 16 })
         .onChange((value: string): void => {
@@ -635,8 +640,9 @@ struct AiChatPage {
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-    .backgroundColor(AppColors.bg)
+    .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bg)
     .border({ width: { top: 0.5 }, color: AppColors.separator })
     .alignItems(VerticalAlign.Center)
+    .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
   }
 }

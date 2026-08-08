@@ -4,12 +4,15 @@ import { AppColors, IconColors } from '../constants/Constants'
 import { ImageViewer } from './ImageViewer'
 import { ProfileCardPopup } from './ProfileCardPopup'
 import { ReplyDialog } from './ReplyDialog'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../constants/AppStorageKeys'
+import { UIMaterialManager } from '../managers/UIMaterialManager'
 
 @Component
 export struct FloatingLayerComponent {
   @State private floating: FloatingLayerStoreClass = floatingLayerStore
   @Prop currentBreakpoint: string = 'sm'
   @StorageProp('navBarHeight') navBarHeight: number = 0
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   private areaSettled: boolean = false
 
   build() {
@@ -92,8 +95,9 @@ export struct FloatingLayerComponent {
             }.height(44)
           }
           .width(300).padding({ left: 20, right: 20 })
-          .backgroundColor(AppColors.bgTertiary).borderRadius(14)
+          .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary).borderRadius(14)
           .alignItems(HorizontalAlign.Center)
+          .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
         }
         .width('100%').height('100%')
       }
@@ -125,9 +129,10 @@ export struct FloatingLayerComponent {
             .border({ width: { top: 0.5 }, color: AppColors.separator })
           }
           .width(270)
-          .backgroundColor(AppColors.bg)
+          .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bg)
           .borderRadius(14)
           .alignItems(HorizontalAlign.Center)
+          .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
         }
         .width('100%').height('100%')
       }

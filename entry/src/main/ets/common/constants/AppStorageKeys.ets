@@ -81,3 +81,6 @@ export const KEY_CONTENT_FONT_SIZE: string = 'contentFontSize'
 
 /** 帖子列表字体大小（vp），默认为 15 */
 export const KEY_TOPIC_FONT_SIZE: string = 'topicFontSize'
+
+/** 沉浸光感开关：true 时应用沉浸式系统材质（默认为 true） */
+export const KEY_IMMERSIVE_MATERIAL_ENABLED: string = 'immersiveMaterialEnabled'

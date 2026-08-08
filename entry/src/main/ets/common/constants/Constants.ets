@@ -117,6 +117,8 @@ export class SettingsIconColors {
   static readonly credentialExport: string = '#0F766E'
   /** 清除缓存的维护琥珀色。 */
   static readonly clearCache: string = '#B45309'
+  /** 沉浸光感的通透靛紫色。 */
+  static readonly immersiveLight: string = '#8B5CF6'
 }
 
 /**

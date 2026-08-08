@@ -1,5 +1,7 @@
 import { routerStore } from '../../store/RouterStore'
 import { AppColors } from '../constants/Constants'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../constants/AppStorageKeys'
+import { UIMaterialManager } from '../managers/UIMaterialManager'
 
 /**
  * 面板通用标题栏。
@@ -10,6 +12,8 @@ export struct PanelNavBar {
   @Prop title: string = ''
   /** 系统状态栏高度。 */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
+  /** 沉浸光感开关。 */
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 自定义返回操作。 */
   onBack?: () => void
   /** 是否显示返回按钮。 */
@@ -51,6 +55,7 @@ export struct PanelNavBar {
       }
 
       Text(this.title).fontSize(17).fontWeight(FontWeight.Bold).layoutWeight(1)
+        .fontColor(AppColors.textPrimary)
         .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
 
       if (this.rightIcon || this.secondaryRightIcon) {
@@ -102,12 +107,8 @@ export struct PanelNavBar {
     }
     .width('100%').height(44 + this.statusBarHeight)
     .padding({ top: this.statusBarHeight })
-    .backgroundEffect({
-      radius: 30,
-      saturation: 1.15,
-      brightness: 1.08,
-      color: AppColors.frostGlassStrong
-    })
+    .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.frostGlassStrong)
     .border({ width: { bottom: 0.5 }, color: AppColors.separator }).alignItems(VerticalAlign.Center)
+    .systemMaterial(this.materialEnabled ? UIMaterialManager.titleBarMaterial : undefined)
   }
 }

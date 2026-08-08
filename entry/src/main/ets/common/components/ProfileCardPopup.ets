@@ -12,6 +12,8 @@ import { openImageViewer } from '../utils/LinkUtils'
 import { getUserActivityAnalysis } from '../../service/api/UserApi'
 import type { UserActivityAnalysis, ForumStat } from '../../model/NgaApiResults'
 import { getActiveAiValidationMessage } from '../../service/ai/ActiveAiService'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../constants/AppStorageKeys'
+import { UIMaterialManager } from '../managers/UIMaterialManager'
 
 @Component
 export struct ProfileCardPopup {
@@ -23,6 +25,7 @@ export struct ProfileCardPopup {
   @StorageProp('profileVersion') @Watch('onProfileVersionChange') profileVersion: number = 0
   /** 黑名单变更版本号。 */
   @StorageProp('blacklistVersion') @Watch('onBlacklistVersionChange') blacklistVersion: number = 0
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 当前资料卡用户是否已被屏蔽。 */
   @State isProfileBlacklisted: boolean = false
   onClose: () => void = () => {}
@@ -200,10 +203,11 @@ export struct ProfileCardPopup {
       }
     }
     .width(280)
-    .backgroundColor(AppColors.bg)
+    .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bg)
     .borderRadius(14)
     .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
     .clip(true)
+    .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
   }
 
   @Builder

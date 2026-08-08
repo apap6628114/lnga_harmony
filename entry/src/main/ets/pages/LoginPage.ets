@@ -15,6 +15,8 @@ import { BusinessError } from '@kit.BasicServicesKit'
 import { util } from '@kit.ArkTS'
 import { webview } from '@kit.ArkWeb'
 import { PageScope } from '../common/concurrency/PageScope'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
+import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
 
 /**
@@ -49,6 +51,8 @@ struct LoginPage {
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
   /** 当前主题名称。 */
   @StorageProp('themeName') themeName: string = 'original'
+  /** 沉浸光感开关。 */
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
 
   /** 网页登录 WebView 控制器。 */
   private webController: webview.WebviewController = new webview.WebviewController()
@@ -97,7 +101,8 @@ struct LoginPage {
               .width('100%')
               .height(48)
               .fontSize(17)
-              .backgroundColor(AppColors.bgSecondary)
+              .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+              .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
               .borderRadius(10)
               .padding({ left: 16, right: 16 })
               .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
@@ -110,7 +115,8 @@ struct LoginPage {
               .width('100%')
               .height(48)
               .fontSize(17)
-              .backgroundColor(AppColors.bgSecondary)
+              .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+              .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
               .borderRadius(10)
               .padding({ left: 16, right: 16 })
               .margin({ top: 12 })
@@ -131,7 +137,8 @@ struct LoginPage {
                   .layoutWeight(1)
                   .height(46)
                   .fontSize(17)
-                  .backgroundColor(AppColors.bgSecondary)
+                  .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+                  .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
                   .borderRadius(10)
                   .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
                   .padding({ left: 16, right: 16 })

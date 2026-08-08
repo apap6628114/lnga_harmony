@@ -34,6 +34,8 @@ import type { ThreadInfo } from '../model/Thread'
 import { Logger, DOMAIN_UI, formatError } from '../common/utils/Logger'
 import { getActiveAiValidationMessage } from '../service/ai/ActiveAiService'
 import { applyBlacklistStateToPosts } from '../common/utils/BlacklistUtils'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
+import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
 const logger = new Logger(DOMAIN_UI, 'ThreadPanel')
 
@@ -116,6 +118,7 @@ export struct ThreadPanel {
   @State votedDownPids: Set<string> = new Set()
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 黑名单变更版本号。 */
   @StorageProp('blacklistVersion') @Watch('onBlacklistVersionChange') blacklistVersion: number = 0
   @State showMoreMenu: boolean = false
@@ -1632,14 +1635,9 @@ export struct ThreadPanel {
           }
           .padding({ left: 8, right: 8, top: 0, bottom: 0 })
           .height(40).alignItems(VerticalAlign.Center)
-          .backgroundColor(Color.Transparent).borderRadius(20)
+          .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.frostGlass).borderRadius(20)
           .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
-          .backgroundEffect({
-            radius: 10,
-            saturation: 1.15,
-            brightness: 1.08,
-            color: AppColors.frostGlass
-          })
+          .systemMaterial(this.materialEnabled ? UIMaterialManager.fabMaterial : undefined)
           .margin({ right: 8 })
         }
 
@@ -1648,14 +1646,9 @@ export struct ThreadPanel {
             .width(20).height(20).fillColor(AppColors.primary)
         }
         .width(40).height(40).borderRadius(20)
-        .backgroundColor(Color.Transparent)
+        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.frostGlass)
         .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
-        .backgroundEffect({
-          radius: 10,
-          saturation: 1.15,
-          brightness: 1.08,
-          color: AppColors.frostGlass
-        })
+        .systemMaterial(this.materialEnabled ? UIMaterialManager.fabMaterial : undefined)
         .onClick(() => {
           replyManager.startThreadReply(Number(this.threadTid), this.threadFid)
           floatingLayerStore.replyDialogTitle = replyManager.dialogTitle
@@ -1737,9 +1730,10 @@ export struct ThreadPanel {
             .width('100%')
           }
           .width(150)
-          .backgroundColor(AppColors.bgTertiary)
+          .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
           .borderRadius(10)
           .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
+          .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
           .position({ top: this.statusBarHeight + NAV_BAR_H + 6, right: 16 })
         }
         .width('100%').height('100%')
@@ -1772,8 +1766,9 @@ export struct ThreadPanel {
             }.width('100%').height(120).align(Alignment.TopStart)
           }
           .width(220).height(180).padding({ left: 10, right: 10 })
-          .backgroundColor(AppColors.bgTertiary).borderRadius(12)
+          .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary).borderRadius(12)
           .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
+          .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
           .position(
             this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD
               ? { bottom: 64 + this.navBarHeight, left: 16 }

@@ -519,6 +519,16 @@ export struct SettingsPanel {
                   appStore.settingsStore.setUseInternalWebView(v)
                 }
               })
+
+              Divider().margin({ left: 60 }).color(AppColors.separator)
+
+              SettingToggleRow({
+                iconRes: $r('app.media.settings_immersive_light'), iconColor: SettingsIconColors.immersiveLight, label: '沉浸光感',
+                isOn: appStore.settings.immersiveMaterial,
+                onChange: (v: boolean) => {
+                  appStore.settingsStore.setImmersiveMaterial(v)
+                }
+              })
             }
             .width('92%')
             .backgroundColor(AppColors.bgTertiary)

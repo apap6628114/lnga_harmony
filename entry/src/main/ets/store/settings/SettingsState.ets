@@ -46,4 +46,6 @@ export class SettingsState {
   activeAiProfileId: string = ''
   /** 各场景自定义 system prompt（key=场景ID, value=用户自定义文本） */
   scenarioSystemPrompts: Record<string, string> = {}
+  /** 沉浸光感（沉浸式系统材质）是否开启，默认为 true */
+  immersiveMaterial: boolean = true
 }

@@ -21,6 +21,8 @@ import {
 } from '../common/typography/ReadingTypography'
 import { preferences } from '@kit.ArkData'
 import { Context } from '@kit.AbilityKit'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
+import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
 @Component
 export struct SearchPanel {
@@ -38,6 +40,7 @@ export struct SearchPanel {
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('topicFontSize') topicFontSize: number = 15
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 黑名单变更版本号。 */
   @StorageProp('blacklistVersion') blacklistVersion: number = 0
 
@@ -332,7 +335,8 @@ export struct SearchPanel {
                 .onClick(() => { this.keyword = ''; this.submitted = ''; this.threads = []; this.forums = []; this.threadsDataSource.clear(); this.forumsDataSource.clear() })
             }
           }.layoutWeight(1).height(40).padding({ left: 12, right: 12 })
-          .backgroundColor(AppColors.bgSecondary).borderRadius(10).alignItems(VerticalAlign.Center)
+          .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary).borderRadius(10).alignItems(VerticalAlign.Center)
+          .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
           Text('取消').fontSize(15).fontColor(AppColors.primary).margin({ left: 12 }).onClick(() => routerStore.back())
         }.width('100%').padding({ left: 16, right: 16, top: 8 + this.statusBarHeight, bottom: 8 }).alignItems(VerticalAlign.Center)
 
@@ -357,8 +361,9 @@ export struct SearchPanel {
       }
       .width('100%')
       .backgroundColor(Color.Transparent)
-      .backdropBlur(60)
+      .backdropBlur(this.materialEnabled ? 0 : 60)
       .border({ width: { bottom: 0.5 }, color: AppColors.separator })
+      .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
       .position({ x: 0, y: 0 })
     }
     .width('100%').height('100%').backgroundColor(AppColors.bg)

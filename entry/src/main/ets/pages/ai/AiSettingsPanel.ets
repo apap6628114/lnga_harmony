@@ -10,6 +10,8 @@
 import { appStore } from '../../store/AppStore'
 import { routerStore } from '../../store/RouterStore'
 import { AppColors } from '../../common/constants/Constants'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../../common/constants/AppStorageKeys'
+import { UIMaterialManager } from '../../common/managers/UIMaterialManager'
 import { PanelNavBar } from '../../common/components/PanelNavBar'
 import { ConfirmDialog, ActionSheetDialog } from '../../common/dialogs/Dialogs'
 import {
@@ -42,6 +44,8 @@ const NEW_ID: string = '__new__'
 export struct AiSettingsPanel {
   /** 配置列表快照。 */
   @State profiles: AiProviderProfile[] = []
+  /** 沉浸光感开关。 */
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 当前展开编辑的配置 ID。 */
   @State expandedProfileId: string = ''
   /** 方案名称输入值。 */
@@ -810,7 +814,8 @@ export struct AiSettingsPanel {
         })
         .width('100%')
         .height(150)
-        .backgroundColor(AppColors.bgSecondary)
+        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
         .borderRadius(8)
         .fontSize(14)
         .padding({ left: 12, right: 12, top: 8, bottom: 8 })
@@ -1011,7 +1016,8 @@ export struct AiSettingsPanel {
         })
         .width('100%')
         .height(40)
-        .backgroundColor(AppColors.bgSecondary)
+        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
         .borderRadius(8)
         .fontSize(14)
         .padding({ left: 12, right: 12 })
@@ -1057,7 +1063,8 @@ export struct AiSettingsPanel {
         })
         .width('100%')
         .height(40)
-        .backgroundColor(AppColors.bgSecondary)
+        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
         .borderRadius(8)
         .fontSize(14)
         .padding({ left: 12, right: 12 })
@@ -1078,7 +1085,8 @@ export struct AiSettingsPanel {
         })
         .width('100%')
         .height(40)
-        .backgroundColor(AppColors.bgSecondary)
+        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
         .borderRadius(8)
         .fontSize(14)
         .padding({ left: 12, right: 12 })

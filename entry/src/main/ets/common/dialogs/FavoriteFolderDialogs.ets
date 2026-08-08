@@ -1,4 +1,6 @@
 import { AppColors } from '../constants/Constants'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../constants/AppStorageKeys'
+import { UIMaterialManager } from '../managers/UIMaterialManager'
 
 /**
  * 收藏夹名称编辑对话框。
@@ -29,6 +31,7 @@ export struct FavoriteFolderNameDialog {
    * 名称确认回调。
    */
   onConfirm?: (name: string) => void
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
 
   /**
    * 将传入名称同步到输入框。
@@ -53,7 +56,8 @@ export struct FavoriteFolderNameDialog {
         .height(44)
         .fontSize(15)
         .borderRadius(12)
-        .backgroundColor(AppColors.bgSecondary)
+        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
         .onChange((value: string): void => {
           this.name = value
         })
@@ -92,7 +96,8 @@ export struct FavoriteFolderNameDialog {
     }
     .constraintSize({ maxWidth: 340, minWidth: 280 })
     .padding({ left: 20, right: 20, bottom: 12 })
-    .backgroundColor(AppColors.bgTertiary)
+    .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
     .borderRadius(14)
+    .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
   }
 }

@@ -15,6 +15,8 @@ import { PanelNavBar } from '../common/components/PanelNavBar'
 import { MessageThreadDataSource } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/components/PageStateView'
 import { PageScope } from '../common/concurrency/PageScope'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
+import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
 @Component
 export struct MessageListPanel {
@@ -30,6 +32,7 @@ export struct MessageListPanel {
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   private threadsDataSource: MessageThreadDataSource = new MessageThreadDataSource()
   /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
   private scope: PageScope = new PageScope()
@@ -191,19 +194,22 @@ export struct MessageListPanel {
 
           TextInput({ text: this.composeTo, placeholder: '收件人（用户名）' })
             .width('92%').height(44).fontSize(15).borderRadius(12)
-            .backgroundColor(AppColors.bgSecondary).margin({ top: 12 })
+            .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary).margin({ top: 12 })
+            .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
             .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
             .onChange((value: string) => { this.composeTo = value })
 
           TextInput({ text: this.composeSubject, placeholder: '主题' })
             .width('92%').height(44).fontSize(15).borderRadius(12)
-            .backgroundColor(AppColors.bgSecondary).margin({ top: 8 })
+            .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary).margin({ top: 8 })
+            .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
             .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
             .onChange((value: string) => { this.composeSubject = value })
 
           TextArea({ text: this.composeContent, placeholder: '内容' })
             .width('92%').height(100).fontSize(15).borderRadius(12)
-            .backgroundColor(AppColors.bgSecondary).margin({ top: 8 })
+            .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary).margin({ top: 8 })
+            .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
             .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
             .onChange((value: string) => { this.composeContent = value })
 
@@ -214,9 +220,10 @@ export struct MessageListPanel {
               this.composeSubject.trim().length > 0 && this.composeContent.trim().length > 0)
             .onClick(() => this.handleSend())
         }
-        .width('100%').backgroundColor(AppColors.bg)
+        .width('100%').backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bg)
         .borderRadius({ topLeft: 14, topRight: 14 }).alignItems(HorizontalAlign.Center)
         .padding({ bottom: this.navBarHeight })
+        .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
         .position({ x: 0, y: '40%' })
       }
     }
