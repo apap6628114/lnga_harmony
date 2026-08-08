@@ -89,8 +89,8 @@ export class InlineTextStyle {
   color: string = ''
   /** 相对正文的累计字号百分比。 */
   scalePercent: number = 100
-  /** 字体族或字体回退列表。 */
-  fontFamily: string = 'HarmonyOS Sans'
+  /** 字体族或字体回退列表；空字符串表示系统默认字体（跟随用户主题字体）。 */
+  fontFamily: string = ''
   /** 上下标基线语义。 */
   baseline: InlineBaseline = InlineBaseline.NORMAL
 }

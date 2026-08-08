@@ -482,7 +482,7 @@ export default function bbcodeUnitTest(): void {
         'color: rgb(1, 2, 3); font-family: ' + 'x'.repeat(65) + '; text-align: center', inherited)
 
       expect(style.color).assertEqual('#ff0000')
-      expect(style.fontFamily).assertEqual('HarmonyOS Sans')
+      expect(style.fontFamily).assertEqual('')
       expect(extractTextStyleAlign('color:red; text-align: CENTER')).assertEqual('center')
       expect(extractTextStyleAlign('color:red')).assertEqual('')
     })
