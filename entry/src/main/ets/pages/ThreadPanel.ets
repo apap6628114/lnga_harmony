@@ -1,4 +1,4 @@
-import { display } from '@kit.ArkUI'
+import { display, LengthMetrics } from '@kit.ArkUI'
 import { common, Context } from '@kit.AbilityKit'
 import { motion } from '@kit.MultimodalAwarenessKit'
 import { BusinessError } from '@kit.BasicServicesKit'
@@ -31,29 +31,53 @@ import { shareThread, sharePost } from '../common/utils/ShareUtils'
 import { openImageViewer as sharedOpenImageViewer, handleForumLink } from '../common/utils/LinkUtils'
 import { ThreadPaginationManager } from '../common/managers/ThreadPaginationManager'
 import type { ThreadInfo } from '../model/Thread'
-import { Logger, DOMAIN_UI } from '../common/utils/Logger'
+import { Logger, DOMAIN_UI, formatError } from '../common/utils/Logger'
 import { getActiveAiValidationMessage } from '../service/ai/ActiveAiService'
 import { applyBlacklistStateToPosts } from '../common/utils/BlacklistUtils'
 
 const logger = new Logger(DOMAIN_UI, 'ThreadPanel')
 
+/** 设备握持状态。 */
 enum HoldingHandStatus {
+  /** 未检测到握持。 */
   NOT_HELD = 0,
+  /** 左手握持。 */
   LEFT_HAND_HELD = 1,
+  /** 右手握持。 */
   RIGHT_HAND_HELD = 2,
+  /** 双手握持。 */
   BOTH_HANDS_HELD = 3,
+  /** 无法识别的握持状态。 */
   UNKNOWN_STATUS = 16
 }
 
-const LOAD_REPLACE: string = 'replace'
-const LOAD_APPEND: string = 'append'
-const LOAD_PREPEND: string = 'prepend'
-const NAV_BAR_H: number = 44
-/** 导航意图（跳页/楼层定位）落位兜底时长：正常情况下 onScrollStop 即解除，此值仅作异常兜底。 */
-const NAV_INTENT_SETTLE_MS: number = 500
+/** 帖子页面结果写入连续窗口的方式。 */
+enum ThreadLoadMode {
+  /** 用目标页重建窗口。 */
+  REPLACE = 0,
+  /** 将下一相邻页追加到窗口末尾。 */
+  APPEND = 1,
+  /** 将上一相邻页插入窗口开头。 */
+  PREPEND = 2
+}
 
+/** 用户通过底部分页控件发起跳页的来源。 */
+enum PageNavigationSource {
+  /** 点击相邻页码按钮。 */
+  PAGER_BUTTON = 0,
+  /** 从页码选择器中选择页面。 */
+  PAGE_PICKER = 1
+}
+
+const NAV_BAR_H: number = 44
+const PAGE_LOAD_AHEAD_ITEMS: number = 3
+
+/** 带请求页码的预取结果。 */
 class FetchPageResult {
+  /** 请求页码。 */
   page: number = 0
+
+  /** 页面接口结果。 */
   result: ThreadResult | null = null
 }
 
@@ -93,21 +117,60 @@ export struct ThreadPanel {
   private pagePickerCurrentPage: number = 0
   private pagePickerOnSelect: ((page: number) => void) | null = null
   private scroller: Scroller = new Scroller()
-  /** 导航意图：跳页/楼层定位尚未落位时为 true，期间 reconcile 不触发上下页加载。 */
-  private navIntentPending: boolean = false
+
   /** onScrollIndex 最近上报的首个可见列表项下标，用于判断是否靠近顶部。 */
-  private lastScrollStart: number = 1
+  private lastScrollStart: number = 0
+
   /** onScrollIndex 最近上报的末个可见列表项下标，用于判断是否靠近底部。 */
   private lastScrollEnd: number = 0
-  /** 前置插入前的首屏锚点 pid（楼层稳定标识，取代索引锚点）。 */
-  private anchorPid: number = -1
-  /** 导航意图解除的兜底定时器句柄。 */
-  private navIntentTimer: number = -1
+
   /** 尚未交给帖子接口定位的路由目标楼层。 */
   private pendingTargetPid: string = ''
+
   @State mgr: ThreadPaginationManager = new ThreadPaginationManager()
-  private prefetchNextInProgress: boolean = false
-  private prefetchPrevInProgress: boolean = false
+
+  /** 每个预取页对应的会话代际，用于去重并隔离重置前后的请求。 */
+  private prefetchGenerationByPage: Map<number, number> = new Map()
+
+  /** 最近一次替换加载的目标页，用于失败重试。 */
+  private lastReplacePage: number = 1
+
+  /** 替换加载完成后是否仍等待 List 挂载并执行定位。 */
+  private listNavigationPending: boolean = false
+
+  /** 待执行 List 定位所属的分页会话代际。 */
+  private listNavigationGeneration: number = -1
+
+  /** 待定位页面，用于诊断请求页与服务端实际页差异。 */
+  private listNavigationPage: number = 1
+
+  /** 待定位楼层；空字符串表示定位到页面开头。 */
+  private listNavigationPid: string = ''
+
+  /** 是否已经为当前 List 导航安排下一帧任务。 */
+  private listNavigationScheduled: boolean = false
+
+  /** 当前 List 是否已经挂载并与 Scroller 建立绑定。 */
+  private listMounted: boolean = false
+
+  /** 前插帖子后是否仍等待恢复原可见帖子锚点。 */
+  private prependAnchorPending: boolean = false
+
+  /** 前插锚点所属的分页会话代际。 */
+  private prependAnchorGeneration: number = -1
+
+  /** 前插前首个可见帖的 pid。 */
+  private prependAnchorPid: number = -1
+
+  /** 前插前锚点帖子相对 List 顶部的纵向位置。 */
+  private prependAnchorOffset: number = 0
+
+  /** 触发前插的页面，用于运行态诊断。 */
+  private prependAnchorPage: number = 1
+
+  /** 是否已经为当前前插锚点安排恢复任务。 */
+  private prependAnchorScheduled: boolean = false
+
   @State loadingContentOpacity: number = 0
   private loadingDelayTimer: number = -1
 
@@ -173,7 +236,7 @@ export struct ThreadPanel {
     this.pendingTargetPid = this.threadPid
     this.displayPage = initialPage
     if (this.threadTid) {
-      this.loadPosts(initialPage, LOAD_REPLACE)
+      this.loadPosts(initialPage, ThreadLoadMode.REPLACE)
     }
     this.syncFavoriteState()
     appStore.favoriteStore.ensureFolders()
@@ -183,7 +246,19 @@ export struct ThreadPanel {
 
   aboutToDisappear(): void {
     this.stopHoldingHandMonitoring()
-    // 推进分页代际，使未完成的分页/预取异步回调失效，避免回写已销毁页面
+    clearTimeout(this.loadingDelayTimer)
+    this.loadingDelayTimer = -1
+    this.prefetchGenerationByPage.clear()
+    this.listNavigationPending = false
+    this.listNavigationScheduled = false
+    this.listNavigationGeneration = -1
+    this.listNavigationPid = ''
+    this.listMounted = false
+    this.prependAnchorPending = false
+    this.prependAnchorGeneration = -1
+    this.prependAnchorPid = -1
+    this.prependAnchorOffset = 0
+    this.prependAnchorScheduled = false
     this.mgr.reset()
   }
 
@@ -192,8 +267,6 @@ export struct ThreadPanel {
       this.hasInitiallyLoaded = true
       return
     }
-    this.mgr.reset()
-    this.postsDataSource.clear()
     const initialPage: number = Math.max(this.threadPage, 1)
     this.pendingTargetPid = this.threadPid
     this.displayPage = initialPage
@@ -205,8 +278,7 @@ export struct ThreadPanel {
     this.syncFavoriteState()
     this.votedUpPids = new Set()
     this.votedDownPids = new Set()
-    this.navIntentPending = false
-    this.loadPosts(initialPage, LOAD_REPLACE)
+    this.loadPosts(initialPage, ThreadLoadMode.REPLACE)
     this.loadPersistedVotes()
   }
 
@@ -268,80 +340,354 @@ export struct ThreadPanel {
     this.votedDownPids = result[1]
   }
 
+  /**
+   * 将目标楼层瞬时定位到视口中央。
+   */
   private onScrollToPid(): void {
-    if (this.threadPid.length > 0 && this.mgr.posts.length > 0) {
-      const pidNum: number = parseInt(this.threadPid, 10)
-      const idx: number = this.mgr.findPostIndex(pidNum)
-      if (idx >= 0) {
-        // 列表第 0 项是状态栏占位，楼层在列表中的下标 = posts 下标 + 1
-        // 使用瞬时滚动：平滑滚动期间 onScrollIndex 会以中间值触发，可能提前加载上下页并覆盖目标位置
-        this.scroller.scrollToIndex(idx + 1, false, ScrollAlign.CENTER)
-      }
+    if (this.threadPid.length === 0 || this.mgr.posts.length === 0) {
+      return
     }
+    const positioned: boolean = this.scrollToPid(this.threadPid)
+    logger.info(
+      'floor-nav direct tid=%{public}s pid=%{public}s positioned=%{public}s gen=%{public}d window=%{public}d-%{public}d',
+      this.threadTid, this.threadPid, String(positioned), this.mgr.getGeneration(),
+      this.mgr.loadedPageStart, this.mgr.loadedPageEnd
+    )
   }
 
   /**
-   * 滚动协调：根据最近一次上报的可见范围决定是否需要加载上下页。
-   * 导航意图（跳页/楼层定位）未落位时直接放行，避免定位滚动与加载逻辑互踩；
-   * 加载与否的单一判断点，滚动事件只负责上报位置、不直接发请求。
+   * 按 pid 将楼层定位到视口中央。
+   *
+   * @param pid - 目标楼层 pid
+   * @returns 是否找到并发出了定位命令
+   */
+  private scrollToPid(pid: string): boolean {
+    const pidNumber: number = parseInt(pid, 10)
+    const postIndex: number = this.mgr.findPostIndex(pidNumber)
+    if (postIndex < 0) {
+      return false
+    }
+    this.scroller.scrollToIndex(postIndex, false, ScrollAlign.CENTER)
+    return true
+  }
+
+  /**
+   * 处理底部分页控件发起的页面跳转。
+   *
+   * @param targetPage - 目标页
+   * @param source - 跳页来源
+   */
+  private navigateToPage(targetPage: number, source: PageNavigationSource): void {
+    const boundedPage: number = Math.max(1, Math.min(targetPage, this.mgr.totalPages))
+    logger.info(
+      'page-nav request source=%{public}s tid=%{public}s display=%{public}d target=%{public}d bounded=%{public}d ' +
+        'gen=%{public}d window=%{public}d-%{public}d visible=%{public}d-%{public}d',
+      this.getNavigationSourceName(source), this.threadTid, this.displayPage, targetPage, boundedPage,
+      this.mgr.getGeneration(), this.mgr.loadedPageStart, this.mgr.loadedPageEnd,
+      this.lastScrollStart, this.lastScrollEnd
+    )
+    this.loadPosts(boundedPage, ThreadLoadMode.REPLACE)
+  }
+
+  /**
+   * 返回可读的跳页来源名称。
+   *
+   * @param source - 跳页来源
+   * @returns 日志名称
+   */
+  private getNavigationSourceName(source: PageNavigationSource): string {
+    return source === PageNavigationSource.PAGE_PICKER ? 'page-picker' : 'pager-button'
+  }
+
+  /**
+   * 返回可读的加载模式名称。
+   *
+   * @param mode - 加载模式
+   * @returns 日志名称
+   */
+  private getLoadModeName(mode: ThreadLoadMode): string {
+    if (mode === ThreadLoadMode.REPLACE) return 'replace'
+    if (mode === ThreadLoadMode.APPEND) return 'append'
+    return 'prepend'
+  }
+
+  /**
+   * 为替换加载登记 List 挂载后的定位意图。
+   *
+   * @param generation - 分页会话代际
+   * @param page - 服务端实际页码
+   * @param pid - 目标楼层 pid
+   */
+  private prepareListNavigation(generation: number, page: number, pid: string): void {
+    this.listNavigationPending = true
+    this.listNavigationScheduled = false
+    this.listNavigationGeneration = generation
+    this.listNavigationPage = page
+    this.listNavigationPid = pid
+    logger.info(
+      'list-nav prepared tid=%{public}s page=%{public}d pid=%{public}s gen=%{public}d posts=%{public}d',
+      this.threadTid, page, pid, generation, this.mgr.posts.length
+    )
+  }
+
+  /**
+   * 取消指定会话尚未执行的 List 定位。
+   *
+   * @param generation - 分页会话代际
+   * @param reason - 取消原因
+   */
+  private cancelListNavigation(generation: number, reason: string): void {
+    if (this.listNavigationGeneration !== generation) return
+    logger.warn(
+      'list-nav cancel tid=%{public}s page=%{public}d pid=%{public}s gen=%{public}d reason=%{public}s',
+      this.threadTid, this.listNavigationPage, this.listNavigationPid, generation, reason
+    )
+    this.listNavigationPending = false
+    this.listNavigationScheduled = false
+    this.listNavigationGeneration = -1
+    this.listNavigationPid = ''
+  }
+
+  /**
+   * 在 List 挂载后安排下一帧定位，确保 Scroller 已绑定到真实组件。
+   */
+  private scheduleListNavigation(): void {
+    if (!this.listNavigationPending || this.listNavigationScheduled || !this.listMounted) return
+    const generation: number = this.listNavigationGeneration
+    this.listNavigationScheduled = true
+    logger.info(
+      'list-nav schedule tid=%{public}s page=%{public}d pid=%{public}s gen=%{public}d',
+      this.threadTid, this.listNavigationPage, this.listNavigationPid, generation
+    )
+    setTimeout((): void => {
+      if (this.listNavigationGeneration !== generation) {
+        return
+      }
+      this.listNavigationScheduled = false
+      if (!this.listMounted) {
+        logger.info(
+          'list-nav wait-mount tid=%{public}s page=%{public}d pid=%{public}s gen=%{public}d',
+          this.threadTid, this.listNavigationPage, this.listNavigationPid, generation
+        )
+        return
+      }
+      this.applyListNavigation(generation)
+    }, 0)
+  }
+
+  /**
+   * 执行已经完成挂载的 List 定位，并恢复滚动分页协调。
+   *
+   * @param generation - 定位所属的分页会话代际
+   */
+  private applyListNavigation(generation: number): void {
+    if (!this.listNavigationPending || generation !== this.mgr.getGeneration()) {
+      logger.warn(
+        'list-nav discard tid=%{public}s pendingGen=%{public}d currentGen=%{public}d pending=%{public}s',
+        this.threadTid, generation, this.mgr.getGeneration(), String(this.listNavigationPending)
+      )
+      return
+    }
+    const targetPid: string = this.listNavigationPid
+    let positioned: boolean = false
+    let targetIndex: number = 0
+    if (targetPid.length > 0) {
+      const pidNumber: number = parseInt(targetPid, 10)
+      const postIndex: number = this.mgr.findPostIndex(pidNumber)
+      if (postIndex >= 0) {
+        targetIndex = postIndex
+        positioned = this.scrollToPid(targetPid)
+      }
+    }
+    if (!positioned) {
+      this.scroller.scrollToIndex(0, false, ScrollAlign.START)
+      positioned = true
+    }
+    this.listNavigationPending = false
+    this.listNavigationGeneration = -1
+    this.listNavigationPid = ''
+    logger.info(
+      'list-nav applied tid=%{public}s page=%{public}d pid=%{public}s index=%{public}d positioned=%{public}s ' +
+        'gen=%{public}d window=%{public}d-%{public}d',
+      this.threadTid, this.listNavigationPage, targetPid, targetIndex, String(positioned), generation,
+      this.mgr.loadedPageStart, this.mgr.loadedPageEnd
+    )
+    this.scheduleReconcile(generation)
+  }
+
+  /**
+   * 在提交上一页前记录当前首个可见帖子，作为数据前插后的稳定视口锚点。
+   *
+   * @param page - 即将提交的上一页页码
+   * @returns 是否成功记录了可恢复的帖子锚点
+   */
+  private preparePrependAnchor(page: number): boolean {
+    const postCount: number = this.mgr.posts.length
+    if (postCount <= 0) return false
+    const anchorListIndex: number = Math.max(0, Math.min(this.lastScrollStart, postCount - 1))
+    const anchorPostIndex: number = anchorListIndex
+    const anchorPid: number = this.mgr.posts[anchorPostIndex].pid
+    let anchorOffset: number = 0
+    try {
+      anchorOffset = this.scroller.getItemRect(anchorListIndex).y
+    } catch (error) {
+      logger.warn(
+        'prepend-anchor rect-failed tid=%{public}s page=%{public}d index=%{public}d error=%{public}s',
+        this.threadTid, page, anchorListIndex, formatError(error)
+      )
+    }
+    this.prependAnchorPending = true
+    this.prependAnchorGeneration = this.mgr.getGeneration()
+    this.prependAnchorPid = anchorPid
+    this.prependAnchorOffset = anchorOffset
+    this.prependAnchorPage = page
+    this.prependAnchorScheduled = false
+    logger.info(
+      'prepend-anchor prepared tid=%{public}s page=%{public}d pid=%{public}d index=%{public}d ' +
+        'offset=%{public}s gen=%{public}d visible=%{public}d-%{public}d',
+      this.threadTid, page, anchorPid, anchorListIndex, String(anchorOffset),
+      this.prependAnchorGeneration, this.lastScrollStart, this.lastScrollEnd
+    )
+    return true
+  }
+
+  /**
+   * 取消尚未完成的前插锚点恢复。
+   *
+   * @param reason - 取消原因
+   */
+  private cancelPrependAnchor(reason: string): void {
+    if (!this.prependAnchorPending) return
+    logger.warn(
+      'prepend-anchor cancel tid=%{public}s page=%{public}d pid=%{public}d gen=%{public}d reason=%{public}s',
+      this.threadTid, this.prependAnchorPage, this.prependAnchorPid,
+      this.prependAnchorGeneration, reason
+    )
+    this.prependAnchorPending = false
+    this.prependAnchorGeneration = -1
+    this.prependAnchorPid = -1
+    this.prependAnchorOffset = 0
+    this.prependAnchorScheduled = false
+  }
+
+  /**
+   * 在前插数据完成布局后安排帖子锚点恢复。
+   */
+  private schedulePrependAnchorRestore(): void {
+    if (!this.prependAnchorPending || this.prependAnchorScheduled || !this.listMounted) return
+    const generation: number = this.prependAnchorGeneration
+    this.prependAnchorScheduled = true
+    setTimeout((): void => {
+      if (!this.prependAnchorPending || generation !== this.prependAnchorGeneration) return
+      if (!this.listMounted) {
+        this.prependAnchorScheduled = false
+        return
+      }
+      const anchorPostIndex: number = this.mgr.findPostIndex(this.prependAnchorPid)
+      if (anchorPostIndex < 0) {
+        this.cancelPrependAnchor('pid-missing')
+        this.scheduleReconcile(generation)
+        return
+      }
+      const targetListIndex: number = anchorPostIndex
+      const contentStartOffset: number = NAV_BAR_H + this.statusBarHeight
+      const restoreOffset: number = contentStartOffset - this.prependAnchorOffset
+      const extraOffset: LengthMetrics = new LengthMetrics(restoreOffset)
+      this.scroller.scrollToIndex(targetListIndex, false, ScrollAlign.START, { extraOffset: extraOffset })
+      logger.info(
+        'prepend-anchor restore tid=%{public}s page=%{public}d pid=%{public}d index=%{public}d ' +
+          'offset=%{public}s restoreOffset=%{public}s gen=%{public}d',
+        this.threadTid, this.prependAnchorPage, this.prependAnchorPid,
+        targetListIndex, String(this.prependAnchorOffset), String(restoreOffset), generation
+      )
+      setTimeout((): void => {
+        if (!this.prependAnchorPending || generation !== this.prependAnchorGeneration) return
+        if (!this.listMounted) {
+          this.prependAnchorScheduled = false
+          return
+        }
+        const restoredPostIndex: number = this.mgr.findPostIndex(this.prependAnchorPid)
+        const restoredListIndex: number = restoredPostIndex >= 0 ? restoredPostIndex : targetListIndex
+        this.lastScrollStart = restoredListIndex
+        this.lastScrollEnd = restoredListIndex
+        if (restoredPostIndex >= 0) {
+          this.displayPage = this.mgr.getDisplayPage(restoredPostIndex)
+        }
+        logger.info(
+          'prepend-anchor applied tid=%{public}s page=%{public}d pid=%{public}d index=%{public}d ' +
+            'display=%{public}d gen=%{public}d window=%{public}d-%{public}d',
+          this.threadTid, this.prependAnchorPage, this.prependAnchorPid, restoredListIndex,
+          this.displayPage, generation, this.mgr.loadedPageStart, this.mgr.loadedPageEnd
+        )
+        this.prependAnchorPending = false
+        this.prependAnchorGeneration = -1
+        this.prependAnchorPid = -1
+        this.prependAnchorOffset = 0
+        this.prependAnchorScheduled = false
+        this.scheduleReconcile(generation)
+      }, 0)
+    }, 0)
+  }
+
+  /**
+   * 根据最近一次可见范围协调双向加载。
+   *
+   * 帖子占据 `[0, postCount - 1]`，末项之后还有底部状态项。
+   * 两个方向拥有独立的请求状态，因此跳页后同时靠近窗口两端时也可安全并行。
    */
   private reconcile(): void {
-    if (this.navIntentPending) return
     if (appStore.settings.threadNavMode === ThreadNavMode.PAGE) return
-    const total: number = this.postsDataSource.totalCount()
-    if (total <= 0) return
-    if (this.lastScrollEnd >= total - 3) {
+    if (this.listNavigationPending || this.prependAnchorPending) {
+      if (logger.isVerbose()) {
+        logger.verbose(
+          'reconcile paused tid=%{public}s gen=%{public}d listNav=%{public}s prependAnchor=%{public}s ' +
+            'visible=%{public}d-%{public}d',
+          this.threadTid, this.mgr.getGeneration(), String(this.listNavigationPending),
+          String(this.prependAnchorPending), this.lastScrollStart, this.lastScrollEnd
+        )
+      }
+      return
+    }
+    const postCount: number = this.postsDataSource.totalCount()
+    if (postCount <= 0) return
+    const nextThreshold: number = Math.max(postCount - PAGE_LOAD_AHEAD_ITEMS, 0)
+    if (logger.isVerbose()) {
+      logger.verbose(
+        'reconcile tid=%{public}s gen=%{public}d visible=%{public}d-%{public}d nextThreshold=%{public}d ' +
+          'window=%{public}d-%{public}d posts=%{public}d nextLoading=%{public}s prevLoading=%{public}s',
+        this.threadTid, this.mgr.getGeneration(), this.lastScrollStart, this.lastScrollEnd,
+        nextThreshold, this.mgr.loadedPageStart, this.mgr.loadedPageEnd, postCount,
+        String(this.isLoadingMore), String(this.isLoadingPrevious)
+      )
+    }
+    if (this.lastScrollEnd >= nextThreshold) {
       this.tryLoadNext()
     }
-    if (this.lastScrollStart <= 3) {
+    if (this.lastScrollStart < PAGE_LOAD_AHEAD_ITEMS) {
       this.tryLoadPrev()
     }
   }
 
   /**
-   * 记录前置插入前的首屏锚点：以当前首个可见帖子的 pid 为稳定标识，
-   * 取代索引锚点（索引受状态栏占位与插入数量影响，易产生偏移错误）。
+   * 在当前会话的下一帧再次协调边界加载。
+   *
+   * 空页或完全重复页不会触发 LazyForEach 的索引变化，需要显式推进到下一相邻页。
+   *
+   * @param generation - 发起调度时的分页会话代际
    */
-  private captureAnchorPid(): void {
-    // 列表第 0 项是状态栏占位，首个可见帖子的 posts 下标 = 列表下标 - 1
-    const postIdx: number = Math.max(this.lastScrollStart - 1, 0)
-    if (postIdx < this.mgr.posts.length) {
-      this.anchorPid = this.mgr.posts[postIdx].pid
-    } else {
-      this.anchorPid = -1
-    }
+  private scheduleReconcile(generation: number): void {
+    setTimeout((): void => {
+      if (generation === this.mgr.getGeneration()) {
+        this.reconcile()
+      }
+    }, 0)
   }
 
   /**
-   * 前置插入完成后滚动回锚点楼层，保持视口内容不动。
-   * @param addedCount - 本次实际新增的楼层数
+   * 构造页码选择器的数据源。
+   *
+   * @returns 从 1 到总页数的连续页码
    */
-  private scrollToAnchor(addedCount: number): void {
-    let targetListIdx: number = addedCount + 1
-    if (this.anchorPid > 0) {
-      const idx: number = this.mgr.findPostIndex(this.anchorPid)
-      if (idx >= 0) {
-        targetListIdx = idx + 1
-      }
-    }
-    this.scroller.scrollToIndex(targetListIdx)
-  }
-
-  /**
-   * 调度导航意图解除：正常情况下由 onScrollStop 在滚动落位后立即解除，
-   * 本定时器仅作为兜底（防止 onScrollStop 未触发导致意图卡死）。
-   * @param gen - 本次加载的代际值，若期间已发起新加载则不再解除
-   */
-  private scheduleNavIntentRelease(gen: number): void {
-    if (!this.navIntentPending) return
-    clearTimeout(this.navIntentTimer)
-    this.navIntentTimer = setTimeout((): void => {
-      if (gen === this.mgr.getGeneration()) {
-        this.navIntentPending = false
-      }
-    }, NAV_INTENT_SETTLE_MS)
-  }
-
   private buildPageArray(): number[] {
     const arr: number[] = []
     for (let i: number = 1; i <= this.pagePickerTotalPages; i++) {
@@ -350,11 +696,69 @@ export struct ThreadPanel {
     return arr
   }
 
-  private async loadPosts(targetPage: number, mode: string): Promise<void> {
-    // 在 reset 前保存已有帖子，供跨页引用查找使用
-    const prevPosts: PostInfo[] = [...this.mgr.posts]
-    if (mode === LOAD_REPLACE) {
+  /**
+   * 请求并完成一页帖子的通用预处理。
+   *
+   * @param targetPage - 请求页码
+   * @param requestPid - 需要服务端定位的楼层 pid
+   * @param timeoutMs - 请求超时时间
+   * @param priority - BBCode 预热优先级
+   * @param previousPosts - 替换前的帖子，用于补全跨页引用
+   * @returns 页面接口结果
+   */
+  private async fetchPostsPage(
+    targetPage: number,
+    requestPid: string,
+    timeoutMs: number,
+    priority: taskpool.Priority,
+    previousPosts?: PostInfo[]
+  ): Promise<ThreadResult> {
+    const noteMap: Record<string, string> = appStore.settingsStore.getNoteMap()
+    const isNegativeAuthor: boolean = this.authorOnly && this.threadAuthorId !== '' && Number(this.threadAuthorId) <= 0
+    const result: ThreadResult = await withTimeout<ThreadResult>(getThread(
+      appStore.auth.token, this.threadTid, requestPid,
+      this.authorOnly && !isNegativeAuthor ? this.threadAuthorId : '', String(targetPage),
+      appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords(),
+      noteMap
+    ), timeoutMs)
+    if (!result.ok) {
+      return result
+    }
+    applyBlacklistStateToPosts(result.posts, appStore.settingsStore.getBlacklistIds())
+    if (isNegativeAuthor) {
+      result.posts = result.posts.filter((post: PostInfo): boolean => String(post.authorid) === this.threadAuthorId)
+    }
+    try {
+      await preWarmPosts(result.posts, false, priority)
+    } catch (error) {
+      logger.warn('preWarmPosts failed: %{public}s', formatError(error))
+    }
+    this.processPostsQuoteInjection(result.posts, previousPosts)
+    return result
+  }
+
+  /**
+   * 加载一页帖子并按替换、后置或前置模式提交到连续窗口。
+   *
+   * 只有替换操作会推进分页会话代际；同一会话内的前置和后置请求可以并行，
+   * 且分别维护自己的 loading 状态。
+   *
+   * @param targetPage - 请求页码
+   * @param mode - 提交模式
+   */
+  private async loadPosts(targetPage: number, mode: ThreadLoadMode): Promise<void> {
+    const previousPosts: PostInfo[] = mode === ThreadLoadMode.REPLACE ? this.mgr.posts.slice() : []
+    const previousGeneration: number = this.mgr.getGeneration()
+    const previousStart: number = this.mgr.loadedPageStart
+    const previousEnd: number = this.mgr.loadedPageEnd
+    if (mode === ThreadLoadMode.REPLACE) {
+      if (this.listNavigationPending) {
+        this.cancelListNavigation(this.listNavigationGeneration, 'superseded')
+      }
+      this.cancelPrependAnchor('replace')
+      this.lastReplacePage = targetPage
       this.mgr.reset()
+      this.prefetchGenerationByPage.clear()
       this.postsDataSource.clear()
       this.isLoading = true
       this.loadingContentOpacity = 0
@@ -369,45 +773,45 @@ export struct ThreadPanel {
       this.isLoadingMore = false
       this.isLoadingPrevious = false
       this.hasError = false
-      this.mgr.loadedPageStart = targetPage
-      // 跳页（targetPage > 1）或楼层定位（带 pid）都视为"导航意图"，滚动落位后再解除
-      this.navIntentPending = targetPage > 1 || this.pendingTargetPid.length > 0
-    } else if (mode === LOAD_APPEND) {
+      this.lastScrollStart = 0
+      this.lastScrollEnd = 0
+    } else if (mode === ThreadLoadMode.APPEND) {
       this.isLoadingMore = true
     } else {
       this.isLoadingPrevious = true
     }
 
-    const gen: number = this.mgr.nextGeneration()
-    const requestPid: string = mode === LOAD_REPLACE ? this.pendingTargetPid : ''
+    const generation: number = this.mgr.getGeneration()
+    const requestPid: string = mode === ThreadLoadMode.REPLACE ? this.pendingTargetPid : ''
+    let windowAdvanced: boolean = false
+    logger.info(
+      'page-load start mode=%{public}s tid=%{public}s requested=%{public}d pid=%{public}s gen=%{public}d ' +
+        'previousGen=%{public}d previousWindow=%{public}d-%{public}d display=%{public}d',
+      this.getLoadModeName(mode), this.threadTid, targetPage, requestPid, generation,
+      previousGeneration, previousStart, previousEnd, this.displayPage
+    )
 
     try {
-      const noteMap: Record<string, string> = appStore.settingsStore.getNoteMap()
-      const isNegativeAuthor: boolean = this.authorOnly && this.threadAuthorId !== '' && Number(this.threadAuthorId) <= 0
-      const result: ThreadResult = await withTimeout<ThreadResult>(getThread(
-        appStore.auth.token, this.threadTid, requestPid,
-        this.authorOnly && !isNegativeAuthor ? this.threadAuthorId : '', String(targetPage),
-        appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords(),
-        noteMap
-      ), 15000)
-
-      if (gen !== this.mgr.getGeneration()) return
+      const result: ThreadResult = await this.fetchPostsPage(
+        targetPage, requestPid, 15000, taskpool.Priority.HIGH, previousPosts
+      )
+      if (generation !== this.mgr.getGeneration()) {
+        logger.warn(
+          'page-load stale mode=%{public}s tid=%{public}s requested=%{public}d capturedGen=%{public}d currentGen=%{public}d',
+          this.getLoadModeName(mode), this.threadTid, targetPage, generation, this.mgr.getGeneration()
+        )
+        return
+      }
 
       if (result.ok) {
         const resolvedPage: number = result.pagination.page > 0 ? result.pagination.page : targetPage
-        applyBlacklistStateToPosts(result.posts, appStore.settingsStore.getBlacklistIds())
-        if (isNegativeAuthor) {
-          result.posts = result.posts.filter((p: PostInfo): boolean => String(p.authorid) === this.threadAuthorId)
-        }
-
-        await preWarmPosts(result.posts, false, taskpool.Priority.HIGH)
-
-        this.processPostsQuoteInjection(result.posts, prevPosts)
-
-        if (result.pagination) {
-          this.mgr.totalPages = result.pagination.totalPages
-        }
-        if (result.threadInfo) {
+        logger.info(
+          'page-load response mode=%{public}s tid=%{public}s requested=%{public}d resolved=%{public}d ' +
+            'total=%{public}d posts=%{public}d gen=%{public}d',
+          this.getLoadModeName(mode), this.threadTid, targetPage, resolvedPage,
+          result.pagination.totalPages, result.posts.length, generation
+        )
+        if (result.threadInfo !== null) {
           const info: ThreadInfo = result.threadInfo
           this.threadSubject = unescapeHtml(info.subject) || '帖子'
           this.threadFid = info.fid
@@ -416,81 +820,118 @@ export struct ThreadPanel {
           }
         }
 
-        if (mode === LOAD_REPLACE) {
-          this.mgr.replaceWith(result.posts, resolvedPage, this.mgr.totalPages)
+        if (mode === ThreadLoadMode.REPLACE) {
+          this.mgr.replaceWith(result.posts, resolvedPage, result.pagination.totalPages)
           this.postsDataSource.replaceAll(result.posts)
           this.displayPage = resolvedPage
           if (appStore.auth.isAuthenticated) {
             appStore.addBrowseHistoryFromThread(appStore.auth.uid, result, this.threadTid)
           }
-          if (requestPid.length > 0) {
-            this.pendingTargetPid = ''
-            // 延迟一帧确保 LazyForEach 布局完成，目标 item 已创建
-            setTimeout((): void => {
-              this.onScrollToPid()
-            }, 0)
-          } else {
-            this.scroller.scrollToIndex(1)
-          }
-          // 定位/回顶滚动落位后再解除导航意图（onScrollStop 为主，定时器兜底）
-          this.scheduleNavIntentRelease(gen)
-        } else if (mode === LOAD_APPEND) {
-          const added: PostInfo[] = this.mgr.appendPosts(result.posts, targetPage, this.mgr.totalPages)
+          this.pendingTargetPid = ''
+          this.prepareListNavigation(generation, resolvedPage, requestPid)
+        } else if (mode === ThreadLoadMode.APPEND) {
+          const previousEnd: number = this.mgr.loadedPageEnd
+          const added: PostInfo[] = this.mgr.appendPosts(
+            result.posts, resolvedPage, result.pagination.totalPages
+          )
+          windowAdvanced = this.mgr.loadedPageEnd !== previousEnd
           if (added.length > 0) {
             this.postsDataSource.appendAll(added)
           }
         } else {
-          // 前置插入前以当前首屏首个可见帖子的 pid 为锚，插入后滚动回锚点，保持视口内容不动
-          this.captureAnchorPid()
-          const added: PostInfo[] = this.mgr.prependPosts(result.posts, targetPage)
+          const previousStart: number = this.mgr.loadedPageStart
+          const anchorPrepared: boolean = this.preparePrependAnchor(resolvedPage)
+          const added: PostInfo[] = this.mgr.prependPosts(
+            result.posts, resolvedPage, result.pagination.totalPages
+          )
+          windowAdvanced = this.mgr.loadedPageStart !== previousStart
           if (added.length > 0) {
             this.postsDataSource.prependAll(added)
-            this.scrollToAnchor(added.length)
+            if (anchorPrepared) {
+              this.schedulePrependAnchorRestore()
+            }
+          } else if (anchorPrepared) {
+            this.cancelPrependAnchor('no-inserted-posts')
           }
         }
+        logger.info(
+          'page-load commit mode=%{public}s tid=%{public}s requested=%{public}d resolved=%{public}d ' +
+            'gen=%{public}d window=%{public}d-%{public}d posts=%{public}d advanced=%{public}s',
+          this.getLoadModeName(mode), this.threadTid, targetPage, resolvedPage, generation,
+          this.mgr.loadedPageStart, this.mgr.loadedPageEnd, this.mgr.posts.length, String(windowAdvanced)
+        )
         this.triggerPrefetches()
-      } else if (mode === LOAD_REPLACE) {
-        this.hasError = true
-        this.errorMsg = result.error || '加载失败'
-        this.mgr.posts = []
-        this.postsDataSource.clear()
-        this.navIntentPending = false
-      }
-    } catch (e) {
-      if (gen !== this.mgr.getGeneration()) return
-      if (mode === LOAD_REPLACE) {
-        this.hasError = true
-        this.errorMsg = (e as Error).message || '加载失败'
-        this.mgr.posts = []
-        this.postsDataSource.clear()
-        this.navIntentPending = false
       } else {
-        logger.error('loadPosts failed: %{public}s', (e as Error).message)
+        logger.error(
+          'page-load response-error mode=%{public}s tid=%{public}s requested=%{public}d gen=%{public}d error=%{public}s',
+          this.getLoadModeName(mode), this.threadTid, targetPage, generation, result.error || '加载失败'
+        )
+        if (mode === ThreadLoadMode.REPLACE) {
+          this.hasError = true
+          this.errorMsg = result.error || '加载失败'
+          this.postsDataSource.clear()
+          this.cancelListNavigation(generation, 'response-error')
+        }
       }
+    } catch (error) {
+      if (generation !== this.mgr.getGeneration()) {
+        logger.warn(
+          'page-load exception stale mode=%{public}s tid=%{public}s requested=%{public}d ' +
+            'capturedGen=%{public}d currentGen=%{public}d error=%{public}s',
+          this.getLoadModeName(mode), this.threadTid, targetPage, generation,
+          this.mgr.getGeneration(), formatError(error)
+        )
+        return
+      }
+      if (mode === ThreadLoadMode.REPLACE) {
+        this.hasError = true
+        this.errorMsg = formatError(error) || '加载失败'
+        this.postsDataSource.clear()
+        this.cancelListNavigation(generation, 'exception')
+      } else {
+        logger.error('loadPosts failed: %{public}s', formatError(error))
+      }
+    } finally {
+      if (generation !== this.mgr.getGeneration()) return
+      if (mode === ThreadLoadMode.REPLACE) {
+        clearTimeout(this.loadingDelayTimer)
+        this.loadingDelayTimer = -1
+        this.loadingContentOpacity = 0
+        this.isLoading = false
+        this.scheduleListNavigation()
+      } else if (mode === ThreadLoadMode.APPEND) {
+        this.isLoadingMore = false
+      } else {
+        this.isLoadingPrevious = false
+      }
+      if (windowAdvanced) {
+        this.scheduleReconcile(generation)
+      }
+      logger.info(
+        'page-load end mode=%{public}s tid=%{public}s requested=%{public}d gen=%{public}d ' +
+          'window=%{public}d-%{public}d loading=%{public}s navPending=%{public}s error=%{public}s',
+        this.getLoadModeName(mode), this.threadTid, targetPage, generation,
+        this.mgr.loadedPageStart, this.mgr.loadedPageEnd, String(this.isLoading),
+        String(this.listNavigationPending), String(this.hasError)
+      )
     }
-
-    clearTimeout(this.loadingDelayTimer)
-    this.loadingDelayTimer = -1
-    this.loadingContentOpacity = 0
-    this.isLoading = false
-    this.isLoadingMore = false
-    this.isLoadingPrevious = false
-
   }
 
+  /**
+   * 为快速回复和被截断的引用补全原楼层内容。
+   *
+   * @param posts - 需要处理的页面帖子
+   * @param prevPosts - 替换前的帖子，用于查找跨页引用
+   */
   private processPostsQuoteInjection(posts: PostInfo[], prevPosts?: PostInfo[]): void {
-    // posts: 需要处理的楼层数组
-    // prevPosts: 跳页前已有的帖子（跨页引用用）
-    // ── 引用原文注入：为 [b]Reply to [pid][/b] 快速回复格式补充被引用内容
-    // Step 1: 备份所有楼层原始内容，防止链式修改后查找错乱
-    // 同时包含新加载的 posts 和 mgr 中已有的帖子（跨页引用需要）
     const origByPid: Map<number, string> = new Map()
+    /** 收集楼层与贴条的原始正文。 */
     const collectToMap = (arr: PostInfo[]): void => {
       for (const p of arr) {
-        origByPid.set(p.pid, p.content)            // p.content: 主楼层的正文
+        origByPid.set(p.pid, p.content)
         if (p.comments) {
           for (const c of p.comments) {
-            origByPid.set(c.pid, c.content)        // c.content: 贴条的正文
+            origByPid.set(c.pid, c.content)
           }
         }
       }
@@ -500,7 +941,7 @@ export struct ThreadPanel {
     if (prevPosts) {
       collectToMap(prevPosts)
     }
-    // Step 2: 遍历楼层和贴条，对快速回复格式注入引用原文
+    /** 为快速回复格式注入被引用楼层的正文。 */
     const injectReplyQuote = (target: PostInfo): void => {
       if (target.content.startsWith('[quote]')) return
       const headerRegex: RegExp = /\[b\]Reply to \[pid=(\d+),(\d+),(\d+)\]Reply\[\/pid\] Post by \[uid=(\d+)\](.*?)\[\/uid\] \(([^)]+)\)/i
@@ -521,7 +962,7 @@ export struct ThreadPanel {
       const replyText: string = closeBIdx >= 0 ? target.content.substring(closeBIdx + 4) : ''
       target.content = `[quote][pid=${headerMatch[1]},${headerMatch[2]},${headerMatch[3]}]Reply[/pid] [b]Post by [uid=${headerMatch[4]}]${headerMatch[5]}[/uid] (${headerMatch[6]}):[/b]\n${cleaned}[/quote]\n<br/><br/>${replyText}`
     }
-    // Step 3: 修复 [quote] 格式中被 NGA 截断的引用内容
+    /** 用已加载的完整原文修复服务端截断的引用正文。 */
     const fixTruncatedQuote = (target: PostInfo): void => {
       if (!target.content.startsWith('[quote]')) return
       const pidInQuote: RegExpMatchArray | null = target.content.match(/\[pid=(\d+),(\d+),(\d+)\]/)
@@ -558,162 +999,164 @@ export struct ThreadPanel {
     }
   }
 
+  /**
+   * 启动当前连续窗口两侧的按页预取。
+   */
   private triggerPrefetches(): void {
     if (appStore.settings.threadNavMode === ThreadNavMode.PAGE) return
     if (appStore.settings.prefetchPageCount <= 0) return
-    this.prefetchNext()
-    this.prefetchPrev()
+    this.prefetchAroundWindow()
   }
 
-  private lastPrefetchTime: number = 0
-  private lastPrefetchPrevTime: number = 0
-  private readonly PREFETCH_COOLDOWN_MS: number = 400
-
-  private async prefetchNext(): Promise<void> {
-    const now: number = Date.now()
-    if (now - this.lastPrefetchTime < this.PREFETCH_COOLDOWN_MS) return
-    if (!this.mgr.hasMore) return
-    if (this.prefetchNextInProgress) return
+  /**
+   * 并行预取连续窗口两侧的页面。
+   *
+   * 预取可以乱序完成，但结果只进入按页缓存；可见列表只能由紧邻窗口边界的页面扩展，
+   * 因而不会出现前向或后向缺页。
+   */
+  private async prefetchAroundWindow(): Promise<void> {
+    const generation: number = this.mgr.getGeneration()
+    const prefetchCount: number = appStore.settings.prefetchPageCount
+    const firstPage: number = Math.max(this.mgr.loadedPageStart - prefetchCount, 1)
+    const lastPage: number = Math.min(this.mgr.loadedPageEnd + prefetchCount, this.mgr.totalPages)
     const pagesToFetch: number[] = []
-    const maxPrefetchPage: number = Math.min(this.mgr.currentPage + appStore.settings.prefetchPageCount, this.mgr.totalPages)
-    this.lastPrefetchTime = now
-    for (let p: number = this.mgr.currentPage + 1; p <= maxPrefetchPage; p++) {
-      if (!this.mgr.hasPrefetchedPage(p)) {
-        pagesToFetch.push(p)
+    for (let page: number = firstPage; page <= lastPage; page++) {
+      const inFlightGeneration: number | undefined = this.prefetchGenerationByPage.get(page)
+      if (this.mgr.isPageLoaded(page) || this.mgr.hasPrefetchedPage(page) || inFlightGeneration === generation) {
+        continue
       }
+      this.prefetchGenerationByPage.set(page, generation)
+      pagesToFetch.push(page)
     }
     if (pagesToFetch.length === 0) return
+    if (logger.isVerbose()) {
+      logger.verbose(
+        'prefetch start tid=%{public}s gen=%{public}d window=%{public}d-%{public}d range=%{public}d-%{public}d count=%{public}d',
+        this.threadTid, generation, this.mgr.loadedPageStart, this.mgr.loadedPageEnd,
+        firstPage, lastPage, pagesToFetch.length
+      )
+    }
 
-    this.prefetchNextInProgress = true
-    const gen: number = this.mgr.getGeneration()
     try {
-      const isNegativeAuthor: boolean = this.authorOnly && this.threadAuthorId !== '' && Number(this.threadAuthorId) <= 0
-      const noteMap: Record<string, string> = appStore.settingsStore.getNoteMap()
-      const promises: Promise<FetchPageResult | null>[] = []
-      for (let i = 0; i < pagesToFetch.length; i++) {
+      const requests: Promise<FetchPageResult | null>[] = []
+      for (let i: number = 0; i < pagesToFetch.length; i++) {
         const page: number = pagesToFetch[i]
-        promises.push(
-          withTimeout<ThreadResult>(getThread(
-            appStore.auth.token, this.threadTid, '',
-            isNegativeAuthor ? '' : (this.authorOnly ? this.threadAuthorId : ''), String(page),
-            appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords(),
-            noteMap
-          ), 10000).then((r: ThreadResult) => {
-            const fpr: FetchPageResult = new FetchPageResult()
-            fpr.page = page
-            fpr.result = r
-            return fpr
-          }).catch(() => null)
-        )
+        requests.push(this.fetchPostsPage(page, '', 10000, taskpool.Priority.MEDIUM)
+          .then((result: ThreadResult): FetchPageResult => {
+            const pageResult: FetchPageResult = new FetchPageResult()
+            pageResult.page = page
+            pageResult.result = result
+            return pageResult
+          })
+          .catch((): null => null))
       }
-      const results: (FetchPageResult | null)[] = await Promise.all(promises)
-      if (gen !== this.mgr.getGeneration()) return
-      for (let i = 0; i < results.length; i++) {
-        const item: FetchPageResult | null = results[i]
-        if (item === null || item.result === null) continue
-        if (item.result.ok) {
-          applyBlacklistStateToPosts(item.result.posts, appStore.settingsStore.getBlacklistIds())
-          if (isNegativeAuthor) {
-            item.result.posts = item.result.posts.filter((p: PostInfo): boolean => String(p.authorid) === this.threadAuthorId)
-          }
-          this.processPostsQuoteInjection(item.result.posts)
-          this.mgr.setPrefetchedPage(item.page, item.result.posts, item.result.pagination.totalPages)
-          preWarmPosts(item.result.posts, false, taskpool.Priority.MEDIUM).catch(() => {})
+      const results: (FetchPageResult | null)[] = await Promise.all(requests)
+      if (generation !== this.mgr.getGeneration()) return
+      for (let i: number = 0; i < results.length; i++) {
+        const pageResult: FetchPageResult | null = results[i]
+        if (pageResult === null || pageResult.result === null || !pageResult.result.ok) {
+          continue
+        }
+        const resolvedPage: number = pageResult.result.pagination.page > 0
+          ? pageResult.result.pagination.page
+          : pageResult.page
+        if (!this.mgr.isPageLoaded(resolvedPage)) {
+          this.mgr.setPrefetchedPage(
+            resolvedPage,
+            pageResult.result.posts,
+            pageResult.result.pagination.totalPages
+          )
         }
       }
-    } catch (e) {
-      // silently fall back to on-demand load
     } finally {
-      this.prefetchNextInProgress = false
+      for (let i: number = 0; i < pagesToFetch.length; i++) {
+        const page: number = pagesToFetch[i]
+        if (this.prefetchGenerationByPage.get(page) === generation) {
+          this.prefetchGenerationByPage.delete(page)
+        }
+      }
+      if (generation === this.mgr.getGeneration()) {
+        if (logger.isVerbose()) {
+          logger.verbose(
+            'prefetch end tid=%{public}s gen=%{public}d window=%{public}d-%{public}d',
+            this.threadTid, generation, this.mgr.loadedPageStart, this.mgr.loadedPageEnd
+          )
+        }
+        this.reconcile()
+      }
     }
   }
 
-  private async prefetchPrev(): Promise<void> {
-    if (appStore.settings.prefetchPageCount <= 0) return
-    const now: number = Date.now()
-    if (now - this.lastPrefetchPrevTime < this.PREFETCH_COOLDOWN_MS) return
-    const defaultPage: number = this.mgr.loadedPageStart - 1
-    if (defaultPage < 1) return
-    if (this.prefetchPrevInProgress) return
-
-    let targetPage: number = defaultPage
-    if (this.mgr.prefetchedPrevPage === targetPage) {
-      targetPage--
-    }
-    if (targetPage < 1) return
-
-    this.lastPrefetchPrevTime = now
-    this.prefetchPrevInProgress = true
-    const gen: number = this.mgr.getGeneration()
-    let ok: boolean = false
-    const isNegativeAuthorPrev: boolean = this.authorOnly && this.threadAuthorId !== '' && Number(this.threadAuthorId) <= 0
-    try {
-      const noteMap: Record<string, string> = appStore.settingsStore.getNoteMap()
-      const result: ThreadResult = await withTimeout<ThreadResult>(getThread(
-        appStore.auth.token, this.threadTid, '',
-        isNegativeAuthorPrev ? '' : (this.authorOnly ? this.threadAuthorId : ''), String(targetPage),
-        appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords(),
-        noteMap
-      ), 10000)
-      if (gen !== this.mgr.getGeneration()) return
-      if (result.ok) {
-        applyBlacklistStateToPosts(result.posts, appStore.settingsStore.getBlacklistIds())
-        if (isNegativeAuthorPrev) {
-          result.posts = result.posts.filter((p: PostInfo): boolean => String(p.authorid) === this.threadAuthorId)
-        }
-        ok = true
-        try {
-            await preWarmPosts(result.posts, false, taskpool.Priority.MEDIUM)
-        } catch (e) {
-          // 预热失败不影响 posts 存储
-        }
-        this.processPostsQuoteInjection(result.posts)
-        this.mgr.prefetchedPrevPosts = result.posts
-        this.mgr.prefetchedPrevPage = targetPage
-      }
-    } catch (e) {
-      // silently fall back to on-demand load
-    } finally {
-      this.prefetchPrevInProgress = false
-    }
-
-    if (ok) {
-      // pipeline 由 tryLoadPrev 提交后触发，无需在此串联
-    }
-  }
-
+  /**
+   * 在接近窗口末尾时提交或请求紧邻的下一页。
+   */
   private tryLoadNext(): void {
     if (appStore.settings.threadNavMode === ThreadNavMode.PAGE) return
-    if (this.isLoadingMore || this.navIntentPending || !this.mgr.hasMore) return
-    const nextPage: number = this.mgr.currentPage + 1
+    if (this.isLoadingMore || !this.mgr.hasNextPage()) return
+    const generation: number = this.mgr.getGeneration()
+    const nextPage: number = this.mgr.getNextPage()
+    logger.info(
+      'page-edge next tid=%{public}s page=%{public}d source=%{public}s gen=%{public}d ' +
+        'window=%{public}d-%{public}d visible=%{public}d-%{public}d',
+      this.threadTid, nextPage, this.mgr.hasPrefetchedPage(nextPage) ? 'cache' : 'network',
+      generation, this.mgr.loadedPageStart, this.mgr.loadedPageEnd,
+      this.lastScrollStart, this.lastScrollEnd
+    )
     if (this.mgr.hasPrefetchedPage(nextPage)) {
-      const added: PostInfo[] = this.mgr.commitPrefetchedPage(nextPage)
+      this.isLoadingMore = true
+      const previousEnd: number = this.mgr.loadedPageEnd
+      const added: PostInfo[] = this.mgr.commitPrefetchedNextPage()
       if (added.length > 0) {
         this.postsDataSource.appendAll(added)
       }
-      this.prefetchNext()
-    } else {
-      this.loadPosts(nextPage, LOAD_APPEND)
+      this.isLoadingMore = false
+      this.triggerPrefetches()
+      if (this.mgr.loadedPageEnd !== previousEnd) {
+        this.scheduleReconcile(generation)
+      }
+      return
     }
+    this.loadPosts(nextPage, ThreadLoadMode.APPEND)
   }
 
+  /**
+   * 在接近窗口开头时提交或请求紧邻的上一页。
+   *
+   * 视口锚点完全交给 List.maintainVisibleContentPosition，避免额外滚动造成二次位移。
+   */
   private tryLoadPrev(): void {
     if (appStore.settings.threadNavMode === ThreadNavMode.PAGE) return
-    if (this.isLoadingPrevious || this.navIntentPending) return
-    if (this.mgr.loadedPageStart <= 1) return
-    const prevPage: number = this.mgr.loadedPageStart - 1
-    if (this.mgr.isPrefetchedPrevReady()) {
-      // 前置插入前以当前首屏首个可见帖子的 pid 为锚，插入后滚动回锚点，保持视口内容不动
-      this.captureAnchorPid()
-      const added: PostInfo[] = this.mgr.commitPrefetchedPrev()
+    if (this.isLoadingPrevious || !this.mgr.hasPreviousPage()) return
+    const generation: number = this.mgr.getGeneration()
+    const previousPage: number = this.mgr.getPreviousPage()
+    logger.info(
+      'page-edge previous tid=%{public}s page=%{public}d source=%{public}s gen=%{public}d ' +
+        'window=%{public}d-%{public}d visible=%{public}d-%{public}d',
+      this.threadTid, previousPage, this.mgr.hasPrefetchedPage(previousPage) ? 'cache' : 'network',
+      generation, this.mgr.loadedPageStart, this.mgr.loadedPageEnd,
+      this.lastScrollStart, this.lastScrollEnd
+    )
+    if (this.mgr.hasPrefetchedPage(previousPage)) {
+      this.isLoadingPrevious = true
+      const previousStart: number = this.mgr.loadedPageStart
+      const anchorPrepared: boolean = this.preparePrependAnchor(previousPage)
+      const added: PostInfo[] = this.mgr.commitPrefetchedPreviousPage()
       if (added.length > 0) {
         this.postsDataSource.prependAll(added)
-        this.scrollToAnchor(added.length)
+        if (anchorPrepared) {
+          this.schedulePrependAnchorRestore()
+        }
+      } else if (anchorPrepared) {
+        this.cancelPrependAnchor('no-inserted-posts')
       }
-      this.prefetchPrev()
-    } else {
-      this.loadPosts(prevPage, LOAD_PREPEND)
+      this.isLoadingPrevious = false
+      this.triggerPrefetches()
+      if (this.mgr.loadedPageStart !== previousStart) {
+        this.scheduleReconcile(generation)
+      }
+      return
     }
+    this.loadPosts(previousPage, ThreadLoadMode.PREPEND)
   }
 
   private async handleReplySend(text: string, isAnony: boolean): Promise<void> {
@@ -722,8 +1165,8 @@ export struct ThreadPanel {
       if (result.ok) {
         const isComment: boolean = replyManager.type === ReplyType.COMMENT
         appStore.showToast(isComment ? '贴条成功' : '回复成功')
-        if (this.mgr.currentPage >= this.mgr.totalPages) {
-          await this.loadPosts(1, LOAD_REPLACE)
+        if (this.mgr.loadedPageEnd >= this.mgr.totalPages) {
+          await this.loadPosts(1, ThreadLoadMode.REPLACE)
         }
       } else {
         appStore.showToast(result.error || '操作失败')
@@ -738,7 +1181,7 @@ export struct ThreadPanel {
       const result: PostReplyResult = await replyManager.send(text, isAnony)
       if (result.ok) {
         appStore.showToast('编辑成功')
-        await this.loadPosts(1, LOAD_REPLACE)
+        await this.loadPosts(1, ThreadLoadMode.REPLACE)
       } else {
         appStore.showToast(result.error || '编辑失败')
       }
@@ -824,15 +1267,15 @@ export struct ThreadPanel {
         .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
       } else if (this.hasError) {
         Column() {
-          ErrorStateView({ msg: this.errorMsg, onRetry: () => this.loadPosts(1, LOAD_REPLACE) })
+          ErrorStateView({
+            msg: this.errorMsg,
+            onRetry: (): Promise<void> => this.loadPosts(this.lastReplacePage, ThreadLoadMode.REPLACE)
+          })
         }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
           .padding({ top: NAV_BAR_H + this.statusBarHeight })
         .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
       } else {
         List({ scroller: this.scroller }) {
-          ListItem() {
-            Row().width('100%').height(NAV_BAR_H + this.statusBarHeight)
-          }
           LazyForEach(this.postsDataSource, (post: PostInfo) => {
             ListItem() {
               PostItem({
@@ -856,7 +1299,7 @@ export struct ThreadPanel {
                   this.handleVote(p, value)
                 },
                 onReply: (p: PostInfo): void => {
-                  replyManager.startFloorReply(p, Number(this.threadTid), this.threadFid, this.mgr.currentPage)
+                  replyManager.startFloorReply(p, Number(this.threadTid), this.threadFid, this.displayPage)
                   floatingLayerStore.replyDialogTitle = replyManager.dialogTitle
                   floatingLayerStore.replyOnSend = (text: string, isAnony: boolean): Promise<void> => {
                     return this.handleReplySend(text, isAnony)
@@ -934,7 +1377,7 @@ export struct ThreadPanel {
                 if (this.isLoadingMore) {
                   LoadingProgress().width(16).height(16).color(AppColors.textTertiary)
                   Text('加载更多...').fontSize(13).fontColor(AppColors.textTertiary).margin({ left: 8 })
-                } else if (this.mgr.currentPage >= this.mgr.totalPages && this.mgr.posts.length > 0) {
+                } else if (this.mgr.loadedPageEnd >= this.mgr.totalPages && this.mgr.posts.length > 0) {
                   Text('已加载全部回复').fontSize(13).fontColor(AppColors.textTertiary)
                 }
               }.width('100%').justifyContent(FlexAlign.Center)
@@ -942,23 +1385,56 @@ export struct ThreadPanel {
           }
         }
         .width('100%').layoutWeight(1)
+        .contentStartOffset(NAV_BAR_H + this.statusBarHeight)
         .scrollBar(BarState.Off)
         .divider({ strokeWidth: 0.5, color: AppColors.separator })
         .edgeEffect(EdgeEffect.Spring)
         .cachedCount(6)
         .maintainVisibleContentPosition(true)
+        .onAppear((): void => {
+          this.listMounted = true
+          logger.info(
+            'list lifecycle appear tid=%{public}s gen=%{public}d window=%{public}d-%{public}d posts=%{public}d ' +
+              'navPending=%{public}s anchorPending=%{public}s',
+            this.threadTid, this.mgr.getGeneration(), this.mgr.loadedPageStart, this.mgr.loadedPageEnd,
+            this.mgr.posts.length, String(this.listNavigationPending), String(this.prependAnchorPending)
+          )
+          this.scheduleListNavigation()
+          this.schedulePrependAnchorRestore()
+        })
+        .onDisAppear((): void => {
+          this.listMounted = false
+          logger.info(
+            'list lifecycle disappear tid=%{public}s gen=%{public}d loading=%{public}s error=%{public}s ' +
+              'navPending=%{public}s anchorPending=%{public}s',
+            this.threadTid, this.mgr.getGeneration(), String(this.isLoading), String(this.hasError),
+            String(this.listNavigationPending), String(this.prependAnchorPending)
+          )
+        })
         .onScrollIndex((start: number, end: number, center: number): void => {
-          // 只上报位置，加载与否统一由 reconcile 决定，避免滚动事件直接驱动请求
+          if (this.prependAnchorPending) {
+            if (logger.isVerbose()) {
+              logger.verbose(
+                'scroll-index ignored prepend-anchor tid=%{public}s gen=%{public}d start=%{public}d ' +
+                  'end=%{public}d center=%{public}d anchorPid=%{public}d',
+                this.threadTid, this.mgr.getGeneration(), start, end, center, this.prependAnchorPid
+              )
+            }
+            return
+          }
           this.lastScrollStart = start
           this.lastScrollEnd = end
-          this.displayPage = this.mgr.getDisplayPage(center - 1)
+          this.displayPage = this.mgr.getDisplayPage(center)
+          if (logger.isVerbose()) {
+            logger.verbose(
+              'scroll-index tid=%{public}s gen=%{public}d start=%{public}d end=%{public}d center=%{public}d ' +
+                'display=%{public}d window=%{public}d-%{public}d posts=%{public}d navPending=%{public}s',
+              this.threadTid, this.mgr.getGeneration(), start, end, center, this.displayPage,
+              this.mgr.loadedPageStart, this.mgr.loadedPageEnd, this.mgr.posts.length,
+              String(this.listNavigationPending)
+            )
+          }
           this.reconcile()
-        })
-        .onScrollStop((): void => {
-          // 滚动真正停止即视为导航滚动落位，立即解除意图；定时器仅作异常兜底
-          this.navIntentPending = false
-          clearTimeout(this.navIntentTimer)
-          this.navIntentTimer = -1
         })
         .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
       }
@@ -985,7 +1461,8 @@ export struct ThreadPanel {
                   Text('•').fontSize(10).fontColor(AppColors.primary)
                     .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
                 }
-              }.width(24).height(28).onClick(() => this.loadPosts(1, LOAD_REPLACE))
+              }.width(24).height(28)
+                .onClick(() => this.navigateToPage(1, PageNavigationSource.PAGER_BUTTON))
               Divider().vertical(true).height(16).color(AppColors.dividerStrong)
               Stack() {
                 Text('2').fontSize(14).fontColor(this.displayPage === 2 ? AppColors.primary : AppColors.textSecondary)
@@ -994,46 +1471,56 @@ export struct ThreadPanel {
                   Text('•').fontSize(10).fontColor(AppColors.primary)
                     .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
                 }
-              }.width(24).height(28).onClick(() => this.loadPosts(2, LOAD_REPLACE))
+              }.width(24).height(28)
+                .onClick(() => this.navigateToPage(2, PageNavigationSource.PAGER_BUTTON))
             } else if (this.displayPage === 1) {
               Stack() {
                 Text('1').fontSize(14).fontColor(AppColors.primary).fontWeight(FontWeight.Bold)
                 Text('•').fontSize(10).fontColor(AppColors.primary)
                   .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
-              }.width(24).height(28).onClick(() => this.loadPosts(1, LOAD_REPLACE))
+              }.width(24).height(28)
+                .onClick(() => this.navigateToPage(1, PageNavigationSource.PAGER_BUTTON))
               Divider().vertical(true).height(16).color(AppColors.dividerStrong)
               Stack() {
                 Text('2').fontSize(14).fontColor(AppColors.textSecondary).fontWeight(FontWeight.Regular)
-              }.width(24).height(28).onClick(() => this.loadPosts(2, LOAD_REPLACE))
+              }.width(24).height(28)
+                .onClick(() => this.navigateToPage(2, PageNavigationSource.PAGER_BUTTON))
             } else if (this.displayPage === this.mgr.totalPages) {
               Stack() {
                 Text(String(this.mgr.totalPages - 1)).fontSize(14).fontColor(AppColors.textSecondary)
                   .fontWeight(FontWeight.Regular)
-              }.width(24).height(28).onClick(() => this.loadPosts(this.mgr.totalPages - 1, LOAD_REPLACE))
+              }.width(24).height(28)
+                .onClick(() => this.navigateToPage(
+                  this.mgr.totalPages - 1, PageNavigationSource.PAGER_BUTTON
+                ))
               Divider().vertical(true).height(16).color(AppColors.dividerStrong)
               Stack() {
                 Text(String(this.mgr.totalPages)).fontSize(14).fontColor(AppColors.primary)
                   .fontWeight(FontWeight.Bold)
                 Text('•').fontSize(10).fontColor(AppColors.primary)
                   .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
-              }.width(24).height(28).onClick(() => this.loadPosts(this.mgr.totalPages, LOAD_REPLACE))
+              }.width(24).height(28)
+                .onClick(() => this.navigateToPage(this.mgr.totalPages, PageNavigationSource.PAGER_BUTTON))
             } else {
               Stack() {
                 Text(String(this.displayPage - 1)).fontSize(14).fontColor(AppColors.textSecondary)
                   .fontWeight(FontWeight.Regular)
-              }.width(24).height(28).onClick(() => this.loadPosts(this.displayPage - 1, LOAD_REPLACE))
+              }.width(24).height(28)
+                .onClick(() => this.navigateToPage(this.displayPage - 1, PageNavigationSource.PAGER_BUTTON))
               Divider().vertical(true).height(16).color(AppColors.dividerStrong)
               Stack() {
                 Text(String(this.displayPage)).fontSize(14).fontColor(AppColors.primary)
                   .fontWeight(FontWeight.Bold)
                 Text('•').fontSize(10).fontColor(AppColors.primary)
                   .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
-              }.width(24).height(28).onClick(() => this.loadPosts(this.displayPage, LOAD_REPLACE))
+              }.width(24).height(28)
+                .onClick(() => this.navigateToPage(this.displayPage, PageNavigationSource.PAGER_BUTTON))
               Divider().vertical(true).height(16).color(AppColors.dividerStrong)
               Stack() {
                 Text(String(this.displayPage + 1)).fontSize(14).fontColor(AppColors.textSecondary)
                   .fontWeight(FontWeight.Regular)
-              }.width(24).height(28).onClick(() => this.loadPosts(this.displayPage + 1, LOAD_REPLACE))
+              }.width(24).height(28)
+                .onClick(() => this.navigateToPage(this.displayPage + 1, PageNavigationSource.PAGER_BUTTON))
             }
             if (this.mgr.totalPages > 2) {
               Divider().vertical(true).height(16).color(AppColors.dividerStrong)
@@ -1043,7 +1530,7 @@ export struct ThreadPanel {
                   this.pagePickerTotalPages = this.mgr.totalPages
                   this.pagePickerOnSelect = (page: number): void => {
                     if (page !== this.displayPage) {
-                      this.loadPosts(page, LOAD_REPLACE)
+                      this.navigateToPage(page, PageNavigationSource.PAGE_PICKER)
                     }
                   }
                   this.showPagePicker = true
@@ -1115,7 +1602,7 @@ export struct ThreadPanel {
                 .onClick(() => {
                   this.authorOnly = !this.authorOnly
                   this.showMoreMenu = false
-                  this.loadPosts(1, LOAD_REPLACE)
+                  this.loadPosts(1, ThreadLoadMode.REPLACE)
                 })
             }
             .width('100%')

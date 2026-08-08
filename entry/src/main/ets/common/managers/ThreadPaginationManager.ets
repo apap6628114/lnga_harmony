@@ -2,225 +2,230 @@ import type { PostInfo } from '../../model/PostInfo'
 import { PaginationManager } from './PaginationManager'
 
 /**
- * 帖子详情（Thread）分页管理器。继承共性基类 PaginationManager，额外维护：
- * - posts / pageOfIndex / loadedLouSet：楼层去重 + 每条帖子所属页码索引
- * - 反向预取（prefetchedPrevPosts / prefetchedPrevPage）：向上滚动加载上一页
+ * 帖子详情的连续分页窗口管理器。
  *
- * @Observed 装饰器在本子类上，确保 ArkUI 能观测到本类实例的字段变化。
+ * 管理器始终只允许提交与当前窗口相邻的页面，使已加载内容保持为
+ * `[loadedPageStart, loadedPageEnd]` 的连续区间。向前、向后预取共用按页缓存，
+ * 缓存可以乱序到达，但只有紧邻窗口边界的页面才能提交到可见列表。
  */
 @Observed
 export class ThreadPaginationManager extends PaginationManager {
-  /** 当前已加载的帖子列表（主帖 + 回复）。 */
+  /** 当前连续窗口内的帖子列表。 */
   posts: PostInfo[] = []
-  /** 与 posts 一一对应的页码索引，用于计算显示页码。 */
+
+  /** 与 posts 一一对应的所属页码。 */
   pageOfIndex: number[] = []
-  /** 已加载楼层的 lou 集合，用于追加时去重。 */
-  loadedLouSet: Set<number> = new Set()
-  /** 当前连续加载段的起始页（向上预取会前移）。 */
+
+  /** 当前连续窗口的起始页。 */
   loadedPageStart: number = 1
 
-  /** 反向预取缓存的上一页帖子。 */
-  prefetchedPrevPosts: PostInfo[] = []
-  /** 反向预取对应的页码，0 表示无缓存。 */
-  prefetchedPrevPage: number = 0
+  /** 当前连续窗口的结束页。 */
+  loadedPageEnd: number = 1
+
+  /** 已加载帖子的稳定标识集合。 */
+  private loadedPidSet: Set<number> = new Set()
 
   /**
-   * 重置到初始分页状态。
-   *
-   * hasMore 复位为 true：reset 后乐观假设还有更多页，避免 UI 立即判定无可加载内容；
-   * 这与 {@link PaginationManager.applyState} 根据实际响应（page < totalPages）设置 hasMore
-   * 的语义不同——后者反映服务端事实，前者只是 reset 的安全默认值。
+   * 重置分页窗口并推进会话代际，使此前的异步结果全部失效。
    */
   reset(): void {
     this.posts = []
     this.pageOfIndex = []
-    this.loadedLouSet.clear()
+    this.loadedPidSet.clear()
     this.loadedPageStart = 1
+    this.loadedPageEnd = 1
     this.currentPage = 1
     this.totalPages = 0
-    // 乐观假设还有更多页，待首次加载响应到达后由 applyState 按实际页数修正
     this.hasMore = true
     this.clearPrefetchedPages()
-    this.prefetchedPrevPosts = []
-    this.prefetchedPrevPage = 0
     this.resetGeneration()
   }
 
   /**
-   * 用新的一页帖子整体替换当前内容（跳页/首次加载场景）。
-   * @param newPosts - 该页帖子
-   * @param page - 页码
-   * @param totalPages - 总页数
+   * 用单页内容建立新的连续窗口。
+   *
+   * @param newPosts - 页面帖子
+   * @param page - 服务端确认的页码
+   * @param totalPages - 服务端确认的总页数
    */
   replaceWith(newPosts: PostInfo[], page: number, totalPages: number): void {
-    this.loadedLouSet.clear()
-    for (let i = 0; i < newPosts.length; i++) {
-      this.loadedLouSet.add(newPosts[i].lou)
+    this.clearPrefetchedPages()
+    this.loadedPidSet.clear()
+    for (let i: number = 0; i < newPosts.length; i++) {
+      this.loadedPidSet.add(newPosts[i].pid)
     }
     this.posts = newPosts
-    this.pageOfIndex = newPosts.map(() => page)
+    this.pageOfIndex = newPosts.map((): number => page)
     this.loadedPageStart = page
-    this.applyState(page, totalPages)
+    this.loadedPageEnd = page
+    this.applyState(page, Math.max(page, totalPages))
   }
 
   /**
-   * 向后追加一页帖子，按 lou 去重。
-   * @param rawPosts - 待追加的帖子
-   * @param page - 页码
+   * 返回窗口下一相邻页。
+   *
+   * @returns 下一页页码
+   */
+  getNextPage(): number {
+    return this.loadedPageEnd + 1
+  }
+
+  /**
+   * 返回窗口上一相邻页。
+   *
+   * @returns 上一页页码，不存在时为 0
+   */
+  getPreviousPage(): number {
+    return Math.max(this.loadedPageStart - 1, 0)
+  }
+
+  /**
+   * 判断窗口后方是否还有页面。
+   *
+   * @returns 是否可以向下加载
+   */
+  hasNextPage(): boolean {
+    return this.loadedPageEnd < this.totalPages
+  }
+
+  /**
+   * 判断窗口前方是否还有页面。
+   *
+   * @returns 是否可以向上加载
+   */
+  hasPreviousPage(): boolean {
+    return this.loadedPageStart > 1
+  }
+
+  /**
+   * 判断指定页是否已处于连续窗口中。
+   *
+   * @param page - 待判断页码
+   * @returns 是否已经加载
+   */
+  isPageLoaded(page: number): boolean {
+    return this.totalPages > 0 && page >= this.loadedPageStart && page <= this.loadedPageEnd
+  }
+
+  /**
+   * 向窗口末尾提交相邻下一页，并按 pid 去重。
+   *
+   * @param rawPosts - 页面原始帖子
+   * @param page - 页面页码
    * @param totalPages - 总页数
-   * @returns 实际新增（去重后）的帖子
+   * @returns 实际新增的帖子；非相邻页不会被提交
    */
   appendPosts(rawPosts: PostInfo[], page: number, totalPages: number): PostInfo[] {
-    const deduped: PostInfo[] = []
-    for (let i = 0; i < rawPosts.length; i++) {
-      if (!this.loadedLouSet.has(rawPosts[i].lou)) {
-        deduped.push(rawPosts[i])
-      }
-      this.loadedLouSet.add(rawPosts[i].lou)
-    }
-    if (deduped.length === 0) {
-      this.applyState(page, totalPages)
+    if (page !== this.getNextPage()) {
       return []
     }
-    const combined: PostInfo[] = []
-    for (let i = 0; i < this.posts.length; i++) {
-      combined.push(this.posts[i])
+    const added: PostInfo[] = this.collectNewPosts(rawPosts)
+    if (added.length > 0) {
+      const combinedPosts: PostInfo[] = this.posts.concat(added)
+      const combinedPages: number[] = this.pageOfIndex.concat(added.map((): number => page))
+      this.posts = combinedPosts
+      this.pageOfIndex = combinedPages
     }
-    for (let i = 0; i < deduped.length; i++) {
-      combined.push(deduped[i])
-    }
-    this.posts = combined
-
-    const newPageOfIndex: number[] = []
-    for (let i = 0; i < this.pageOfIndex.length; i++) {
-      newPageOfIndex.push(this.pageOfIndex[i])
-    }
-    for (let i = 0; i < deduped.length; i++) {
-      newPageOfIndex.push(page)
-    }
-    this.pageOfIndex = newPageOfIndex
-
-    this.applyState(page, totalPages)
-    return deduped
+    this.loadedPageEnd = page
+    this.deletePrefetched(page)
+    const stableTotalPages: number = Math.max(this.totalPages, totalPages, this.loadedPageEnd)
+    this.applyState(this.loadedPageEnd, stableTotalPages)
+    return added
   }
 
   /**
-   * 向前插入上一页帖子（反向预取），按 lou 去重。
-   * @param rawPosts - 待前置的帖子
-   * @param page - 该批对应的页码
-   * @returns 实际新增（去重后）的帖子
+   * 向窗口开头提交相邻上一页，并按 pid 去重。
+   *
+   * @param rawPosts - 页面原始帖子
+   * @param page - 页面页码
+   * @param totalPages - 总页数
+   * @returns 实际新增的帖子；非相邻页不会被提交
    */
-  prependPosts(rawPosts: PostInfo[], page: number): PostInfo[] {
-    const deduped: PostInfo[] = []
-    for (let i = 0; i < rawPosts.length; i++) {
-      if (!this.loadedLouSet.has(rawPosts[i].lou)) {
-        deduped.push(rawPosts[i])
-      }
-      this.loadedLouSet.add(rawPosts[i].lou)
-    }
-    if (deduped.length === 0) {
-      this.loadedPageStart = page
+  prependPosts(rawPosts: PostInfo[], page: number, totalPages: number): PostInfo[] {
+    if (page !== this.getPreviousPage()) {
       return []
     }
-    const combined: PostInfo[] = []
-    for (let i = 0; i < deduped.length; i++) {
-      combined.push(deduped[i])
+    const added: PostInfo[] = this.collectNewPosts(rawPosts)
+    if (added.length > 0) {
+      const combinedPosts: PostInfo[] = added.concat(this.posts)
+      const combinedPages: number[] = added.map((): number => page).concat(this.pageOfIndex)
+      this.posts = combinedPosts
+      this.pageOfIndex = combinedPages
     }
-    for (let i = 0; i < this.posts.length; i++) {
-      combined.push(this.posts[i])
-    }
-    this.posts = combined
-
-    const newPageOfIndex: number[] = []
-    for (let i = 0; i < deduped.length; i++) {
-      newPageOfIndex.push(page)
-    }
-    for (let i = 0; i < this.pageOfIndex.length; i++) {
-      newPageOfIndex.push(this.pageOfIndex[i])
-    }
-    this.pageOfIndex = newPageOfIndex
-
     this.loadedPageStart = page
-    return deduped
+    this.deletePrefetched(page)
+    const stableTotalPages: number = Math.max(this.totalPages, totalPages, this.loadedPageEnd)
+    this.applyState(this.loadedPageEnd, stableTotalPages)
+    return added
   }
 
   /**
-   * 缓存一页预取帖子。将 PostInfo[] 暂存进基类预取 Map。
+   * 缓存一页乱序到达的预取结果。
+   *
    * @param page - 页码
-   * @param posts - 该页帖子
+   * @param posts - 页面帖子
    * @param totalPages - 总页数
    */
   setPrefetchedPage(page: number, posts: PostInfo[], totalPages: number): void {
+    if (this.isPageLoaded(page)) {
+      return
+    }
     const items: object[] = []
-    for (let i = 0; i < posts.length; i++) {
+    for (let i: number = 0; i < posts.length; i++) {
       items.push(posts[i])
     }
     this.setPrefetchedRaw(page, items, totalPages)
   }
 
   /**
-   * 提交某页预取缓存，合并进 posts（按 lou 去重）。
-   * @param page - 页码
-   * @returns 实际新增的帖子（空数组表示无缓存或全部去重）
-   */
-  commitPrefetchedPage(page: number): PostInfo[] {
-    const holder = this.getPrefetchedRaw(page)
-    if (holder === undefined) return []
-    const posts: PostInfo[] = []
-    for (let i = 0; i < holder.items.length; i++) {
-      posts.push(holder.items[i] as PostInfo)
-    }
-    if (posts.length === 0) {
-      this.deletePrefetched(page)
-      return []
-    }
-    const added: PostInfo[] = this.appendPosts(posts, page, holder.totalPages)
-    this.deletePrefetched(page)
-    return added
-  }
-
-  /**
-   * 反向预取是否就绪。
-   * @returns 是否有可提交的上一页缓存
-   */
-  isPrefetchedPrevReady(): boolean {
-    return this.prefetchedPrevPosts.length > 0 && this.prefetchedPrevPage > 0
-  }
-
-  /**
-   * 提交反向预取缓存，前置合并进 posts。
+   * 提交缓存中的相邻下一页。
+   *
    * @returns 实际新增的帖子
    */
-  commitPrefetchedPrev(): PostInfo[] {
-    if (!this.isPrefetchedPrevReady()) return []
-    const added: PostInfo[] = this.prependPosts(
-      this.prefetchedPrevPosts,
-      this.prefetchedPrevPage
-    )
-    this.prefetchedPrevPosts = []
-    this.prefetchedPrevPage = 0
-    return added
+  commitPrefetchedNextPage(): PostInfo[] {
+    const page: number = this.getNextPage()
+    const holder = this.getPrefetchedRaw(page)
+    if (holder === undefined) {
+      return []
+    }
+    return this.appendPosts(this.toPosts(holder.items), page, holder.totalPages)
   }
 
   /**
-   * 根据列表中心索引计算当前应显示的页码。
-   * @param centerIndex - 中心条目索引
+   * 提交缓存中的相邻上一页。
+   *
+   * @returns 实际新增的帖子
+   */
+  commitPrefetchedPreviousPage(): PostInfo[] {
+    const page: number = this.getPreviousPage()
+    const holder = this.getPrefetchedRaw(page)
+    if (holder === undefined) {
+      return []
+    }
+    return this.prependPosts(this.toPosts(holder.items), page, holder.totalPages)
+  }
+
+  /**
+   * 根据列表中心帖子索引计算当前显示页。
+   *
+   * @param centerIndex - 中心帖子的数组索引
    * @returns 对应页码
    */
   getDisplayPage(centerIndex: number): number {
     if (centerIndex >= 0 && centerIndex < this.pageOfIndex.length) {
       return this.pageOfIndex[centerIndex]
     }
-    return this.currentPage
+    return this.loadedPageEnd
   }
 
   /**
    * 按 pid 查找帖子索引。
+   *
    * @param pid - 帖子 pid
    * @returns 索引，未找到返回 -1
    */
   findPostIndex(pid: number): number {
-    for (let i = 0; i < this.posts.length; i++) {
+    for (let i: number = 0; i < this.posts.length; i++) {
       if (this.posts[i].pid === pid) {
         return i
       }
@@ -229,14 +234,15 @@ export class ThreadPaginationManager extends PaginationManager {
   }
 
   /**
-   * 给指定 pid 的帖子累加投票分数（用于投票后即时更新 UI）。
+   * 给指定 pid 的帖子累加投票分数。
+   *
    * @param pid - 帖子 pid
    * @param scoreDelta - score 增量
    * @param score2Delta - score_2 增量
    * @returns 被更新帖子的索引，未找到返回 -1
    */
   updateVoteScore(pid: number, scoreDelta: number, score2Delta: number): number {
-    for (let i = 0; i < this.posts.length; i++) {
+    for (let i: number = 0; i < this.posts.length; i++) {
       if (this.posts[i].pid === pid) {
         this.posts[i].score += scoreDelta
         this.posts[i].score_2 += score2Delta
@@ -244,5 +250,37 @@ export class ThreadPaginationManager extends PaginationManager {
       }
     }
     return -1
+  }
+
+  /**
+   * 从页面结果中筛出尚未加载的帖子，并登记稳定标识。
+   *
+   * @param rawPosts - 页面原始帖子
+   * @returns 去重后的帖子
+   */
+  private collectNewPosts(rawPosts: PostInfo[]): PostInfo[] {
+    const added: PostInfo[] = []
+    for (let i: number = 0; i < rawPosts.length; i++) {
+      const post: PostInfo = rawPosts[i]
+      if (!this.loadedPidSet.has(post.pid)) {
+        added.push(post)
+        this.loadedPidSet.add(post.pid)
+      }
+    }
+    return added
+  }
+
+  /**
+   * 将基类缓存中的对象数组恢复为帖子数组。
+   *
+   * @param items - 基类缓存条目
+   * @returns 帖子数组
+   */
+  private toPosts(items: object[]): PostInfo[] {
+    const posts: PostInfo[] = []
+    for (let i: number = 0; i < items.length; i++) {
+      posts.push(items[i] as PostInfo)
+    }
+    return posts
   }
 }
