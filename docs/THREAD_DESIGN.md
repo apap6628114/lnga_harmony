@@ -108,6 +108,25 @@ Thread 不是“每次只展示一页”的普通分页页面，而是一个可�
 
 锚点必须使用 `pid`，因为前插后旧索引已经失效。不要通过猜测新插入了多少项来修正索引。
 
+### 5. 引用跳转（Reply）是"整页请求 + 页内定位"，不是单帖请求
+
+NGA 引用头 `[pid=被引pid,主题tid,被引楼层所在页]Reply[/pid]` 的第 3 值是页码
+（lou 永不复用，`page = floor(lou/20) + 1` 稳定，已用真实样本验证）。点击跳转：
+
+- 解析层把第 3 值保留进链接（`#/thread?tid=..&pid=..&page=..`），经
+  `Screen.thread(tid, page, pid)` 进入；`threadPage` 即目标页。
+- **REPLACE 请求默认不带 pid**：服务端收到 pid 时返回单帖视图
+  （`lou=0`、`__PAGE=1`、`__ROWS=1`），页码与楼层信息全部丢失，无法按页加载。
+  整页加载后用既有 `prepareListNavigation` 机制在页内按 pid 定位。
+- 定位意图 `pendingTargetPid` 只来自路由进入（`aboutToAppear`/`onThreadChanged`），
+  定位应用后清除；分页器、只看楼主、回复/编辑后刷新等用户主动 REPLACE 必须先清意图，
+  错误页重试保留意图。
+- 整页未命中目标 pid 时做**一次**单帖兜底（`singlePostFallback` 防重复）。
+  兜底响应的 `totalPages` 会被单帖视图重置为 1，必须用兜底前暂存的真实值恢复
+  （`fallbackPrevTotalPages`），否则分页器消失且 `hasNextPage()` 恒假，用户被困在单帖窗口。
+- 同帖且目标 pid 已在加载窗口时，`handleLinkClick` 直接页内滚动（日志 `quote-jump local`），
+  不触发路由与请求。
+
 ## 四、曾经出现的问题及根因
 
 ### 首帖被标题区遮挡
@@ -146,6 +165,8 @@ hdc shell hilog -x -T ThreadPanel -v time
 - `page-load start/response/commit/end`：请求代次、模式、请求页和提交窗口。
 - `list lifecycle`：列表何时挂载或卸载。
 - `list-nav prepared/schedule/applied`：跳页定位意图何时真正应用。
+- `list-nav fallback`：整页未命中后发起单帖兜底（含 pid 与引用页）。
+- `quote-jump local`：引用目标已在加载窗口，页内直接定位。
 - `prepend-anchor prepared/restore/applied`：前插前后的 pid、索引和 y 偏移。
 - `page-edge next/previous`：哪次滚动判断触发了相邻页加载。
 
@@ -162,6 +183,8 @@ hdc shell hilog -x -T ThreadPanel -v time
 - 分页器跳到较远页面后，目标页顶部定位正确。
 - 跳页后继续向上、向下滚动，两侧都能正常加载。
 - pid 路由进入时目标帖子定位正确。
+- 点击引用（Reply）：目标楼已在窗口 → 页内定位；跨页 → 按引用头页码加载整页并定位到目标楼。
+- 引用头页码过期或楼层被删 → 单帖兜底后仍可向下翻页（`totalPages` 已恢复），分页器可用。
 - 快速连续跳页时，旧响应不会覆盖新页面。
 - 相邻页为空或内容全部重复时，不会无限重复请求。
 - 最后一页不足一整页时，不会误判或重复追加。

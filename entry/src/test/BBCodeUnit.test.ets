@@ -387,6 +387,31 @@ export default function bbcodeUnitTest(): void {
       expect(nodes[0].children[1].text).assertEqual('正文')
     })
 
+    it('keepsQuoteReplyPageInPidLinkHref', 0, (): void => {
+      // NGA 引用头 [pid=pid,tid,page] 携带引用楼层所在页，
+      // 链接必须保留 page 供帖子页按页加载整页后定位
+      const quoteNodes: BBNode[] = parseBBCode(
+        '[quote][pid=868052707,46425481,8]Reply[/pid] [b]Post by [uid=1379135]就是会装死[/uid] ' +
+        '(2026-05-14 13:34):[/b]<br/>燃烧之刃dk漂亮男孩又来麻烦大佬做披风[/quote]')
+      expect(quoteNodes.length).assertEqual(1)
+      expect(quoteNodes[0].type).assertEqual(BBNodeType.QUOTE)
+      const postBy: BBNode = quoteNodes[0].children[0]
+      expect(postBy.type).assertEqual(BBNodeType.POST_BY)
+      const replyLink: BBNode = postBy.children[0]
+      expect(replyLink.type).assertEqual(BBNodeType.PID_LINK)
+      expect(replyLink.href).assertEqual('#/thread?tid=46425481&pid=868052707&page=8')
+
+      // 两值形式（普通回复链接）行为不变
+      const plainNodes: BBNode[] = parseBBCode('[pid=101112,131415]回复链接[/pid]')
+      expect(plainNodes[0].type).assertEqual(BBNodeType.PID_LINK)
+      expect(plainNodes[0].href).assertEqual('#/thread?tid=131415&pid=101112')
+
+      // 第三值非数字时不追加 page
+      const oddNodes: BBNode[] = parseBBCode('[pid=1,2,abc]Reply[/pid]')
+      expect(oddNodes[0].type).assertEqual(BBNodeType.PID_LINK)
+      expect(oddNodes[0].href).assertEqual('#/thread?tid=2&pid=1')
+    })
+
     it('preservesUnknownAndUnmatchedTagsAsText', 0, (): void => {
       const runs: InlineRun[] = flattenInlineNodes(parseBBCode('前[/b][unknown]后'))
 

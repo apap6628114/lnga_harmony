@@ -211,8 +211,15 @@ function createLinkHref(tag: InlineTagToken): string {
   if (tag.name === 'uid') return attribute.length > 0 ? `#/profile?uid=${attribute}` : ''
   if (tag.name === 'pid') {
     const parts: string[] = attribute.split(',')
-    return parts.length >= 2 && parts[0].length > 0 && parts[1].length > 0 ?
-      `#/thread?tid=${parts[1]}&pid=${parts[0]}` : ''
+    if (parts.length >= 2 && parts[0].length > 0 && parts[1].length > 0) {
+      // 第三段为引用楼层所在页（NGA 引用头 [pid=pid,tid,page] 携带），
+      // 保留进链接供帖子页按页加载整页后定位，避免服务端单帖视图丢失页码与楼层。
+      const page: string = parts.length >= 3 && /^\d+$/.test(parts[2]) ? parts[2] : ''
+      return page.length > 0 ?
+        `#/thread?tid=${parts[1]}&pid=${parts[0]}&page=${page}` :
+        `#/thread?tid=${parts[1]}&pid=${parts[0]}`
+    }
+    return ''
   }
   const pageMarker: string = '&page='
   const pageIndex: number = attribute.toLowerCase().indexOf(pageMarker)

@@ -131,6 +131,24 @@ runs.json 提取方式：浏览器内脚本遍历楼层 DOM，跳过 `.x` 表格
 
 ## 修复记录
 
+- **2026-08-08 引用回复跳转：保留引用楼层页码（[pid=pid,tid,page]）**：
+  - 问题：NGA 引用头 `[pid=pid,tid,page]Reply[/pid]` 携带被引楼层所在页（第 3 值，
+    实测 26 个真实引用样本与 `floor(lou/20)+1` 100% 一致），但 `createLinkHref` 丢弃
+    page，跳转仅带 pid。帖子页 REPLACE 请求带 pid 时服务端返回单帖视图
+    （`lou=0`、`__PAGE=1`，页码与楼层信息丢失），无法按页加载整页定位
+  - 对齐实现：pid 链接第三段为纯数字时保留 `&page=`（两值形式行为不变）；
+    ThreadPanel REPLACE 默认请求整页（不带 pid），按目标页加载后由既有
+    `prepareListNavigation` 在页内按 pid 定位；整页未命中时一次性单帖兜底
+    （`singlePostFallback`，兜底后恢复整页窗口真实 `totalPages`——单帖视图
+    `__ROWS=1` 会把它重置为 1，否则用户被困在单帖窗口无法扩展），
+    同帖且目标楼已在加载窗口时页内直接滚动（`quote-jump local` 日志）
+  - 样本 `tid46425481-lou142-quote.txt`（真实引用楼层）固化 + 快照基线；
+    该样本首次暴露既有解析行为：引用头 `[/b]<br/><br/>` 后的连续换行段被
+    handleQuote 消费（测试 `removesQuoteHeaderSeparatingBreaks` 已固化），
+    零丢失断言侧在 `expectedPlainText` 中镜像该消费语义
+  - 镜像新增 1 测试（三值 href / 两值不变 / 非数字与四值第三值 / 空值），
+    Hypium 1 例（`keepsQuoteReplyPageInPidLinkHref`）
+
 - **2026-08-07 [img] 旧附件域归一化**（tid=47228037 主楼表格内图片裂图修复，镜像 71 项 + Hypium 80 项全绿）：
   - 症状：主楼表格 `[td]` 内 `[img]https://img.nga.178.com/...[/img]` 解析为 IMAGE 但
     src 保留旧域 `img.nga.178.com`，该域已不可解析（实测 HTTP 000 / DNS 落保留地址），

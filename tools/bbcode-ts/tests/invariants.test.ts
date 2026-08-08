@@ -32,6 +32,11 @@ function stripBBCodeTags(s: string): string {
 function expectedPlainText(content: string): string {
   let preprocessed: string = preprocessContent(content)
   preprocessed = preprocessed.replace(/\[(img|flash|album|video|audio)(?:=[^\]]*)?\][\s\S]*?\[\/\1\]/gi, '')
+  // 镜像 handleQuote 的消费语义：引用头（[pid=..]Reply[/pid] [b]Post by ...[/b]）
+  // 后的连续换行段整体跳过（真实 NGA 数据为 </b><br/><br/>，预处理后成 \n\n）
+  preprocessed = preprocessed.replace(
+    /(\[pid=\d+,\d+,\d+\]Reply\[\/pid\] \[b\]Post by \[uid=\d+\].*?\[\/uid\] \([^)]+\):\[\/b\])(?:\r?\n)+/g,
+    '$1')
   preprocessed = preprocessed.replace(/\[attach\](.+?)\[\/attach\]/gi,
     (match: string, url: string): string => {
       const resolved: string = resolveAttachBBCodeUrl(url)
@@ -296,6 +301,40 @@ describe('教学文档语法覆盖（guide-bbcode.txt）', () => {
     collectType(nodes, BBNodeType.PID_LINK, pids)
     assert.equal(pids.length, 2)
     assert.equal(pids[1].href, '#/thread?tid=131415&pid=101112')
+  })
+
+  it('15b. [pid=pid,tid,page] 三值形式保留引用楼层页码', () => {
+    const three: BBNode[] = parseBBCode('[pid=1000,12345,8]Reply[/pid]')
+    const threePids: BBNode[] = []
+    collectType(three, BBNodeType.PID_LINK, threePids)
+    assert.equal(threePids.length, 1)
+    assert.equal(threePids[0].href, '#/thread?tid=12345&pid=1000&page=8')
+
+    const quoteNodes: BBNode[] = parseBBCode(
+      '[quote][pid=868052707,46425481,8]Reply[/pid] [b]Post by [uid=1379135]就是会装死[/uid] (2026-05-14 13:34):[/b]<br/>燃烧之刃dk漂亮男孩又来麻烦大佬做披风[/quote]'
+    )
+    const quotePids: BBNode[] = []
+    collectType(quoteNodes, BBNodeType.PID_LINK, quotePids)
+    assert.equal(quotePids.length, 1)
+    assert.equal(quotePids[0].href, '#/thread?tid=46425481&pid=868052707&page=8')
+
+    const nonNumeric: BBNode[] = parseBBCode('[pid=1,2,abc]Reply[/pid]')
+    const nonNumericPids: BBNode[] = []
+    collectType(nonNumeric, BBNodeType.PID_LINK, nonNumericPids)
+    assert.equal(nonNumericPids.length, 1)
+    assert.equal(nonNumericPids[0].href, '#/thread?tid=2&pid=1')
+
+    const fourParts: BBNode[] = parseBBCode('[pid=1,2,3,4]Reply[/pid]')
+    const fourPids: BBNode[] = []
+    collectType(fourParts, BBNodeType.PID_LINK, fourPids)
+    assert.equal(fourPids.length, 1)
+    assert.equal(fourPids[0].href, '#/thread?tid=2&pid=1&page=3')
+
+    const emptyParts: BBNode[] = parseBBCode('[pid=,2,3]Reply[/pid]')
+    const emptyPids: BBNode[] = []
+    collectType(emptyParts, BBNodeType.PID_LINK, emptyPids)
+    assert.equal(emptyPids.length, 1)
+    assert.equal(emptyPids[0].href, '')
   })
 
   it('16-17. del 删除线与 album 相册', () => {

@@ -134,6 +134,15 @@ export struct ThreadPanel {
   /** 尚未交给帖子接口定位的路由目标楼层。 */
   private pendingTargetPid: string = ''
 
+  /** 整页未命中目标 pid 后是否已发起单帖兜底请求，防止重复兜底。 */
+  private singlePostFallback: boolean = false
+
+  /** 单帖兜底前整页窗口的真实总页数（单帖视图 __ROWS=1 会把 totalPages 重置为 1）。 */
+  private fallbackPrevTotalPages: number = 0
+
+  /** 单帖兜底前记录的被引楼层所在页（单帖视图 __PAGE=1，用于恢复显示页）。 */
+  private fallbackPrevPage: number = 0
+
   @State mgr: ThreadPaginationManager = new ThreadPaginationManager()
 
   /** 每个预取页对应的会话代际，用于去重并隔离重置前后的请求。 */
@@ -241,6 +250,7 @@ export struct ThreadPanel {
     this.hasInitiallyLoaded = true
     const initialPage: number = Math.max(this.threadPage, 1)
     this.pendingTargetPid = this.threadPid
+    this.singlePostFallback = false
     this.displayPage = initialPage
     if (this.threadTid) {
       this.loadPosts(initialPage, ThreadLoadMode.REPLACE)
@@ -276,6 +286,9 @@ export struct ThreadPanel {
     }
     const initialPage: number = Math.max(this.threadPage, 1)
     this.pendingTargetPid = this.threadPid
+    this.singlePostFallback = false
+    this.fallbackPrevTotalPages = 0
+    this.fallbackPrevPage = 0
     this.displayPage = initialPage
     this.isLoading = true
     this.isLoadingMore = false
@@ -393,6 +406,11 @@ export struct ThreadPanel {
       this.mgr.getGeneration(), this.mgr.loadedPageStart, this.mgr.loadedPageEnd,
       this.lastScrollStart, this.lastScrollEnd
     )
+    // 用户主动跳页不再携带路由进入时的目标楼层意图
+    this.pendingTargetPid = ''
+    this.singlePostFallback = false
+    this.fallbackPrevTotalPages = 0
+    this.fallbackPrevPage = 0
     this.loadPosts(boundedPage, ThreadLoadMode.REPLACE)
   }
 
@@ -506,6 +524,27 @@ export struct ThreadPanel {
         positioned = this.scrollToPid(targetPid)
       }
     }
+    if (!positioned && targetPid.length > 0 && !this.singlePostFallback) {
+      // 整页未命中目标楼层（页码过期或楼层被删）：发起一次单帖兜底请求，
+      // 服务端返回仅含目标楼的单帖视图，其内必含该 pid。
+      this.listNavigationPending = false
+      this.listNavigationScheduled = false
+      this.listNavigationGeneration = -1
+      this.listNavigationPid = ''
+      this.singlePostFallback = true
+      this.fallbackPrevTotalPages = this.mgr.totalPages
+      this.fallbackPrevPage = this.listNavigationPage
+      logger.warn(
+        'list-nav fallback tid=%{public}s pid=%{public}s page=%{public}d gen=%{public}d',
+        this.threadTid, targetPid, this.listNavigationPage, generation
+      )
+      this.loadPosts(1, ThreadLoadMode.REPLACE)
+      return
+    }
+    if (!positioned && targetPid.length > 0) {
+      // 单帖兜底已尝试仍失败（服务端返回空或该楼层已删除）
+      appStore.showToast('该楼层不存在或已删除')
+    }
     if (!positioned) {
       this.scroller.scrollToIndex(0, false, ScrollAlign.START)
       positioned = true
@@ -513,6 +552,13 @@ export struct ThreadPanel {
     this.listNavigationPending = false
     this.listNavigationGeneration = -1
     this.listNavigationPid = ''
+    this.pendingTargetPid = ''
+    this.singlePostFallback = false
+    if (this.fallbackPrevPage > 0) {
+      this.displayPage = this.fallbackPrevPage
+    }
+    this.fallbackPrevTotalPages = 0
+    this.fallbackPrevPage = 0
     logger.info(
       'list-nav applied tid=%{public}s page=%{public}d pid=%{public}s index=%{public}d positioned=%{public}s ' +
         'gen=%{public}d window=%{public}d-%{public}d',
@@ -789,7 +835,11 @@ export struct ThreadPanel {
     }
 
     const generation: number = this.mgr.getGeneration()
-    const requestPid: string = mode === ThreadLoadMode.REPLACE ? this.pendingTargetPid : ''
+    // 本次 REPLACE 的定位意图：路由进入（含引用跳转）携带目标 pid；
+    // 请求参数默认不带 pid（服务端带 pid 返回单帖视图，丢失页码与楼层）。
+    // 仅单帖兜底时携带 pid，由服务端返回包含目标楼的单帖数据。
+    const navPid: string = mode === ThreadLoadMode.REPLACE ? this.pendingTargetPid : ''
+    const requestPid: string = mode === ThreadLoadMode.REPLACE && this.singlePostFallback ? navPid : ''
     let windowAdvanced: boolean = false
     logger.info(
       'page-load start mode=%{public}s tid=%{public}s requested=%{public}d pid=%{public}s gen=%{public}d ' +
@@ -829,13 +879,17 @@ export struct ThreadPanel {
 
         if (mode === ThreadLoadMode.REPLACE) {
           this.mgr.replaceWith(result.posts, resolvedPage, result.pagination.totalPages)
+          if (this.singlePostFallback && this.fallbackPrevTotalPages > 0) {
+            // 单帖视图把 totalPages 重置为 1：恢复兜底前整页窗口的真实总页数，
+            // 否则分页器消失且 hasNextPage 恒假，用户被困在单帖窗口无法扩展
+            this.mgr.totalPages = this.fallbackPrevTotalPages
+          }
           this.postsDataSource.replaceAll(result.posts)
           this.displayPage = resolvedPage
           if (appStore.auth.isAuthenticated) {
             appStore.addBrowseHistoryFromThread(appStore.auth.uid, result, this.threadTid)
           }
-          this.pendingTargetPid = ''
-          this.prepareListNavigation(generation, resolvedPage, requestPid)
+          this.prepareListNavigation(generation, resolvedPage, navPid)
         } else if (mode === ThreadLoadMode.APPEND) {
           const previousEnd: number = this.mgr.loadedPageEnd
           const added: PostInfo[] = this.mgr.appendPosts(
@@ -1173,6 +1227,8 @@ export struct ThreadPanel {
         const isComment: boolean = replyManager.type === ReplyType.COMMENT
         appStore.showToast(isComment ? '贴条成功' : '回复成功')
         if (this.mgr.loadedPageEnd >= this.mgr.totalPages) {
+          this.pendingTargetPid = ''
+          this.singlePostFallback = false
           await this.loadPosts(1, ThreadLoadMode.REPLACE)
         }
       } else {
@@ -1188,6 +1244,8 @@ export struct ThreadPanel {
       const result: PostReplyResult = await replyManager.send(text, isAnony)
       if (result.ok) {
         appStore.showToast('编辑成功')
+        this.pendingTargetPid = ''
+        this.singlePostFallback = false
         await this.loadPosts(1, ThreadLoadMode.REPLACE)
       } else {
         appStore.showToast(result.error || '编辑失败')
@@ -1255,6 +1313,34 @@ export struct ThreadPanel {
   }
 
   private handleLinkClick(href: string): void {
+    // 同主题引用且目标楼层已在当前加载窗口：页内直接定位，
+    // 避免整页重载与服务端单帖视图（最常见引用场景零网络请求）。
+    if (href.startsWith('#/thread?')) {
+      const query: string = href.substring(href.indexOf('?') + 1)
+      let linkTid: string = ''
+      let linkPid: string = ''
+      const parts: string[] = query.split('&')
+      for (let i: number = 0; i < parts.length; i++) {
+        const kv: string[] = parts[i].split('=')
+        if (kv.length === 2) {
+          if (kv[0] === 'tid') linkTid = kv[1]
+          if (kv[0] === 'pid') linkPid = kv[1]
+        }
+      }
+      if (linkTid === this.threadTid && linkPid.length > 0 && this.listMounted &&
+        !this.listNavigationPending && !this.prependAnchorPending) {
+        const linkPidNumber: number = parseInt(linkPid, 10)
+        if (this.mgr.findPostIndex(linkPidNumber) >= 0) {
+          logger.info(
+            'quote-jump local tid=%{public}s pid=%{public}s gen=%{public}d window=%{public}d-%{public}d',
+            this.threadTid, linkPid, this.mgr.getGeneration(),
+            this.mgr.loadedPageStart, this.mgr.loadedPageEnd
+          )
+          this.scrollToPid(linkPid)
+          return
+        }
+      }
+    }
     handleForumLink(href, this.getUIContext().getHostContext() as common.UIAbilityContext, (uid: string) => {
       this.showProfileCard(uid, 200, 200)
     })
@@ -1609,6 +1695,8 @@ export struct ThreadPanel {
                 .onClick(() => {
                   this.authorOnly = !this.authorOnly
                   this.showMoreMenu = false
+                  this.pendingTargetPid = ''
+                  this.singlePostFallback = false
                   this.loadPosts(1, ThreadLoadMode.REPLACE)
                 })
             }
