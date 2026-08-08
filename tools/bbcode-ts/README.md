@@ -30,6 +30,7 @@ tools/bbcode-ts/
     official-<tid>-lou<N>.html  #   官方渲染 DOM（调试流程第 8 步固化）
     official-<tid>-lou<N>-runs.json  # 官方渲染 run 序列（差分输入）
   scripts/
+    fetch-thread-json.mjs       #   拉取帖子 JSON 调试数据（整页或指定楼层 content）
     sync-to-ets.mjs             #   TS 镜像 → entry/src/main/ets 单向同步
     gen-snapshot.ts             #   重新生成快照基线
     compare-official.ts         #   官方差分人类可读报告
@@ -43,6 +44,15 @@ npm test           # 编译 + 全部测试（不变量 + 快照 + 官方差分�
 npm run snapshot   # 生成/更新快照基线（审查 git diff 后提交）
 npm run compare:official   # 官方差分报告
 npm run sync       # 把验证过的镜像写回 entry/src/main/ets（.ts → .ets）
+```
+
+调试数据拉取（详见下方调试流程）：
+
+```bash
+# 取帖子某楼层 content 存为样本（NGA_COOKIE 为浏览器登录后 document.cookie）
+NGA_COOKIE=... node scripts/fetch-thread-json.mjs <tid> <page> <输出文件名> <lou>
+# 取整页 JSON 落盘（不带 lou 参数）
+NGA_COOKIE=... node scripts/fetch-thread-json.mjs <tid> <page>
 ```
 
 ## 工作流（单一真源）
@@ -70,32 +80,33 @@ npm run sync       # 把验证过的镜像写回 entry/src/main/ets（.ts → .e
 
 ## 异常渲染调试流程
 
-前置：chrome 已登录 NGA；chrome devtools MCP 处于持久化调试模式。
+前置：chrome 已登录 NGA（取 cookie 与渲染 DOM）；chrome devtools MCP 处于持久化调试模式。
 
-1. 记录用户报告的帖子 URL 与异常楼层号
-2. 取官方 JSON：`https://bbs.nga.cn/read.php?page=<页>&__output=8&tid=<tid>&__inchst=UTF8`
-
-   > **取 JSON 操作要点**（2026-08-07 实测）：
-   > - 从帖子 URL `read.php?tid=<tid>` 提取 tid 构造上 URL（`__output=8` 强制 JSON 输出，
-   >   不加返回服务端渲染 HTML；`__inchst=UTF8`/`noprefix=`/`v2=` 与鸿蒙端 ThreadApi 参数一致）
-   > - 必须带登录 cookie（`ngaPassportUid`/`ngaPassportCid`），游客返回 error 15；
-   >   UA 用 `NGA_WP_JW` + `X-User-Agent: Nga_Official`
-   > - 响应为 GBK 编码：`fetch().text()` 按默认编码解码会产出未转义控制字符（`JSON.parse`
-   >   报 "Bad control character"），须 `arrayBuffer()` + `TextDecoder('gbk')` 显式解码
-   > - NGA JSON 字符串内 tab 未转义：parse 前全局 `replace(/\t/g, '\\t')`
-   >   （即鸿蒙端 `preprocessJson`，见 `entry/.../parser/NgaJsonSanitizer.ets`）
-   > - 楼层字段名是 `data.__R`（双下划线开头、**单下划线结尾**）：检查响应完整性用
-   >   `"__R":`（带引号冒号），用 `__R__` 会误匹配 `__R__ROWS`（分页行数）而误判
-   >   "防爬空响应"——实测该 API 无防爬，请求均完整返回
-3. 响应落盘，用 `tests/helpers.ts::loadSampleContent` 提取目标楼层 `content` 字段
-4. 用 TS 镜像解析该 content，检查解析树/run 序列是否符合预期
-5. devtools 打开帖子页，滚动至异常楼层，取该楼层内容容器
+1. 记录用户报告的帖子 URL 与异常楼层号（URL `read.php?tid=<tid>` 中 tid= 后为帖子 ID）
+2. 一键拉取楼层数据：
+   `NGA_COOKIE=<浏览器 document.cookie> node scripts/fetch-thread-json.mjs <tid> <page> <输出文件名> <lou>`
+   - 输出为 `"content": "..."` 格式，`tests/helpers.ts::loadSampleContent` 直接可读
+   - 不带 lou 参数则整页 JSON 落盘（`data.__R` 为楼层列表）
+   - 脚本已封装取数要点（2026-08-07 实测）：
+     - URL 构造：`__output=8` 强制 JSON（不加返回 JS 启动壳）；`__inchst=UTF8` 与鸿蒙端
+       ThreadApi 参数一致
+     - 登录 cookie + UA（`NGA_WP_JW` + `X-User-Agent: Nga_Official`）；游客返回 error 15
+     - 响应 GBK 编码：须 `TextDecoder('gbk')` 显式解码，否则 `JSON.parse` 报
+       "Bad control character"
+     - JSON 内 tab 未转义：parse 前 `replace(/\t/g, '\\t')`（即鸿蒙端 `preprocessJson`，
+       见 `entry/.../parser/NgaJsonSanitizer.ets`）
+   - 手动事项：cookie 从浏览器 `document.cookie` 获取（需 `ngaPassportUid`/`ngaPassportCid`）；
+     整页响应完整性校验看 `"__R":`（双下划线开头、**单下划线结尾**，勿用 `__R__` 误匹配
+     `__R__ROWS` 分页行数而误判防爬——实测该 API 无防爬，请求均完整返回）
+3. 用 TS 镜像解析该 content，检查解析树/run 序列是否符合预期
+4. devtools 打开帖子页，滚动至异常楼层，取该楼层内容容器
    （id 为 `postcontent<lou>` 或 `postcontentandsubject<lou>`）的 HTML
-6. 官方 HTML 与解析输出逐项对照，差异即 bug
-7. 修复镜像 → `npm test` → `npm run sync` → DevEco 编译 + Hypium
-8. 固化回归样本：content 存 `samples/` 并登记 `samples.lst`；官方 DOM 存
+   （注意：read.php 静态抓取只返回 JS 启动壳，楼层 DOM 由浏览器 JS 渲染，必须从浏览器取）
+5. 官方 HTML 与解析输出逐项对照，差异即 bug
+6. 修复镜像 → `npm test` → `npm run sync` → DevEco 编译 + Hypium
+7. 固化回归样本：content 存 `samples/` 并登记 `samples.lst`；官方 DOM 存
    `samples/official-<tid>-lou<lou>.html`，run 序列存 `samples/official-<tid>-lou<lou>-runs.json`
-9. 运行 `npm run snapshot` 生成 `<name>.snapshot.json`（快照测试遍历 samples.lst，
+8. 运行 `npm run snapshot` 生成 `<name>.snapshot.json`（快照测试遍历 samples.lst，
    缺基线即失败），审查 git diff 后提交
 
 官方差分挂载：`tests/official.test.ts` / `scripts/compare-official.ts` 当前硬编码

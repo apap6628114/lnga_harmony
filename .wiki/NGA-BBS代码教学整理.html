@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NGA BBS 代码教学整理（语法 · 用途 · 渲染效果对照）</title>
+<!--
+  NGA BBS 代码教学文档（HTML 版）
+  来源：帖子 [NGA常用BBS代码][排版的艺术]排版2012. 让文艺来的更猛烈些[更新版]（tid=5355906，2012-07-13 楼主发言）
+  本文件自包含（内联 CSS + 少量 JS），离线可看。
+  每节统一结构：语法（BBCode 原文）→ 用途（楼主提示）→ 效果预览（按 NGA 官方渲染样式模拟，
+  样式值 2026-08 从 ngabbs.com 官方网页 computedStyle 实测：quote #f9efd6 / h4.subtitle 粗体 /
+  ulist 缩进等），可作鸿蒙端 BBCode 渲染效果的参考对照。
+  颜色 class 取值按官方颜色名的标准 Web 色值模拟。
+-->
+<style>
+  :root {
+    --bg: #f5f5f2; --card: #ffffff; --line: #ddd8cc;
+    --syntax-bg: #faf8f2; --text: #333; --muted: #888;
+    --accent: #b3221b; --preview-label: #9a8870;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--bg); color: var(--text);
+    font: 14px/1.7 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  header h1 { font-size: 24px; margin: 0 0 6px; }
+  header .src { color: var(--muted); font-size: 12px; margin-bottom: 18px; }
+  nav { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px 18px; margin-bottom: 22px; }
+  nav h2 { font-size: 14px; margin: 0 0 8px; color: var(--muted); }
+  nav ol { margin: 0; padding-left: 22px; columns: 2; column-gap: 32px; }
+  nav a { color: var(--accent); text-decoration: none; }
+  nav a:hover { text-decoration: underline; }
+
+  section.code-item {
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    margin: 0 0 20px; padding: 18px 22px; overflow: hidden;
+  }
+  section.code-item > h2 { margin: 0 0 14px; font-size: 19px; border-bottom: 2px solid var(--line); padding-bottom: 8px; }
+  section.code-item > h2 .no { color: var(--accent); font-weight: 700; margin-right: 8px; }
+  .grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 20px; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } nav ol { columns: 1; } }
+
+  .col h3 {
+    font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: .12em;
+    margin: 0 0 8px; text-transform: uppercase;
+  }
+  .col-syntax h3 { color: var(--accent); }
+  .col-preview h3 { color: var(--preview-label); }
+
+  pre {
+    background: var(--syntax-bg); border: 1px dashed var(--line); border-radius: 6px;
+    padding: 10px 12px; overflow-x: auto; margin: 0 0 14px;
+  }
+  pre code { font: 13px/1.6 Consolas, "Courier New", monospace; white-space: pre; }
+
+  .usage { margin: 0 0 6px; padding: 0; list-style: none; }
+  .usage li { padding-left: 16px; position: relative; margin-bottom: 4px; }
+  .usage li::before { content: "•"; position: absolute; left: 0; color: var(--accent); }
+
+  /* ============ 效果预览区（模拟 NGA 官方渲染） ============ */
+  .preview {
+    border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px;
+    background: #fdfdfb; min-height: 80px;
+  }
+  .preview .tag { color: var(--muted); font-size: 11px; margin-bottom: 8px; display: block; }
+
+  /* 官方 quote：背景 #f9efd6，边框 1px solid #e6e1d3，padding 7.8px 10.4px（computedStyle 实测） */
+  .nqa-quote { background-color: #f9efd6; border: 1px solid #e6e1d3; padding: 8px 11px; border-radius: 2px; }
+
+  /* 官方 code：textfield 等宽、滚动、灰色行号 */
+  .nqa-code {
+    border: 1px solid #cfc9b8; background: #fff; padding: 6px 10px; max-height: 160px;
+    overflow: auto; font: 12.5px/1.7 Consolas, "Courier New", monospace; white-space: pre;
+  }
+  .nqa-code .ln { color: #999; float: left; margin-right: 10px; text-align: right; user-select: none; }
+  .nqa-code .lnbody { overflow: hidden; }
+
+  /* 官方 list：ul.ulist 嵌套，padding-left 18px（实测） */
+  .nqa-ulist { margin: 0; padding-left: 18px; }
+  .nqa-ulist li { margin: 2px 0; }
+  .nqa-ulist .ulist { margin-top: 2px; }
+
+  /* 官方 h：h4.subtitle 粗体标题（实测） */
+  .nqa-h { font-weight: 700; font-size: 15px; color: #10273f; border-bottom: 1px solid #ccc; padding-bottom: 2px; }
+
+    /* 官方 collapse：+ 按钮 + 标题（content 服务端截断为空） */
+  .nqa-collapse { border: 1px solid #cfc9b8; border-radius: 3px; padding: 6px 10px; }
+  .nqa-collapse button {
+    background: #e8e3d5; border: 1px solid #cfc9b8; border-radius: 3px; cursor: pointer;
+    font-weight: 700; margin-right: 8px; line-height: 1.2; padding: 0 6px;
+  }
+  .nqa-collapse .title { color: #333; }
+  .nqa-collapse .body { display: none; margin-top: 8px; border-top: 1px dashed #cfc9b8; padding-top: 8px; }
+
+  /* 官方链接：userlink / db 链接 */
+  .nqa-link { color: #2a6496; text-decoration: underline; cursor: pointer; }
+  .nqa-userlink { color: #b3221b; text-decoration: underline; cursor: pointer; font-weight: 700; }
+
+  /* 官方表格：tablecontainer 包裹，td padding 6px（实测），列宽由 td 数字控制 */
+  .nqa-table { width: 99.95%; border-collapse: collapse; }
+  .nqa-table td { border: 1px solid #cfc9b8; padding: 6px; background: #fff; }
+
+  /* 官方颜色名（标准 Web 色值） */
+  .c-skyblue{color:#87CEEB}.c-royalblue{color:#4169E1}.c-blue{color:#0000FF}.c-darkblue{color:#00008B}
+  .c-orange{color:#FFA500}.c-orangered{color:#FF4500}.c-crimson{color:#DC143C}.c-red{color:#FF0000}
+  .c-firebrick{color:#B22222}.c-darkred{color:#8B0000}.c-green{color:#008000}.c-limegreen{color:#32CD32}
+  .c-seagreen{color:#2E8B57}.c-teal{color:#008080}.c-deeppink{color:#FF1493}.c-tomato{color:#FF6347}
+  .c-coral{color:#FF7F50}.c-purple{color:#800080}.c-indigo{color:#4B0082}.c-burlywood{color:#DEB887}
+  .c-sandybrown{color:#F4A460}.c-chocolate{color:#D2691E}.c-sienna{color:#A0522D}.c-silver{color:#C0C0C0}
+
+  /* 对齐 */
+  .nqa-center { text-align: center; }
+  .nqa-right { text-align: right; }
+
+  /* 浮动 */
+  .nqa-float-l { float: left; width: 46%; border: 1px dashed #cfc9b8; padding: 6px 10px; background: #faf9f4; }
+  .nqa-float-r { float: right; width: 46%; border: 1px dashed #cfc9b8; padding: 6px 10px; background: #faf9f4; }
+  .clearfix::after { content: ""; display: block; clear: both; }
+
+  /* 媒体占位（图片/视频/相册/目录等，原帖图床已失效，展示形态） */
+  .nqa-media {
+    background: #eee; border: 1px solid #ddd; display: flex; align-items: center; justify-content: center;
+    color: #999; font-size: 12px;
+  }
+
+            footer { color: var(--muted); font-size: 12px; text-align: center; margin: 30px 0 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>NGA BBS 代码教学整理</h1>
+  <p class="src">
+    来源：<a href="https://ngabbs.com/read.php?tid=5355906" target="_blank">[NGA常用BBS代码][排版的艺术]排版2012. 让文艺来的更猛烈些[更新版]</a>
+    （tid=5355906，2012-07-13 楼主发言）。每节含语法、用途与效果预览；效果预览按 NGA 官方渲染样式模拟
+    （样式值 2026-08 实测于 ngabbs.com 官方网页），可作鸿蒙端 BBCode 解释器渲染效果的参考对照。
+  </p>
+</header>
+
+<nav>
+  <h2>目录</h2>
+  <ol>
+    <li><a href="#c1">color 颜色</a></li>
+    <li><a href="#c2">size 字号</a></li>
+    <li><a href="#c3">font 字体</a></li>
+    <li><a href="#c4">b / u / i 粗体·下划线·斜体</a></li>
+    <li><a href="#c5">align 对齐</a></li>
+    <li><a href="#c6">h 标题分割线</a></li>
+    <li><a href="#c7">l / r 左浮动·右浮动</a></li>
+    <li><a href="#c8">list 列表</a></li>
+    <li><a href="#c9">img 图片</a></li>
+    <li><a href="#c10">url 链接</a></li>
+    <li><a href="#c11">quote 引用</a></li>
+    <li><a href="#c12">code 代码</a></li>
+    <li><a href="#c13">flash 视频</a></li>
+    <li><a href="#c14">table 表格</a></li>
+    <li><a href="#c15">tid / pid 主题 ID·回复 ID</a></li>
+    <li><a href="#c16">del 删除线</a></li>
+    <li><a href="#c17">album 相册</a></li>
+    <li><a href="#c18">collapse 折叠内容</a></li>
+    <li><a href="#c19">@ 发送提醒</a></li>
+    <li><a href="#c20">更新 &amp; 备注（停用标签）</a></li>
+    <li><a href="#c21">排版界面的使用</a></li>
+    <li><a href="#c22">心得分享</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c1">
+  <h2><span class="no">1</span>color 颜色</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[color=颜色名]文本[/color]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>醒目的颜色一般和粗体等格式一起使用，标注醒目或重要的内容</li>
+        <li>最好不要使用过多的颜色，以免整篇文字太花，反而不利于阅读</li>
+        <li>同级的标题或者相似结构的文本，最好使用同样的颜色或格式</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">[color=skyblue]frost[/color] 与 [color=red]fire[/color]</span>
+        A song of <span class="c-skyblue">frost</span> and <span class="c-red">fire</span>.
+      </div>
+    </div>
+  </div>
+  <p><strong>可选颜色列表</strong>（24 个官方颜色名）：</p>
+  <table class="nqa-table" style="width:100%">
+    <tr><td><span class="c-skyblue">skyblue</span> 天蓝色</td><td><span class="c-royalblue">royalblue</span> 宝蓝色</td><td><span class="c-blue">blue</span> 蓝色</td><td><span class="c-darkblue">darkblue</span> 暗蓝色</td></tr>
+    <tr><td><span class="c-orange">orange</span> 橙色</td><td><span class="c-orangered">orangered</span> 桔红色</td><td><span class="c-crimson">crimson</span> 深红色</td><td><span class="c-red">red</span> 红色</td></tr>
+    <tr><td><span class="c-firebrick">firebrick</span> 砖红色</td><td><span class="c-darkred">darkred</span> 暗红色</td><td><span class="c-green">green</span> 绿色</td><td><span class="c-limegreen">limegreen</span> 橙绿色</td></tr>
+    <tr><td><span class="c-seagreen">seagreen</span> 海绿色</td><td><span class="c-teal">teal</span> 青色</td><td><span class="c-deeppink">deeppink</span> 深粉红色</td><td><span class="c-tomato">tomato</span> 番茄色</td></tr>
+    <tr><td><span class="c-coral">coral</span> 珊瑚红</td><td><span class="c-purple">purple</span> 紫色</td><td><span class="c-indigo">indigo</span> 靛蓝色</td><td><span class="c-burlywood">burlywood</span> 实木色</td></tr>
+    <tr><td><span class="c-sandybrown">sandybrown</span> 沙褐色</td><td><span class="c-chocolate">chocolate</span> 巧克力色</td><td><span class="c-sienna">sienna</span> 黄褐色</td><td><span class="c-silver">silver</span> 银灰色</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c2">
+  <h2><span class="no">2</span>size 字号</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[size=百分比]文本[/size]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>按百分比缩放字号；默认 100%，最小 1%，最大……很大</li>
+        <li>一般用来做首字大写以示醒目（如本篇开头 200%）；推荐多文字文章全局 120%</li>
+        <li>标题或小标题也可以使用大些的 size 来凸显</li>
+        <li>最好不要在正文中使用大号字体，会使行距疏疏密密，十分难看</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">[size=190%]导[/size]读党的最爱… / [size=1%]舅舅党…[/size]</span>
+        <span style="font-size:190%;line-height:1.2">导</span>读党的最爱，不过他们除了对首字放大有时还会加粗和上色.<br>
+        <span style="font-size:1%">舅舅党与忽略党的最爱.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c3">
+  <h2><span class="no">3</span>font 字体</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[font=字体名]文本[/font]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>指定文字字体；字体其实用处不大，默认字体就很好看</li>
+        <li>排版中使用了过多不同的字体，效果会看起来很乱</li>
+      </ul>
+      <p style="font-size:12px;color:#888">可用字体：simsun 宋体、simhei 黑体、Arial、Arial Black、Book Antiqua、Century Gothic、Comic Sans MS、Courier New、Georgia、Impact、Tahoma、Times New Roman、Trebuchet MS、Script MT Bold、Stencil、Verdana、Lucida Console</p>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">[font=simsun]宋体[/font] / [font=simhei]黑体[/font] / [font=Arial]Arial[/font]</span>
+        <span style="font-family:SimSun,serif">宋体 凉暮淡月可倾舟，覆水碧沉秋色流.</span><br>
+        <span style="font-family:SimHei,sans-serif">黑体 光景潺湲不得眷，寒霜入寐浸凝眸.</span><br>
+        <span style="font-family:Arial,sans-serif">Auixote 0123456789</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c4">
+  <h2><span class="no">4</span>b / u / i 粗体·下划线·斜体</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[b]粗体文本[/b]
+[u]下划线文本[/u]
+[i]斜体文本[/i]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>粗体最常用：标题、小标题、标记、结论、首字大写等都可以使用</li>
+        <li>下划线一般用于网址或邮件等文本，但又不宜直接使用链接标签的场合</li>
+        <li>斜体用在一些特殊的场合（如引用、诗句）</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">[b]粗[/b] / [u]下划线[/u] / [i]斜体[/i]</span>
+        <b>粗体文本</b>　<u>下划线文本</u>　<i>斜体文本</i>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c5">
+  <h2><span class="no">5</span>align 对齐</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[align=left/center/right]文本[/align]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>左 / 中 / 右对齐；默认左对齐，左对齐可省略标签</li>
+        <li>中对齐一般用来做标题，也可用作署名；右对齐一般用来做署名</li>
+        <li>图片、单元格等的对齐也可以嵌套使用该标签</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">[align=center]…[/align]（官方渲染为块级居中）</span>
+        <div class="nqa-center">看这里，中对齐</div>
+        <div class="nqa-right">这一行是右对齐</div>
+        <div>默认左对齐</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c6">
+  <h2><span class="no">6</span>h 标题分割线</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[h]我是一条分割线[/h]
+===我是一条分割线===</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>渲染为一条带标题文字的分割线；官方渲染为 h4.subtitle 粗体标题</li>
+        <li>分割线上的文字可以是空格；可编写于文字两端或文尾</li>
+        <li>分割线上的文字也可用其它文本标签嵌套修饰</li>
+        <li>预览模式下看不到分割线</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">[h]我是一条分割线[/h]（官方渲染为 h4.subtitle）</span>
+        <div class="nqa-h">我是一条分割线</div>
+        <p style="margin:10px 0 0;color:#888;font-size:12px">也可写作 <code>===我是一条分割线===</code>，分割线文字可嵌套修饰：</p>
+        <div class="nqa-h"><span class="c-sienna">第</span>一条</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c7">
+  <h2><span class="no">7</span>l / r 左浮动·右浮动</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[l]左浮动段落[/l]
+[r]右浮动段落[/r]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>将段落左右浮动，实现图文左右配套的特殊效果</li>
+        <li>左右浮动段落字节须等同，否则还是会自动平衡两侧</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview clearfix">
+        <span class="tag">[l]…[/l] [r]…[/r]（浮动并排）</span>
+        <div class="nqa-float-l">版本末期带着满满的祝福和美好的回忆</div>
+        <div class="nqa-float-r">法师、牧师、术士、德鲁依、萨满 变身吧...</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c8">
+  <h2><span class="no">8</span>list 列表</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[list]
+[*]条目1
+[*]条目2
+[/list]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>将整段文字缩进一段距离并进行分类；可嵌套使用，层次分明</li>
+        <li>每个条目前增加 [*] 标签；嵌套最多三层，不同层级 [*] 显示三种不同样式</li>
+        <li>可用来排版逐条计列的文本，也可使一段文本整体缩进</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">三层嵌套 [list]（官方渲染为 ul.ulist 嵌套）</span>
+        <ul class="nqa-ulist">
+          <li>Did you think we had forgotten?
+            <ul class="nqa-ulist">
+              <li>Did you think we had forgiven?
+                <ul class="nqa-ulist">
+                  <li>Behold, now, the terrible vengeance of the Forsaken!</li>
+                </ul>
+              </li>
+            </ul>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c9">
+  <h2><span class="no">9</span>img 图片</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[img]http://www.图片地址.com/XXX.jpg[/img]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>引用某网络地址的图片；NGA 发帖可用上传附件功能传图获取网络地址</li>
+        <li>使用前先确认图床有效并支持外链；也可进入个人 178 中心相册上传</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">[img]http://img.ngacn.cc/attachments/mon_201207/13/-3429350_4fff8633bec77.jpg[/img]（原图床已失效，占位示意）</span>
+        <div class="nqa-media" style="width:100%;height:120px">图片：mon_201207/13/-3429350_4fff8633bec77.jpg</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c10">
+  <h2><span class="no">10</span>url 链接</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[url]http://bbs.ngacn.cc[/url]
+[url=http://bbs.ngacn.cc]艾泽拉斯国家地理[/url]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>在文本中方便地插入超级链接；引用、举例、传送等场景可用</li>
+        <li>第一种直接显示网址；第二种显示中间的文字；标签内文字也可以是图片</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">两种形式的渲染对比</span>
+        <a class="nqa-link" href="#">http://bbs.ngacn.cc</a><br>
+        <a class="nqa-link" href="#">艾泽拉斯国家地理</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c11">
+  <h2><span class="no">11</span>quote 引用</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[quote]引用个什么呢?[/quote]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>点击帖子右上方的引用按钮可直接在回帖中引用该帖</li>
+        <li>除了表示引用，也常常用来排版（本篇全局使用引用代码排版）</li>
+        <li>引用内可插入文字、图片甚至表格；也可以再次添加引用（嵌套）</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">官方渲染：背景 #f9efd6，1px 边框 #e6e1d3，padding 7.8px 10.4px</span>
+        <div class="nqa-quote">引用个什么呢?<br><div class="nqa-quote" style="margin-top:6px">嵌套引用也可以</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c12">
+  <h2><span class="no">12</span>code 代码</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[code]代码内容[/code]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>渲染为固定大小代码窗口，内容太长自动滚动；分行编辑自动标注行号</li>
+        <li>代码内的排版代码不会被自动转化成排版样式，一般用来帖 BBS 代码</li>
+        <li>代码内的文本一般不能改变样式或字体</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">官方渲染：textfield 等宽 + 左侧灰色行号</span>
+        <div class="nqa-code"><span class="ln">1:<br>2:</span><div class="lnbody">[code]节操，撒了一地![/code]</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c13">
+  <h2><span class="no">13</span>flash 视频</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[flash]http://xxx.com/ooo.swf[/flash]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>嵌入视频播放框架；官方渲染为 640×360 视频占位 + 跳转链接</li>
+        <li>只支持 youtube / tudou / youku 三个站；一贴仅显示一个视频框架</li>
+        <li>视频地址可直接在该网站视频下方复制得到</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">官方渲染：div.video 640px 宽 + 跳转链接</span>
+        <div style="border:1px solid #cfc9b8;padding:4px;background:#fff">
+          <div class="nqa-media" style="width:100%;height:120px"><a class="nqa-link" href="#">▶ 视频：player.youku.com/player.php/sid/XMjQ4Mjg3MTY=/v.swf</a></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+
+<!-- ============================================================ -->
+
+<!-- ============================================================ -->
+
+<!-- ============================================================ -->
+
+<!-- ============================================================ -->
+<section class="code-item" id="c14">
+  <h2><span class="no">14</span>table 表格</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[table]
+[tr][td]单元格11[/td][td]单元格12[/td][/tr]
+[tr][td]单元格21[/td][td]单元格22[/td][/tr]
+[/table]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>table 指表格，tr 表示行，td 是单元格；每行单元格数必须相同，否则表格会乱</li>
+        <li>单元格内可插入各种 BBS 代码：图片、链接、字体、对齐等</li>
+        <li>列宽可在第一行 td 中加数字设定：<code>[td50]</code> = 宽度 50%（官方渲染 width:50%）；行高自适应</li>
+        <li>编辑技巧：记事本中每行开头插 1、单元格间用 2 分隔、行末补 3，再用替换功能换成 BBS 代码</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">官方渲染：tablecontainer 包裹，td padding 6px；[td50] → width:50%</span>
+        <table class="nqa-table">
+          <tr><td style="width:50%"><b>颜色名</b></td><td style="width:50%"><b>样本</b></td></tr>
+          <tr><td>skyblue</td><td><span class="c-skyblue">skyblue 天蓝色</span></td></tr>
+          <tr><td>red</td><td><span class="c-red">red 红色</span></td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c15">
+  <h2><span class="no">15</span>tid / pid 主题 ID·回复 ID</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[tid]主题ID[/tid]
+[tid=主题ID]显示名称[/tid]
+[pid]回复ID[/pid]
+[pid=回复ID]显示名称[/pid]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>主题帖地址栏 tid= 后的数字为主题 ID；回复帖地址栏 pid= 后的数字为回复 ID</li>
+        <li>可在帖子中引用另一主题的回复（如银色黎明投诉其他版区）</li>
+        <li>点击引用按钮时，回复第一句话是系统加上的 [pid][/pid] 代码</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">官方渲染为链接</span>
+        <a class="nqa-link" href="#">主题链接 [tid=123]</a>　<a class="nqa-link" href="#">回复链接 [pid=456]</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c16">
+  <h2><span class="no">16</span>del 删除线</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[del]删除线文本[/del]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>标注已经过期或失效的文字内容</li>
+        <li>常出现于回复贴中，用来标注吐槽内容</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">[del]请问，还有人身材比我还好吗[/del]</span>
+        <s>请问，还有人身材比我还好吗</s>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+
+<!-- ============================================================ -->
+<section class="code-item" id="c17">
+  <h2><span class="no">17</span>album 相册</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法（图片用 [url] 包裹）</h3>
+      <pre><code>[album=相册标题]
+[url]http://xxx.com/ooo.jpg[/url]
+[url]http://xxx.com/xxx.jpg[/url]
+[/album]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>相册中可以添加多幅图片，节省图片所占帖子排版空间</li>
+        <li>同主题上传太多附件会自动保存于相册中</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">多图相册（原图床已失效，占位示意）</span>
+        <div style="display:flex;gap:8px">
+          <div class="nqa-media" style="flex:1;height:80px">图1</div>
+          <div class="nqa-media" style="flex:1;height:80px">图2</div>
+          <div class="nqa-media" style="flex:1;height:80px">图3</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c18">
+  <h2><span class="no">18</span>collapse 折叠内容</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[collapse=提要]隐藏的内容……[/collapse]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>隐藏字数太多的内容部分；官方渲染为 + 按钮折叠块，标题显示「提要」</li>
+        <li>最常见于很多人的签名——签名过大可能被砍，用折叠标签有安全保障</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览（点击 + 展开）</h3>
+      <div class="preview">
+        <span class="tag">官方渲染：button.chButton + 标题 + collapse_content</span>
+        <div class="nqa-collapse" data-toggle="collapse">
+          <button type="button">+</button><span class="title">来做个示例 ...</span>
+          <div class="body" style="display:none">这儿有一堆福利，有节操的人才能看到</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+
+<!-- ============================================================ -->
+<section class="code-item" id="c19">
+  <h2><span class="no">19</span>@ 发送提醒</h2>
+  <div class="grid">
+    <div class="col col-syntax">
+      <h3>语法</h3>
+      <pre><code>[@用户名]</code></pre>
+      <h3>用途</h3>
+      <ul class="usage">
+        <li>发送提醒代码，发言需要某人查看时使用</li>
+        <li>曾经在水区风靡一时的黑枪就是这一标签</li>
+        <li>官方渲染为 nuke.php?func=ucp&amp;username= 用户链接（userlink）</li>
+      </ul>
+    </div>
+    <div class="col col-preview">
+      <h3>效果预览</h3>
+      <div class="preview">
+        <span class="tag">[@那个黑枪不能再打了]</span>
+        <a class="nqa-userlink" href="#">@那个黑枪不能再打了</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+
+<!-- ============================================================ -->
+
+<!-- ============================================================ -->
+
+<!-- ============================================================ -->
+<section class="code-item" id="c20">
+  <h2><span class="no">20</span>更新 &amp; 备注（停用标签）</h2>
+  <ul class="usage">
+    <li><b>lessernuke（禁言）标签</b>：代码虽未停用，但编辑后不再有效果；2012/07 之前编辑保存的依旧有效</li>
+    <li><b>NGA 维基百科（wiki）</b>：曾经非常强大，不知何时已经停用</li>
+    <li>排版的艺术（作者 Auixote，2008 年作）是该帖的学习源头；四年间 NGA 增添了很多新代码</li>
+  </ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c21">
+  <h2><span class="no">21</span>排版界面的使用</h2>
+  <ul class="usage">
+    <li>字体 / 字号 / 颜色的代码可直接使用排版界面中的下拉列表框选取和自动完成</li>
+    <li>不清楚的代码可点击排版界面中的相关标签获得帮助；预览功能可提前观看排版效果</li>
+    <li>误关页面后可用「恢复上次输入的内容」复原未保存的帖子</li>
+    <li>每个帖子的长度上限是 40000 字节，可通过标签获知当前帖子的长度</li>
+  </ul>
+</section>
+
+<!-- ============================================================ -->
+<section class="code-item" id="c22">
+  <h2><span class="no">22</span>心得分享</h2>
+  <ul class="usage">
+    <li>最重要的一点是学习别人的长处，多看看他人优秀的文章排版</li>
+    <li>帖子的美观并不在于多么花俏，做到整洁干净，或多一点「清秀」的感觉就很不错了</li>
+    <li>文章编辑中的半角空格是无效的，可以尝试用全角空格，或者 2 次 TAB 键</li>
+    <li>较长篇幅的帖子中，多使用 LIST 列表会使文章条理看起来更清晰</li>
+    <li>除了排版美观，真正的内涵在于文字内容看起来要文艺，整贴才会真正优秀</li>
+  </ul>
+</section>
+
+<footer>
+  NGA BBS 代码教学整理 · 整理自 tid=5355906 楼主发言 · 效果预览样式参考官方渲染实测（2026-08）
+</footer>
+
+</div>
+
+<script>
+// 交互：collapse 折叠展开（官方 + 按钮语义）
+document.querySelectorAll('[data-toggle="collapse"]').forEach(function (box) {
+  var btn = box.querySelector('button');
+  var body = box.querySelector('.body');
+  btn.addEventListener('click', function () {
+    var hidden = body.style.display === 'none';
+    body.style.display = hidden ? 'block' : 'none';
+    btn.textContent = hidden ? '-' : '+';
+  });
+});
+</script>
+</body>
+</html>
