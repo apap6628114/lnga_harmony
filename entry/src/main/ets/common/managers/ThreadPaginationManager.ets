@@ -7,6 +7,7 @@ import { PaginationManager } from './PaginationManager'
  * 管理器始终只允许提交与当前窗口相邻的页面，使已加载内容保持为
  * `[loadedPageStart, loadedPageEnd]` 的连续区间。向前、向后预取共用按页缓存，
  * 缓存可以乱序到达，但只有紧邻窗口边界的页面才能提交到可见列表。
+ * 修改窗口语义前必须先阅读 `docs/THREAD_DESIGN.md`。
  */
 @Observed
 export class ThreadPaginationManager extends PaginationManager {

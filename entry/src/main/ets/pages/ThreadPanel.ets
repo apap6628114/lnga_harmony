@@ -81,6 +81,13 @@ class FetchPageResult {
   result: ThreadResult | null = null
 }
 
+/**
+ * 帖子详情面板。
+ *
+ * 修改滚动、分页或标题栏布局前必须先阅读 `docs/THREAD_DESIGN.md`。
+ * 固定毛玻璃标题栏覆盖全屏列表，顶部安全区只由 `contentStartOffset` 表达；
+ * 禁止重新引入伪列表占位项或全局索引补偿。
+ */
 @Component
 export struct ThreadPanel {
   @State holdingStatus: HoldingHandStatus = appStore.settings.holdingHand as HoldingHandStatus
