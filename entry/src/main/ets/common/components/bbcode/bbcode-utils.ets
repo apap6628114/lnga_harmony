@@ -183,19 +183,73 @@ export function normalizeTextColor(raw: string): string {
 }
 
 /**
- * 将常见网页字体名称映射到 HarmonyOS 可用的通用字体族。
+ * 常见字体名的归类规则。
+ *
+ * 命中后按「系统字体表中的规范名」+「保底通用族」生成回退链：
+ * `'Times New Roman,serif'` 语义为——系统字体表存在规范名时精确渲染，
+ * 否则落到保底族。中文/别名（如 宋体/simsun）在系统表中不存在，
+ * 规范名为空，直接返回保底族。
+ */
+interface FontFamilyRule {
+  /** 小写匹配键（包含匹配）。 */
+  key: string
+  /** 系统字体表中的规范名；为空表示直接使用保底族。 */
+  canonical: string
+  /** 保底通用族。 */
+  fallback: string
+}
+
+/** 教学帖 18 种字体 + 常见别名按衬线/无衬线/等宽归类；长名在前避免子串抢占。 */
+const FONT_FAMILY_RULES: FontFamilyRule[] = [
+  // 衬线族
+  { key: 'times new roman', canonical: 'Times New Roman', fallback: 'serif' },
+  { key: 'georgia', canonical: 'Georgia', fallback: 'serif' },
+  { key: 'book antiqua', canonical: 'Book Antiqua', fallback: 'serif' },
+  { key: 'simsun', canonical: '', fallback: 'serif' },
+  { key: '宋体', canonical: '', fallback: 'serif' },
+  { key: '楷体', canonical: '', fallback: 'serif' },
+  // 无衬线族
+  { key: 'arial black', canonical: 'Arial Black', fallback: 'sans-serif' },
+  { key: 'arial', canonical: 'Arial', fallback: 'sans-serif' },
+  { key: 'tahoma', canonical: 'Tahoma', fallback: 'sans-serif' },
+  { key: 'verdana', canonical: 'Verdana', fallback: 'sans-serif' },
+  { key: 'trebuchet ms', canonical: 'Trebuchet MS', fallback: 'sans-serif' },
+  { key: 'century gothic', canonical: 'Century Gothic', fallback: 'sans-serif' },
+  { key: 'comic sans ms', canonical: 'Comic Sans MS', fallback: 'sans-serif' },
+  { key: 'impact', canonical: 'Impact', fallback: 'sans-serif' },
+  { key: 'script mt bold', canonical: 'Script MT Bold', fallback: 'sans-serif' },
+  { key: 'simhei', canonical: '', fallback: 'sans-serif' },
+  { key: '黑体', canonical: '', fallback: 'sans-serif' },
+  { key: 'yahei', canonical: '', fallback: 'sans-serif' },
+  { key: '微软雅黑', canonical: '', fallback: 'sans-serif' },
+  // 等宽族
+  { key: 'courier new', canonical: 'Courier New', fallback: 'monospace' },
+  { key: 'lucida console', canonical: 'Lucida Console', fallback: 'monospace' },
+  { key: 'consolas', canonical: 'Consolas', fallback: 'monospace' },
+  { key: 'courier', canonical: 'Courier', fallback: 'monospace' },
+]
+
+/**
+ * 将常见网页字体名称归一化为 ArkUI fontFamily 回退链。
+ *
+ * 归类为衬线/无衬线/等宽三族：拉丁专名返回「规范名,保底族」回退链
+ * （系统表存在时精确命中，否则保底），中文/别名直接返回保底族；
+ * 未命中的名字原样返回（系统表命中即用，否则系统回退默认字体）。
  *
  * @param raw BBCode/CSS 字体名称
- * @returns 字体族或字体回退列表
+ * @returns ArkUI fontFamily 值；空字符串表示无法使用（调用方不设置）
  */
 export function normalizeFontFamily(raw: string): string {
   const family: string = raw.trim().replace(/["']/g, '')
-  const lower: string = family.toLowerCase()
   if (family.length === 0 || family.length > 64) return ''
-  if (lower.indexOf('simsun') >= 0 || family.indexOf('宋体') >= 0 || lower === 'serif') return 'serif'
-  if (lower.indexOf('consolas') >= 0 || lower.indexOf('courier') >= 0 || lower === 'monospace') return 'monospace'
-  if (lower.indexOf('arial') >= 0 || lower.indexOf('yahei') >= 0 || family.indexOf('黑体') >= 0 ||
-    family.indexOf('微软雅黑') >= 0 || lower === 'sans-serif') return 'sans-serif'
+  const lower: string = family.toLowerCase()
+  if (lower === 'serif' || lower === 'sans-serif' || lower === 'monospace') return lower
+  for (let i: number = 0; i < FONT_FAMILY_RULES.length; i++) {
+    const rule: FontFamilyRule = FONT_FAMILY_RULES[i]
+    if (lower.indexOf(rule.key) >= 0) {
+      return rule.canonical.length > 0 ? `${rule.canonical},${rule.fallback}` : rule.fallback
+    }
+  }
   return family
 }
 

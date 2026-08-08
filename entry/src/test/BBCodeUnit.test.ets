@@ -12,7 +12,8 @@ import {
   InlineRun,
   InlineRunKind,
   InlineTextStyle,
-  isInlineRunsBlank
+  isInlineRunsBlank,
+  normalizeFontFamily
 } from '../main/ets/common/components/bbcode/bbcode-utils'
 import {
   buildTableLayout,
@@ -410,10 +411,25 @@ export default function bbcodeUnitTest(): void {
         '[font=Consolas][size=200%][size=200%]大[/size][/size][sub]下[/sub][sup]上[/sup][/font]'))
 
       expect(runs.length).assertEqual(3)
-      expect(runs[0].style.fontFamily).assertEqual('monospace')
+      expect(runs[0].style.fontFamily).assertEqual('Consolas,monospace')
       expect(runs[0].style.scalePercent).assertEqual(300)
       expect(runs[1].style.baseline).assertEqual(InlineBaseline.SUBSCRIPT)
       expect(runs[2].style.baseline).assertEqual(InlineBaseline.SUPERSCRIPT)
+    })
+
+    it('normalizesFontFamilyWithFallbackChain', 0, (): void => {
+      // 拉丁专名：系统表存在时精确命中，否则落到保底族
+      expect(normalizeFontFamily('Times New Roman')).assertEqual('Times New Roman,serif')
+      expect(normalizeFontFamily('Arial')).assertEqual('Arial,sans-serif')
+      expect(normalizeFontFamily('Courier New')).assertEqual('Courier New,monospace')
+      // 长名优先于子串抢占
+      expect(normalizeFontFamily('Arial Black')).assertEqual('Arial Black,sans-serif')
+      // 中文/拼音别名直接落到保底族
+      expect(normalizeFontFamily('宋体')).assertEqual('serif')
+      expect(normalizeFontFamily('simhei')).assertEqual('sans-serif')
+      // 通用族与未知名字
+      expect(normalizeFontFamily('monospace')).assertEqual('monospace')
+      expect(normalizeFontFamily('Futura')).assertEqual('Futura')
     })
 
     it('derivesUrlFromFormattedBody', 0, (): void => {
