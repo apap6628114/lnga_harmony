@@ -49,6 +49,8 @@ const LOAD_REPLACE: string = 'replace'
 const LOAD_APPEND: string = 'append'
 const LOAD_PREPEND: string = 'prepend'
 const NAV_BAR_H: number = 44
+/** 导航意图（跳页/楼层定位）落位兜底时长：正常情况下 onScrollStop 即解除，此值仅作异常兜底。 */
+const NAV_INTENT_SETTLE_MS: number = 500
 
 class FetchPageResult {
   page: number = 0
@@ -91,7 +93,16 @@ export struct ThreadPanel {
   private pagePickerCurrentPage: number = 0
   private pagePickerOnSelect: ((page: number) => void) | null = null
   private scroller: Scroller = new Scroller()
-  private pageSwitchPending: boolean = false
+  /** 导航意图：跳页/楼层定位尚未落位时为 true，期间 reconcile 不触发上下页加载。 */
+  private navIntentPending: boolean = false
+  /** onScrollIndex 最近上报的首个可见列表项下标，用于判断是否靠近顶部。 */
+  private lastScrollStart: number = 1
+  /** onScrollIndex 最近上报的末个可见列表项下标，用于判断是否靠近底部。 */
+  private lastScrollEnd: number = 0
+  /** 前置插入前的首屏锚点 pid（楼层稳定标识，取代索引锚点）。 */
+  private anchorPid: number = -1
+  /** 导航意图解除的兜底定时器句柄。 */
+  private navIntentTimer: number = -1
   /** 尚未交给帖子接口定位的路由目标楼层。 */
   private pendingTargetPid: string = ''
   @State mgr: ThreadPaginationManager = new ThreadPaginationManager()
@@ -194,7 +205,7 @@ export struct ThreadPanel {
     this.syncFavoriteState()
     this.votedUpPids = new Set()
     this.votedDownPids = new Set()
-    this.pageSwitchPending = false
+    this.navIntentPending = false
     this.loadPosts(initialPage, LOAD_REPLACE)
     this.loadPersistedVotes()
   }
@@ -262,9 +273,73 @@ export struct ThreadPanel {
       const pidNum: number = parseInt(this.threadPid, 10)
       const idx: number = this.mgr.findPostIndex(pidNum)
       if (idx >= 0) {
-        this.scroller.scrollToIndex(idx + 1, true, ScrollAlign.CENTER)
+        // 列表第 0 项是状态栏占位，楼层在列表中的下标 = posts 下标 + 1
+        // 使用瞬时滚动：平滑滚动期间 onScrollIndex 会以中间值触发，可能提前加载上下页并覆盖目标位置
+        this.scroller.scrollToIndex(idx + 1, false, ScrollAlign.CENTER)
       }
     }
+  }
+
+  /**
+   * 滚动协调：根据最近一次上报的可见范围决定是否需要加载上下页。
+   * 导航意图（跳页/楼层定位）未落位时直接放行，避免定位滚动与加载逻辑互踩；
+   * 加载与否的单一判断点，滚动事件只负责上报位置、不直接发请求。
+   */
+  private reconcile(): void {
+    if (this.navIntentPending) return
+    if (appStore.settings.threadNavMode === ThreadNavMode.PAGE) return
+    const total: number = this.postsDataSource.totalCount()
+    if (total <= 0) return
+    if (this.lastScrollEnd >= total - 3) {
+      this.tryLoadNext()
+    }
+    if (this.lastScrollStart <= 3) {
+      this.tryLoadPrev()
+    }
+  }
+
+  /**
+   * 记录前置插入前的首屏锚点：以当前首个可见帖子的 pid 为稳定标识，
+   * 取代索引锚点（索引受状态栏占位与插入数量影响，易产生偏移错误）。
+   */
+  private captureAnchorPid(): void {
+    // 列表第 0 项是状态栏占位，首个可见帖子的 posts 下标 = 列表下标 - 1
+    const postIdx: number = Math.max(this.lastScrollStart - 1, 0)
+    if (postIdx < this.mgr.posts.length) {
+      this.anchorPid = this.mgr.posts[postIdx].pid
+    } else {
+      this.anchorPid = -1
+    }
+  }
+
+  /**
+   * 前置插入完成后滚动回锚点楼层，保持视口内容不动。
+   * @param addedCount - 本次实际新增的楼层数
+   */
+  private scrollToAnchor(addedCount: number): void {
+    let targetListIdx: number = addedCount + 1
+    if (this.anchorPid > 0) {
+      const idx: number = this.mgr.findPostIndex(this.anchorPid)
+      if (idx >= 0) {
+        targetListIdx = idx + 1
+      }
+    }
+    this.scroller.scrollToIndex(targetListIdx)
+  }
+
+  /**
+   * 调度导航意图解除：正常情况下由 onScrollStop 在滚动落位后立即解除，
+   * 本定时器仅作为兜底（防止 onScrollStop 未触发导致意图卡死）。
+   * @param gen - 本次加载的代际值，若期间已发起新加载则不再解除
+   */
+  private scheduleNavIntentRelease(gen: number): void {
+    if (!this.navIntentPending) return
+    clearTimeout(this.navIntentTimer)
+    this.navIntentTimer = setTimeout((): void => {
+      if (gen === this.mgr.getGeneration()) {
+        this.navIntentPending = false
+      }
+    }, NAV_INTENT_SETTLE_MS)
   }
 
   private buildPageArray(): number[] {
@@ -295,9 +370,8 @@ export struct ThreadPanel {
       this.isLoadingPrevious = false
       this.hasError = false
       this.mgr.loadedPageStart = targetPage
-      if (targetPage > 1) {
-        this.pageSwitchPending = true
-      }
+      // 跳页（targetPage > 1）或楼层定位（带 pid）都视为"导航意图"，滚动落位后再解除
+      this.navIntentPending = targetPage > 1 || this.pendingTargetPid.length > 0
     } else if (mode === LOAD_APPEND) {
       this.isLoadingMore = true
     } else {
@@ -346,28 +420,32 @@ export struct ThreadPanel {
           this.mgr.replaceWith(result.posts, resolvedPage, this.mgr.totalPages)
           this.postsDataSource.replaceAll(result.posts)
           this.displayPage = resolvedPage
-          this.pageSwitchPending = false
           if (appStore.auth.isAuthenticated) {
             appStore.addBrowseHistoryFromThread(appStore.auth.uid, result, this.threadTid)
           }
           if (requestPid.length > 0) {
             this.pendingTargetPid = ''
+            // 延迟一帧确保 LazyForEach 布局完成，目标 item 已创建
             setTimeout((): void => {
               this.onScrollToPid()
             }, 0)
           } else {
             this.scroller.scrollToIndex(1)
           }
+          // 定位/回顶滚动落位后再解除导航意图（onScrollStop 为主，定时器兜底）
+          this.scheduleNavIntentRelease(gen)
         } else if (mode === LOAD_APPEND) {
           const added: PostInfo[] = this.mgr.appendPosts(result.posts, targetPage, this.mgr.totalPages)
           if (added.length > 0) {
             this.postsDataSource.appendAll(added)
           }
         } else {
+          // 前置插入前以当前首屏首个可见帖子的 pid 为锚，插入后滚动回锚点，保持视口内容不动
+          this.captureAnchorPid()
           const added: PostInfo[] = this.mgr.prependPosts(result.posts, targetPage)
           if (added.length > 0) {
             this.postsDataSource.prependAll(added)
-            this.scroller.scrollToIndex(added.length + 1)
+            this.scrollToAnchor(added.length)
           }
         }
         this.triggerPrefetches()
@@ -376,7 +454,7 @@ export struct ThreadPanel {
         this.errorMsg = result.error || '加载失败'
         this.mgr.posts = []
         this.postsDataSource.clear()
-        this.pageSwitchPending = false
+        this.navIntentPending = false
       }
     } catch (e) {
       if (gen !== this.mgr.getGeneration()) return
@@ -385,7 +463,7 @@ export struct ThreadPanel {
         this.errorMsg = (e as Error).message || '加载失败'
         this.mgr.posts = []
         this.postsDataSource.clear()
-        this.pageSwitchPending = false
+        this.navIntentPending = false
       } else {
         logger.error('loadPosts failed: %{public}s', (e as Error).message)
       }
@@ -606,7 +684,7 @@ export struct ThreadPanel {
 
   private tryLoadNext(): void {
     if (appStore.settings.threadNavMode === ThreadNavMode.PAGE) return
-    if (this.isLoadingMore || !this.mgr.hasMore) return
+    if (this.isLoadingMore || this.navIntentPending || !this.mgr.hasMore) return
     const nextPage: number = this.mgr.currentPage + 1
     if (this.mgr.hasPrefetchedPage(nextPage)) {
       const added: PostInfo[] = this.mgr.commitPrefetchedPage(nextPage)
@@ -621,14 +699,16 @@ export struct ThreadPanel {
 
   private tryLoadPrev(): void {
     if (appStore.settings.threadNavMode === ThreadNavMode.PAGE) return
-    if (this.isLoadingPrevious || this.pageSwitchPending) return
+    if (this.isLoadingPrevious || this.navIntentPending) return
     if (this.mgr.loadedPageStart <= 1) return
     const prevPage: number = this.mgr.loadedPageStart - 1
     if (this.mgr.isPrefetchedPrevReady()) {
+      // 前置插入前以当前首屏首个可见帖子的 pid 为锚，插入后滚动回锚点，保持视口内容不动
+      this.captureAnchorPid()
       const added: PostInfo[] = this.mgr.commitPrefetchedPrev()
       if (added.length > 0) {
         this.postsDataSource.prependAll(added)
-        this.scroller.scrollToIndex(added.length + 1)
+        this.scrollToAnchor(added.length)
       }
       this.prefetchPrev()
     } else {
@@ -868,14 +948,17 @@ export struct ThreadPanel {
         .cachedCount(6)
         .maintainVisibleContentPosition(true)
         .onScrollIndex((start: number, end: number, center: number): void => {
+          // 只上报位置，加载与否统一由 reconcile 决定，避免滚动事件直接驱动请求
+          this.lastScrollStart = start
+          this.lastScrollEnd = end
           this.displayPage = this.mgr.getDisplayPage(center - 1)
-          const total: number = this.postsDataSource.totalCount()
-          if (end >= total - 3 && total > 0) {
-            this.tryLoadNext()
-          }
-          if (start <= 3 && total > 0) {
-            this.tryLoadPrev()
-          }
+          this.reconcile()
+        })
+        .onScrollStop((): void => {
+          // 滚动真正停止即视为导航滚动落位，立即解除意图；定时器仅作异常兜底
+          this.navIntentPending = false
+          clearTimeout(this.navIntentTimer)
+          this.navIntentTimer = -1
         })
         .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
       }
