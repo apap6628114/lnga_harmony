@@ -1,0 +1,1341 @@
+[
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "1. color 颜色"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\nA song of "
+ },
+ {
+  "type": "COLOR",
+  "color": "skyblue",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "frost"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " and "
+ },
+ {
+  "type": "COLOR",
+  "color": "red",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "fire"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": ".\n"
+ },
+ {
+  "type": "COLOR",
+  "color": "royalblue",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "royalblue"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "blue",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "blue"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "darkblue",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "darkblue"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "orange",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "orange"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "orangered",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "orangered"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "crimson",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "crimson"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "firebrick",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "firebrick"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "darkred",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "darkred"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "green",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "green"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "limegreen",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "limegreen"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "seagreen",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "seagreen"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "teal",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "teal"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "deeppink",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "deeppink"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "tomato",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "tomato"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "coral",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "coral"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "purple",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "purple"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "indigo",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "indigo"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "burlywood",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "burlywood"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "sandybrown",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "sandybrown"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "chocolate",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "chocolate"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "sienna",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "sienna"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "COLOR",
+  "color": "silver",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "silver"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "2. size 字号"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "SIZE",
+  "size": 190,
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "导"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "读党的最爱，不过他们除了对首字放大有时还会加粗和上色.\n"
+ },
+ {
+  "type": "SIZE",
+  "size": 50,
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "舅舅党与忽略党的最爱."
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "3. font 字体"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "FONT",
+  "fontFamily": "simsun",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "宋体 凉暮淡月可倾舟"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "FONT",
+  "fontFamily": "simhei",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "黑体 光景潺湲不得眷"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "FONT",
+  "fontFamily": "Arial",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "Auixote 0123456789"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "4. b / u / i"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "粗体文本"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "　"
+ },
+ {
+  "type": "UNDERLINE",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "下划线文本"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "　"
+ },
+ {
+  "type": "ITALIC",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "斜体文本"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "5. align 对齐"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "ALIGN",
+  "align": "center",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "看这里，中对齐"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "ALIGN",
+  "align": "right",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "这一行是右对齐"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "6. h 标题分割线"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "HEADING",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "我是一条分割线"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "HEADING",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "我是一条分割线"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "HEADING",
+  "children": [
+   {
+    "type": "COLOR",
+    "color": "sienna",
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "第"
+     }
+    ]
+   },
+   {
+    "type": "TEXT",
+    "text": "一条"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "7. l / r 左浮动·右浮动"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "FLOAT_LEFT",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "版本末期带着满满的祝福和美好的回忆"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "FLOAT_RIGHT",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "法师、牧师、术士、德鲁依、萨满 变身吧..."
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "8. list 列表"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "LIST",
+  "children": [
+   {
+    "type": "LIST_ITEM",
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "Did you think we had forgotten?"
+     },
+     {
+      "type": "LIST",
+      "children": [
+       {
+        "type": "LIST_ITEM",
+        "children": [
+         {
+          "type": "TEXT",
+          "text": "Did you think we had forgiven?"
+         },
+         {
+          "type": "LIST",
+          "children": [
+           {
+            "type": "LIST_ITEM",
+            "children": [
+             {
+              "type": "TEXT",
+              "text": "Behold, now, the terrible vengeance of the Forsaken!"
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "9. img 图片"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "IMAGE",
+  "src": "https://img.nga.cn/attachments/mon_201207/13/-3429350_4fff8633bec77.jpg"
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "IMAGE",
+  "src": "https://img.nga.cn/attachments/mon_202605/03/-nuoxnQ2x-55cdK28T3cSsg-hd.jpg"
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "10. url 链接"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "URL",
+  "href": "http://bbs.ngacn.cc",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "http://bbs.ngacn.cc"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "URL",
+  "href": "http://bbs.ngacn.cc",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "艾泽拉斯国家地理"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "11. quote 引用"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "QUOTE",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "引用个什么呢?"
+   },
+   {
+    "type": "QUOTE",
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "嵌套引用也可以"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "12. code 代码"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "CODE",
+  "text": "节操，撒了一地!"
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "CODE",
+  "text": "[b]不该加粗[/b] 与 [/size] 都是文字"
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "13. flash 视频"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "FLASH",
+  "href": "http://player.youku.com/player.php/sid/XMjQ4Mjg3MTY=/v.swf"
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "VIDEO",
+  "src": "https://video.example.com/a.mp4"
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "14. table 表格"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "TABLE",
+  "children": [
+   {
+    "type": "TABLE_ROW",
+    "children": [
+     {
+      "type": "TABLE_CELL",
+      "children": [
+       {
+        "type": "TEXT",
+        "text": "颜色名"
+       }
+      ]
+     },
+     {
+      "type": "TABLE_CELL",
+      "children": [
+       {
+        "type": "TEXT",
+        "text": "样本"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "type": "TABLE_ROW",
+    "children": [
+     {
+      "type": "TABLE_CELL",
+      "children": [
+       {
+        "type": "TEXT",
+        "text": "skyblue"
+       }
+      ]
+     },
+     {
+      "type": "TABLE_CELL",
+      "children": [
+       {
+        "type": "TEXT",
+        "text": "天蓝色"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "TABLE",
+  "children": [
+   {
+    "type": "TABLE_ROW",
+    "children": [
+     {
+      "type": "TABLE_CELL",
+      "colSpan": 2,
+      "children": [
+       {
+        "type": "TEXT",
+        "text": "跨两列"
+       }
+      ]
+     },
+     {
+      "type": "TABLE_CELL",
+      "rowSpan": 2,
+      "children": [
+       {
+        "type": "TEXT",
+        "text": "跨两行"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "type": "TABLE_ROW",
+    "children": [
+     {
+      "type": "TABLE_CELL",
+      "colSpan": 1,
+      "rowSpan": 1,
+      "colWidth": 50,
+      "children": [
+       {
+        "type": "TEXT",
+        "text": "列宽50"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "15. tid / pid 主题 ID·回复 ID"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "TID_LINK",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "123"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "TID_LINK",
+  "href": "#/thread?tid=456",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "主题链接"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "PID_LINK",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "789"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": " "
+ },
+ {
+  "type": "PID_LINK",
+  "href": "#/thread?tid=131415&pid=101112",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "回复链接"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "16. del 删除线"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "STRIKETHROUGH",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "请问，还有人身材比我还好吗"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "17. album 相册"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "ALBUM",
+  "title": "相册标题",
+  "children": [
+   {
+    "type": "URL",
+    "href": "http://xxx.com/ooo.jpg",
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "http://xxx.com/ooo.jpg"
+     }
+    ]
+   },
+   {
+    "type": "URL",
+    "href": "http://xxx.com/xxx.jpg",
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "http://xxx.com/xxx.jpg"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "18. collapse 折叠内容"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "COLLAPSE",
+  "title": "来做个示例...",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "这儿有一堆福利，有节操的人才能看到"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "19. @ 发送提醒"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "MENTION",
+  "text": "@123456",
+  "href": "#/profile?uid=123456"
+ },
+ {
+  "type": "TEXT",
+  "text": "与"
+ },
+ {
+  "type": "MENTION",
+  "text": "@那个黑枪不能再打了",
+  "href": "#/profile?username=%E9%82%A3%E4%B8%AA%E9%BB%91%E6%9E%AA%E4%B8%8D%E8%83%BD%E5%86%8D%E6%89%93%E4%BA%86"
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "20. lessernuke 禁言（警告）"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "WARN",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "禁言警告内容"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "BOLD",
+  "children": [
+   {
+    "type": "SIZE",
+    "size": 150,
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "21. wiki（已停用标签）"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n[wiki]曾经非常强大的维基[/wiki]\n实体与裸方括号：&<>\"与裸[方括号]\n"
+ }
+]

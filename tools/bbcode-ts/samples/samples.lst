@@ -1,6 +1,8 @@
-# 真实楼层回复样本清单：每行一个文件名（samples/ 目录下）
-# 新收集的样本放入 samples/ 并在本文件登记，即自动纳入文本零丢失不变量测试
+# 样本清单：每行一个文件名（samples/ 目录下）
+# 真实楼层回复样本（demo*.txt、tid*.txt）与语法覆盖合成样本（guide-bbcode.txt，源自教学文档）均在此登记，
+# 自动纳入文本零丢失不变量测试与快照回归
 demo.txt
 demo2.txt
 tid47307683-lou0.txt
 tid47228037-lou0.txt
+guide-bbcode.txt

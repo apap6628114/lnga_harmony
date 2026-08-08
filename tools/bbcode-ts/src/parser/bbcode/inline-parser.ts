@@ -324,12 +324,17 @@ function closeInlineFrame(name: string, raw: string, frames: InlineFrame[]): boo
  * @returns 是否成功识别
  */
 function appendInlineAtom(rawBody: string, target: BBNode[]): boolean {
-  const mention: RegExpExecArray | null = /^@(\d+)$/.exec(rawBody)
+  // 官方 ubbcode 正则 \[@(.{2,20}?)\]：@ 后 2~20 个字符；纯数字或 UID 前缀视为 uid 链接，
+  // 其余文本视为用户名（官方 username= 链接，鸿蒙端点击时按用户名解析 uid 再弹资料卡）。
+  // 长度越界（[@1]、超过 20 字符）与官方一致不识别，保留原文。
+  const mention: RegExpExecArray | null = /^@(.{2,20})$/.exec(rawBody)
   if (mention) {
+    const body: string = mention[1]
+    const uidMatch: RegExpExecArray | null = /^(?:UID)?(\d+)$/i.exec(body)
     const node = createBBNode()
     node.type = BBNodeType.MENTION
-    node.href = `#/profile?uid=${mention[1]}`
-    node.text = `@${mention[1]}`
+    node.href = uidMatch !== null ? `#/profile?uid=${uidMatch[1]}` : `#/profile?username=${encodeURIComponent(body)}`
+    node.text = `@${body}`
     target.push(node)
     return true
   }

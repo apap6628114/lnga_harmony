@@ -149,6 +149,33 @@ export async function getUserProfile(token: string, uid: string): Promise<UserPr
   return result;
 }
 
+/**
+ * 按用户名解析用户 UID。
+ *
+ * 官方 [@用户名] 链接指向 nuke.php?func=ucp&username= 用户页（页内 `__UCPUSER`
+ * JSON 变量携带 uid）；客户端资料卡只认 uid，故点击时先经本函数解析 uid。
+ * 用户不存在时服务端返回 `{"error":{"0":"找不到用户"}}`。
+ *
+ * @param token - 登录令牌
+ * @param username - 用户名称（原文，URL 编码由 NgaClient 统一处理）
+ * @returns 用户 UID；用户不存在、未登录或请求失败时返回空字符串
+ */
+export async function resolveUidByUsername(token: string, username: string): Promise<string> {
+  const session = appStore.getSession(token);
+  if (!session) return '';
+  try {
+    const params: Record<string, string> = {
+      'func': 'ucp', 'lite': 'js', 'noprefix': '', '__inchst': 'UTF8', 'username': username,
+    };
+    const text: string = await ngaClient.getHtmlText('/nuke.php', params, { uid: session.uid, cid: session.cid });
+    if (text.indexOf('找不到用户') >= 0) return '';
+    const match: RegExpMatchArray | null = text.match(/__UCPUSER\s*=\s*\{"uid":(\d+)/);
+    return match ? match[1] : '';
+  } catch (e) {
+    return '';
+  }
+}
+
 // ============== 用户成分分析 ==============
 
 export async function getUserActivityAnalysis(token: string, uid: string): Promise<UserActivityAnalysis | null> {

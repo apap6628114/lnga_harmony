@@ -169,6 +169,178 @@ describe('真实样本结构（demo2.txt）', () => {
 })
 
 // ---------------------------------------------------------------------------
+// 教学文档语法覆盖（guide-bbcode.txt：源自 .wiki/NGA-BBS代码教学整理.html 21 节语法）
+// ---------------------------------------------------------------------------
+
+describe('教学文档语法覆盖（guide-bbcode.txt）', () => {
+  const content: string = loadSampleContent('guide-bbcode.txt')
+  const nodes: BBNode[] = parseBBCode(content)
+
+  it('1. color：24 个官方颜色名全部识别', () => {
+    const colors: BBNode[] = []
+    collectType(nodes, BBNodeType.COLOR, colors)
+    const names: string[] = colors.map((c: BBNode) => c.color)
+    const official: string[] = [
+      'skyblue', 'royalblue', 'blue', 'darkblue',
+      'orange', 'orangered', 'crimson', 'red', 'firebrick', 'darkred',
+      'green', 'limegreen', 'seagreen', 'teal',
+      'deeppink', 'tomato', 'coral', 'purple', 'indigo',
+      'burlywood', 'sandybrown', 'chocolate', 'sienna', 'silver'
+    ]
+    for (const name of official) {
+      assert.ok(names.includes(name), `官方颜色名缺失: ${name}`)
+    }
+  })
+
+  it('2. size：190% 保留，1% 截断到 50%（下限 clamp）', () => {
+    const sizes: BBNode[] = []
+    collectType(nodes, BBNodeType.SIZE, sizes)
+    const values: number[] = sizes.map((s: BBNode) => s.size)
+    assert.ok(values.includes(190), '190% 应保留')
+    assert.ok(values.includes(50), '1% 应截断到 50')
+  })
+
+  it('3-4. font / b / u / i', () => {
+    const fonts: BBNode[] = []
+    collectType(nodes, BBNodeType.FONT, fonts)
+    assert.equal(fonts.map((f: BBNode) => f.fontFamily).join(','), 'simsun,simhei,Arial')
+    const actual: string = concatTextNodes(nodes)
+    for (const phrase of ['粗体文本', '下划线文本', '斜体文本']) {
+      assert.ok(actual.includes(phrase), `短语缺失: ${phrase}`)
+    }
+  })
+
+  it('5. align：center 与 right', () => {
+    const aligns: BBNode[] = []
+    collectType(nodes, BBNodeType.ALIGN, aligns)
+    assert.equal(aligns.map((a: BBNode) => a.align).join(','), 'center,right')
+  })
+
+  it('6. h：[/h] 与 ===x=== 双写法均渲染为 HEADING', () => {
+    const headings: BBNode[] = []
+    collectType(nodes, BBNodeType.HEADING, headings)
+    assert.equal(headings.length, 3, '[h] 1 个 + === 1 个 + 嵌套修饰 1 个')
+    assert.equal(concatTextNodes(headings[0].children), '我是一条分割线')
+    assert.equal(concatTextNodes(headings[1].children), '我是一条分割线')
+    const color: BBNode | undefined = findType(headings[2].children, BBNodeType.COLOR)
+    if (!color) assert.fail('HEADING 内嵌套 COLOR 缺失')
+    assert.equal(color.color, 'sienna')
+  })
+
+  it('7-8. l/r 浮动与三层嵌套 list', () => {
+    assert.equal(countType(nodes, BBNodeType.FLOAT_LEFT), 1)
+    assert.equal(countType(nodes, BBNodeType.FLOAT_RIGHT), 1)
+    assert.equal(countType(nodes, BBNodeType.LIST), 3)
+    assert.equal(countType(nodes, BBNodeType.LIST_ITEM), 3)
+  })
+
+  it('9. img：旧附件域绝对 URL 归一化到 img.nga.cn，相对路径拼 CDN', () => {
+    const imgs: BBNode[] = []
+    collectType(nodes, BBNodeType.IMAGE, imgs)
+    assert.equal(imgs.length, 2)
+    assert.equal(imgs[0].src, 'https://img.nga.cn/attachments/mon_201207/13/-3429350_4fff8633bec77.jpg',
+      '旧域 img.ngacn.cc 应归一化')
+    assert.equal(imgs[1].src, 'https://img.nga.cn/attachments/mon_202605/03/-nuoxnQ2x-55cdK28T3cSsg-hd.jpg',
+      '相对路径 ./mon_ 应拼 CDN 根')
+  })
+
+  it('10. url：无属性推导与带属性两种形式', () => {
+    const urls: BBNode[] = []
+    collectType(nodes, BBNodeType.URL, urls)
+    assert.equal(urls[0].href, 'http://bbs.ngacn.cc')
+    assert.equal(urls[1].href, 'http://bbs.ngacn.cc')
+    assert.equal(concatTextNodes(urls[1].children), '艾泽拉斯国家地理')
+  })
+
+  it('11-12. quote 嵌套引用与 code 原样保留标签', () => {
+    assert.equal(countType(nodes, BBNodeType.QUOTE), 2, '嵌套引用应为 2 个 QUOTE')
+    const codes: BBNode[] = []
+    collectType(nodes, BBNodeType.CODE, codes)
+    assert.equal(codes.length, 2)
+    assert.equal(codes[1].text, '[b]不该加粗[/b] 与 [/size] 都是文字')
+  })
+
+  it('13. flash：swf 兜底 FLASH 节点，flash=video 明确 VIDEO', () => {
+    const flashes: BBNode[] = []
+    collectType(nodes, BBNodeType.FLASH, flashes)
+    assert.equal(flashes.length, 1)
+    assert.equal(flashes[0].href, 'http://player.youku.com/player.php/sid/XMjQ4Mjg3MTY=/v.swf')
+    const videos: BBNode[] = []
+    collectType(nodes, BBNodeType.VIDEO, videos)
+    assert.equal(videos.length, 1)
+    assert.equal(videos[0].src, 'https://video.example.com/a.mp4')
+  })
+
+  it('14. table：[td50] 无属性（文档列宽写法当前不识别），[td=2]/rowspan/[td=1,1,50] 生效', () => {
+    const tables: BBNode[] = []
+    collectTables(nodes, tables)
+    assert.equal(tables.length, 2)
+    const cells1: BBNode[] = []
+    collectType(tables[0].children, BBNodeType.TABLE_CELL, cells1)
+    assert.equal(cells1.length, 4)
+    assert.equal(cells1[0].colWidth, 0, '[td50] 无等号形式当前不识别为列宽（固化行为）')
+    const cells2: BBNode[] = []
+    collectType(tables[1].children, BBNodeType.TABLE_CELL, cells2)
+    assert.equal(cells2.length, 3)
+    assert.equal(cells2[0].colSpan, 2)
+    assert.equal(cells2[1].rowSpan, 2)
+    assert.equal(cells2[2].colWidth, 50)
+  })
+
+  it('15. tid/pid：属性形式生成话题地址', () => {
+    const tids: BBNode[] = []
+    collectType(nodes, BBNodeType.TID_LINK, tids)
+    assert.equal(tids.length, 2)
+    assert.equal(tids[1].href, '#/thread?tid=456')
+    const pids: BBNode[] = []
+    collectType(nodes, BBNodeType.PID_LINK, pids)
+    assert.equal(pids.length, 2)
+    assert.equal(pids[1].href, '#/thread?tid=131415&pid=101112')
+  })
+
+  it('16-17. del 删除线与 album 相册', () => {
+    assert.equal(countType(nodes, BBNodeType.STRIKETHROUGH), 1)
+    const album: BBNode | undefined = findType(nodes, BBNodeType.ALBUM)
+    if (!album) assert.fail('未找到 ALBUM 节点')
+    assert.equal(album.title, '相册标题')
+    const urls: BBNode[] = []
+    collectType(album.children, BBNodeType.URL, urls)
+    assert.equal(urls.length, 2)
+    assert.equal(urls[0].href, 'http://xxx.com/ooo.jpg')
+  })
+
+  it('18. collapse：标题与折叠内容完整保留', () => {
+    const collapse: BBNode | undefined = findType(nodes, BBNodeType.COLLAPSE)
+    if (!collapse) assert.fail('未找到 COLLAPSE 节点')
+    assert.equal(collapse.title, '来做个示例...')
+    assert.ok(concatTextNodes(collapse.children).includes('这儿有一堆福利，有节操的人才能看到'))
+  })
+
+  it('19. @：数字 uid 与文本用户名均识别为 MENTION', () => {
+    const mentions: BBNode[] = []
+    collectType(nodes, BBNodeType.MENTION, mentions)
+    assert.equal(mentions.length, 2)
+    assert.equal(mentions[0].href, '#/profile?uid=123456')
+    assert.equal(mentions[0].text, '@123456')
+    assert.equal(mentions[1].text, '@那个黑枪不能再打了')
+    assert.ok(mentions[1].href.startsWith('#/profile?username='), `用户名应走 username 路由: ${mentions[1].href}`)
+  })
+
+  it('20-21. lessernuke 警告块与 wiki 停用标签保留原文', () => {
+    const warn: BBNode | undefined = findType(nodes, BBNodeType.WARN)
+    if (!warn) assert.fail('未找到 WARN 节点')
+    assert.equal(concatTextNodes(warn.children), '禁言警告内容')
+    const actual: string = concatTextNodes(nodes)
+    assert.ok(actual.includes('[wiki]曾经非常强大的维基[/wiki]'), '停用标签应保留原文')
+  })
+
+  it('实体解码：&amp;&lt;&gt;&quot; 解码为 &<>"', () => {
+    const actual: string = concatTextNodes(nodes)
+    assert.ok(actual.includes('&<>"'), `实体解码缺失: ${actual.slice(-80)}`)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 边角样例（解析器功能面覆盖）
 // ---------------------------------------------------------------------------
 
@@ -221,6 +393,36 @@ describe('边角样例', () => {
     { name: '折叠块', input: '[collapse=折叠标题]折叠内容[/collapse]' },
     { name: '特殊字符实体', input: '实体 &amp;&lt;&gt;&quot;&#91;字面&#93; 与 裸 [ 方括号' },
     { name: '大小写标签', input: '[B]大写粗体[/B] [COLOR=BLUE]大写颜色[/COLOR]' },
+    {
+      name: 'mention UID 前缀（官方 ^(?:UID)?\\d+$ 大小写不敏感）',
+      input: '[@UID123] 与 [@uid456]',
+      asserts: (nodes: BBNode[]) => {
+        const mentions: BBNode[] = []
+        collectType(nodes, BBNodeType.MENTION, mentions)
+        assert.equal(mentions.length, 2)
+        assert.equal(mentions[0].href, '#/profile?uid=123')
+        assert.equal(mentions[1].href, '#/profile?uid=456')
+      }
+    },
+    {
+      name: 'mention 文本用户名走 username 路由',
+      input: '[@那个黑枪不能再打了]',
+      asserts: (nodes: BBNode[]) => {
+        const mention: BBNode | undefined = findType(nodes, BBNodeType.MENTION)
+        if (!mention) assert.fail('未找到 MENTION 节点')
+        assert.equal(mention.href, `#/profile?username=${encodeURIComponent('那个黑枪不能再打了')}`)
+        assert.equal(mention.text, '@那个黑枪不能再打了')
+      }
+    },
+    {
+      name: 'mention 长度越界保留原文（官方 {2,20} 约束）',
+      input: '[@1] 与 [@ABCDEFGHIJKLMNOPQRSTUV]',
+      asserts: (nodes: BBNode[]) => {
+        assert.equal(countType(nodes, BBNodeType.MENTION), 0, '越界长度不应识别')
+        const actual: string = concatTextNodes(nodes)
+        assert.ok(actual.includes('[@1]') && actual.includes('[@ABCDEFGHIJKLMNOPQRSTUV]'), `原文应保留: ${actual}`)
+      }
+    },
     { name: '表情标签', input: '表情 [s:ac:01] 之后文字' },
     {
       name: '大写变体 smile 表情（回归：快速路径 [img] 大小写敏感）',

@@ -554,4 +554,43 @@ export default function bbcodeUnitTest(): void {
     expect(cell.children[0].type).assertEqual(BBNodeType.IMAGE)
     expect(cell.children[0].src).assertEqual('https://img.nga.cn/attachments/mon_202112/05/x.png')
   })
+
+  it('parsesNumericMentionAsProfileLink', 0, (): void => {
+    const nodes: BBNode[] = parseBBCode('[@123456]')
+
+    expect(nodes.length).assertEqual(1)
+    expect(nodes[0].type).assertEqual(BBNodeType.MENTION)
+    expect(nodes[0].href).assertEqual('#/profile?uid=123456')
+    expect(nodes[0].text).assertEqual('@123456')
+  })
+
+  it('parsesUidPrefixedMentionCaseInsensitively', 0, (): void => {
+    const nodes: BBNode[] = parseBBCode('[@UID123] 与 [@uid456]')
+
+    expect(nodes.length).assertEqual(3)
+    expect(nodes[0].type).assertEqual(BBNodeType.MENTION)
+    expect(nodes[0].href).assertEqual('#/profile?uid=123')
+    expect(nodes[2].type).assertEqual(BBNodeType.MENTION)
+    expect(nodes[2].href).assertEqual('#/profile?uid=456')
+  })
+
+  it('parsesTextUsernameMentionAsUsernameRoute', 0, (): void => {
+    const nodes: BBNode[] = parseBBCode('[@那个黑枪不能再打了]')
+    const runs: InlineRun[] = flattenInlineNodes(nodes)
+
+    expect(nodes.length).assertEqual(1)
+    expect(nodes[0].type).assertEqual(BBNodeType.MENTION)
+    expect(nodes[0].text).assertEqual('@那个黑枪不能再打了')
+    expect(nodes[0].href.startsWith('#/profile?username=')).assertTrue()
+    expect(runs.length).assertEqual(1)
+    expect(runs[0].kind).assertEqual(InlineRunKind.LINK)
+  })
+
+  it('keepsOutOfRangeMentionAsPlainText', 0, (): void => {
+    const nodes: BBNode[] = parseBBCode('[@1] 与 [@ABCDEFGHIJKLMNOPQRSTUV]')
+
+    expect(nodes.length).assertEqual(1)
+    expect(nodes[0].type).assertEqual(BBNodeType.TEXT)
+    expect(nodes[0].text).assertEqual('[@1] 与 [@ABCDEFGHIJKLMNOPQRSTUV]')
+  })
 }

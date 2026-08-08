@@ -1,6 +1,8 @@
 import { common, Context } from '@kit.AbilityKit'
 import { routerStore, Screen } from '../../store/RouterStore'
 import { floatingLayerStore, FloatingPage } from '../../store/FloatingLayerStore'
+import { appStore } from '../../store/AppStore'
+import { resolveUidByUsername } from '../../service/api/UserApi'
 import { KEY_USE_INTERNAL_WEBVIEW } from '../constants/AppStorageKeys'
 import { NGA_HOSTS } from '../constants/NgaDomains'
 
@@ -111,6 +113,28 @@ export function openSystemLink(href: string, context: common.UIAbilityContext): 
 }
 
 /**
+ * 按用户名解析 UID 后弹资料卡（[@用户名] 链接点击，与帖子内作者信息区同一条弹出链路）。
+ *
+ * 官方 [@用户名] 链接语义为按用户名查用户主页，客户端资料卡只认 uid：
+ * 解析成功 → onProfileClick(uid)；用户不存在或网络失败 → 提示。
+ *
+ * @param name - 解码后的用户名称
+ * @param onProfileClick - 资料卡弹出回调
+ */
+async function openProfileCardByUsername(name: string, onProfileClick: (uid: string) => void): Promise<void> {
+  try {
+    const uid: string = await resolveUidByUsername(appStore.auth.token, name)
+    if (uid.length > 0) {
+      onProfileClick(uid)
+    } else {
+      appStore.showToast('找不到该用户')
+    }
+  } catch (e) {
+    appStore.showToast('找不到该用户')
+  }
+}
+
+/**
  * 处理论坛链接点击，识别 NGA 链接并执行应用内跳转。
  *
  * @param href - 链接地址
@@ -133,13 +157,24 @@ export function handleForumLink(
       routerStore.navigateActivity(Screen.thread(tid, page, pid))
     }
   } else if (href.startsWith('#/profile?')) {
-    // 应用内用户链接 → 弹窗资料卡
-    const uidStr: string = href.split('uid=')[1]
-    if (uidStr) {
-      const uid: string = uidStr.split('&')[0]
+    // 应用内用户链接 → 弹窗资料卡：uid 直查；[username] 先按用户名解析 uid
+    const params: Map<string, string> = parseQueryString(href.substring(href.indexOf('?') + 1))
+    const uidStr: string = params.get('uid') || ''
+    if (uidStr.length > 0) {
       if (onProfileClick) {
-        onProfileClick(uid)
+        onProfileClick(uidStr)
       }
+      return
+    }
+    const rawName: string = params.get('username') || ''
+    if (rawName.length > 0 && onProfileClick) {
+      let name: string = rawName
+      try {
+        name = decodeURIComponent(rawName)
+      } catch (e) {
+        name = rawName
+      }
+      openProfileCardByUsername(name, onProfileClick)
     }
   } else if (href.startsWith('http://') || href.startsWith('https://')) {
     // 外部链接 → 判断是否为 NGA 链接
