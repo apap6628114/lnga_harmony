@@ -81,7 +81,9 @@ export struct FavoriteFolderNameDialog {
           .layoutWeight(1)
           .height(44)
           .backgroundColor(Color.Transparent)
-          .fontColor(this.name.trim().length > 0 ? AppColors.primary : AppColors.textTertiary)
+          .systemMaterial(this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
+          .fontColor(this.name.trim().length > 0
+            ? (this.materialEnabled ? AppColors.white : AppColors.primary) : AppColors.textTertiary)
           .fontWeight(FontWeight.Bold)
           .fontSize(16)
           .onClick((): void => {

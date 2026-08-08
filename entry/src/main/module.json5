@@ -26,6 +26,12 @@
         "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
       }
     ],
+    "metadata": [
+      {
+        "name": "ohos.arkui.UIMaterial.state",
+        "value": "enable"
+      }
+    ],
     "abilities": [
       {
         "name": "EntryAbility",

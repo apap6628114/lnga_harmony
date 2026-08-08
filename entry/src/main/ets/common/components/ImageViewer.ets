@@ -6,6 +6,8 @@ import { uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { appStore } from '../../store/AppStore';
 import { AppColors } from '../constants/Constants';
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../constants/AppStorageKeys';
+import { UIMaterialManager } from '../managers/UIMaterialManager';
 import { Logger, DOMAIN_UI, formatError } from '../utils/Logger';
 
 const logger = new Logger(DOMAIN_UI, 'ImageViewer');
@@ -27,6 +29,7 @@ export struct ImageViewer {
   @State imgNaturalH: number = 0
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   @State saving: boolean = false
   @State sharing: boolean = false
 
@@ -489,7 +492,8 @@ export struct ImageViewer {
         Blank().layoutWeight(1)
         Button(this.sharing ? '分享中...' : '分享')
           .fontSize(14).fontColor(AppColors.white)
-          .backgroundColor(AppColors.imageViewerButtonBg)
+          .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.imageViewerButtonBg)
+          .systemMaterial(this.materialEnabled ? UIMaterialManager.fabMaterial : undefined)
           .borderRadius(16)
           .height(32)
           .type(ButtonType.Capsule)

@@ -57,7 +57,8 @@ export struct ConfirmDialog {
           .layoutWeight(1)
           .height(44)
           .backgroundColor(this.destructive ? AppColors.destructive : Color.Transparent)
-          .fontColor(this.destructive ? AppColors.white : AppColors.primary)
+          .systemMaterial(!this.destructive && this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
+          .fontColor(this.destructive ? AppColors.white : (this.materialEnabled ? AppColors.white : AppColors.primary))
           .fontWeight(FontWeight.Bold)
           .onClick(() => {
             this.controller.close()
@@ -221,7 +222,9 @@ export struct CredentialPasswordDialog {
           .layoutWeight(1)
           .height(44)
           .backgroundColor(Color.Transparent)
-          .fontColor(this.password.trim().length >= this.minLength ? AppColors.primary : AppColors.textTertiary)
+          .systemMaterial(this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
+          .fontColor(this.password.trim().length >= this.minLength
+            ? (this.materialEnabled ? AppColors.white : AppColors.primary) : AppColors.textTertiary)
           .fontWeight(FontWeight.Bold)
           .fontSize(16)
           .onClick(() => {
@@ -290,7 +293,9 @@ export struct MakeNoteDialog {
 
         Button('确认')
           .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
-          .fontColor(this.noteText.length >= 1 && this.noteText.length <= 20 ? AppColors.primary : AppColors.textTertiary)
+          .systemMaterial(this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
+          .fontColor(this.noteText.length >= 1 && this.noteText.length <= 20
+            ? (this.materialEnabled ? AppColors.white : AppColors.primary) : AppColors.textTertiary)
           .fontWeight(FontWeight.Bold).fontSize(16)
           .onClick(() => {
             if (this.noteText.length >= 1 && this.noteText.length <= 20) {
@@ -396,7 +401,9 @@ export struct AddBlacklistDialog {
 
         Button('确定添加')
           .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
-          .fontColor(this.canSubmit() ? AppColors.primary : AppColors.textTertiary)
+          .systemMaterial(this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
+          .fontColor(this.canSubmit()
+            ? (this.materialEnabled ? AppColors.white : AppColors.primary) : AppColors.textTertiary)
           .fontWeight(FontWeight.Bold).fontSize(16)
           .onClick(() => {
             const validationError: string = this.getValidationError()
@@ -458,7 +465,9 @@ export struct AddKeywordDialog {
 
         Button('确定添加')
           .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
-          .fontColor(this.keyword.trim().length > 0 ? AppColors.primary : AppColors.textTertiary)
+          .systemMaterial(this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
+          .fontColor(this.keyword.trim().length > 0
+            ? (this.materialEnabled ? AppColors.white : AppColors.primary) : AppColors.textTertiary)
           .fontWeight(FontWeight.Bold).fontSize(16)
           .onClick(() => {
             if (this.keyword.trim()) {
@@ -522,7 +531,9 @@ export struct AddNoteDialog {
 
         Button('确定添加')
           .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
-          .fontColor(this.uid.trim().length > 0 && this.nickName.trim().length > 0 ? AppColors.primary : AppColors.textTertiary)
+          .systemMaterial(this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
+          .fontColor(this.uid.trim().length > 0 && this.nickName.trim().length > 0
+            ? (this.materialEnabled ? AppColors.white : AppColors.primary) : AppColors.textTertiary)
           .fontWeight(FontWeight.Bold).fontSize(16)
           .onClick(() => {
             if (this.uid.trim() && this.nickName.trim()) {

@@ -361,7 +361,6 @@ export struct SearchPanel {
       }
       .width('100%')
       .backgroundColor(Color.Transparent)
-      .backdropBlur(this.materialEnabled ? 0 : 60)
       .border({ width: { bottom: 0.5 }, color: AppColors.separator })
       .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
       .position({ x: 0, y: 0 })

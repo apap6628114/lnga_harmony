@@ -108,7 +108,7 @@ export struct PanelNavBar {
     .width('100%').height(44 + this.statusBarHeight)
     .padding({ top: this.statusBarHeight })
     .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.frostGlassStrong)
-    .border({ width: { bottom: 0.5 }, color: AppColors.separator }).alignItems(VerticalAlign.Center)
+    .border({ width: { bottom: 0.5 }, color: '#33FFFFFF' }).alignItems(VerticalAlign.Center)
     .systemMaterial(this.materialEnabled ? UIMaterialManager.titleBarMaterial : undefined)
   }
 }

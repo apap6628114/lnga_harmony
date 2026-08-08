@@ -317,7 +317,9 @@ export struct ReplyDialog {
 
         Button(this.sending ? '...' : (this.editMode ? '保存' : '发送'))
           .fontSize(14).fontWeight(FontWeight.Medium).height(34)
-          .fontColor(AppColors.white).backgroundColor(AppColors.primary)
+          .fontColor(AppColors.white)
+          .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.primary)
+          .systemMaterial(this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
           .borderRadius(17).padding({ left: 20, right: 20 })
           .enabled(!this.sending && (this.editMode || this.replyText.trim().length > 0 || replyManager.shouldQuote))
           .onClick(() => { this.doSend() })

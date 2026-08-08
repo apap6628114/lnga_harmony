@@ -16,6 +16,8 @@ import { BBCodeContentView } from '../common/components/BBCodeContentView'
 import { openImageViewer, handleForumLink } from '../common/utils/LinkUtils'
 import { PageScope } from '../common/concurrency/PageScope'
 import { Context } from '@kit.AbilityKit'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
+import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
 /**
  * 个人主页统计项数据模型（驱动 Grid 中的 ForEach）。
@@ -66,6 +68,7 @@ export struct ProfilePanel {
   @State isProfileBlacklisted: boolean = false
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
 
   @Prop @Watch('onUidChange') uid: string = ''
   private isOwnProfile: boolean = false
@@ -523,7 +526,8 @@ export struct ProfilePanel {
                 Button('发私信')
                   .fontSize(15)
                   .fontColor(AppColors.white)
-                  .backgroundColor(AppColors.primary)
+                  .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.primary)
+                  .systemMaterial(this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
                   .borderRadius(12)
                   .layoutWeight(1)
                   .height(44)

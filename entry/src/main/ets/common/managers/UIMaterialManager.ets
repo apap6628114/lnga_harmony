@@ -14,25 +14,52 @@ import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../constants/AppStorageKeys'
  *   开启时背景透明 + systemMaterial(对应材质)，关闭时 systemMaterial(undefined) 恢复原背景。
  */
 export class UIMaterialManager {
-  /** 标题栏材质：薄样式 + 智能反色（资源色文字/图标可自动反色）。 */
+  /**
+   * 标题栏材质：通透薄玻璃 + 材质自带高光阴影 + 光感反馈。
+   *
+   * THIN 保持最强通透（背后内容几乎原样透出）；applyShadow 打开材质
+   * 自带的高光/阴影层，在系统"强"光效下呈现玻璃板的折射与边缘高光。
+   */
   static readonly titleBarMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
     style: uiMaterial.ImmersiveStyle.THIN,
-    colorInvert: true,
-    applyShadow: false
+    applyShadow: true,
+    lightEffect: { color: '#33FFFFFF' }
   })
 
-  /** 悬浮按钮材质：超薄 + 按压交互形变 + 光感流光反馈。 */
+  /**
+   * 悬浮按钮材质：超薄通透玻璃球 + 按压交互形变 + 强光感流光反馈。
+   *
+   * ULTRA_THIN 几乎完全透明，按压时按钮整体形变并泛起白色光波，
+   * 呈现"捏一块水润玻璃球"的通透光感。
+   */
   static readonly fabMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
     style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
     interactive: true,
-    lightEffect: { color: undefined },
+    lightEffect: { color: '#66FFFFFF' },
     applyShadow: false
   })
 
-  /** 浮层/面板/弹窗容器材质：常规厚度，保证可读性。 */
+  /**
+   * 浮层/面板/弹窗容器材质：常规通透玻璃，兼顾可读性与光感。
+   */
   static readonly surfaceMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
     style: uiMaterial.ImmersiveStyle.REGULAR,
     applyShadow: false
+  })
+
+  /**
+   * 主操作按钮材质：通透琥珀玻璃 + 按压形变 + 光感流光 + 材质高光。
+   *
+   * materialColor 仅以低透明度着入主题主色，背后内容仍能透出；
+   * interactive + lightEffect 使按压时按钮形变并泛起暖色光波；
+   * applyShadow 打开材质自带阴影，让按钮像悬浮的玻璃透镜。
+   */
+  static readonly buttonMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+    style: uiMaterial.ImmersiveStyle.THIN,
+    materialColor: '#33C08A4A',
+    interactive: true,
+    lightEffect: { color: '#66FFE9C9' },
+    applyShadow: true
   })
 
   /** 输入框材质：超薄，不反色不形变，保证占位符/光标稳定可读。 */

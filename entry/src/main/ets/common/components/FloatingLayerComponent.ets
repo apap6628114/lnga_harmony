@@ -83,7 +83,9 @@ export struct FloatingLayerComponent {
               Divider().vertical(true).height(20).color(AppColors.separator)
               Button(this.floating.confirmLabel)
                 .layoutWeight(1).backgroundColor(Color.Transparent)
-                .fontColor(this.floating.confirmDestructive ? AppColors.destructive : AppColors.primary)
+                .systemMaterial(!this.floating.confirmDestructive && this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
+                .fontColor(this.floating.confirmDestructive ? AppColors.destructive :
+                  (this.materialEnabled ? AppColors.white : AppColors.primary))
                 .fontWeight(FontWeight.Bold)
                 .onClick(() => {
                   const handler = this.floating.confirmOnConfirm
