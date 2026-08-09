@@ -15,7 +15,14 @@ import type { VoteResult } from '../model/NgaApiResults'
 import { FavoriteMembershipState } from '../model/Favorite'
 import { getCachedBBNodes } from '../parser/bbcode/BBCodeCache'
 import { preWarmPosts } from '../common/utils/PostWarmup'
-import { AppColors, ThreadNavMode } from '../common/constants/Constants'
+import {
+  AppColors,
+  NAV_BAR_H,
+  ThreadNavMode,
+  TITLE_BLUR_FADE_DISTANCE,
+  TITLE_BLUR_RADIUS,
+  TITLE_SCROLL_EFFECT_DISTANCE
+} from '../common/constants/Constants'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { PostItem } from '../common/components/PostItem'
 import { PostInfoDataSource } from '../common/datasource/LazyDataSource'
@@ -71,7 +78,6 @@ enum PageNavigationSource {
   PAGE_PICKER = 1
 }
 
-const NAV_BAR_H: number = 44
 const PAGE_LOAD_AHEAD_ITEMS: number = 3
 
 /** 带请求页码的预取结果。 */
@@ -87,7 +93,7 @@ class FetchPageResult {
  * 帖子详情面板。
  *
  * 修改滚动、分页或标题栏布局前必须先阅读 `docs/THREAD_DESIGN.md`。
- * 固定毛玻璃标题栏覆盖全屏列表，顶部安全区只由 `contentStartOffset` 表达；
+ * 固定透明标题栏覆盖全屏列表，顶部安全区只由 `contentStartOffset` 表达；
  * 禁止重新引入伪列表占位项或全局索引补偿。
  */
 @Component
@@ -119,6 +125,8 @@ export struct ThreadPanel {
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
   @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
+  /** 标题栏渐变模糊与偏色的滚动联动进度。 */
+  @State titleScrollEffectProgress: number = 0
   /** 黑名单变更版本号。 */
   @StorageProp('blacklistVersion') @Watch('onBlacklistVersionChange') blacklistVersion: number = 0
   @State showMoreMenu: boolean = false
@@ -127,6 +135,43 @@ export struct ThreadPanel {
   private pagePickerCurrentPage: number = 0
   private pagePickerOnSelect: ((page: number) => void) | null = null
   private scroller: Scroller = new Scroller()
+  /** List 当前视口高度，用于将固定 vp 标题区换算为渐变模糊比例。 */
+  @State listViewportHeight: number = 1
+
+  /**
+   * 按 List 的绝对滚动偏移同步标题栏视觉效果。
+   *
+   * `onDidScroll` 上报的是帧间增量，不能直接用作标题栏状态；滚动进度在前 20vp
+   * 内从 0 线性变化到 1，回到顶部或发生顶部回弹时归零。
+   */
+  private syncTitleScrollEffect(): void {
+    const offset: number = Math.max(this.scroller.currentOffset().yOffset, 0)
+    const progress: number = Math.min(offset / TITLE_SCROLL_EFFECT_DISTANCE, 1)
+    if (progress !== this.titleScrollEffectProgress &&
+      (progress === 0 || progress === 1 || Math.abs(progress - this.titleScrollEffectProgress) >= 0.001)) {
+      this.titleScrollEffectProgress = progress
+    }
+  }
+
+  /**
+   * 获取正文渐变模糊的空间停靠点。
+   *
+   * 标题区内保持最大模糊，标题底部以下 32vp 连续衰减到零；最后一个停靠点
+   * 固定为 1，确保不同窗口高度下的位置严格递增。
+   *
+   * @returns 渐变模糊强度与位置组成的停靠点
+   */
+  private getTitleBlurStops(): FractionStop[] {
+    const titleHeight: number = this.statusBarHeight + NAV_BAR_H
+    const minimumViewportHeight: number = titleHeight + TITLE_BLUR_FADE_DISTANCE
+    const viewportHeight: number = Math.max(this.listViewportHeight, minimumViewportHeight)
+    const titleEnd: number = Math.min(titleHeight / viewportHeight, 0.8)
+    const fadeEnd: number = Math.min(
+      (titleHeight + TITLE_BLUR_FADE_DISTANCE) / viewportHeight,
+      0.9
+    )
+    return [[1, 0], [1, titleEnd], [0, fadeEnd], [0, 1]]
+  }
 
   /** onScrollIndex 最近上报的首个可见列表项下标，用于判断是否靠近顶部。 */
   private lastScrollStart: number = 0
@@ -831,6 +876,7 @@ export struct ThreadPanel {
       this.hasError = false
       this.lastScrollStart = 0
       this.lastScrollEnd = 0
+      this.titleScrollEffectProgress = 0
     } else if (mode === ThreadLoadMode.APPEND) {
       this.isLoadingMore = true
     } else {
@@ -1487,8 +1533,25 @@ export struct ThreadPanel {
         .edgeEffect(EdgeEffect.Spring)
         .cachedCount(6)
         .maintainVisibleContentPosition(true)
+        .linearGradientBlur(
+          this.materialEnabled ? TITLE_BLUR_RADIUS * this.titleScrollEffectProgress : 0,
+          {
+            fractionStops: this.getTitleBlurStops(),
+            direction: GradientDirection.Bottom
+          }
+        )
+        .onAreaChange((_oldValue: Area, newValue: Area): void => {
+          if (typeof newValue.height === 'number' && newValue.height > 0 &&
+            newValue.height !== this.listViewportHeight) {
+            this.listViewportHeight = newValue.height
+          }
+        })
+        .onDidScroll((): void => {
+          this.syncTitleScrollEffect()
+        })
         .onAppear((): void => {
           this.listMounted = true
+          this.syncTitleScrollEffect()
           logger.info(
             'list lifecycle appear tid=%{public}s gen=%{public}d window=%{public}d-%{public}d posts=%{public}d ' +
               'navPending=%{public}s anchorPending=%{public}s',
@@ -1540,6 +1603,7 @@ export struct ThreadPanel {
       PanelNavBar({
         title: this.getVisibleThreadSubject(),
         rightIcon: $r('app.media.icon_more'),
+        scrollEffectProgress: this.titleScrollEffectProgress,
         onRightClick: (): void => {
           this.showMoreMenu = !this.showMoreMenu
         }

@@ -117,6 +117,14 @@
       "value": "#59FFFFFF"
     },
     {
+      "name": "title_backdrop_tint",
+      "value": "#4DFEFAF6"
+    },
+    {
+      "name": "title_backdrop_clear",
+      "value": "#00FEFAF6"
+    },
+    {
       "name": "quote_border_1",
       "value": "#4DC08A4A"
     },

@@ -15,18 +15,6 @@ import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../constants/AppStorageKeys'
  */
 export class UIMaterialManager {
   /**
-   * 标题栏材质：通透薄玻璃 + 材质自带高光阴影 + 光感反馈。
-   *
-   * THIN 保持最强通透（背后内容几乎原样透出）；applyShadow 打开材质
-   * 自带的高光/阴影层，在系统"强"光效下呈现玻璃板的折射与边缘高光。
-   */
-  static readonly titleBarMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-    style: uiMaterial.ImmersiveStyle.THIN,
-    applyShadow: true,
-    lightEffect: { color: '#33FFFFFF' }
-  })
-
-  /**
    * 悬浮按钮材质：超薄通透玻璃球 + 按压交互形变 + 强光感流光反馈。
    *
    * ULTRA_THIN 几乎完全透明，按压时按钮整体形变并泛起白色光波，

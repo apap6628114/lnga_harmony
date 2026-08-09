@@ -9,6 +9,18 @@
 
 import { NGA_HOSTS } from './NgaDomains'
 
+/** 标题栏高度（vp）。所有固定标题栏与 Thread 页 contentStartOffset 共用此常量。 */
+export const NAV_BAR_H: number = 44
+
+/** 标题栏滚动模糊从透明过渡到完全生效的距离（vp）。 */
+export const TITLE_SCROLL_EFFECT_DISTANCE: number = 20
+
+/** 标题栏渐变模糊从标题底部向正文衰减的距离（vp）。 */
+export const TITLE_BLUR_FADE_DISTANCE: number = 32
+
+/** 标题栏渐变模糊完全生效时的最大模糊半径。 */
+export const TITLE_BLUR_RADIUS: number = 16
+
 // 当前激活的主题色（通过 $r 引用资源，setColorMode 自动切换）
 export class AppColors {
   static primary: Resource = $r('app.color.primary')

@@ -13,12 +13,12 @@ Thread 不是“每次只展示一页”的普通分页页面，而是一个可�
 必须同时满足以下体验：
 
 1. 标题区固定在屏幕顶部，不参与滚动。
-2. `List` 铺满屏幕并位于毛玻璃标题区后方；滚动时，帖子内容能够穿过标题区，形成模糊透视效果。
+2. `List` 铺满屏幕并位于透明标题区后方；正文初始通过 `contentStartOffset` 规避标题区、两区不重叠，向下滑动后正文向上穿过标题区——此时正文从标题顶部向下渐变模糊，标题层叠加向下透明衰减的主题背景偏色（标题栏本体无整块材质，材质只用于按钮），回顶后渐隐。
 3. 首次进入或跳页完成时，目标页的第一个帖子完整出现在标题区下方，不能被遮挡。
 4. 向下滚动可以无缝追加下一页，向上滚动可以无缝前插上一页。
 5. 使用分页器跳到任意页后，仍然满足第 3、4 点。
 
-这里最容易误解的是第 2、3 点并不冲突：列表需要与标题区重叠，但列表处于起点时又需要保留安全距离。当前使用 `List.contentStartOffset(NAV_BAR_H + statusBarHeight)` 表达这段距离。它只负责列表起点的视觉留白，不会阻止滚动中的内容进入毛玻璃区域。
+这里最容易误解的是第 2、3 点并不冲突：列表需要与标题区重叠，但列表处于起点时又需要保留安全距离。当前使用 `List.contentStartOffset(NAV_BAR_H + statusBarHeight)` 表达这段距离。它只负责列表起点的视觉留白，不会阻止滚动中的内容进入标题区。
 
 不要用一个假的 `ListItem` 作为标题占位，也不要把固定标题栏放进 `List`。这会让视觉元素混入数据索引，最终迫使所有定位代码增加 `+1` 或 `-1`，并与跳页、pid 定位和前插恢复互相冲突。
 
@@ -177,7 +177,8 @@ hdc shell hilog -x -T ThreadPanel -v time
 任何涉及 Thread 布局、分页或滚动的修改至少验证：
 
 - 首次进入第 1 页，首帖完整位于固定标题区下方。
-- 向上滚动内容时，内容能进入标题栏背后的毛玻璃区域。
+- 渐变模糊与主题偏色仅在正文滚动进入标题区后渐显；页面位于顶部时隐藏，首帖不被遮挡。
+- 向上滚动内容时，内容能穿过透明标题区，模糊与偏色向正文自然衰减，标题底部没有分割线或明显区域边界，回顶后完全渐隐。
 - 连续向下滚动可逐页追加，无闪烁、无回跳。
 - 从非第 1 页进入后向上滚动，上一页前插时当前帖子不跳动。
 - 分页器跳到较远页面后，目标页顶部定位正确。
@@ -198,6 +199,19 @@ hdc shell hilog -x -T ThreadPanel -v time
 
 遇到新问题时，先用日志确定它属于数据窗口、组件生命周期、布局坐标还是滚动回调，再修改对应层。不要用延时常量、全局索引补偿或重复滚动命令掩盖时序问题；这些修补通常会解决一个入口，却破坏跳页后的另一条路径。
 
-保留视觉设计本身：标题区必须固定，列表必须能够穿过毛玻璃。真正要隔离的是“初始安全距离”和“数据索引”，不是标题与列表的视觉重叠。
+保留视觉设计本身：标题区必须固定，列表必须能够穿过透明标题区（无常驻整块毛玻璃背板，可读性由滚动联动的小模糊与同色偏色背板保障）。真正要隔离的是“初始安全距离”和“数据索引”，不是标题与列表的视觉重叠。
 
 如果设计不变量发生变化，请同步更新本文和回归测试，让下一位开发者能从仓库中直接理解新的事实。
+
+## 八、标题区视觉层（官方沉浸光感适配，2026-08）
+
+实现依据是华为官方的[沉浸光感](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/ui-design-hds-component-material)与[标题栏动态模糊](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/ui-design-navigation-dynamic-blur)指南。项目保留自定义路由和 `PanelNavBar`，但视觉语义与 HDS 标题栏一致；全部改动都是纯视觉，不触碰本章任何数据不变量：
+
+- **系统材质只用于可操作按钮**：返回、更多等按钮为 36×36 圆形光感底板，使用 API 26 `systemMaterial` 与 `UIMaterialManager.fabMaterial`（ULTRA_THIN、interactive、lightEffect）；标题栏本体不再使用 `titleBarMaterial`。沉浸光感关闭时，按钮回退到 `AppColors.frostGlass` 圆底，标题区回退到原有 `frostGlassStrong` 背板。
+- **正文采用官方 `GRADIENT_BLUR` 语义**：均匀模糊和分割线会强化标题区的矩形边界，因此 Thread 使用 `List.linearGradientBlur` 直接处理进入标题下方的正文。标题区内保持最大模糊，标题底部以下 `TITLE_BLUR_FADE_DISTANCE`（32vp）连续衰减到零，完全生效时最大半径为 `TITLE_BLUR_RADIUS`（16）。
+- 正文初始通过 `contentStartOffset` 规避标题区；开始滚动后，渐变模糊随滚动进度增强。标题层只负责 `title_backdrop_tint` 到 `title_backdrop_clear` 的同色透明渐变，并向标题底部以下延伸 32vp；不再使用均匀 `backgroundBlurStyle` 或底部分割线，因此不会形成独立标题块。
+- 联动状态 `titleScrollEffectProgress` 只使用 `scroller.currentOffset().yOffset` 的绝对偏移计算。官方示例的生效区间为 0–20vp，因此这里使用 `clamp(yOffset / TITLE_SCROLL_EFFECT_DISTANCE, 0, 1)`；`onDidScroll` 每帧同步，`List.onAppear` 重新校准，REPLACE 加载开始时归零。
+- 渐变偏色层使用 `hitTestBehavior(HitTestMode.None)`，不会拦截下方帖子交互；视觉效果不占列表索引，也不改变 `contentStartOffset` / `restoreOffset` 公式，两者继续共用 `NAV_BAR_H`。
+- 页面位于顶部时渐变模糊与偏色均隐藏，首帖完整可见性不受影响，与第六节回归清单第 1 条一致。
+
+材质参数由 `UIMaterialManager` 静态单例一次性确定，不逐列表项创建材质。`PanelNavBar` 默认 `scrollEffectProgress=0`，只有 Thread 页传入滚动进度，其他页面保持原有视觉。
