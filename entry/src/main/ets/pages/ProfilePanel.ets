@@ -16,7 +16,6 @@ import { BBCodeContentView } from '../common/components/BBCodeContentView'
 import { openImageViewer, handleForumLink } from '../common/utils/LinkUtils'
 import { PageScope } from '../common/concurrency/PageScope'
 import { Context } from '@kit.AbilityKit'
-import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
@@ -69,7 +68,6 @@ export struct ProfilePanel {
   @State isProfileBlacklisted: boolean = false
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 标题栏渐变模糊与偏色的滚动联动进度。 */
   @State titleScrollEffectProgress: number = 0
   /** 滚动容器当前视口高度。 */
@@ -543,8 +541,8 @@ export struct ProfilePanel {
                 Button('发私信')
                   .fontSize(15)
                   .fontColor(AppColors.white)
-                  .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.primary)
-                  .systemMaterial(this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
+                  .backgroundColor(Color.Transparent)
+                  .systemMaterial(UIMaterialManager.buttonMaterial)
                   .borderRadius(12)
                   .layoutWeight(1)
                   .height(44)
@@ -622,7 +620,7 @@ export struct ProfilePanel {
         .align(Alignment.Top)
         .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
         .linearGradientBlur(
-          TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+          TitleScrollEffect.getBlurRadius(this.titleScrollEffectProgress),
           {
             fractionStops: TitleScrollEffect.getBlurStops(this.scrollViewportHeight, this.statusBarHeight),
             direction: GradientDirection.Bottom

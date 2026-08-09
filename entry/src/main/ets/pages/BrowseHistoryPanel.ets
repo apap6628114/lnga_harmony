@@ -9,7 +9,6 @@ import { PanelNavBar } from '../common/components/PanelNavBar'
 import { HistoryItemDataSource } from '../common/datasource/LazyDataSource'
 import { AnonymousName } from '../common/components/AnonymousName'
 import { PageScope } from '../common/concurrency/PageScope'
-import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 @Component
@@ -17,7 +16,6 @@ export struct BrowseHistoryPanel {
   @State items: BrowseHistoryEntry[] = []
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   /** 是否启用沉浸式材质。 */
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 标题栏渐变模糊与偏色的滚动联动进度。 */
   @State titleScrollEffectProgress: number = 0
   /** 列表当前视口高度。 */
@@ -167,7 +165,7 @@ export struct BrowseHistoryPanel {
           .divider({ strokeWidth: 0.5, color: AppColors.separator })
           .edgeEffect(EdgeEffect.Spring)
           .linearGradientBlur(
-            TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+            TitleScrollEffect.getBlurRadius(this.titleScrollEffectProgress),
             {
               fractionStops: TitleScrollEffect.getBlurStops(this.listViewportHeight, this.statusBarHeight),
               direction: GradientDirection.Bottom

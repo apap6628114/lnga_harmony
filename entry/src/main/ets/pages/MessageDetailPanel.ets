@@ -11,7 +11,6 @@ import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { Avatar } from '../common/components/Avatar'
 import { MessageArticleDataSource } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/components/PageStateView'
-import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
@@ -28,7 +27,6 @@ export struct MessageDetailPanel {
   @StorageProp('navBarHeight') navBarHeight: number = 0
   /** 状态栏高度。 */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 标题栏渐变模糊与偏色的滚动联动进度。 */
   @State titleScrollEffectProgress: number = 0
   /** 列表当前视口高度。 */
@@ -165,7 +163,7 @@ export struct MessageDetailPanel {
           .edgeEffect(EdgeEffect.Spring)
           .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           .linearGradientBlur(
-            TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+            TitleScrollEffect.getBlurRadius(this.titleScrollEffectProgress),
             {
               fractionStops: TitleScrollEffect.getBlurStops(this.listViewportHeight, this.statusBarHeight),
               direction: GradientDirection.Bottom
@@ -188,25 +186,25 @@ export struct MessageDetailPanel {
           Row() {
             TextInput({ text: this.replyText, placeholder: '写回复...' })
               .layoutWeight(1).fontSize(15).borderRadius(12)
-              .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+              .backgroundColor(Color.Transparent)
               .height(40).padding({ left: 12, right: 12 })
-              .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
+              .systemMaterial(UIMaterialManager.inputMaterial)
               .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
               .onChange((value: string) => { this.replyText = value })
               .onSubmit(() => this.handleReply())
             Button('发送')
               .fontSize(14).fontColor(AppColors.white)
-              .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.primary)
-              .systemMaterial(this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
+              .backgroundColor(Color.Transparent)
+              .systemMaterial(UIMaterialManager.buttonMaterial)
               .borderRadius(12).height(40).padding({ left: 16, right: 16 }).margin({ left: 8 })
               .enabled(!this.sending && this.replyText.trim().length > 0)
               .onClick(() => this.handleReply())
           }
           .width('100%').padding({ left: 12, right: 12, top: 8, bottom: 8 + this.navBarHeight })
-          .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
+          .backgroundColor(Color.Transparent)
           .border({ width: { top: 0.5 }, color: AppColors.separator })
           .alignItems(VerticalAlign.Center)
-          .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
+          .systemMaterial(UIMaterialManager.surfaceMaterial)
         }
       }
       .width('100%').height('100%').backgroundColor(AppColors.bg)

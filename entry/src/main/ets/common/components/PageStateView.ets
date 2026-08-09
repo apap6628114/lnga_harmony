@@ -1,5 +1,4 @@
 import { AppColors } from '../constants/Constants'
-import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../constants/AppStorageKeys'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 
 /**
@@ -38,15 +37,13 @@ export struct ErrorStateView {
   @Prop msg: string
   /** 点击“重试”按钮时触发的回调 */
   onRetry: () => void = () => {}
-  /** 沉浸光感开关。 */
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
 
   build() {
     Column() {
       Text(this.msg).fontSize(14).fontColor(AppColors.textTertiary).margin({ bottom: 12 })
       Button('重试').fontSize(14).fontColor(AppColors.primary)
-        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
-        .systemMaterial(this.materialEnabled ? UIMaterialManager.fabMaterial : undefined)
+        .backgroundColor(Color.Transparent)
+        .systemMaterial(UIMaterialManager.fabMaterial)
         .borderRadius(10)
         .onClick(() => this.onRetry())
     }

@@ -109,14 +109,6 @@
       "value": "#3A3A3E"
     },
     {
-      "name": "frost_glass",
-      "value": "#40000000"
-    },
-    {
-      "name": "frost_glass_strong",
-      "value": "#4D000000"
-    },
-    {
       "name": "title_backdrop_tint",
       "value": "#4D121214"
     },

@@ -11,7 +11,6 @@ import { PanelNavBar } from '../../common/components/PanelNavBar'
 import { AppColors } from '../../common/constants/Constants'
 import { appStore } from '../../store/AppStore'
 import { PageScope } from '../../common/concurrency/PageScope'
-import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../../common/constants/AppStorageKeys'
 import { UIMaterialManager } from '../../common/managers/UIMaterialManager'
 import { TitleScrollEffect } from '../../common/utils/TitleScrollEffect'
 
@@ -92,8 +91,6 @@ struct AiChatPage {
   @State private toolCount: number = 0
   /** 导航栏标题 */
   @State private title: string = 'AI 对话'
-  /** 沉浸光感开关 */
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 状态栏高度。 */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   /** 标题栏渐变模糊与偏色的滚动联动进度。 */
@@ -548,7 +545,7 @@ struct AiChatPage {
         .align(Alignment.TopStart)
         .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
         .linearGradientBlur(
-          TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+          TitleScrollEffect.getBlurRadius(this.titleScrollEffectProgress),
           {
             fractionStops: TitleScrollEffect.getBlurStops(this.scrollViewportHeight, this.statusBarHeight),
             direction: GradientDirection.Bottom
@@ -656,8 +653,8 @@ struct AiChatPage {
         .layoutWeight(1)
         .fontSize(15)
         .borderRadius(20)
-        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
-        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
+        .backgroundColor(Color.Transparent)
+        .systemMaterial(UIMaterialManager.inputMaterial)
         .height(40)
         .padding({ left: 16, right: 16 })
         .onChange((value: string): void => {
@@ -669,8 +666,8 @@ struct AiChatPage {
       Button('发送')
         .fontSize(14)
         .fontColor(AppColors.white)
-        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.primary)
-        .systemMaterial(this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
+        .backgroundColor(Color.Transparent)
+        .systemMaterial(UIMaterialManager.buttonMaterial)
         .borderRadius(20)
         .height(40)
         .padding({ left: 18, right: 18 })
@@ -682,9 +679,9 @@ struct AiChatPage {
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-    .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bg)
+    .backgroundColor(Color.Transparent)
     .border({ width: { top: 0.5 }, color: AppColors.separator })
     .alignItems(VerticalAlign.Center)
-    .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
+    .systemMaterial(UIMaterialManager.surfaceMaterial)
   }
 }

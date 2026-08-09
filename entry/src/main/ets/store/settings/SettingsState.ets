@@ -9,8 +9,7 @@ import type { AiProviderProfile } from '../../model/AiConfig'
 /**
  * 用户设置持久化根状态。
  *
- * 23 个字段对应 9 个设置域（主题/显示/媒体/阅读/社交列表/关键词屏蔽/便签/自动签到/AI 配置）。
- * 由各域子 store 通过共享引用直接读写，保持 @Observed 响应式不断。
+ * 设置字段由各域子 store 通过共享引用直接读写，保持 @Observed 响应式不断。
  */
 @Observed
 export class SettingsState {
@@ -46,6 +45,4 @@ export class SettingsState {
   activeAiProfileId: string = ''
   /** 各场景自定义 system prompt（key=场景ID, value=用户自定义文本） */
   scenarioSystemPrompts: Record<string, string> = {}
-  /** 沉浸光感（沉浸式系统材质）是否开启，默认为 true */
-  immersiveMaterial: boolean = true
 }

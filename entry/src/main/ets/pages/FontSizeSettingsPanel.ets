@@ -3,7 +3,6 @@ import { AppColors } from '../common/constants/Constants'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { Avatar } from '../common/components/Avatar'
 import { AnonymousName } from '../common/components/AnonymousName'
-import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 import {
   ReadingFontRole,
@@ -18,8 +17,6 @@ import {
 export struct FontSizeSettingsPanel {
   /** 状态栏高度。 */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
-  /** 是否启用沉浸式材质。 */
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 当前帖子内容字号。 */
   @State currentContentFontSize: number = appStore.settings.fontSize
   /** 当前帖子列表字号。 */
@@ -124,7 +121,7 @@ export struct FontSizeSettingsPanel {
         .layoutWeight(1).scrollBar(BarState.Off).align(Alignment.Top)
         .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
         .linearGradientBlur(
-          TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+          TitleScrollEffect.getBlurRadius(this.titleScrollEffectProgress),
           {
             fractionStops: TitleScrollEffect.getBlurStops(this.scrollViewportHeight, this.statusBarHeight),
             direction: GradientDirection.Bottom

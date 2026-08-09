@@ -8,7 +8,6 @@ import { EmptyStateView, ErrorStateView, LoadingStateView } from '../common/comp
 import { ConfirmDialog } from '../common/dialogs/Dialogs'
 import { FavoriteFolderNameDialog } from '../common/dialogs/FavoriteFolderDialogs'
 import { PageScope } from '../common/concurrency/PageScope'
-import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 /**
@@ -51,7 +50,6 @@ export struct FavoriteFoldersPanel {
    */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   /** 是否启用沉浸式材质。 */
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 标题栏渐变模糊与偏色的滚动联动进度。 */
   @State titleScrollEffectProgress: number = 0
   /** 列表当前视口高度。 */
@@ -566,7 +564,7 @@ export struct FavoriteFoldersPanel {
           .divider({ strokeWidth: 0.5, color: AppColors.separator })
           .edgeEffect(EdgeEffect.Spring)
           .linearGradientBlur(
-            TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+            TitleScrollEffect.getBlurRadius(this.titleScrollEffectProgress),
             {
               fractionStops: TitleScrollEffect.getBlurStops(this.listViewportHeight, this.statusBarHeight),
               direction: GradientDirection.Bottom

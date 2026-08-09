@@ -29,7 +29,6 @@ import {
   ReadingTypography
 } from '../common/typography/ReadingTypography'
 import { AuthScope } from '../store/AuthScope'
-import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
@@ -77,7 +76,6 @@ export struct TopicListPanel {
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('unreadNotiCount') unreadNotiCount: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 标题栏渐变模糊与偏色的滚动联动进度。 */
   @State titleScrollEffectProgress: number = 0
   /** 列表当前视口高度。 */
@@ -761,7 +759,7 @@ export struct TopicListPanel {
           .cachedCount(3)
           .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           .linearGradientBlur(
-            TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+            TitleScrollEffect.getBlurRadius(this.titleScrollEffectProgress),
             {
               fractionStops: TitleScrollEffect.getBlurStops(this.listViewportHeight, this.statusBarHeight),
               direction: GradientDirection.Bottom
@@ -814,9 +812,9 @@ export struct TopicListPanel {
             .fillColor(AppColors.primary)
         }
         .width(44).height(44).borderRadius(22)
-        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.frostGlass)
+        .backgroundColor(Color.Transparent)
         .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
-        .systemMaterial(this.materialEnabled ? UIMaterialManager.fabMaterial : undefined)
+        .systemMaterial(UIMaterialManager.fabMaterial)
         .onClick(() => this.loadTopics(1))
       }.width('100%').justifyContent(this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? FlexAlign.Start : FlexAlign.End)
       .padding({ left: this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? 16 : 0, right: this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? 0 : 16, bottom: 16 + this.navBarHeight })
@@ -859,10 +857,10 @@ export struct TopicListPanel {
             .width('100%')
           }
           .width(170)
-          .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
+          .backgroundColor(Color.Transparent)
           .borderRadius(10)
           .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
-          .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
+          .systemMaterial(UIMaterialManager.surfaceMaterial)
           .position({ top: this.statusBarHeight + 50, right: 12 })
         }
         .width('100%').height('100%')
@@ -977,10 +975,10 @@ export struct TopicListPanel {
           }
           .width('88%')
           .height('70%')
-          .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
+          .backgroundColor(Color.Transparent)
           .borderRadius(16)
           .shadow({ radius: 24, color: AppColors.shadow, offsetY: 6 })
-          .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
+          .systemMaterial(UIMaterialManager.surfaceMaterial)
         }
         .width('100%').height('100%')
         .transition(TransitionEffect.OPACITY.animation({ duration: 180 }))

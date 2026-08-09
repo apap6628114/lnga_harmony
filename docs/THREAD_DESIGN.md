@@ -218,19 +218,14 @@ TITLE_SCROLL_EFFECT_DISTANCE = 20vp
 - `PanelNavBar` 的偏色层覆盖 `H + 32vp`，标题区内使用 `title_backdrop_tint`，随后渐变到 `title_backdrop_clear`。
 - 偏色层使用 `HitTestMode.None`，不得拦截帖子或标题按钮交互。
 
-启用沉浸光感时：
+沉浸光感是 API 26 构建的固定视觉契约，不提供运行时开关或旧版实色回退：
 
 - 返回、更多等标题操作按钮使用 36×36 圆形 `UIMaterialManager.fabMaterial`。
 - `fabMaterial` 当前为 `ImmersiveStyle.ULTRA_THIN`，启用 `interactive` 和 `lightEffect`。
 - 标题操作必须使用语义明确的独立 SVG 资源，不在标题栏中混用文字操作；视觉图标与无障碍名称分别由 `rightIcon` 和 `rightIconAccessibilityText` 提供。
 - 标题栏本体不使用整块 `systemMaterial`；正文模糊由 `List` 承担，标题可读性由颜色渐变层承担。
 - 不绘制用于强调标题底边的常驻分割线，避免形成独立矩形区域。
-
-关闭沉浸光感时：
-
-- 标题按钮回退到 `AppColors.frostGlass` 圆底。
-- 标题栏回退到 `AppColors.frostGlassStrong` 和现有底边框。
-- 动态正文模糊和标题偏色不生效。
+- 输入框、主操作按钮和浮层分别直接使用 `inputMaterial`、`buttonMaterial` 和 `surfaceMaterial`；组件不得保存材质启用状态，也不得按持久化设置切换 `systemMaterial`。
 
 ### 6.4 共享实现的适用条件
 
@@ -297,7 +292,7 @@ hdc shell hilog -x -T ThreadPanel -v time
 - 第 1 页起点的首帖完整位于标题区下方，标题模糊和偏色为零。
 - 正文离开起点的第一个滚动增量即开始联动；不等待首项到达屏幕顶部。
 - 进入标题区的正文可以辨识，标题底部无明显整块边界；回到起点后效果完全消失。
-- 浅色、深色模式以及沉浸光感关闭状态均符合第 6.3 节。
+- 浅色、深色模式下的固定沉浸光感效果均符合第 6.3 节。
 - 标题偏色层不影响帖子点击、返回和更多按钮。
 
 分页与定位：

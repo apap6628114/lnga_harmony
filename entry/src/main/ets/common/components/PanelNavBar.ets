@@ -1,6 +1,5 @@
 import { routerStore } from '../../store/RouterStore'
 import { AppColors, NAV_BAR_H, TITLE_BLUR_FADE_DISTANCE } from '../constants/Constants'
-import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../constants/AppStorageKeys'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 import { TitleScrollEffect } from '../utils/TitleScrollEffect'
 
@@ -20,8 +19,6 @@ export struct PanelNavBar {
   @Prop title: string = ''
   /** 系统状态栏高度。 */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
-  /** 沉浸光感开关。 */
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 自定义返回操作。 */
   onBack?: () => void
   /** 是否显示返回按钮。 */
@@ -72,8 +69,8 @@ export struct PanelNavBar {
     }
     .width(36).height(36).borderRadius(18)
     .alignContent(Alignment.Center)
-    .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.frostGlass)
-    .systemMaterial(this.materialEnabled ? UIMaterialManager.fabMaterial : undefined)
+    .backgroundColor(Color.Transparent)
+    .systemMaterial(UIMaterialManager.fabMaterial)
     .accessibilityText(accessibilityText)
     .onClick(onTap)
   }
@@ -83,7 +80,7 @@ export struct PanelNavBar {
    */
   build() {
     Stack() {
-      if (this.materialEnabled && this.scrollEffectProgress > 0) {
+      if (this.scrollEffectProgress > 0) {
         Column()
           .width('100%')
           .height(this.statusBarHeight + NAV_BAR_H + TITLE_BLUR_FADE_DISTANCE)
@@ -151,8 +148,7 @@ export struct PanelNavBar {
       }
       .width('100%').height(NAV_BAR_H + this.statusBarHeight)
       .padding({ top: this.statusBarHeight })
-      .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.frostGlassStrong)
-      .border(this.materialEnabled ? undefined : { width: { bottom: 0.5 }, color: '#33FFFFFF' })
+      .backgroundColor(Color.Transparent)
       .alignItems(VerticalAlign.Center)
 
     }

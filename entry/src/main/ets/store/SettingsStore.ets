@@ -15,7 +15,6 @@ import { FilterKeywordSettings } from './settings/domain/FilterKeywordSettings'
 import { NoteSettings } from './settings/domain/NoteSettings'
 import { CheckinSettings } from './settings/domain/CheckinSettings'
 import { AiSettings } from './settings/domain/AiSettings'
-import { MaterialSettings } from './settings/domain/MaterialSettings'
 import type { AuthState } from './AuthStore'
 import type { AiProviderProfile } from '../model/AiConfig'
 import {
@@ -49,7 +48,6 @@ export class SettingsStore extends BaseStore<SettingsState> {
   readonly noteSettings: NoteSettings
   readonly checkinSettings: CheckinSettings
   readonly aiSettings: AiSettings
-  readonly materialSettings: MaterialSettings
 
   constructor() {
     super()
@@ -63,7 +61,6 @@ export class SettingsStore extends BaseStore<SettingsState> {
     this.noteSettings = new NoteSettings(this.ctx)
     this.checkinSettings = new CheckinSettings(this.ctx)
     this.aiSettings = new AiSettings(this.ctx)
-    this.materialSettings = new MaterialSettings(this.ctx)
   }
 
   async init(store: PreferencesStore, queue: SerialQueue, auth: AuthState, ctx?: Context): Promise<void> {
@@ -114,7 +111,6 @@ export class SettingsStore extends BaseStore<SettingsState> {
       this.noteSettings.load(saved)
       this.checkinSettings.load(saved)
       this.aiSettings.load(saved)
-      this.materialSettings.load(saved)
       if (saved.useInternalWebView !== undefined) {
         this.state.useInternalWebView = saved.useInternalWebView
       }
@@ -201,10 +197,6 @@ export class SettingsStore extends BaseStore<SettingsState> {
   // --- Checkin ---
   setAutoCheckin(enabled: boolean): void { this.checkinSettings.setAutoCheckin(enabled) }
   autoCheckinIfNeeded(): Promise<boolean> { return this.checkinSettings.autoCheckinIfNeeded() }
-
-  // --- Immersive Material ---
-  /** 设置沉浸光感开关。 */
-  setImmersiveMaterial(enabled: boolean): void { this.materialSettings.setEnabled(enabled) }
 
   // --- AI ---
   addAiProfile(profile: AiProviderProfile): void { this.aiSettings.addProfile(profile) }

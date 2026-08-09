@@ -4,7 +4,6 @@ import { AppColors, IconColors } from '../constants/Constants'
 import { ImageViewer } from './ImageViewer'
 import { ProfileCardPopup } from './ProfileCardPopup'
 import { ReplyDialog } from './ReplyDialog'
-import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../constants/AppStorageKeys'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 
 @Component
@@ -12,7 +11,6 @@ export struct FloatingLayerComponent {
   @State private floating: FloatingLayerStoreClass = floatingLayerStore
   @Prop currentBreakpoint: string = 'sm'
   @StorageProp('navBarHeight') navBarHeight: number = 0
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   private areaSettled: boolean = false
 
   build() {
@@ -83,9 +81,9 @@ export struct FloatingLayerComponent {
               Divider().vertical(true).height(20).color(AppColors.separator)
               Button(this.floating.confirmLabel)
                 .layoutWeight(1).backgroundColor(Color.Transparent)
-                .systemMaterial(!this.floating.confirmDestructive && this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
+                .systemMaterial(!this.floating.confirmDestructive ? UIMaterialManager.buttonMaterial : undefined)
                 .fontColor(this.floating.confirmDestructive ? AppColors.destructive :
-                  (this.materialEnabled ? AppColors.white : AppColors.primary))
+                  AppColors.white)
                 .fontWeight(FontWeight.Bold)
                 .onClick(() => {
                   const handler = this.floating.confirmOnConfirm
@@ -97,9 +95,9 @@ export struct FloatingLayerComponent {
             }.height(44)
           }
           .width(300).padding({ left: 20, right: 20 })
-          .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary).borderRadius(14)
+          .backgroundColor(Color.Transparent).borderRadius(14)
           .alignItems(HorizontalAlign.Center)
-          .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
+          .systemMaterial(UIMaterialManager.surfaceMaterial)
         }
         .width('100%').height('100%')
       }
@@ -131,10 +129,10 @@ export struct FloatingLayerComponent {
             .border({ width: { top: 0.5 }, color: AppColors.separator })
           }
           .width(270)
-          .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bg)
+          .backgroundColor(Color.Transparent)
           .borderRadius(14)
           .alignItems(HorizontalAlign.Center)
-          .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
+          .systemMaterial(UIMaterialManager.surfaceMaterial)
         }
         .width('100%').height('100%')
       }

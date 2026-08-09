@@ -22,15 +22,12 @@ import { picker, fileIo, storageStatistics } from '@kit.CoreFileKit'
 import { BusinessError } from '@kit.BasicServicesKit'
 import { common, contextConstant } from '@kit.AbilityKit'
 import type { AiProviderProfile } from '../model/AiConfig'
-import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 @Component
 export struct SettingsPanel {
   @StorageProp('themeName') themeName: string = 'light'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
-  /** 是否启用沉浸式材质。 */
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   @StorageProp('aiConfigVersion') @Watch('onAiConfigVersionChange') aiConfigVersion: number = 0
   /** 当前帖子内容字号，用于响应字体设置页的实时更新。 */
   @StorageProp('contentFontSize') contentFontSize: number = 15
@@ -540,15 +537,6 @@ export struct SettingsPanel {
                 }
               })
 
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              SettingToggleRow({
-                iconRes: $r('app.media.settings_immersive_light'), iconColor: SettingsIconColors.immersiveLight, label: '沉浸光感',
-                isOn: appStore.settings.immersiveMaterial,
-                onChange: (v: boolean) => {
-                  appStore.settingsStore.setImmersiveMaterial(v)
-                }
-              })
             }
             .width('92%')
             .backgroundColor(AppColors.bgTertiary)
@@ -599,7 +587,7 @@ export struct SettingsPanel {
         .layoutWeight(1).scrollBar(BarState.Off).align(Alignment.Top)
         .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
         .linearGradientBlur(
-          TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+          TitleScrollEffect.getBlurRadius(this.titleScrollEffectProgress),
           {
             fractionStops: TitleScrollEffect.getBlurStops(this.scrollViewportHeight, this.statusBarHeight),
             direction: GradientDirection.Bottom

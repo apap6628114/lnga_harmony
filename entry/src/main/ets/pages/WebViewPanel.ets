@@ -7,7 +7,7 @@ import { getSession } from '../service/api/AuthApi'
 import { getActiveDomain } from '../service/api/MiscApi'
 import { appStore } from '../store/AppStore'
 import { Logger, DOMAIN_UI, formatError } from '../common/utils/Logger'
-import { KEY_USE_INTERNAL_WEBVIEW, KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
+import { KEY_USE_INTERNAL_WEBVIEW } from '../common/constants/AppStorageKeys'
 import { handleForumLink, isNgaDomain, openAppLinkOrFallback, openSystemLink } from '../common/utils/LinkUtils'
 import { extractHostname } from '../common/utils/UrlUtils'
 import { AppColors } from '../common/constants/Constants'
@@ -25,8 +25,6 @@ export struct WebViewPanel {
   private controller: webview.WebviewController = new webview.WebviewController()
   /** 系统状态栏高度。 */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
-  /** 沉浸光感开关。 */
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 是否显示标题栏"更多"下拉菜单。 */
   @State showMoreMenu: boolean = false
   @State pageTitle: string = ''
@@ -242,10 +240,10 @@ export struct WebViewPanel {
         .width('100%')
       }
       .width(150)
-      .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
+      .backgroundColor(Color.Transparent)
       .borderRadius(10)
       .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
-      .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
+      .systemMaterial(UIMaterialManager.surfaceMaterial)
       .position({ top: this.statusBarHeight + NAV_BAR_H + 6, right: 16 })
     }
     .width('100%').height('100%')
@@ -348,9 +346,9 @@ export struct WebViewPanel {
             .fillColor(this.canGoBackward ? AppColors.primary : AppColors.textTertiary)
         }
         .width(44).height(44).borderRadius(22)
-        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.frostGlass)
+        .backgroundColor(Color.Transparent)
         .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
-        .systemMaterial(this.materialEnabled ? UIMaterialManager.fabMaterial : undefined)
+        .systemMaterial(UIMaterialManager.fabMaterial)
         .opacity(this.canGoBackward ? 1 : 0.45)
         .enabled(this.canGoBackward)
         .accessibilityText('网页后退')
@@ -365,9 +363,9 @@ export struct WebViewPanel {
             .rotate({ angle: 180 })
         }
         .width(44).height(44).borderRadius(22)
-        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.frostGlass)
+        .backgroundColor(Color.Transparent)
         .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
-        .systemMaterial(this.materialEnabled ? UIMaterialManager.fabMaterial : undefined)
+        .systemMaterial(UIMaterialManager.fabMaterial)
         .opacity(this.canGoForward ? 1 : 0.45)
         .enabled(this.canGoForward)
         .accessibilityText('网页前进')

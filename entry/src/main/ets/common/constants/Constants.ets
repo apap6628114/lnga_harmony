@@ -45,8 +45,6 @@ export class AppColors {
   static toastBg: Resource = $r('app.color.toast_bg')
   static imageViewerBg: Resource = $r('app.color.image_viewer_bg')
   static imageViewerButtonBg: Resource = $r('app.color.image_viewer_button_bg')
-  static frostGlass: Resource = $r('app.color.frost_glass')
-  static frostGlassStrong: Resource = $r('app.color.frost_glass_strong')
   static warnBg: Resource = $r('app.color.warn_bg')
   static warnBorder: Resource = $r('app.color.warn_border')
   static warnText: Resource = $r('app.color.warn_text')
@@ -129,8 +127,6 @@ export class SettingsIconColors {
   static readonly credentialExport: string = '#0F766E'
   /** 清除缓存的维护琥珀色。 */
   static readonly clearCache: string = '#B45309'
-  /** 沉浸光感的通透靛紫色。 */
-  static readonly immersiveLight: string = '#8B5CF6'
 }
 
 /**

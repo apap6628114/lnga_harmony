@@ -5,7 +5,6 @@ import { AppColors } from '../common/constants/Constants'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { TtsPlayer } from '../common/media/TtsPlayer'
 import { PageScope } from '../common/concurrency/PageScope'
-import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 const VOICE_OPTIONS: VoiceOption[] = [
@@ -23,8 +22,6 @@ interface VoiceOption {
 @Component
 export struct TtsSettingsPanel {
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
-  /** 是否启用沉浸式材质。 */
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   @State currentPerson: number = appStore.settings.ttsPerson
   @State currentSpeed: number = appStore.settings.ttsSpeed
   @State currentVolume: number = appStore.settings.ttsVolume
@@ -266,7 +263,7 @@ export struct TtsSettingsPanel {
         .layoutWeight(1).scrollBar(BarState.Off).align(Alignment.Top)
         .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
         .linearGradientBlur(
-          TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+          TitleScrollEffect.getBlurRadius(this.titleScrollEffectProgress),
           {
             fractionStops: TitleScrollEffect.getBlurStops(this.scrollViewportHeight, this.statusBarHeight),
             direction: GradientDirection.Bottom

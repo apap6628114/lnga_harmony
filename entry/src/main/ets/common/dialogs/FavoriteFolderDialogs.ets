@@ -1,5 +1,4 @@
 import { AppColors } from '../constants/Constants'
-import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../constants/AppStorageKeys'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 
 /**
@@ -31,7 +30,6 @@ export struct FavoriteFolderNameDialog {
    * 名称确认回调。
    */
   onConfirm?: (name: string) => void
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
 
   /**
    * 将传入名称同步到输入框。
@@ -56,8 +54,8 @@ export struct FavoriteFolderNameDialog {
         .height(44)
         .fontSize(15)
         .borderRadius(12)
-        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
-        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
+        .backgroundColor(Color.Transparent)
+        .systemMaterial(UIMaterialManager.inputMaterial)
         .onChange((value: string): void => {
           this.name = value
         })
@@ -81,9 +79,9 @@ export struct FavoriteFolderNameDialog {
           .layoutWeight(1)
           .height(44)
           .backgroundColor(Color.Transparent)
-          .systemMaterial(this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
+          .systemMaterial(UIMaterialManager.buttonMaterial)
           .fontColor(this.name.trim().length > 0
-            ? (this.materialEnabled ? AppColors.white : AppColors.primary) : AppColors.textTertiary)
+            ? AppColors.white : AppColors.textTertiary)
           .fontWeight(FontWeight.Bold)
           .fontSize(16)
           .onClick((): void => {
@@ -98,8 +96,8 @@ export struct FavoriteFolderNameDialog {
     }
     .constraintSize({ maxWidth: 340, minWidth: 280 })
     .padding({ left: 20, right: 20, bottom: 12 })
-    .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
+    .backgroundColor(Color.Transparent)
     .borderRadius(14)
-    .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
+    .systemMaterial(UIMaterialManager.surfaceMaterial)
   }
 }

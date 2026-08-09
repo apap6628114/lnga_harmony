@@ -15,7 +15,6 @@ import { PanelNavBar } from '../common/components/PanelNavBar'
 import { MessageThreadDataSource } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/components/PageStateView'
 import { PageScope } from '../common/concurrency/PageScope'
-import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
@@ -33,7 +32,6 @@ export struct MessageListPanel {
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 标题栏渐变模糊与偏色的滚动联动进度。 */
   @State titleScrollEffectProgress: number = 0
   /** 列表当前视口高度。 */
@@ -188,7 +186,7 @@ export struct MessageListPanel {
           .edgeEffect(EdgeEffect.Spring)
           .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           .linearGradientBlur(
-            TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+            TitleScrollEffect.getBlurRadius(this.titleScrollEffectProgress),
             {
               fractionStops: TitleScrollEffect.getBlurStops(this.listViewportHeight, this.statusBarHeight),
               direction: GradientDirection.Bottom
@@ -236,38 +234,38 @@ export struct MessageListPanel {
 
           TextInput({ text: this.composeTo, placeholder: '收件人（用户名）' })
             .width('92%').height(44).fontSize(15).borderRadius(12)
-            .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary).margin({ top: 12 })
-            .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
+            .backgroundColor(Color.Transparent).margin({ top: 12 })
+            .systemMaterial(UIMaterialManager.inputMaterial)
             .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
             .onChange((value: string) => { this.composeTo = value })
 
           TextInput({ text: this.composeSubject, placeholder: '主题' })
             .width('92%').height(44).fontSize(15).borderRadius(12)
-            .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary).margin({ top: 8 })
-            .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
+            .backgroundColor(Color.Transparent).margin({ top: 8 })
+            .systemMaterial(UIMaterialManager.inputMaterial)
             .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
             .onChange((value: string) => { this.composeSubject = value })
 
           TextArea({ text: this.composeContent, placeholder: '内容' })
             .width('92%').height(100).fontSize(15).borderRadius(12)
-            .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary).margin({ top: 8 })
-            .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
+            .backgroundColor(Color.Transparent).margin({ top: 8 })
+            .systemMaterial(UIMaterialManager.inputMaterial)
             .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
             .onChange((value: string) => { this.composeContent = value })
 
           Button(this.sending ? '发送中...' : '发送')
             .width('92%').height(44).fontSize(16).fontColor(AppColors.white)
-            .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.primary)
-            .systemMaterial(this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
+            .backgroundColor(Color.Transparent)
+            .systemMaterial(UIMaterialManager.buttonMaterial)
             .borderRadius(12).margin({ top: 12, bottom: 20 })
             .enabled(!this.sending && this.composeTo.trim().length > 0 &&
               this.composeSubject.trim().length > 0 && this.composeContent.trim().length > 0)
             .onClick(() => this.handleSend())
         }
-        .width('100%').backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bg)
+        .width('100%').backgroundColor(Color.Transparent)
         .borderRadius({ topLeft: 14, topRight: 14 }).alignItems(HorizontalAlign.Center)
         .padding({ bottom: this.navBarHeight })
-        .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
+        .systemMaterial(UIMaterialManager.surfaceMaterial)
         .position({ x: 0, y: '40%' })
       }
     }

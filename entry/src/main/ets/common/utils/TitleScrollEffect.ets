@@ -71,14 +71,10 @@ export class TitleScrollEffect {
   /**
    * 获取当前滚动进度对应的渐变模糊半径。
    *
-   * @param materialEnabled - 是否启用沉浸式材质
    * @param progress - 标题栏效果进度
    * @returns 当前模糊半径
    */
-  static getBlurRadius(materialEnabled: boolean, progress: number): number {
-    if (!materialEnabled) {
-      return 0
-    }
+  static getBlurRadius(progress: number): number {
     const safeProgress: number = Math.max(0, Math.min(progress, 1))
     return TITLE_BLUR_RADIUS * safeProgress
   }

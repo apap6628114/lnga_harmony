@@ -8,7 +8,6 @@ import { NotesDataSource } from '../common/datasource/LazyDataSource'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { ConfirmDialog, MakeNoteDialog, AddNoteDialog } from '../common/dialogs/Dialogs'
 import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
-import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 @Component
@@ -18,8 +17,6 @@ export struct NotesPanel {
   @State notesCount: number = 0
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
-  /** 是否启用沉浸式材质。 */
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 标题栏渐变模糊与偏色的滚动联动进度。 */
   @State titleScrollEffectProgress: number = 0
   /** 列表当前视口高度。 */
@@ -197,7 +194,7 @@ export struct NotesPanel {
           .divider({ strokeWidth: 0.5, color: AppColors.separator })
           .edgeEffect(EdgeEffect.Spring)
           .linearGradientBlur(
-            TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+            TitleScrollEffect.getBlurRadius(this.titleScrollEffectProgress),
             {
               fractionStops: TitleScrollEffect.getBlurStops(this.listViewportHeight, this.statusBarHeight),
               direction: GradientDirection.Bottom

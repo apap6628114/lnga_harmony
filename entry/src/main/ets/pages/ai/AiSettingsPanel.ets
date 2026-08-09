@@ -10,7 +10,6 @@
 import { appStore } from '../../store/AppStore'
 import { routerStore } from '../../store/RouterStore'
 import { AppColors } from '../../common/constants/Constants'
-import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../../common/constants/AppStorageKeys'
 import { UIMaterialManager } from '../../common/managers/UIMaterialManager'
 import { PanelNavBar } from '../../common/components/PanelNavBar'
 import { ConfirmDialog, ActionSheetDialog } from '../../common/dialogs/Dialogs'
@@ -45,8 +44,6 @@ const NEW_ID: string = '__new__'
 export struct AiSettingsPanel {
   /** 配置列表快照。 */
   @State profiles: AiProviderProfile[] = []
-  /** 沉浸光感开关。 */
-  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 状态栏高度。 */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   /** 当前展开编辑的配置 ID。 */
@@ -618,7 +615,7 @@ export struct AiSettingsPanel {
         .align(Alignment.Top)
         .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
         .linearGradientBlur(
-          TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+          TitleScrollEffect.getBlurRadius(this.titleScrollEffectProgress),
           {
             fractionStops: TitleScrollEffect.getBlurStops(this.scrollViewportHeight, this.statusBarHeight),
             direction: GradientDirection.Bottom
@@ -853,8 +850,8 @@ export struct AiSettingsPanel {
         })
         .width('100%')
         .height(150)
-        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
-        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
+        .backgroundColor(Color.Transparent)
+        .systemMaterial(UIMaterialManager.inputMaterial)
         .borderRadius(8)
         .fontSize(14)
         .padding({ left: 12, right: 12, top: 8, bottom: 8 })
@@ -1055,8 +1052,8 @@ export struct AiSettingsPanel {
         })
         .width('100%')
         .height(40)
-        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
-        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
+        .backgroundColor(Color.Transparent)
+        .systemMaterial(UIMaterialManager.inputMaterial)
         .borderRadius(8)
         .fontSize(14)
         .padding({ left: 12, right: 12 })
@@ -1102,8 +1099,8 @@ export struct AiSettingsPanel {
         })
         .width('100%')
         .height(40)
-        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
-        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
+        .backgroundColor(Color.Transparent)
+        .systemMaterial(UIMaterialManager.inputMaterial)
         .borderRadius(8)
         .fontSize(14)
         .padding({ left: 12, right: 12 })
@@ -1124,8 +1121,8 @@ export struct AiSettingsPanel {
         })
         .width('100%')
         .height(40)
-        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
-        .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
+        .backgroundColor(Color.Transparent)
+        .systemMaterial(UIMaterialManager.inputMaterial)
         .borderRadius(8)
         .fontSize(14)
         .padding({ left: 12, right: 12 })
