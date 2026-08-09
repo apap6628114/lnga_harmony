@@ -648,43 +648,53 @@ struct AiChatPage {
   /** 渲染底部输入栏。 */
   @Builder
   RenderInputBar() {
-    Row() {
-      TextInput({ text: this.inputText, placeholder: '输入追问内容...' })
-        .layoutWeight(1)
-        .fontSize(15)
-        .fontColor(UIMaterialManager.inputForeground)
-        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .caretColor(UIMaterialManager.inputForeground)
-        .borderRadius(20)
-        .backgroundColor(Color.Transparent)
-        .systemMaterial(UIMaterialManager.inputMaterial)
-        .height(40)
-        .padding({ left: 16, right: 16 })
-        .onChange((value: string): void => {
-          this.inputText = value
-        })
-        .onSubmit((): void => {
-          this.sendMessage(this.inputText)
-        })
-      Button('发送')
-        .fontSize(14)
-        .fontColor(UIMaterialManager.adaptiveForeground)
-        .backgroundColor(Color.Transparent)
-        .systemMaterial(UIMaterialManager.buttonMaterial)
-        .borderRadius(20)
-        .height(40)
-        .padding({ left: 18, right: 18 })
-        .margin({ left: 8 })
-        .enabled(!this.isSending && this.inputText.trim().length > 0)
-        .onClick((): void => {
-          this.sendMessage(this.inputText)
-        })
+    Column() {
+      Row() {
+        TextInput({ text: this.inputText, placeholder: '输入追问…' })
+          .layoutWeight(1)
+          .fontSize(15)
+          .fontColor(UIMaterialManager.inputForeground)
+          .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+          .caretColor(UIMaterialManager.inputForeground)
+          .backgroundColor(Color.Transparent)
+          .height(44)
+          .padding({ left: 16, right: 16 })
+          .borderRadius(22)
+          .border({ width: 1, color: '#52FFFFFF' })
+          .shadow({ radius: 12, color: AppColors.shadowLight, offsetY: 3 })
+          .systemMaterial(UIMaterialManager.inputMaterial)
+          .enterKeyType(EnterKeyType.Send)
+          .onChange((value: string): void => {
+            this.inputText = value
+          })
+          .onSubmit((): void => {
+            this.sendMessage(this.inputText)
+          })
+
+        Button(this.isSending ? '生成中…' : '发送')
+          .type(ButtonType.Capsule)
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(UIMaterialManager.adaptiveForeground)
+          .backgroundColor(Color.Transparent)
+          .systemMaterial(UIMaterialManager.neutralActionMaterial)
+          .border({ width: 1, color: '#52FFFFFF' })
+          .height(44)
+          .constraintSize({ minWidth: 76 })
+          .padding({ left: 16, right: 16 })
+          .margin({ left: 8 })
+          .enabled(!this.isSending && this.inputText.trim().length > 0)
+          .onClick((): void => {
+            this.sendMessage(this.inputText)
+          })
+      }
+      .width('100%')
+      .constraintSize({ maxWidth: 720 })
+      .alignItems(VerticalAlign.Center)
     }
     .width('100%')
-    .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
     .backgroundColor(Color.Transparent)
-    .border({ width: { top: 0.5 }, color: AppColors.separator })
-    .alignItems(VerticalAlign.Center)
-    .systemMaterial(UIMaterialManager.barMaterial)
+    .alignItems(HorizontalAlign.Center)
   }
 }
