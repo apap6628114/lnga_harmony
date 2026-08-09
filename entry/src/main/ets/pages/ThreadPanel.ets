@@ -1810,8 +1810,12 @@ export struct ThreadPanel {
                   Text(String(p)).fontSize(15)
                     .fontColor(p === this.pagePickerCurrentPage ? AppColors.primary : AppColors.textPrimary)
                     .fontWeight(p === this.pagePickerCurrentPage ? FontWeight.Bold : FontWeight.Regular)
-                    .width(40).height(40).textAlign(TextAlign.Center).borderRadius(8)
-                    .backgroundColor(p === this.pagePickerCurrentPage ? AppColors.primaryLight : Color.Transparent)
+                    .width(40).height(40).textAlign(TextAlign.Center).borderRadius(20)
+                    .border({
+                      width: p === this.pagePickerCurrentPage ? 1.5 : 0,
+                      color: AppColors.primary
+                    })
+                    .backgroundColor(Color.Transparent)
                     .onClick(() => {
                       if (this.pagePickerOnSelect) {
                         this.pagePickerOnSelect(p)
