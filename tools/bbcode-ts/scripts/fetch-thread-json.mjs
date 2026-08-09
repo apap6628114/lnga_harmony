@@ -13,13 +13,18 @@
  *   有 lou → 该楼层 content，输出为 `"content": "..."` 格式
  *            （tests/helpers.ts::loadSampleContent 直接可读，可直接存 samples/ 固化）
  *
- * 前置：cookie 从环境变量 NGA_COOKIE 读取（登录后浏览器 document.cookie）；
- * 响应 GBK 编码，TextDecoder('gbk') 显式解码；UA 用 NGA_WP_JW。
+ * 前置：cookie 依次取环境变量 NGA_COOKIE、tools/bbcode-ts/.nga-cookie.txt（本地持久化，
+ * 浏览器登录后 document.cookie）；响应 GBK 编码，TextDecoder('gbk') 显式解码；UA 用 NGA_WP_JW。
  *
  * 注：官方网页渲染 DOM 无法静态抓取（read.php 对静态请求返回 JS 启动壳），
  * 渲染后楼层 DOM 需用浏览器 devtools 从已渲染页面提取（README 调试流程第 5-8 步）。
  */
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+const COOKIE_FILE = join(ROOT, '.nga-cookie.txt')
 
 // 数字参数依次为 tid / page / lou；非数字参数为输出文件名
 const args = process.argv.slice(2)
@@ -27,7 +32,7 @@ const nums = args.filter((a) => /^\d+$/.test(a))
 const tid = nums[0]
 const page = nums[1] ?? '1'
 const lou = nums[2] ?? null
-const cookie = process.env.NGA_COOKIE
+const cookie = process.env.NGA_COOKIE ?? (existsSync(COOKIE_FILE) ? readFileSync(COOKIE_FILE, 'utf8').trim() : '')
 
 const defaultName = `raw-tid${tid}-page${page}${lou !== null ? `-lou${lou}` : ''}.json`
 const outFile = args.find((a) => !/^\d+$/.test(a)) ?? defaultName
@@ -37,7 +42,7 @@ if (!tid) {
   process.exit(1)
 }
 if (!cookie) {
-  console.error('缺少环境变量 NGA_COOKIE（浏览器 document.cookie）')
+  console.error('缺少 cookie：设 NGA_COOKIE 环境变量，或把 document.cookie 存入 .nga-cookie.txt（已 gitignore）')
   process.exit(1)
 }
 

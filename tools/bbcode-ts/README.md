@@ -13,36 +13,45 @@ tools/bbcode-ts/
   src/                          # TS 镜像（真源）：与 entry/src/main/ets 同构
     parser/bbcode/              #   词法/块级/内联解析 + block-handlers
     parser/_shared/             #   实体解码、附件 URL
-    model/BBCodeNode.ts         #   节点模型
+    parser/nga/html-thread/     #   HTML 模式解析器镜像（read.php HTML → JSON 形状）
+    parser/NgaJsonSanitizer.ts  #   JSON 预处理镜像    model/BBCodeNode.ts         #   节点模型
     common/components/bbcode/   #   渲染逻辑（bbcode-utils）
     common/typography/          #   排版常量
     common/constants/           #   NGA 域名常量（NgaDomains.ts，与 entry 同构）
     common/utils/Utils.ts       #   bbNodesToPlainText 等
   tests/
     helpers.ts                  #   样本加载、序列化、子序列断言、官方差分 run 提取
+    html-coverage.ts            #   HTML 模式 → JSON 覆盖分析引擎（测试与报告共用）
     invariants.test.ts          #   文本零丢失 + 结构断言 + 边角样例
     snapshot.test.ts            #   快照回归
     official.test.ts            #   官方渲染基准差分断言
+    html-mode-coverage.test.ts  #   HTML 模式 → JSON 数据覆盖断言
   samples/
     samples.lst                 #   样本清单（每行一个文件名，自动纳入测试）
     demo.txt / demo2.txt        #   真实楼层样本（NGA API content 字段）
     demo.snapshot.json          #   解析树快照基线（npm run snapshot 生成）
     official-<tid>-lou<N>.html  #   官方渲染 DOM（调试流程第 8 步固化）
     official-<tid>-lou<N>-runs.json  # 官方渲染 run 序列（差分输入）
+    html-pairs.lst              #   JSON/HTML 成对样本清单（覆盖验证套件）
+    html-pair-gaps.json         #   成对样本已知缺口声明（页面行号错位映射等）
+    html-pair-<tid>-p<page>.json / .html  # 成对样本（JSON API 响应 + read.php 原始 HTML）
   scripts/
     fetch-thread-json.mjs       #   拉取帖子 JSON 调试数据（整页或指定楼层 content）
+    fetch-thread-pair.mjs       #   拉取同帖同页 JSON + HTML 成对样本（覆盖验证套件输入）
     sync-to-ets.mjs             #   TS 镜像 → entry/src/main/ets 单向同步
     gen-snapshot.ts             #   重新生成快照基线
     compare-official.ts         #   官方差分人类可读报告
+    compare-html-json.ts        #   HTML 模式 → JSON 覆盖人类可读报告
 ```
 
 ## 使用
 
 ```bash
 npm install        # 首次
-npm test           # 编译 + 全部测试（不变量 + 快照 + 官方差分）
+npm test           # 编译 + 全部测试（不变量 + 快照 + 官方差分 + HTML 覆盖）
 npm run snapshot   # 生成/更新快照基线（审查 git diff 后提交）
 npm run compare:official   # 官方差分报告
+npm run compare:html-json  # HTML 模式 → JSON 覆盖报告
 npm run sync       # 把验证过的镜像写回 entry/src/main/ets（.ts → .ets）
 ```
 
@@ -53,7 +62,96 @@ npm run sync       # 把验证过的镜像写回 entry/src/main/ets（.ts → .e
 NGA_COOKIE=... node scripts/fetch-thread-json.mjs <tid> <page> <输出文件名> <lou>
 # 取整页 JSON 落盘（不带 lou 参数）
 NGA_COOKIE=... node scripts/fetch-thread-json.mjs <tid> <page>
+# 取同帖同页 JSON + HTML 成对样本（HTML 模式覆盖验证套件输入）
+NGA_COOKIE=... node scripts/fetch-thread-pair.mjs <tid> [page]
 ```
+
+## HTML 模式 → JSON 覆盖验证套件
+
+客户端有两条帖子数据通道：**JSON 模式**（`__output=8`，主通道）与 **HTML 模式**
+（`read.php` 静态 HTML 解析，`ThreadApi` 降级/调试通道）。实测 HTML 模式在客户端
+缺少部分数据（如热门回复/楼中楼评论/签名等字段、渲染后不可恢复的表格/折叠结构）。
+本套件以 JSON 为基准真值，验证 HTML 模式转成 JSON 数据的覆盖情况。
+
+1. 抓取成对样本（同一 tid 同一 page，保证逐楼层可比）：
+   `NGA_COOKIE=... node scripts/fetch-thread-pair.mjs <tid> [page]`
+   - JSON 响应存 `samples/html-pair-<tid>-p<page>.json`（GBK 解码 + tab 转义）
+   - HTML 存 `samples/html-pair-<tid>-p<page>.html`（与客户端 HTML 模式同 URL 同 UA
+     `NGA_WP_JW`；校验含 `commonui.postArg.proc` 标记，拒绝 JS 启动壳）
+   - 自动登记 `samples/html-pairs.lst`，提交样本后套件自动生效
+2. `npm run compare:html-json` 输出人类可读覆盖报告（`tests/html-coverage.ts` 引擎）：
+   - 楼层集合覆盖：JSON 每楼（lou）在 HTML 输出中是否有对应
+   - 楼层元数据：pid/authorid/postdatetimestamp/type/score/score_2/content_length/
+     from_client 等逐字段一致性（HTML 与 JSON 同源于页面 postArg JS 数据，必须一致）
+   - 正文文本覆盖率：JSON content 经 BBCode 解析的纯文本，在 HTML content（渲染后
+     HTML 经同一解析器）中的去空白子序列保留度；输出首个未覆盖片段定位"文字被吞"
+   - 附件覆盖：JSON attachs 与 HTML `attach.load` 解析结果的数量与 URL 命中
+   - 用户表 `__U`：UID 集合、交集用户名一致性、字段出现率（avatar/signature/yz 等）
+   - 缺失字段清单：JSON 有值但 HTML 输出无法提供的字段（hotreply/comment/signature
+     /js_escap_avatar/mute_time 等）按出现楼数排序
+   - 结构清单：JSON 侧解析树 TABLE/COLLAPSE/LIST/IMAGE 等计数 vs HTML 渲染后经
+     解析器可恢复量（量化"渲染丢结构"）
+3. `npm test` 中的 `tests/html-mode-coverage.test.ts` 断言硬不变量：
+   - 楼层零缺失；楼层元数据字段零差异；交集 UID 用户名一致；`__ROWS`/`__PAGE`/
+     主题标题一致
+   - 正文文本覆盖率 ≥ 90%（`TEXT_COVERAGE_THRESHOLD`，按真实样本可调）
+   - 已知缺口经 `samples/html-pair-gaps.json` 声明（见下），声明之外的新缺口
+     直接断言失败（套件告警）
+   - 已知丢失维度（结构/附加字段/用户字段）不设断言，只进报告
+4. 修复走既有工作流：改 `src/parser/nga/html-thread/` 镜像 → `npm test` →
+   `npm run sync`（html-thread 5 文件 + NgaJsonSanitizer 已纳入镜像治理）。
+
+### 已知缺口声明（html-pair-gaps.json）
+
+read.php 页面存在"隐楼"行为：被隐藏/删除的楼层不渲染但服务器行号继续递增，
+后续楼层行号与真实 lou 错位 +1。HTML 模式从页面无法恢复真实 lou 号，套件用
+样本级 `rowShift`（页面行号 → JSON lou）映射对齐后再断言；报告保留原始错位信息
+（楼层明细"页面行"列标注 `(映射)`）。新样本页面出现隐楼时，按报告确认后补充声明。
+
+### 实测发现（2026-08-10，样本 html-pair-46425481-p1 / html-pair-47307683-p1）
+
+- **隐楼行号错位**（46425481）：页面跳过 lou 11（容器内 `pid862841466Anchor` 为证），
+  后续行 12-19 实为 JSON lou 11-18，客户端 HTML 模式楼层内容整体错位 +1；
+  `rowShift` 对齐后 19/19 楼元数据与文本 100% 一致——解析器本身无 bug，页面行为所致
+- **fid 负号**（46425481，已修复）：子版 fid 为负（`__CURRENT_FID=parseInt('-40063163')`），
+  `extractIntVar` 正则不含负号导致 fid=0；已改为 `-?\d+`（两样本 19/19、20/20 一致）
+- **`__T.lastpost` 偏早**（两样本，已修复）：原取页面最后一楼时间，跨页时早于全帖
+  最后回复；`setDefault` 倒数第 2 个参数即全帖 lastPostTs（与 JSON `__T.lastpost` 实测
+  逐位一致），已新增 `extractLastPostTs` 优先使用
+- **`__U` 用户字段**：页面 `userInfo.setAll` 与 JSON `__U` 同源（uid/username/credit/
+  medal/reputation/groupid/memberid/avatar/yz/regdate/mute_time/postnum/rvrc/signature/
+  nickname 等全字段一致；该帖用户匿名显示故 avatar/signature 为空，非解析缺失）。
+  两侧均无 `__GROUPS`（memberGroup 本来就取不到，非 HTML 模式独有问题）
+- **`alterinfo` 缺失**：HTML 行硬编码为空，JSON 的"主楼"等 alterinfo 标记丢失（页面无数据源）
+- **`__T.author` 差异**：JSON 为完整用户名，HTML 反查 `__U` 得 `UID:xxx`（匿名显示语义，
+  交集 UID 用户名两侧一致）
+- **附件/结构恢复完好**：`attach.load` URL 全命中；表格 4→4、单元格 750→750、
+  折叠 2→2、图片 16→16、链接、引用均完整恢复（read.php 的 postcontent 为 BBCode 源文）
+- **热点回复（hotreply）还原**（2026-08-10 新增 `HotReplyParser`，样本 47341103 验证）：
+  网页版把热点回复渲染在楼主楼 `<span id='hightlight_for_<lou>'>` 容器（正文
+  `postcomment__<pid>` 为 BBCode 源文、时间 `commentInfo__<pid>`、作者
+  `commentauthor__<pid>`、元数据在独立 `postArg.proc( '__<pid>', ... )` 调用、
+  原楼层号经 `pid<pid>Anchor` 后 `<a name='l<lou>'>` 反查）。提取后组装为与 JSON
+  `hotreply` 同形状挂到 `__R` 行，pid/fid/tid/type/score/score_2/postdate/content/lou/
+  postdatetimestamp 逐位一致，attachs 复用原楼层行；content_length/from_client
+  页面无数据（proc 参数为 null）维持空值
+
+### 数据模式盘点（2026-08-10，浏览器 + 直连实测）
+
+- **`__output=8` JSON**（现有主通道）：字段最全（__U 全字段/__R 行/__T/__F/__ROWS/__PAGE），
+  客户端唯一获得 hotreply/comment/alterinfo 的通道，无可替代
+- **`__output=9` XML**：同源完整数据（GB18030 声明、`<root><__U><item>` 结构），
+  ArkTS 无顺手 XML 解析路径，无优势
+- **`__output=1` / `lite=js`**：`window.script_muti_get_var_store={JSON}` JS 壳包同源 JSON
+- **read.php HTML**（现有 HTML 降级模式）：postcontent 为 BBCode 源文（正文/表格/折叠
+  可完整恢复）；`postArg.proc` 参数 [0]lou [10]pid [11]type [13]authorid [14]ts [15]score
+  [16]content_length [19]from_client [20]model；`setAll`=__U；`setDefault` 含总回复数/
+  lastPostTs/页大小
+- **`read.php?pid=` 单帖视图**：ThreadPanel REPLACE 兜底已用
+- **`thread.php?__output=8`**：版块列表（ForumApi 已用）
+- **`nuke.php?__lib=&__act=`**：仅个人功能（收藏/翻译/举报/用户选项），无帖子数据
+- **移动端 m.nga.cn / wap.nga.cn**：404 不存在
+- **待验证**：`postArg.proc` 参数 [22]（恒为 0，疑似 recommend）
 
 ## 工作流（单一真源）
 
@@ -63,7 +161,7 @@ NGA_COOKIE=... node scripts/fetch-thread-json.mjs <tid> <page>
 3. `npm run sync` 回写 `entry/src/main/ets/`
 4. DevEco 编译 + Hypium（`entry/src/test/BBCodeUnit.test.ets`）最终门禁
 
-> ⚠️ 禁止直接修改 `entry/src/main/ets` 下被镜像的 22 个文件——下次 `npm run sync`
+> ⚠️ 禁止直接修改 `entry/src/main/ets` 下被镜像的 29 个文件——下次 `npm run sync`
 > 会整体覆盖。确需直接改 .ets 时，改完立即反向同步回镜像。
 > 域名常量 `common/constants/NgaDomains.ts` 同样纳入镜像，切域时两侧都要同步。
 
