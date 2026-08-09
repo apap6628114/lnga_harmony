@@ -1,5 +1,10 @@
 import { routerStore } from '../../store/RouterStore'
-import { AppColors, NAV_BAR_H, TITLE_BLUR_FADE_DISTANCE } from '../constants/Constants'
+import {
+  AppColors,
+  NAV_BAR_H,
+  TITLE_ACTION_BUTTON_GAP,
+  TITLE_BLUR_FADE_DISTANCE
+} from '../constants/Constants'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 import { TitleScrollEffect } from '../utils/TitleScrollEffect'
 
@@ -118,7 +123,7 @@ export struct PanelNavBar {
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
 
         if (this.rightIcon || this.secondaryRightIcon) {
-          Row() {
+          Row({ space: TITLE_ACTION_BUTTON_GAP }) {
             if (this.rightIcon) {
               this.iconPod(
                 this.rightIcon,

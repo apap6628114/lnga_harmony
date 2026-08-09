@@ -21,6 +21,9 @@ export const TITLE_BLUR_FADE_DISTANCE: number = 32
 /** 标题栏渐变模糊完全生效时的最大模糊半径。 */
 export const TITLE_BLUR_RADIUS: number = 16
 
+/** 标题栏右侧相邻操作按钮之间的间距（vp）。 */
+export const TITLE_ACTION_BUTTON_GAP: number = 8
+
 // 当前激活的主题色（通过 $r 引用资源，setColorMode 自动切换）
 export class AppColors {
   static primary: Resource = $r('app.color.primary')

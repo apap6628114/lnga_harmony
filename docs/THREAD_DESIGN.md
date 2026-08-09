@@ -221,6 +221,7 @@ TITLE_SCROLL_EFFECT_DISTANCE = 20vp
 沉浸光感是 API 26 构建的固定视觉契约，不提供运行时开关或旧版实色回退：
 
 - 返回、更多等标题操作按钮使用 36×36 圆形 `UIMaterialManager.fabMaterial`。
+- 右侧存在两个操作按钮时，按钮之间固定保留 `8vp` 间距。
 - `fabMaterial` 当前为 `ImmersiveStyle.ULTRA_THIN`，启用 `interactive` 和 `lightEffect`。
 - 标题操作必须使用语义明确的独立 SVG 资源，不在标题栏中混用文字操作；视觉图标与无障碍名称分别由 `rightIcon` 和 `rightIconAccessibilityText` 提供。
 - 标题栏本体不使用整块 `systemMaterial`；正文模糊由 `List` 承担，标题可读性由颜色渐变层承担。
