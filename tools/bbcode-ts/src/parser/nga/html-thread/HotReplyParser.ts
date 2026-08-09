@@ -32,8 +32,6 @@ const POSTER_ID_MARKER: string = "id='commentposterinfo__";
 const COMMENT_CONTENT_MARKER_PREFIX: string = "id='postcomment__";
 /** 时间容器标记。 */
 const COMMENT_INFO_MARKER_PREFIX: string = "id='commentInfo__";
-/** 作者名锚点标记。 */
-const COMMENT_AUTHOR_MARKER_PREFIX: string = "id='commentauthor__";
 /** 热点回复元数据 postArg.proc 调用标记（含 `(`，openPos 取 length-1 指向开括号）。 */
 const PROC_MARKER: string = "commonui.postArg.proc( '";
 /** 时间文本前缀（`<span title='reply time'>` 内）。 */
@@ -44,6 +42,8 @@ const PID_ANCHOR_MARKER_PREFIX: string = "<a id='pid";
 const LOU_ANCHOR_RE: RegExp = /<a name='l(\d+)'>/;
 /** 容器内 pid 提取（commentposterinfo__ 后紧跟数字）。 */
 const PID_AFTER_MARKER_RE: RegExp = /^(\d+)/;
+/** 空附件映射（ArkTS 不允许无类型空对象字面量，声明后复用）。 */
+const EMPTY_ATTACHS: Record<string, Object> = {};
 
 /**
  * 从 HTML 中提取指定楼层的热点回复列表。
@@ -83,7 +83,6 @@ function extractHotReplies(html: string, lou: number, fid: number, tid: number):
 
     const content: string = extractCommentContent(container, pidStr);
     const postDate: string = extractCommentDate(container, pidStr);
-    const author: string = extractCommentAuthor(html, pidStr);
     const meta: CommentMeta = extractCommentMeta(html, pidStr);
     const replyLou: number = extractReplyLou(html, pidStr);
 
@@ -102,11 +101,10 @@ function extractHotReplies(html: string, lou: number, fid: number, tid: number):
       'content': content as Object,
       'lou': replyLou as Object,
       'content_length': 0 as Object,
-      'attachs': {} as Object,
+      'attachs': EMPTY_ATTACHS as Object,
       'from_client': '' as Object,
       'postdatetimestamp': meta.postdatetimestamp as Object,
     };
-    void author;
     result[String(itemIdx)] = row;
     itemIdx++;
   }
@@ -213,31 +211,6 @@ function extractCommentDate(container: string, pid: string): string {
     return '';
   }
   return container.substring(contentStart, endIdx).trim();
-}
-
-/**
- * 提取热点回复作者名（commentauthor__<pid> 锚点文本，已反转 HTML 实体）。
- *
- * @param html 源 HTML
- * @param pid 热点回复 pid
- * @returns 作者名；未找到时返回空串
- */
-function extractCommentAuthor(html: string, pid: string): string {
-  const marker: string = COMMENT_AUTHOR_MARKER_PREFIX + pid + "'";
-  const startIdx: number = html.indexOf(marker);
-  if (startIdx < 0) {
-    return '';
-  }
-  const tagEnd: number = html.indexOf('>', startIdx);
-  if (tagEnd < 0) {
-    return '';
-  }
-  const contentStart: number = tagEnd + 1;
-  const endIdx: number = html.indexOf('</a>', contentStart);
-  if (endIdx < 0) {
-    return '';
-  }
-  return unescapeHtml(html.substring(contentStart, endIdx).trim());
 }
 
 /**

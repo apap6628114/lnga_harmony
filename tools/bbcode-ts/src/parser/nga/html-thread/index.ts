@@ -77,6 +77,7 @@ export function parseHtmlToRawJson(html: string): object {
 
     let attachs: Record<string, Object>[] = tryParseAttachLoad(html, lou) ?? [];
     const hotReplies: Record<string, Object> | null = extractHotReplies(html, lou, fid, tid);
+    const noHotReplies: Record<string, Object> = {};
 
     const row: Record<string, Object> = {
       'pid': arg.pid as Object,
@@ -99,7 +100,7 @@ export function parseHtmlToRawJson(html: string): object {
       'alterinfo': '' as Object,
       'isanonymous': false as Object,
       'attachs': attachs as Object,
-      'hotreply': (hotReplies ?? {}) as Object,
+      'hotreply': (hotReplies ?? noHotReplies) as Object,
     };
 
     __R[String(lou)] = row;
