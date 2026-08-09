@@ -3,9 +3,9 @@
   <h1>LNGA</h1>
   <p><strong>NGA 玩家社区 · 鸿蒙原生客户端</strong></p>
   <p>
-    <img src="https://img.shields.io/badge/HarmonyOS-6.1.0(23)-0078D7?style=flat-square">
+    <img src="https://img.shields.io/badge/HarmonyOS-7.0.0(26)-0078D7?style=flat-square">
     <img src="https://img.shields.io/badge/ArkUI-%F0%9F%93%B1-ff69b4?style=flat-square">
-    <img src="https://img.shields.io/badge/API-23-brightgreen?style=flat-square">
+    <img src="https://img.shields.io/badge/API-26-brightgreen?style=flat-square">
     <img src="https://img.shields.io/badge/license-GPL--2.0-blue?style=flat-square">
   </p>
 </div>
@@ -31,6 +31,15 @@
 **LNGA** 是基于 **HarmonyOS** 原生框架 **ArkUI (ArkTS)** 构建的 [NGA 玩家社区](https://nga.cn) 客户端。致力于在鸿蒙生态中提供流畅、原生的 NGA 论坛浏览与交互体验。
 
 项目完整覆盖了 NGA 论坛的核心功能：板块浏览、帖子阅读、发帖回复、私信聊天、通知推送、AI 内容总结等，并针对手机、平板、二合一设备做了自适应布局适配。
+
+---
+
+## 维护策略
+
+- **`main`（API 26 / HarmonyOS 7.0.0）** — 当前主线，基于 API 26 特性持续开发新功能。
+- **`oh23`（API 23 / HarmonyOS 6.1.0）** — 旧版备份分支，**已暂停新功能开发**，仅维护关键错误修复。
+
+> 需要基于 API 23 的稳定版本时，请切换到 `oh23` 分支获取源码，或使用对应的旧版 Releases。
 
 ---
 
@@ -90,41 +99,11 @@
 - **请求限流** — 按域名的请求频率控制
 - **语音朗读** — 基于 Core Speech Kit 的帖子内容语音播报，超长文本自动分段接力播放
 
+---
 
+## 构建
 
-## 快速开始
-
-### 环境要求
-
-- [DevEco Studio](https://developer.huawei.com/consumer/cn/deveco-studio/) 5.0+
-- HarmonyOS SDK 6.1.0 (API 23)
-- Node.js 20+
-
-### 构建运行
-
-```bash
-# 克隆仓库
-git clone https://github.com/<your-username>/nga_oh.git
-
-# 使用 DevEco Studio 打开项目根目录
-
-# 构建 debug HAP
-hvigorw assembleHap --mode debug
-
-# 构建 release HAP
-hvigorw assembleHap --mode release
-```
-
-> 也可直接在 DevEco Studio 中点击 `Run` 按钮部署到真机或模拟器。
-
-### 权限说明
-
-应用需要以下权限：
-
-- `ohos.permission.INTERNET` — 网络访问，用于 NGA API 通信
-- `ohos.permission.DETECT_GESTURE` — 手势检测，用于图片查看器等交互
-
-入口文件：`entry/src/main/module.json5:15:22`
+使用 [DevEco Studio](https://developer.huawei.com/consumer/cn/deveco-studio/)（需支持 HarmonyOS SDK 26 / API 26）打开项目根目录，连接真机或模拟器后点击 `Run` 即可编译运行。
 
 ---
 
