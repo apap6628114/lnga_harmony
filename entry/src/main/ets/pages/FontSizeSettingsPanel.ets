@@ -3,6 +3,8 @@ import { AppColors } from '../common/constants/Constants'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { Avatar } from '../common/components/Avatar'
 import { AnonymousName } from '../common/components/AnonymousName'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
+import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 import {
   ReadingFontRole,
   ReadingLineHeightRole,
@@ -16,10 +18,30 @@ import {
 export struct FontSizeSettingsPanel {
   /** 状态栏高度。 */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
+  /** 是否启用沉浸式材质。 */
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   /** 当前帖子内容字号。 */
   @State currentContentFontSize: number = appStore.settings.fontSize
   /** 当前帖子列表字号。 */
   @State currentTopicFontSize: number = appStore.settings.topicFontSize
+  /** 标题栏渐变模糊与偏色的滚动联动进度。 */
+  @State titleScrollEffectProgress: number = 0
+  /** 滚动容器当前视口高度。 */
+  @State scrollViewportHeight: number = 1
+
+  /** 字体设置页滚动控制器。 */
+  private scroller: Scroller = new Scroller()
+
+  /** 按滚动容器绝对偏移同步标题栏视觉效果。 */
+  private syncTitleScrollEffect(): void {
+    const progress: number = TitleScrollEffect.getProgress(
+      this.scroller.currentOffset().yOffset,
+      this.statusBarHeight
+    )
+    if (TitleScrollEffect.shouldUpdateProgress(this.titleScrollEffectProgress, progress)) {
+      this.titleScrollEffectProgress = progress
+    }
+  }
 
   /**
    * 构建字体大小设置界面。
@@ -27,9 +49,7 @@ export struct FontSizeSettingsPanel {
   build() {
     Stack() {
       Column() {
-        Row().width('100%').height(44 + this.statusBarHeight)
-
-        Scroll() {
+        Scroll(this.scroller) {
           Column() {
             Column() {
               Text('帖子内容').fontSize(15).fontColor(AppColors.textSecondary)
@@ -102,10 +122,29 @@ export struct FontSizeSettingsPanel {
           .width('100%').alignItems(HorizontalAlign.Center).padding({ bottom: 32 })
         }
         .layoutWeight(1).scrollBar(BarState.Off).align(Alignment.Top)
+        .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
+        .linearGradientBlur(
+          TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+          {
+            fractionStops: TitleScrollEffect.getBlurStops(this.scrollViewportHeight, this.statusBarHeight),
+            direction: GradientDirection.Bottom
+          }
+        )
+        .onAreaChange((oldValue: Area, newValue: Area): void => {
+          if (typeof newValue.height === 'number' && newValue.height !== this.scrollViewportHeight) {
+            this.scrollViewportHeight = newValue.height
+          }
+        })
+        .onDidScroll((): void => {
+          this.syncTitleScrollEffect()
+        })
+        .onAppear((): void => {
+          this.syncTitleScrollEffect()
+        })
       }
       .width('100%').height('100%').backgroundColor(AppColors.bg)
 
-      PanelNavBar({ title: '字体大小' })
+      PanelNavBar({ title: '字体大小', scrollEffectProgress: this.titleScrollEffectProgress })
         .width('100%').position({ x: 0, y: 0 })
     }
     .width('100%').height('100%')

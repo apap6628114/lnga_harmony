@@ -26,22 +26,22 @@ export struct PanelNavBar {
   onBack?: () => void
   /** 是否显示返回按钮。 */
   @Prop showBack: boolean = true
-  /** 右侧文本按钮。 */
-  @Prop rightLabel: string = ''
-  /** 右侧文本颜色。 */
-  @Prop rightLabelColor: ResourceColor = ''
   /** 主右侧图标点击操作。 */
   onRightClick?: () => void
   /** 主右侧图标。 */
   @Prop rightIcon: ResourceStr = ''
   /** 主右侧图标颜色。 */
-  @Prop rightIconColor: string = ''
+  @Prop rightIconColor: ResourceColor = ''
+  /** 主右侧图标的无障碍名称。 */
+  @Prop rightIconAccessibilityText: string = ''
   /** 主右侧图标角标。 */
   @Prop rightIconBadge: number = 0
   /** 主图标右侧的第二个操作图标。 */
   @Prop secondaryRightIcon: ResourceStr = ''
   /** 第二个操作图标颜色。 */
-  @Prop secondaryRightIconColor: string = ''
+  @Prop secondaryRightIconColor: ResourceColor = ''
+  /** 第二个操作图标的无障碍名称。 */
+  @Prop secondaryRightIconAccessibilityText: string = ''
   /** 第二个操作图标角标。 */
   @Prop secondaryRightIconBadge: number = 0
   /** 第二个操作图标点击操作。 */
@@ -53,7 +53,13 @@ export struct PanelNavBar {
    * 标题栏内可操作图标按钮：圆形光感底板 + 按压形变反馈。
    */
   @Builder
-  iconPod(icon: ResourceStr, color: ResourceColor, badge: number, onTap: () => void) {
+  iconPod(
+    icon: ResourceStr,
+    color: ResourceColor,
+    badge: number,
+    accessibilityText: string,
+    onTap: () => void
+  ) {
     Stack() {
       Image(icon).width(18).height(18).objectFit(ImageFit.Contain).fillColor(color)
       if (badge > 0) {
@@ -68,6 +74,7 @@ export struct PanelNavBar {
     .alignContent(Alignment.Center)
     .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.frostGlass)
     .systemMaterial(this.materialEnabled ? UIMaterialManager.fabMaterial : undefined)
+    .accessibilityText(accessibilityText)
     .onClick(onTap)
   }
 
@@ -99,7 +106,7 @@ export struct PanelNavBar {
       Row() {
         if (this.showBack) {
           Row() {
-            this.iconPod($r('app.media.icon_back'), AppColors.primary, 0, () => {
+            this.iconPod($r('app.media.icon_back'), AppColors.primary, 0, '返回', () => {
               if (this.onBack) { this.onBack() } else { routerStore.back() }
             })
           }
@@ -116,23 +123,28 @@ export struct PanelNavBar {
         if (this.rightIcon || this.secondaryRightIcon) {
           Row() {
             if (this.rightIcon) {
-              this.iconPod(this.rightIcon, this.rightIconColor || AppColors.primary,
-                this.rightIconBadge, () => { if (this.onRightClick) { this.onRightClick() } })
+              this.iconPod(
+                this.rightIcon,
+                this.rightIconColor || AppColors.primary,
+                this.rightIconBadge,
+                this.rightIconAccessibilityText,
+                () => { if (this.onRightClick) { this.onRightClick() } }
+              )
             }
             if (this.secondaryRightIcon) {
-              this.iconPod(this.secondaryRightIcon, this.secondaryRightIconColor || AppColors.primary,
-                this.secondaryRightIconBadge, () => {
+              this.iconPod(
+                this.secondaryRightIcon,
+                this.secondaryRightIconColor || AppColors.primary,
+                this.secondaryRightIconBadge,
+                this.secondaryRightIconAccessibilityText,
+                () => {
                   if (this.onSecondaryRightClick) { this.onSecondaryRightClick() }
-                })
+                }
+              )
             }
           }
           .height(44)
           .margin({ right: 8 })
-        } else if (this.rightLabel) {
-          Text(this.rightLabel).fontSize(14)
-            .fontColor(this.rightLabelColor || AppColors.primary)
-            .onClick(() => { if (this.onRightClick) { this.onRightClick() } })
-            .padding({ left: 8, right: 16 })
         } else {
           Blank().width(70)
         }

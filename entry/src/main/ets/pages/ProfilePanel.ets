@@ -18,6 +18,7 @@ import { PageScope } from '../common/concurrency/PageScope'
 import { Context } from '@kit.AbilityKit'
 import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
+import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 /**
  * 个人主页统计项数据模型（驱动 Grid 中的 ForEach）。
@@ -69,12 +70,29 @@ export struct ProfilePanel {
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
+  /** 标题栏渐变模糊与偏色的滚动联动进度。 */
+  @State titleScrollEffectProgress: number = 0
+  /** 滚动容器当前视口高度。 */
+  @State scrollViewportHeight: number = 1
 
   @Prop @Watch('onUidChange') uid: string = ''
   private isOwnProfile: boolean = false
   private uidInitialized: boolean = false
   /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
   private scope: PageScope = new PageScope()
+  /** 个人主页滚动控制器。 */
+  private scroller: Scroller = new Scroller()
+
+  /** 按滚动容器绝对偏移同步标题栏视觉效果。 */
+  private syncTitleScrollEffect(): void {
+    const progress: number = TitleScrollEffect.getProgress(
+      this.scroller.currentOffset().yOffset,
+      this.statusBarHeight
+    )
+    if (TitleScrollEffect.shouldUpdateProgress(this.titleScrollEffectProgress, progress)) {
+      this.titleScrollEffectProgress = progress
+    }
+  }
 
   aboutToAppear(): void {
     this.scope.begin()
@@ -100,6 +118,7 @@ export struct ProfilePanel {
       return
     }
     this.profile = null
+    this.titleScrollEffectProgress = 0
     this.isLoading = true
     this.hasError = false
     this.isOwnProfile = appStore.auth.uid === this.uid
@@ -227,10 +246,8 @@ export struct ProfilePanel {
           .alignItems(HorizontalAlign.Center)
           .padding({ top: 44 + this.statusBarHeight })
         } else if (this.profile) {
-          Scroll() {
+          Scroll(this.scroller) {
             Column() {
-              Row().width('100%').height(44 + this.statusBarHeight)
-
               Column() {
                 Column() {
                 Avatar({ avatar: this.profile!.avatarUrl, uid: String(this.profile!.uid), name: this.profile!.userName, avatarSize: 80 })
@@ -603,13 +620,32 @@ export struct ProfilePanel {
         .layoutWeight(1)
         .scrollBar(BarState.Off)
         .align(Alignment.Top)
+        .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
+        .linearGradientBlur(
+          TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+          {
+            fractionStops: TitleScrollEffect.getBlurStops(this.scrollViewportHeight, this.statusBarHeight),
+            direction: GradientDirection.Bottom
+          }
+        )
+        .onAreaChange((oldValue: Area, newValue: Area): void => {
+          if (typeof newValue.height === 'number' && newValue.height !== this.scrollViewportHeight) {
+            this.scrollViewportHeight = newValue.height
+          }
+        })
+        .onDidScroll((): void => {
+          this.syncTitleScrollEffect()
+        })
+        .onAppear((): void => {
+          this.syncTitleScrollEffect()
+        })
       }
     }
     .width('100%')
     .height('100%')
     .backgroundColor(AppColors.bg)
 
-    PanelNavBar({ title: '个人主页' })
+    PanelNavBar({ title: '个人主页', scrollEffectProgress: this.titleScrollEffectProgress })
       .width('100%').position({ x: 0, y: 0 })
   }
   .width('100%')

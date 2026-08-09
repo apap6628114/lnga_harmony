@@ -13,6 +13,8 @@ import { MessageArticleDataSource } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/components/PageStateView'
 import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
+import { PanelNavBar } from '../common/components/PanelNavBar'
+import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 @Component
 export struct MessageDetailPanel {
@@ -24,10 +26,27 @@ export struct MessageDetailPanel {
   @State replyText: string = ''
   @State sending: boolean = false
   @StorageProp('navBarHeight') navBarHeight: number = 0
+  /** 状态栏高度。 */
+  @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
+  /** 标题栏渐变模糊与偏色的滚动联动进度。 */
+  @State titleScrollEffectProgress: number = 0
+  /** 列表当前视口高度。 */
+  @State listViewportHeight: number = 1
 
   private scroller: Scroller = new Scroller()
   private messagesDataSource: MessageArticleDataSource = new MessageArticleDataSource()
+
+  /** 按列表绝对滚动偏移同步标题栏视觉效果。 */
+  private syncTitleScrollEffect(): void {
+    const progress: number = TitleScrollEffect.getProgress(
+      this.scroller.currentOffset().yOffset,
+      this.statusBarHeight
+    )
+    if (TitleScrollEffect.shouldUpdateProgress(this.titleScrollEffectProgress, progress)) {
+      this.titleScrollEffectProgress = progress
+    }
+  }
 
   aboutToAppear(): void {
     this.loadMessages()
@@ -37,6 +56,7 @@ export struct MessageDetailPanel {
     this.messages = []
     this.messagesDataSource.clear()
     this.hasError = false
+    this.titleScrollEffectProgress = 0
     this.loadMessages()
   }
 
@@ -83,83 +103,117 @@ export struct MessageDetailPanel {
   }
 
   build() {
-    Column() {
-      if (this.isLoading) {
-        Column() {
-          LoadingStateView()
-        }
-        .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-      } else if (this.hasError) {
-        Column() {
-          ErrorStateView({ msg: '加载失败', onRetry: () => this.loadMessages() })
-        }
-        .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-      } else if (this.messages.length === 0) {
-        Column() {
-          EmptyStateView({ msg: '暂无消息', icon: $r('app.media.icon_chat_bubble') })
-        }
-        .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-      } else {
-        if (this.title && this.title !== '私信详情') {
-          Text(unescapeHtml(this.title))
-            .fontSize(17).fontWeight(FontWeight.Bold).width('100%')
-            .padding({ left: 16, right: 16, top: 10, bottom: 8 })
-            .backgroundColor(AppColors.bgTertiary)
-            .border({ width: { bottom: 0.5 }, color: AppColors.separator })
-        }
-
-        List({ scroller: this.scroller }) {
-          LazyForEach(this.messagesDataSource, (msg: MessageArticle) => {
-            ListItem() {
-              Row() {
-                Avatar({ name: msg.author || msg.from || '未知', avatarSize: 36 })
-                Column() {
-                  Row() {
-                    Text(unescapeHtml(msg.author || msg.from || '未知'))
-                      .fontSize(14).fontColor(AppColors.primary).fontWeight(FontWeight.Medium)
-                    Text(formatTime(Number(msg.time))).fontSize(12).fontColor(AppColors.textTertiary).margin({ left: 8 })
-                  }
-                  if (msg.formated_html_data) {
-                    RichText(msg.formated_html_data).width('100%').margin({ top: 4 })
-                  } else {
-                    Text(unescapeHtml(msg.content)).fontSize(15).fontColor(AppColors.textPrimary)
-                      .margin({ top: 4 }).lineHeight(22)
-                  }
-                }
-                .layoutWeight(1).margin({ left: 10 }).alignItems(HorizontalAlign.Start)
+    Stack() {
+      Column() {
+        if (this.isLoading) {
+          Column() {
+            LoadingStateView()
+          }
+          .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+          .padding({ top: TitleScrollEffect.getContentStartOffset(this.statusBarHeight) })
+        } else if (this.hasError) {
+          Column() {
+            ErrorStateView({ msg: '加载失败', onRetry: () => this.loadMessages() })
+          }
+          .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+          .padding({ top: TitleScrollEffect.getContentStartOffset(this.statusBarHeight) })
+        } else if (this.messages.length === 0) {
+          Column() {
+            EmptyStateView({ msg: '暂无消息', icon: $r('app.media.icon_chat_bubble') })
+          }
+          .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+          .padding({ top: TitleScrollEffect.getContentStartOffset(this.statusBarHeight) })
+        } else {
+          List({ scroller: this.scroller }) {
+            if (this.title && this.title !== '私信详情') {
+              ListItem() {
+                Text(unescapeHtml(this.title))
+                  .fontSize(17).fontWeight(FontWeight.Bold).width('100%')
+                  .padding({ left: 16, right: 16, top: 10, bottom: 8 })
+                  .backgroundColor(AppColors.bgTertiary)
+                  .border({ width: { bottom: 0.5 }, color: AppColors.separator })
               }
-              .width('100%').padding({ left: 16, right: 16, top: 10, bottom: 10 }).alignItems(VerticalAlign.Top)
             }
-          }, (msg: MessageArticle) => String(msg.time) + String(msg.from))
-        }
-        .width('100%').layoutWeight(1)
-        .divider({ strokeWidth: 0.5, color: AppColors.separator })
-      }
 
-      if (!this.isLoading && !this.hasError) {
-        Row() {
-          TextInput({ text: this.replyText, placeholder: '写回复...' })
-            .layoutWeight(1).fontSize(15).borderRadius(12)
-            .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary).height(40).padding({ left: 12, right: 12 })
-            .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
-            .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-            .onChange((value: string) => { this.replyText = value })
-            .onSubmit(() => this.handleReply())
-          Button('发送')
-            .fontSize(14).fontColor(AppColors.white)
-            .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.primary)
-            .systemMaterial(this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
-            .borderRadius(12).height(40).padding({ left: 16, right: 16 }).margin({ left: 8 })
-            .enabled(!this.sending && this.replyText.trim().length > 0)
-            .onClick(() => this.handleReply())
+            LazyForEach(this.messagesDataSource, (msg: MessageArticle) => {
+              ListItem() {
+                Row() {
+                  Avatar({ name: msg.author || msg.from || '未知', avatarSize: 36 })
+                  Column() {
+                    Row() {
+                      Text(unescapeHtml(msg.author || msg.from || '未知'))
+                        .fontSize(14).fontColor(AppColors.primary).fontWeight(FontWeight.Medium)
+                      Text(formatTime(Number(msg.time))).fontSize(12).fontColor(AppColors.textTertiary)
+                        .margin({ left: 8 })
+                    }
+                    if (msg.formated_html_data) {
+                      RichText(msg.formated_html_data).width('100%').margin({ top: 4 })
+                    } else {
+                      Text(unescapeHtml(msg.content)).fontSize(15).fontColor(AppColors.textPrimary)
+                        .margin({ top: 4 }).lineHeight(22)
+                    }
+                  }
+                  .layoutWeight(1).margin({ left: 10 }).alignItems(HorizontalAlign.Start)
+                }
+                .width('100%').padding({ left: 16, right: 16, top: 10, bottom: 10 })
+                .alignItems(VerticalAlign.Top)
+              }
+            }, (msg: MessageArticle) => String(msg.time) + String(msg.from))
+          }
+          .width('100%').layoutWeight(1)
+          .divider({ strokeWidth: 0.5, color: AppColors.separator })
+          .edgeEffect(EdgeEffect.Spring)
+          .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
+          .linearGradientBlur(
+            TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+            {
+              fractionStops: TitleScrollEffect.getBlurStops(this.listViewportHeight, this.statusBarHeight),
+              direction: GradientDirection.Bottom
+            }
+          )
+          .onAreaChange((oldValue: Area, newValue: Area): void => {
+            if (typeof newValue.height === 'number' && newValue.height !== this.listViewportHeight) {
+              this.listViewportHeight = newValue.height
+            }
+          })
+          .onDidScroll((): void => {
+            this.syncTitleScrollEffect()
+          })
+          .onAppear((): void => {
+            this.syncTitleScrollEffect()
+          })
         }
-        .width('100%').padding({ left: 12, right: 12, top: 8, bottom: 8 + this.navBarHeight })
-        .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
-        .border({ width: { top: 0.5 }, color: AppColors.separator })
-        .alignItems(VerticalAlign.Center)
-        .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
+
+        if (!this.isLoading && !this.hasError) {
+          Row() {
+            TextInput({ text: this.replyText, placeholder: '写回复...' })
+              .layoutWeight(1).fontSize(15).borderRadius(12)
+              .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgSecondary)
+              .height(40).padding({ left: 12, right: 12 })
+              .systemMaterial(this.materialEnabled ? UIMaterialManager.inputMaterial : undefined)
+              .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+              .onChange((value: string) => { this.replyText = value })
+              .onSubmit(() => this.handleReply())
+            Button('发送')
+              .fontSize(14).fontColor(AppColors.white)
+              .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.primary)
+              .systemMaterial(this.materialEnabled ? UIMaterialManager.buttonMaterial : undefined)
+              .borderRadius(12).height(40).padding({ left: 16, right: 16 }).margin({ left: 8 })
+              .enabled(!this.sending && this.replyText.trim().length > 0)
+              .onClick(() => this.handleReply())
+          }
+          .width('100%').padding({ left: 12, right: 12, top: 8, bottom: 8 + this.navBarHeight })
+          .backgroundColor(this.materialEnabled ? Color.Transparent : AppColors.bgTertiary)
+          .border({ width: { top: 0.5 }, color: AppColors.separator })
+          .alignItems(VerticalAlign.Center)
+          .systemMaterial(this.materialEnabled ? UIMaterialManager.surfaceMaterial : undefined)
+        }
       }
+      .width('100%').height('100%').backgroundColor(AppColors.bg)
+
+      PanelNavBar({ title: '私信', scrollEffectProgress: this.titleScrollEffectProgress })
+        .width('100%').position({ x: 0, y: 0 })
     }
-    .width('100%').height('100%').backgroundColor(AppColors.bg)
+    .width('100%').height('100%')
   }
 }

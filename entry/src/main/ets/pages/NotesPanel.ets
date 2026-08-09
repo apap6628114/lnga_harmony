@@ -219,7 +219,9 @@ export struct NotesPanel {
       }
       .width('100%').height('100%')
 
-      PanelNavBar({ title: '用户备注', rightLabel: '+ 添加', scrollEffectProgress: this.titleScrollEffectProgress, onRightClick: (): void => {
+      PanelNavBar({ title: '用户备注', rightIcon: $r('app.media.icon_nav_add'),
+        rightIconAccessibilityText: '添加用户备注', scrollEffectProgress: this.titleScrollEffectProgress,
+        onRightClick: (): void => {
         this.addDialogController = new CustomDialogController({
           builder: AddNoteDialog({
             onConfirm: (nickName: string, uid: string): void => {
@@ -233,7 +235,7 @@ export struct NotesPanel {
           alignment: DialogAlignment.Center
         })
         this.addDialogController.open()
-      } })
+        } })
         .width('100%').position({ x: 0, y: 0 })
     }
     .width('100%').height('100%').backgroundColor(AppColors.bg)

@@ -592,7 +592,8 @@ export struct FavoriteFoldersPanel {
       PanelNavBar({
         title: this.topicId.length > 0 ? '收藏到…' : '收藏主题',
         scrollEffectProgress: this.titleScrollEffectProgress,
-        rightLabel: '+ 新建',
+        rightIcon: $r('app.media.icon_nav_add'),
+        rightIconAccessibilityText: '新建收藏夹',
         onRightClick: (): void => {
           this.showCreateFolderDialog()
         }

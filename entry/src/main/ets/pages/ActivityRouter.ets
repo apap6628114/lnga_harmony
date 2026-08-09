@@ -72,6 +72,8 @@ export struct ActivityRouter {
             BrowseHistoryPanel()
           } else if (entry.screen.type === 'messages') {
             MessageListPanel({ composeToInit: entry.screen.composeTo })
+          } else if (entry.screen.type === 'messageDetail') {
+            MessageDetailPanel({ mid: entry.screen.mid })
           } else if (entry.screen.type === 'notifications') {
             NotificationPanel()
           } else if (entry.screen.type === 'blacklist') {
@@ -141,14 +143,10 @@ export struct ActivityRouter {
 
   @Builder
   ContentBody(entry: NavEntry) {
-    if (entry.screen.type === 'messageDetail') {
-      MessageDetailPanel({ mid: entry.screen.mid })
-    } else {
-      Column() {
-        Text('未知页面类型').fontSize(14).fontColor(AppColors.textTertiary)
-      }
-      .layoutWeight(1).width('100%')
-      .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+    Column() {
+      Text('未知页面类型').fontSize(14).fontColor(AppColors.textTertiary)
     }
+    .layoutWeight(1).width('100%')
+    .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
   }
 }

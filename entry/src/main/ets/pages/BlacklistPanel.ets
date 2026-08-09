@@ -210,7 +210,9 @@ export struct BlacklistPanel {
       }
       .width('100%').height('100%')
 
-      PanelNavBar({ title: '黑名单管理', rightLabel: '+ 添加', scrollEffectProgress: this.titleScrollEffectProgress, onRightClick: (): void => {
+      PanelNavBar({ title: '黑名单管理', rightIcon: $r('app.media.icon_nav_add'),
+        rightIconAccessibilityText: '添加黑名单', scrollEffectProgress: this.titleScrollEffectProgress,
+        onRightClick: (): void => {
         this.addDialogController = new CustomDialogController({
           builder: AddBlacklistDialog({
             currentUserId: appStore.auth.uid,
@@ -228,7 +230,7 @@ export struct BlacklistPanel {
           alignment: DialogAlignment.Center
         })
         this.addDialogController.open()
-      } })
+        } })
         .width('100%').position({ x: 0, y: 0 })
     }
     .width('100%').height('100%').backgroundColor(AppColors.bg)

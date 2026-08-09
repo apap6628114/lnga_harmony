@@ -340,8 +340,9 @@ export struct NotificationPanel {
       PanelNavBar({
         title: '通知',
         scrollEffectProgress: this.titleScrollEffectProgress,
-        rightLabel: '全部已读',
-        rightLabelColor: this.hasUnreadNotifications() ? AppColors.primary : AppColors.textTertiary,
+        rightIcon: $r('app.media.icon_nav_mark_all_read'),
+        rightIconColor: this.hasUnreadNotifications() ? AppColors.primary : AppColors.textTertiary,
+        rightIconAccessibilityText: '全部标记为已读',
         onRightClick: (): void => { this.handleMarkAllSeen() }
       })
         .width('100%').position({ x: 0, y: 0 })

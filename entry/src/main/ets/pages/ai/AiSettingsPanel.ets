@@ -36,6 +36,7 @@ import {
   SCENARIO_INJECTED_FIELDS,
   type InjectedFieldInfo
 } from '../../model/AiScenarioConfig'
+import { TitleScrollEffect } from '../../common/utils/TitleScrollEffect'
 
 /** 新建方案的哨兵 ID */
 const NEW_ID: string = '__new__'
@@ -46,6 +47,8 @@ export struct AiSettingsPanel {
   @State profiles: AiProviderProfile[] = []
   /** 沉浸光感开关。 */
   @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
+  /** 状态栏高度。 */
+  @StorageProp('statusBarHeight') statusBarHeight: number = 0
   /** 当前展开编辑的配置 ID。 */
   @State expandedProfileId: string = ''
   /** 方案名称输入值。 */
@@ -81,8 +84,25 @@ export struct AiSettingsPanel {
   @State testSuccess: boolean = false
   /** 是否正在测试连接。 */
   @State testing: boolean = false
+  /** 标题栏渐变模糊与偏色的滚动联动进度。 */
+  @State titleScrollEffectProgress: number = 0
+  /** 滚动容器当前视口高度。 */
+  @State scrollViewportHeight: number = 1
   /** 测试连接请求序号。 */
   private testConnectionRequestId: number = 0
+  /** AI 设置页滚动控制器。 */
+  private scroller: Scroller = new Scroller()
+
+  /** 按滚动容器绝对偏移同步标题栏视觉效果。 */
+  private syncTitleScrollEffect(): void {
+    const progress: number = TitleScrollEffect.getProgress(
+      this.scroller.currentOffset().yOffset,
+      this.statusBarHeight
+    )
+    if (TitleScrollEffect.shouldUpdateProgress(this.titleScrollEffectProgress, progress)) {
+      this.titleScrollEffectProgress = progress
+    }
+  }
 
   /** 是否正在新建方案 */
   private isNew(): boolean {
@@ -554,69 +574,88 @@ export struct AiSettingsPanel {
       this.editModelInput.trim() === modelName
   }
 
-	  /** 构建 AI 配置页面。 */
-	  build() {
-	    Stack() {
-	      Column() {
-		        PanelNavBar({
-		          title: 'AI 配置',
-		          onBack: (): void => {
-		            if (this.hasUnsavedEdit()) {
-		              this.showDiscardConfirm((): void => {
-		                this.doCollapse()
-		                routerStore.back()
-		              })
-		              return
-		            }
-		            routerStore.back()
-		          }
-		        })
-		          .width('100%')
+  /** 构建 AI 配置页面。 */
+  build() {
+    Stack() {
+      Column() {
+        Scroll(this.scroller) {
+          Column() {
+            Text('AI 服务')
+              .fontSize(14)
+              .fontColor(AppColors.textPrimary)
+              .fontWeight(FontWeight.Medium)
+              .width('92%')
+              .margin({ top: 8, bottom: 2 })
 
-	        Scroll() {
-	          Column() {
-	            // Section: AI 服务
-	            Text('AI 服务')
-	              .fontSize(14)
-	              .fontColor(AppColors.textPrimary)
-	              .fontWeight(FontWeight.Medium)
-	              .width('92%')
-	              .margin({ top: 8, bottom: 2 })
+            Text('配置 DeepSeek Responses API 连接信息和模型参数，联网搜索由服务端内置完成')
+              .fontSize(11)
+              .fontColor(AppColors.textTertiary)
+              .lineHeight(16)
+              .width('92%')
+              .margin({ bottom: 8, top: 2 })
 
-	            Text('配置 DeepSeek Responses API 连接信息和模型参数，联网搜索由服务端内置完成')
-	              .fontSize(11)
-	              .fontColor(AppColors.textTertiary)
-	              .lineHeight(16)
-	              .width('92%')
-	              .margin({ bottom: 8, top: 2 })
+            if (this.profiles.length === 0 && !this.isNew()) {
+              this.EmptyHint()
+            } else {
+              ForEach(this.profiles, (profile: AiProviderProfile) => {
+                this.ProfileCard(profile)
+              }, (profile: AiProviderProfile): string => profile.id)
+            }
 
-	            if (this.profiles.length === 0 && !this.isNew()) {
-	              this.EmptyHint()
-	            } else {
-	              ForEach(this.profiles, (profile: AiProviderProfile) => {
-	                this.ProfileCard(profile)
-	              }, (profile: AiProviderProfile): string => profile.id)
-	            }
-
-	            if (this.isNew()) {
-	              this.NewProfileCard()
-	            }
+            if (this.isNew()) {
+              this.NewProfileCard()
+            }
 
             this.AddButton()
-
             this.ScenarioSection()
-	          }
-	          .width('100%')
-	          .alignItems(HorizontalAlign.Center)
-	          .padding({ bottom: 32, top: 8 })
-	        }
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Center)
+          .padding({ bottom: 32, top: 8 })
+        }
         .layoutWeight(1)
         .scrollBar(BarState.Off)
         .align(Alignment.Top)
+        .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
+        .linearGradientBlur(
+          TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+          {
+            fractionStops: TitleScrollEffect.getBlurStops(this.scrollViewportHeight, this.statusBarHeight),
+            direction: GradientDirection.Bottom
+          }
+        )
+        .onAreaChange((oldValue: Area, newValue: Area): void => {
+          if (typeof newValue.height === 'number' && newValue.height !== this.scrollViewportHeight) {
+            this.scrollViewportHeight = newValue.height
+          }
+        })
+        .onDidScroll((): void => {
+          this.syncTitleScrollEffect()
+        })
+        .onAppear((): void => {
+          this.syncTitleScrollEffect()
+        })
       }
       .width('100%')
       .height('100%')
       .backgroundColor(AppColors.bg)
+
+      PanelNavBar({
+        title: 'AI 配置',
+        scrollEffectProgress: this.titleScrollEffectProgress,
+        onBack: (): void => {
+          if (this.hasUnsavedEdit()) {
+            this.showDiscardConfirm((): void => {
+              this.doCollapse()
+              routerStore.back()
+            })
+            return
+          }
+          routerStore.back()
+        }
+      })
+        .width('100%')
+        .position({ x: 0, y: 0 })
     }
     .width('100%')
     .height('100%')

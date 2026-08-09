@@ -163,7 +163,9 @@ export struct FilterKeywordsPanel {
       }
       .width('100%').height('100%')
 
-      PanelNavBar({ title: '关键词屏蔽', rightLabel: '+ 添加', scrollEffectProgress: this.titleScrollEffectProgress, onRightClick: (): void => {
+      PanelNavBar({ title: '关键词屏蔽', rightIcon: $r('app.media.icon_nav_add'),
+        rightIconAccessibilityText: '添加关键词', scrollEffectProgress: this.titleScrollEffectProgress,
+        onRightClick: (): void => {
         this.addDialogController = new CustomDialogController({
           builder: AddKeywordDialog({
             onConfirm: (keyword: string): void => {
@@ -177,7 +179,7 @@ export struct FilterKeywordsPanel {
           alignment: DialogAlignment.Center
         })
         this.addDialogController.open()
-      } })
+        } })
         .width('100%').position({ x: 0, y: 0 })
     }
     .width('100%').height('100%').backgroundColor(AppColors.bg)

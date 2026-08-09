@@ -383,6 +383,8 @@ export struct WebViewPanel {
         this.moreMenu()
       }
     }
-    .width('100%').height('100%').alignContent(Alignment.BottomEnd)
+    .width('100%').height('100%')
+    .alignContent(Alignment.BottomEnd)
+    .backgroundColor(AppColors.bg)
   }
 }

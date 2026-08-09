@@ -222,6 +222,7 @@ TITLE_SCROLL_EFFECT_DISTANCE = 20vp
 
 - 返回、更多等标题操作按钮使用 36×36 圆形 `UIMaterialManager.fabMaterial`。
 - `fabMaterial` 当前为 `ImmersiveStyle.ULTRA_THIN`，启用 `interactive` 和 `lightEffect`。
+- 标题操作必须使用语义明确的独立 SVG 资源，不在标题栏中混用文字操作；视觉图标与无障碍名称分别由 `rightIcon` 和 `rightIconAccessibilityText` 提供。
 - 标题栏本体不使用整块 `systemMaterial`；正文模糊由 `List` 承担，标题可读性由颜色渐变层承担。
 - 不绘制用于强调标题底边的常驻分割线，避免形成独立矩形区域。
 
@@ -231,7 +232,18 @@ TITLE_SCROLL_EFFECT_DISTANCE = 20vp
 - 标题栏回退到 `AppColors.frostGlassStrong` 和现有底边框。
 - 动态正文模糊和标题偏色不生效。
 
-`TitleScrollEffect` 和 `PanelNavBar` 是共享实现。其他页面只有在采用“全视口列表 + 固定覆盖标题 + 同一 `contentStartOffset`”布局时，才能直接复用相同进度模型；静态表单、WebView 或其他坐标模型不能仅为了视觉一致而机械接入。
+### 6.4 共享实现的适用条件
+
+`TitleScrollEffect` 和 `PanelNavBar` 是共享实现，不是 Thread 专用视觉副本。页面直接复用时必须同时满足：
+
+1. 正文由可取得绝对偏移的 ArkUI `List` 或 `Scroll` 承载。
+2. 标题栏固定覆盖在正文视口顶部，正文容器占满标题栏后方的可用视口。
+3. 初始避让使用同一个 `contentStartOffset = H`，不得通过标题占位行或伪数据项实现。
+4. 模糊只作用于正文容器，标题偏色只由 `PanelNavBar.scrollEffectProgress` 控制。
+
+当前 `SettingsPanel`、`ProfilePanel`、`FontSizeSettingsPanel`、`TtsSettingsPanel`、`AiSettingsPanel`、`AiChatPage` 和 `MessageDetailPanel` 已按上述条件调整布局并复用相同模型。`MessageDetailPanel` 自己持有标题栏和列表滚动状态；路由容器不得替它代持标题栏，否则无法建立可靠的滚动联动。
+
+`WebViewPanel` 不满足第 1、3 项：`Web` 可报告网页滚动位置，但没有与 ArkUI `contentStartOffset` 等价且不修改网页文档的能力。因此该页面保留非重叠的静态标题布局，并由页面根节点绘制不透明 `AppColors.bg`，避免网页加载或透明区域暴露活动栈下层内容。不得为了表面一致向任意网页注入顶部 DOM/CSS，也不得未经约束切换为 `FIT_CONTENT` 后放入外层 `Scroll`；这两种做法分别会改变网页布局语义，或引入页面高度与无限加载限制。
 
 ## 7. 已知故障模式
 

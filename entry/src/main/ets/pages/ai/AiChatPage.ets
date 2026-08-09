@@ -13,6 +13,7 @@ import { appStore } from '../../store/AppStore'
 import { PageScope } from '../../common/concurrency/PageScope'
 import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../../common/constants/AppStorageKeys'
 import { UIMaterialManager } from '../../common/managers/UIMaterialManager'
+import { TitleScrollEffect } from '../../common/utils/TitleScrollEffect'
 
 /** 流式输出默认刷新间隔毫秒数 */
 const DEFAULT_FLUSH_INTERVAL_MS: number = 80
@@ -93,6 +94,12 @@ struct AiChatPage {
   @State private title: string = 'AI 对话'
   /** 沉浸光感开关 */
   @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
+  /** 状态栏高度。 */
+  @StorageProp('statusBarHeight') statusBarHeight: number = 0
+  /** 标题栏渐变模糊与偏色的滚动联动进度。 */
+  @State private titleScrollEffectProgress: number = 0
+  /** 滚动容器当前视口高度。 */
+  @State private scrollViewportHeight: number = 1
   /** 初始 prompt */
   private initialPrompt: string = ''
   /** AI 场景标识（空字符串表示自由聊天，不注入 system prompt） */
@@ -116,6 +123,17 @@ struct AiChatPage {
 
   /** 滚动控制器 */
   private scroller: Scroller = new Scroller()
+
+  /** 按滚动容器绝对偏移同步标题栏视觉效果。 */
+  private syncTitleScrollEffect(): void {
+    const progress: number = TitleScrollEffect.getProgress(
+      this.scroller.currentOffset().yOffset,
+      this.statusBarHeight
+    )
+    if (TitleScrollEffect.shouldUpdateProgress(this.titleScrollEffectProgress, progress)) {
+      this.titleScrollEffectProgress = progress
+    }
+  }
 
   aboutToAppear(): void {
     this.scope.begin()
@@ -432,16 +450,9 @@ struct AiChatPage {
   }
 
   build() {
-    Column() {
-      // 导航栏
-      PanelNavBar({
-        title: this.title,
-        showBack: true,
-        onBack: (): void => { this.getUIContext().getRouter().back() }
-      })
-
-      // 对话区
-      Scroll(this.scroller) {
+    Stack() {
+      Column() {
+        Scroll(this.scroller) {
         Column() {
           ForEach(this.bubbles, (bubble: ChatBubble) => {
             this.RenderBubble(bubble)
@@ -529,19 +540,49 @@ struct AiChatPage {
         .width('100%')
         .padding({ left: 12, right: 12, top: 8, bottom: 8 })
         .alignItems(HorizontalAlign.Start)
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.None)
+        .align(Alignment.TopStart)
+        .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
+        .linearGradientBlur(
+          TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+          {
+            fractionStops: TitleScrollEffect.getBlurStops(this.scrollViewportHeight, this.statusBarHeight),
+            direction: GradientDirection.Bottom
+          }
+        )
+        .onAreaChange((oldValue: Area, newValue: Area): void => {
+          if (typeof newValue.height === 'number' && newValue.height !== this.scrollViewportHeight) {
+            this.scrollViewportHeight = newValue.height
+          }
+        })
+        .onDidScroll((): void => {
+          this.syncTitleScrollEffect()
+        })
+        .onAppear((): void => {
+          this.syncTitleScrollEffect()
+        })
+
+        this.RenderInputBar()
       }
       .width('100%')
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.None)
-      .align(Alignment.TopStart)
+      .height('100%')
+      .backgroundColor(AppColors.bg)
 
-      // 底部输入栏
-      this.RenderInputBar()
+      PanelNavBar({
+        title: this.title,
+        showBack: true,
+        scrollEffectProgress: this.titleScrollEffectProgress,
+        onBack: (): void => { this.getUIContext().getRouter().back() }
+      })
+        .width('100%')
+        .position({ x: 0, y: 0 })
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(AppColors.bg)
   }
 
   // ============================================================

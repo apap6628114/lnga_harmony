@@ -5,6 +5,8 @@ import { AppColors } from '../common/constants/Constants'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { TtsPlayer } from '../common/media/TtsPlayer'
 import { PageScope } from '../common/concurrency/PageScope'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
+import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 const VOICE_OPTIONS: VoiceOption[] = [
   { person: 13, label: '聆小珊', lang: '中文' },
@@ -21,14 +23,33 @@ interface VoiceOption {
 @Component
 export struct TtsSettingsPanel {
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
+  /** 是否启用沉浸式材质。 */
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   @State currentPerson: number = appStore.settings.ttsPerson
   @State currentSpeed: number = appStore.settings.ttsSpeed
   @State currentVolume: number = appStore.settings.ttsVolume
   @State currentPitch: number = appStore.settings.ttsPitch
   @State installedSet: number[] = []
+  /** 标题栏渐变模糊与偏色的滚动联动进度。 */
+  @State titleScrollEffectProgress: number = 0
+  /** 滚动容器当前视口高度。 */
+  @State scrollViewportHeight: number = 1
   private previousPerson: number = appStore.settings.ttsPerson
   /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
   private scope: PageScope = new PageScope()
+  /** 语音设置页滚动控制器。 */
+  private scroller: Scroller = new Scroller()
+
+  /** 按滚动容器绝对偏移同步标题栏视觉效果。 */
+  private syncTitleScrollEffect(): void {
+    const progress: number = TitleScrollEffect.getProgress(
+      this.scroller.currentOffset().yOffset,
+      this.statusBarHeight
+    )
+    if (TitleScrollEffect.shouldUpdateProgress(this.titleScrollEffectProgress, progress)) {
+      this.titleScrollEffectProgress = progress
+    }
+  }
 
   aboutToAppear(): void {
     this.scope.begin()
@@ -134,9 +155,7 @@ export struct TtsSettingsPanel {
   build() {
     Stack() {
       Column() {
-        Row().width('100%').height(44 + this.statusBarHeight)
-
-        Scroll() {
+        Scroll(this.scroller) {
           Column() {
             // ---- 音色选择 ----
             Column() {
@@ -245,10 +264,29 @@ export struct TtsSettingsPanel {
           .width('100%').alignItems(HorizontalAlign.Center).padding({ bottom: 32 })
         }
         .layoutWeight(1).scrollBar(BarState.Off).align(Alignment.Top)
+        .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
+        .linearGradientBlur(
+          TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+          {
+            fractionStops: TitleScrollEffect.getBlurStops(this.scrollViewportHeight, this.statusBarHeight),
+            direction: GradientDirection.Bottom
+          }
+        )
+        .onAreaChange((oldValue: Area, newValue: Area): void => {
+          if (typeof newValue.height === 'number' && newValue.height !== this.scrollViewportHeight) {
+            this.scrollViewportHeight = newValue.height
+          }
+        })
+        .onDidScroll((): void => {
+          this.syncTitleScrollEffect()
+        })
+        .onAppear((): void => {
+          this.syncTitleScrollEffect()
+        })
       }
       .width('100%').height('100%').backgroundColor(AppColors.bg)
 
-      PanelNavBar({ title: '语音朗读' })
+      PanelNavBar({ title: '语音朗读', scrollEffectProgress: this.titleScrollEffectProgress })
         .width('100%').position({ x: 0, y: 0 })
     }
     .width('100%').height('100%')

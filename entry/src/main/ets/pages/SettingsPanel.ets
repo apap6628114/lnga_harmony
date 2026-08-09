@@ -22,11 +22,15 @@ import { picker, fileIo, storageStatistics } from '@kit.CoreFileKit'
 import { BusinessError } from '@kit.BasicServicesKit'
 import { common, contextConstant } from '@kit.AbilityKit'
 import type { AiProviderProfile } from '../model/AiConfig'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
+import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 @Component
 export struct SettingsPanel {
   @StorageProp('themeName') themeName: string = 'light'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
+  /** 是否启用沉浸式材质。 */
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
   @StorageProp('aiConfigVersion') @Watch('onAiConfigVersionChange') aiConfigVersion: number = 0
   /** 当前帖子内容字号，用于响应字体设置页的实时更新。 */
   @StorageProp('contentFontSize') contentFontSize: number = 15
@@ -36,6 +40,24 @@ export struct SettingsPanel {
   @State threadNavBadge: string = '无缝加载'
   @State prefetchPageBadge: string = '3 页'
   @State aiProviderBadge: string = '未配置 AI'
+  /** 标题栏渐变模糊与偏色的滚动联动进度。 */
+  @State titleScrollEffectProgress: number = 0
+  /** 滚动容器当前视口高度。 */
+  @State scrollViewportHeight: number = 1
+
+  /** 设置页滚动控制器。 */
+  private scroller: Scroller = new Scroller()
+
+  /** 按滚动容器绝对偏移同步标题栏视觉效果。 */
+  private syncTitleScrollEffect(): void {
+    const progress: number = TitleScrollEffect.getProgress(
+      this.scroller.currentOffset().yOffset,
+      this.statusBarHeight
+    )
+    if (TitleScrollEffect.shouldUpdateProgress(this.titleScrollEffectProgress, progress)) {
+      this.titleScrollEffectProgress = progress
+    }
+  }
 
   clearCacheDialogController?: CustomDialogController = new CustomDialogController({
     builder: ConfirmDialog({
@@ -339,10 +361,8 @@ export struct SettingsPanel {
   build() {
     Stack() {
       Column() {
-        Scroll() {
+        Scroll(this.scroller) {
           Column() {
-            Row().width('100%').height(44 + this.statusBarHeight)
-
             // ---- 主题选择 ----
             Column() {
               Text('主题选择').fontSize(15).fontColor(AppColors.textSecondary)
@@ -577,10 +597,29 @@ export struct SettingsPanel {
           .width('100%').alignItems(HorizontalAlign.Center).padding({ bottom: 32 })
         }
         .layoutWeight(1).scrollBar(BarState.Off).align(Alignment.Top)
+        .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
+        .linearGradientBlur(
+          TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+          {
+            fractionStops: TitleScrollEffect.getBlurStops(this.scrollViewportHeight, this.statusBarHeight),
+            direction: GradientDirection.Bottom
+          }
+        )
+        .onAreaChange((oldValue: Area, newValue: Area): void => {
+          if (typeof newValue.height === 'number' && newValue.height !== this.scrollViewportHeight) {
+            this.scrollViewportHeight = newValue.height
+          }
+        })
+        .onDidScroll((): void => {
+          this.syncTitleScrollEffect()
+        })
+        .onAppear((): void => {
+          this.syncTitleScrollEffect()
+        })
       }
       .width('100%').height('100%').backgroundColor(AppColors.bg)
 
-      PanelNavBar({ title: '设置' })
+      PanelNavBar({ title: '设置', scrollEffectProgress: this.titleScrollEffectProgress })
         .width('100%').position({ x: 0, y: 0 })
     }
     .width('100%').height('100%')

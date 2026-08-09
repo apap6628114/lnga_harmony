@@ -192,7 +192,9 @@ export struct BrowseHistoryPanel {
       PanelNavBar({
         title: `浏览历史 (${this.items.length})`,
         scrollEffectProgress: this.titleScrollEffectProgress,
-        rightLabel: this.items.length > 0 ? '清空' : '',
+        rightIcon: this.items.length > 0 ? $r('app.media.icon_nav_clear_history') : '',
+        rightIconColor: AppColors.destructive,
+        rightIconAccessibilityText: '清空浏览历史',
         onRightClick: (): void => {
           floatingLayerStore.showConfirm(
             '清空浏览记录',
