@@ -343,7 +343,7 @@ export struct WebViewPanel {
         Stack() {
           Image($r('app.media.icon_back'))
             .width(22).height(22)
-            .fillColor(this.canGoBackward ? AppColors.primary : AppColors.textTertiary)
+            .fillColor(UIMaterialManager.adaptiveForeground)
         }
         .width(44).height(44).borderRadius(22)
         .backgroundColor(Color.Transparent)
@@ -359,7 +359,7 @@ export struct WebViewPanel {
         Stack() {
           Image($r('app.media.icon_back'))
             .width(22).height(22)
-            .fillColor(this.canGoForward ? AppColors.primary : AppColors.textTertiary)
+            .fillColor(UIMaterialManager.adaptiveForeground)
             .rotate({ angle: 180 })
         }
         .width(44).height(44).borderRadius(22)

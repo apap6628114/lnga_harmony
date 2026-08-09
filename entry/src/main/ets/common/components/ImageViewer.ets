@@ -489,7 +489,7 @@ export struct ImageViewer {
           .fontSize(15).fontColor(AppColors.white)
         Blank().layoutWeight(1)
         Button(this.sharing ? '分享中...' : '分享')
-          .fontSize(14).fontColor(AppColors.white)
+          .fontSize(14).fontColor(UIMaterialManager.adaptiveForeground)
           .backgroundColor(Color.Transparent)
           .systemMaterial(UIMaterialManager.fabMaterial)
           .borderRadius(16)

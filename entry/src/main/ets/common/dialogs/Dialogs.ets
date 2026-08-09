@@ -32,7 +32,7 @@ export struct ConfirmDialog {
 
       Text(this.message)
         .fontSize(14)
-        .fontColor(AppColors.textSecondary)
+        .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
         .margin({ bottom: 20 })
         .textAlign(TextAlign.Center)
 
@@ -56,7 +56,7 @@ export struct ConfirmDialog {
           .height(44)
           .backgroundColor(this.destructive ? AppColors.destructive : Color.Transparent)
           .systemMaterial(!this.destructive ? UIMaterialManager.buttonMaterial : undefined)
-          .fontColor(AppColors.white)
+          .fontColor(this.destructive ? AppColors.white : UIMaterialManager.adaptiveForeground)
           .fontWeight(FontWeight.Bold)
           .onClick(() => {
             this.controller.close()
@@ -102,7 +102,7 @@ export struct ActionSheetDialog {
 
       Text(this.title)
         .fontSize(15)
-        .fontColor(AppColors.textSecondary)
+        .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
         .margin({ bottom: 4 })
 
       // 选项列表
@@ -179,7 +179,7 @@ export struct CredentialPasswordDialog {
 
       Text(this.message)
         .fontSize(13)
-        .fontColor(AppColors.textSecondary)
+        .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
         .textAlign(TextAlign.Center)
         .margin({ bottom: 12 })
 
@@ -187,6 +187,9 @@ export struct CredentialPasswordDialog {
         .type(InputType.Password)
         .height(44)
         .fontSize(15)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
         .borderRadius(12)
         .backgroundColor(Color.Transparent)
         .systemMaterial(UIMaterialManager.inputMaterial)
@@ -194,7 +197,7 @@ export struct CredentialPasswordDialog {
 
       Text('至少 ' + this.minLength + ' 位，请妥善保存')
         .fontSize(11)
-        .fontColor(AppColors.textTertiary)
+        .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
         .margin({ top: 6 })
         .alignSelf(ItemAlign.Start)
 
@@ -220,7 +223,7 @@ export struct CredentialPasswordDialog {
           .backgroundColor(Color.Transparent)
           .systemMaterial(UIMaterialManager.buttonMaterial)
           .fontColor(this.password.trim().length >= this.minLength
-            ? AppColors.white : AppColors.textTertiary)
+            ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
           .fontWeight(FontWeight.Bold)
           .fontSize(16)
           .onClick(() => {
@@ -261,18 +264,21 @@ export struct MakeNoteDialog {
         .alignSelf(ItemAlign.Center)
 
       Text(this.userName)
-        .fontSize(13).fontColor(AppColors.textSecondary)
+        .fontSize(13).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
         .margin({ bottom: 12 })
         .alignSelf(ItemAlign.Center)
 
       TextInput({ text: this.noteText, placeholder: '输入备注内容(1-20字)' })
         .height(44).fontSize(15).borderRadius(12)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
         .backgroundColor(Color.Transparent)
         .systemMaterial(UIMaterialManager.inputMaterial)
         .onChange((value: string) => { this.noteText = value })
 
       Text(String(this.noteText.length) + '/20')
-        .fontSize(11).fontColor(AppColors.textTertiary)
+        .fontSize(11).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
         .margin({ top: 4 })
         .alignSelf(ItemAlign.End)
 
@@ -290,7 +296,7 @@ export struct MakeNoteDialog {
           .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
           .systemMaterial(UIMaterialManager.buttonMaterial)
           .fontColor(this.noteText.length >= 1 && this.noteText.length <= 20
-            ? AppColors.white : AppColors.textTertiary)
+            ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
           .fontWeight(FontWeight.Bold).fontSize(16)
           .onClick(() => {
             if (this.noteText.length >= 1 && this.noteText.length <= 20) {
@@ -362,12 +368,15 @@ export struct AddBlacklistDialog {
         .alignSelf(ItemAlign.Center)
 
       Text('输入用户 UID')
-        .fontSize(13).fontColor(AppColors.textSecondary)
+        .fontSize(13).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
         .margin({ bottom: 12 })
         .alignSelf(ItemAlign.Center)
 
       TextInput({ text: this.uid, placeholder: '输入 UID' })
         .height(44).fontSize(15).borderRadius(12)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
         .backgroundColor(Color.Transparent)
         .systemMaterial(UIMaterialManager.inputMaterial)
         .onChange((value: string) => {
@@ -397,7 +406,7 @@ export struct AddBlacklistDialog {
           .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
           .systemMaterial(UIMaterialManager.buttonMaterial)
           .fontColor(this.canSubmit()
-            ? AppColors.white : AppColors.textTertiary)
+            ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
           .fontWeight(FontWeight.Bold).fontSize(16)
           .onClick(() => {
             const validationError: string = this.getValidationError()
@@ -436,12 +445,15 @@ export struct AddKeywordDialog {
         .alignSelf(ItemAlign.Center)
 
       Text('输入需要屏蔽的关键词')
-        .fontSize(13).fontColor(AppColors.textSecondary)
+        .fontSize(13).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
         .margin({ bottom: 12 })
         .alignSelf(ItemAlign.Center)
 
       TextInput({ text: this.keyword, placeholder: '输入关键词' })
         .height(44).fontSize(15).borderRadius(12)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
         .backgroundColor(Color.Transparent)
         .systemMaterial(UIMaterialManager.inputMaterial)
         .onChange((value: string) => { this.keyword = value })
@@ -460,7 +472,7 @@ export struct AddKeywordDialog {
           .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
           .systemMaterial(UIMaterialManager.buttonMaterial)
           .fontColor(this.keyword.trim().length > 0
-            ? AppColors.white : AppColors.textTertiary)
+            ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
           .fontWeight(FontWeight.Bold).fontSize(16)
           .onClick(() => {
             if (this.keyword.trim()) {
@@ -494,18 +506,24 @@ export struct AddNoteDialog {
         .alignSelf(ItemAlign.Center)
 
       Text('输入用户昵称和 UID')
-        .fontSize(13).fontColor(AppColors.textSecondary)
+        .fontSize(13).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
         .margin({ bottom: 12 })
         .alignSelf(ItemAlign.Center)
 
       TextInput({ text: this.nickName, placeholder: '输入用户昵称' })
         .height(44).fontSize(15).borderRadius(12)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
         .backgroundColor(Color.Transparent)
         .systemMaterial(UIMaterialManager.inputMaterial)
         .onChange((value: string) => { this.nickName = value })
 
       TextInput({ text: this.uid, placeholder: '输入用户 UID' })
         .height(44).fontSize(15).borderRadius(12)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
         .backgroundColor(Color.Transparent)
         .systemMaterial(UIMaterialManager.inputMaterial)
         .margin({ top: 8 })
@@ -525,7 +543,7 @@ export struct AddNoteDialog {
           .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
           .systemMaterial(UIMaterialManager.buttonMaterial)
           .fontColor(this.uid.trim().length > 0 && this.nickName.trim().length > 0
-            ? AppColors.white : AppColors.textTertiary)
+            ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
           .fontWeight(FontWeight.Bold).fontSize(16)
           .onClick(() => {
             if (this.uid.trim() && this.nickName.trim()) {

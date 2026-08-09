@@ -322,14 +322,19 @@ export struct SearchPanel {
       Column() {
         Row() {
           Row() {
-            Image($r('app.media.icon_search')).width(16).height(16).fillColor(AppColors.textTertiary).margin({ right: 8 })
+            Image($r('app.media.icon_search')).width(16).height(16)
+              .fillColor(UIMaterialManager.adaptiveSecondaryForeground).margin({ right: 8 })
             TextInput({ text: this.keyword, placeholder: '搜索板块、主题、内容...' })
               .layoutWeight(1).fontSize(15).backgroundColor(Color.Transparent).type(InputType.Normal)
+              .fontColor(UIMaterialManager.inputForeground)
+              .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+              .caretColor(UIMaterialManager.inputForeground)
               .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
               .onChange((value: string) => { this.keyword = value })
               .onSubmit(() => this.handleSubmit())
             if (this.keyword.length > 0) {
-              Text('✕').fontSize(16).fontColor(AppColors.textTertiary).margin({ left: 8 })
+              Text('✕').fontSize(16).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+                .margin({ left: 8 })
                 .onClick(() => { this.keyword = ''; this.submitted = ''; this.threads = []; this.forums = []; this.threadsDataSource.clear(); this.forumsDataSource.clear() })
             }
           }.layoutWeight(1).height(40).padding({ left: 12, right: 12 })
@@ -360,7 +365,7 @@ export struct SearchPanel {
       .width('100%')
       .backgroundColor(Color.Transparent)
       .border({ width: { bottom: 0.5 }, color: AppColors.separator })
-      .systemMaterial(UIMaterialManager.surfaceMaterial)
+      .systemMaterial(UIMaterialManager.barMaterial)
       .position({ x: 0, y: 0 })
     }
     .width('100%').height('100%').backgroundColor(AppColors.bg)

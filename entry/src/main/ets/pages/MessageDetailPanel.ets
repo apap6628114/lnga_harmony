@@ -186,6 +186,9 @@ export struct MessageDetailPanel {
           Row() {
             TextInput({ text: this.replyText, placeholder: '写回复...' })
               .layoutWeight(1).fontSize(15).borderRadius(12)
+              .fontColor(UIMaterialManager.inputForeground)
+              .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+              .caretColor(UIMaterialManager.inputForeground)
               .backgroundColor(Color.Transparent)
               .height(40).padding({ left: 12, right: 12 })
               .systemMaterial(UIMaterialManager.inputMaterial)
@@ -193,7 +196,7 @@ export struct MessageDetailPanel {
               .onChange((value: string) => { this.replyText = value })
               .onSubmit(() => this.handleReply())
             Button('发送')
-              .fontSize(14).fontColor(AppColors.white)
+              .fontSize(14).fontColor(UIMaterialManager.adaptiveForeground)
               .backgroundColor(Color.Transparent)
               .systemMaterial(UIMaterialManager.buttonMaterial)
               .borderRadius(12).height(40).padding({ left: 16, right: 16 }).margin({ left: 8 })
@@ -204,7 +207,7 @@ export struct MessageDetailPanel {
           .backgroundColor(Color.Transparent)
           .border({ width: { top: 0.5 }, color: AppColors.separator })
           .alignItems(VerticalAlign.Center)
-          .systemMaterial(UIMaterialManager.surfaceMaterial)
+          .systemMaterial(UIMaterialManager.barMaterial)
         }
       }
       .width('100%').height('100%').backgroundColor(AppColors.bg)

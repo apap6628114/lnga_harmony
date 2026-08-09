@@ -69,9 +69,10 @@ export struct FloatingLayerComponent {
           Column() {
             Text(this.floating.confirmTitle)
               .fontSize(17).fontWeight(FontWeight.Bold)
+              .fontColor(AppColors.textPrimary)
               .margin({ top: 20, bottom: 8 })
             Text(this.floating.confirmMessage)
-              .fontSize(14).fontColor(AppColors.textSecondary)
+              .fontSize(14).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
               .margin({ bottom: 20 })
             Divider().color(AppColors.separator)
             Row() {
@@ -83,7 +84,7 @@ export struct FloatingLayerComponent {
                 .layoutWeight(1).backgroundColor(Color.Transparent)
                 .systemMaterial(!this.floating.confirmDestructive ? UIMaterialManager.buttonMaterial : undefined)
                 .fontColor(this.floating.confirmDestructive ? AppColors.destructive :
-                  AppColors.white)
+                  UIMaterialManager.adaptiveForeground)
                 .fontWeight(FontWeight.Bold)
                 .onClick(() => {
                   const handler = this.floating.confirmOnConfirm
@@ -111,7 +112,8 @@ export struct FloatingLayerComponent {
           Column() {
             Text('放弃编辑？').fontSize(17).fontWeight(FontWeight.Bold).fontColor(AppColors.textPrimary)
               .margin({ top: 20 })
-            Text('已保存为草稿，下次编辑可恢复').fontSize(14).fontColor(AppColors.textSecondary)
+            Text('已保存为草稿，下次编辑可恢复').fontSize(14)
+              .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
               .margin({ top: 8 })
             Row() {
               Text('继续编辑').fontSize(16).fontWeight(FontWeight.Medium).fontColor(AppColors.primary)

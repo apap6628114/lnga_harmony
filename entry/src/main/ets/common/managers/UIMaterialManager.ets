@@ -8,10 +8,20 @@ import { uiMaterial } from '@kit.ArkUI'
  *
  * 说明：
  * - 材质对象为纯配置对象，可跨组件共享复用；
- * - 全部材质 applyShadow 均为 false，保留组件自定义 shadow 的生效；
+ * - 悬浮、表面、栏位与输入材质关闭系统阴影，主按钮保留材质阴影；
  * - 组件背景保持透明，由 `systemMaterial` 统一承载材质表现。
+ * - 薄材质前景使用系统颜色资源，使 `colorInvert` 可按背后内容自动反色。
  */
 export class UIMaterialManager {
+  /** 薄材质上的自适应主前景色。 */
+  static readonly adaptiveForeground: ResourceColor = $r('sys.color.ohos_id_color_foreground')
+
+  /** 薄材质上的自适应次要前景色与禁用态前景色。 */
+  static readonly adaptiveSecondaryForeground: ResourceColor = $r('sys.color.ohos_id_color_text_secondary')
+
+  /** 输入控件的主题自适应正文色。 */
+  static readonly inputForeground: ResourceColor = $r('sys.color.ohos_id_color_text_primary')
+
   /**
    * 悬浮按钮材质：超薄通透玻璃球 + 按压交互形变 + 强光感流光反馈。
    *
@@ -22,6 +32,7 @@ export class UIMaterialManager {
     style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
     interactive: true,
     lightEffect: { color: '#66FFFFFF' },
+    colorInvert: true,
     applyShadow: false
   })
 
@@ -29,6 +40,13 @@ export class UIMaterialManager {
    * 浮层/面板/弹窗容器材质：常规通透玻璃，兼顾可读性与光感。
    */
   static readonly surfaceMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+    style: uiMaterial.ImmersiveStyle.REGULAR,
+    materialColor: $r('app.color.material_surface_tint'),
+    applyShadow: false
+  })
+
+  /** 顶部或底部栏材质：保留常规材质本身的通透感，避免形成整块色带。 */
+  static readonly barMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
     style: uiMaterial.ImmersiveStyle.REGULAR,
     applyShadow: false
   })
@@ -42,15 +60,18 @@ export class UIMaterialManager {
    */
   static readonly buttonMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
     style: uiMaterial.ImmersiveStyle.THIN,
-    materialColor: '#33C08A4A',
+    materialColor: $r('app.color.material_accent_tint'),
     interactive: true,
     lightEffect: { color: '#66FFE9C9' },
+    colorInvert: true,
     applyShadow: true
   })
 
-  /** 输入框材质：超薄，不反色不形变，保证占位符/光标稳定可读。 */
+  /** 输入框材质：薄材质叠加主题透明偏色，并由系统前景色保证正文、占位符与光标可读。 */
   static readonly inputMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-    style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+    style: uiMaterial.ImmersiveStyle.THIN,
+    materialColor: $r('app.color.material_input_tint'),
+    colorInvert: true,
     applyShadow: false
   })
 }

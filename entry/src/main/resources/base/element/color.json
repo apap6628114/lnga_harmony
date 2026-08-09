@@ -117,6 +117,18 @@
       "value": "#00FEFAF6"
     },
     {
+      "name": "material_surface_tint",
+      "value": "#73FEFAF6"
+    },
+    {
+      "name": "material_input_tint",
+      "value": "#4DFEFAF6"
+    },
+    {
+      "name": "material_accent_tint",
+      "value": "#52C08A4A"
+    },
+    {
       "name": "quote_border_1",
       "value": "#4DC08A4A"
     },

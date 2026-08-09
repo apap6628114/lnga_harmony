@@ -211,8 +211,9 @@ export struct ProfileCardPopup {
   @Builder
   LoadingContent() {
     Column() {
-      LoadingProgress().width(20).height(20).color(AppColors.textTertiary)
-      Text('加载中...').fontSize(14).fontColor(AppColors.textTertiary).margin({ top: 8 })
+      LoadingProgress().width(20).height(20).color(UIMaterialManager.adaptiveSecondaryForeground)
+      Text('加载中...').fontSize(14).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .margin({ top: 8 })
     }
     .width('100%')
     .padding(32)
@@ -223,7 +224,8 @@ export struct ProfileCardPopup {
   @Builder
   ErrorContent() {
     Column() {
-      Text('获取用户信息失败').fontSize(14).fontColor(AppColors.textTertiary)
+      Text('获取用户信息失败').fontSize(14)
+        .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
     }
     .width('100%')
     .padding(32)
@@ -246,7 +248,7 @@ export struct ProfileCardPopup {
               .fontSize(16).fontWeight(FontWeight.Bold).fontColor(AppColors.textPrimary)
             if (profile.group && profile.group.length > 0) {
               Text(unescapeHtml(profile.group))
-                .fontSize(10).fontColor(AppColors.textSecondary)
+                .fontSize(10).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
                 .backgroundColor(AppColors.bgSecondary).borderRadius(4)
                 .padding({ left: 5, right: 5, top: 2, bottom: 2 }).margin({ left: 6 })
             }
@@ -261,11 +263,11 @@ export struct ProfileCardPopup {
 
           if (profile.title || profile.honor) {
             Text(unescapeHtml(this.joinTitleHonor(profile.title, profile.honor)))
-              .fontSize(12).fontColor(AppColors.textSecondary).margin({ top: 3 })
+              .fontSize(12).fontColor(UIMaterialManager.adaptiveSecondaryForeground).margin({ top: 3 })
           }
 
           Text(`UID: ${escHtml(profile.uid)}`)
-            .fontSize(11).fontColor(AppColors.textTertiary).margin({ top: 3 })
+            .fontSize(11).fontColor(UIMaterialManager.adaptiveSecondaryForeground).margin({ top: 3 })
 
           if (appStore.settingsStore.getNote(profile.uid).length > 0) {
             Text('备注: ' + appStore.settingsStore.getNote(profile.uid))
@@ -307,7 +309,7 @@ export struct ProfileCardPopup {
 
         if (profile.sign && profile.sign.length > 0) {
           Text(unescapeHtml(profile.sign))
-            .fontSize(12).fontColor(AppColors.textTertiary)
+            .fontSize(12).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
             .margin({ top: 8 })
             .maxLines(3)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -368,7 +370,8 @@ export struct ProfileCardPopup {
       if (this.isAnalyzing) {
         Row() {
           LoadingProgress().width(16).height(16).color(AppColors.primary)
-          Text('正在获取发言记录...').fontSize(12).fontColor(AppColors.textSecondary).margin({ left: 8 })
+          Text('正在获取发言记录...').fontSize(12)
+            .fontColor(UIMaterialManager.adaptiveSecondaryForeground).margin({ left: 8 })
         }
         .width('100%')
         .padding(12)
@@ -384,7 +387,7 @@ export struct ProfileCardPopup {
   StatItem(value: string, label: string) {
     Column() {
       Text(value).fontSize(13).fontWeight(FontWeight.Medium).fontColor(AppColors.textPrimary)
-      Text(label).fontSize(10).fontColor(AppColors.textTertiary).margin({ top: 1 })
+      Text(label).fontSize(10).fontColor(UIMaterialManager.adaptiveSecondaryForeground).margin({ top: 1 })
     }
     .layoutWeight(1)
     .alignItems(HorizontalAlign.Center)
@@ -413,7 +416,7 @@ export struct ProfileCardPopup {
   @Builder
   DetailRow(label: string, value: string) {
     Row() {
-      Text(label).fontSize(12).fontColor(AppColors.textSecondary)
+      Text(label).fontSize(12).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
       Text(unescapeHtml(value)).fontSize(12).fontColor(AppColors.textPrimary).fontWeight(FontWeight.Medium)
         .layoutWeight(1).textAlign(TextAlign.End).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
     }

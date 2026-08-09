@@ -41,7 +41,7 @@ export struct ErrorStateView {
   build() {
     Column() {
       Text(this.msg).fontSize(14).fontColor(AppColors.textTertiary).margin({ bottom: 12 })
-      Button('重试').fontSize(14).fontColor(AppColors.primary)
+      Button('重试').fontSize(14).fontColor(UIMaterialManager.adaptiveForeground)
         .backgroundColor(Color.Transparent)
         .systemMaterial(UIMaterialManager.fabMaterial)
         .borderRadius(10)

@@ -809,7 +809,7 @@ export struct TopicListPanel {
         Stack() {
           Image($r('app.media.icon_refresh'))
             .width(22).height(22)
-            .fillColor(AppColors.primary)
+            .fillColor(UIMaterialManager.adaptiveForeground)
         }
         .width(44).height(44).borderRadius(22)
         .backgroundColor(Color.Transparent)

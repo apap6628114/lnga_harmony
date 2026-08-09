@@ -652,6 +652,9 @@ struct AiChatPage {
       TextInput({ text: this.inputText, placeholder: '输入追问内容...' })
         .layoutWeight(1)
         .fontSize(15)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
         .borderRadius(20)
         .backgroundColor(Color.Transparent)
         .systemMaterial(UIMaterialManager.inputMaterial)
@@ -665,7 +668,7 @@ struct AiChatPage {
         })
       Button('发送')
         .fontSize(14)
-        .fontColor(AppColors.white)
+        .fontColor(UIMaterialManager.adaptiveForeground)
         .backgroundColor(Color.Transparent)
         .systemMaterial(UIMaterialManager.buttonMaterial)
         .borderRadius(20)
@@ -682,6 +685,6 @@ struct AiChatPage {
     .backgroundColor(Color.Transparent)
     .border({ width: { top: 0.5 }, color: AppColors.separator })
     .alignItems(VerticalAlign.Center)
-    .systemMaterial(UIMaterialManager.surfaceMaterial)
+    .systemMaterial(UIMaterialManager.barMaterial)
   }
 }

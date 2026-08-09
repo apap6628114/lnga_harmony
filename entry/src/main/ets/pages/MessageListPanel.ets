@@ -234,6 +234,9 @@ export struct MessageListPanel {
 
           TextInput({ text: this.composeTo, placeholder: '收件人（用户名）' })
             .width('92%').height(44).fontSize(15).borderRadius(12)
+            .fontColor(UIMaterialManager.inputForeground)
+            .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+            .caretColor(UIMaterialManager.inputForeground)
             .backgroundColor(Color.Transparent).margin({ top: 12 })
             .systemMaterial(UIMaterialManager.inputMaterial)
             .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
@@ -241,6 +244,9 @@ export struct MessageListPanel {
 
           TextInput({ text: this.composeSubject, placeholder: '主题' })
             .width('92%').height(44).fontSize(15).borderRadius(12)
+            .fontColor(UIMaterialManager.inputForeground)
+            .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+            .caretColor(UIMaterialManager.inputForeground)
             .backgroundColor(Color.Transparent).margin({ top: 8 })
             .systemMaterial(UIMaterialManager.inputMaterial)
             .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
@@ -248,13 +254,17 @@ export struct MessageListPanel {
 
           TextArea({ text: this.composeContent, placeholder: '内容' })
             .width('92%').height(100).fontSize(15).borderRadius(12)
+            .fontColor(UIMaterialManager.inputForeground)
+            .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+            .caretColor(UIMaterialManager.inputForeground)
             .backgroundColor(Color.Transparent).margin({ top: 8 })
             .systemMaterial(UIMaterialManager.inputMaterial)
             .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
             .onChange((value: string) => { this.composeContent = value })
 
           Button(this.sending ? '发送中...' : '发送')
-            .width('92%').height(44).fontSize(16).fontColor(AppColors.white)
+            .width('92%').height(44).fontSize(16)
+            .fontColor(UIMaterialManager.adaptiveForeground)
             .backgroundColor(Color.Transparent)
             .systemMaterial(UIMaterialManager.buttonMaterial)
             .borderRadius(12).margin({ top: 12, bottom: 20 })

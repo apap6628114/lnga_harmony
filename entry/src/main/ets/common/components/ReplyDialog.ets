@@ -209,7 +209,7 @@ export struct ReplyDialog {
 
         Blank().layoutWeight(1)
 
-        Text('取消').fontSize(15).fontColor(AppColors.textSecondary)
+        Text('取消').fontSize(15).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
           .onClick(() => { this.requestClose() }).padding({ left: 8, right: 4 })
       }
       .width('100%').padding({ left: 16, right: 12, top: 6, bottom: 6 })
@@ -218,7 +218,7 @@ export struct ReplyDialog {
       if (this.isCommentMode) {
         Row() {
           Text('贴条将附着在该楼层下方（6~650字节）')
-            .fontSize(11).fontColor(AppColors.textTertiary)
+            .fontSize(11).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
         }.width('100%').padding({ top: 2, bottom: 2 })
       }
 
@@ -292,6 +292,9 @@ export struct ReplyDialog {
       // 正文输入
       TextArea({ text: this.replyText, placeholder: '输入内容...', controller: this.textAreaController })
         .width('100%').height(220).padding(12).fontSize(15)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
         .borderRadius(8).backgroundColor(Color.Transparent)
         .systemMaterial(UIMaterialManager.inputMaterial)
         .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
@@ -307,7 +310,8 @@ export struct ReplyDialog {
           Toggle({ type: ToggleType.Checkbox, isOn: this.isAnonymous })
             .width(16).height(16)
             .onChange((value: boolean) => { this.isAnonymous = value })
-          Text('匿名').fontSize(11).fontColor(AppColors.textTertiary).margin({ left: 3 })
+          Text('匿名').fontSize(11).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+            .margin({ left: 3 })
         }
         .alignItems(VerticalAlign.Center)
 
@@ -315,7 +319,7 @@ export struct ReplyDialog {
 
         Button(this.sending ? '...' : (this.editMode ? '保存' : '发送'))
           .fontSize(14).fontWeight(FontWeight.Medium).height(34)
-          .fontColor(AppColors.white)
+          .fontColor(UIMaterialManager.adaptiveForeground)
           .backgroundColor(Color.Transparent)
           .systemMaterial(UIMaterialManager.buttonMaterial)
           .borderRadius(17).padding({ left: 20, right: 20 })

@@ -1607,7 +1607,7 @@ export struct ThreadPanel {
                 Text('1').fontSize(14).fontColor(this.displayPage === 1 ? AppColors.primary : AppColors.textSecondary)
                   .fontWeight(this.displayPage === 1 ? FontWeight.Bold : FontWeight.Regular)
                 if (this.displayPage === 1) {
-                  Text('•').fontSize(10).fontColor(AppColors.primary)
+                  Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
                     .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
                 }
               }.width(24).height(28)
@@ -1617,26 +1617,27 @@ export struct ThreadPanel {
                 Text('2').fontSize(14).fontColor(this.displayPage === 2 ? AppColors.primary : AppColors.textSecondary)
                   .fontWeight(this.displayPage === 2 ? FontWeight.Bold : FontWeight.Regular)
                 if (this.displayPage === 2) {
-                  Text('•').fontSize(10).fontColor(AppColors.primary)
+                  Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
                     .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
                 }
               }.width(24).height(28)
                 .onClick(() => this.navigateToPage(2, PageNavigationSource.PAGER_BUTTON))
             } else if (this.displayPage === 1) {
               Stack() {
-                Text('1').fontSize(14).fontColor(AppColors.primary).fontWeight(FontWeight.Bold)
-                Text('•').fontSize(10).fontColor(AppColors.primary)
+                Text('1').fontSize(14).fontColor(UIMaterialManager.adaptiveForeground).fontWeight(FontWeight.Bold)
+                Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
                   .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
               }.width(24).height(28)
                 .onClick(() => this.navigateToPage(1, PageNavigationSource.PAGER_BUTTON))
               Divider().vertical(true).height(16).color(AppColors.dividerStrong)
               Stack() {
-                Text('2').fontSize(14).fontColor(AppColors.textSecondary).fontWeight(FontWeight.Regular)
+                Text('2').fontSize(14).fontColor(UIMaterialManager.adaptiveSecondaryForeground).fontWeight(FontWeight.Regular)
               }.width(24).height(28)
                 .onClick(() => this.navigateToPage(2, PageNavigationSource.PAGER_BUTTON))
             } else if (this.displayPage === this.mgr.totalPages) {
               Stack() {
-                Text(String(this.mgr.totalPages - 1)).fontSize(14).fontColor(AppColors.textSecondary)
+                Text(String(this.mgr.totalPages - 1)).fontSize(14)
+                  .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
                   .fontWeight(FontWeight.Regular)
               }.width(24).height(28)
                 .onClick(() => this.navigateToPage(
@@ -1644,36 +1645,39 @@ export struct ThreadPanel {
                 ))
               Divider().vertical(true).height(16).color(AppColors.dividerStrong)
               Stack() {
-                Text(String(this.mgr.totalPages)).fontSize(14).fontColor(AppColors.primary)
+                Text(String(this.mgr.totalPages)).fontSize(14).fontColor(UIMaterialManager.adaptiveForeground)
                   .fontWeight(FontWeight.Bold)
-                Text('•').fontSize(10).fontColor(AppColors.primary)
+                Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
                   .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
               }.width(24).height(28)
                 .onClick(() => this.navigateToPage(this.mgr.totalPages, PageNavigationSource.PAGER_BUTTON))
             } else {
               Stack() {
-                Text(String(this.displayPage - 1)).fontSize(14).fontColor(AppColors.textSecondary)
+                Text(String(this.displayPage - 1)).fontSize(14)
+                  .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
                   .fontWeight(FontWeight.Regular)
               }.width(24).height(28)
                 .onClick(() => this.navigateToPage(this.displayPage - 1, PageNavigationSource.PAGER_BUTTON))
               Divider().vertical(true).height(16).color(AppColors.dividerStrong)
               Stack() {
-                Text(String(this.displayPage)).fontSize(14).fontColor(AppColors.primary)
+                Text(String(this.displayPage)).fontSize(14).fontColor(UIMaterialManager.adaptiveForeground)
                   .fontWeight(FontWeight.Bold)
-                Text('•').fontSize(10).fontColor(AppColors.primary)
+                Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
                   .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
               }.width(24).height(28)
                 .onClick(() => this.navigateToPage(this.displayPage, PageNavigationSource.PAGER_BUTTON))
               Divider().vertical(true).height(16).color(AppColors.dividerStrong)
               Stack() {
-                Text(String(this.displayPage + 1)).fontSize(14).fontColor(AppColors.textSecondary)
+                Text(String(this.displayPage + 1)).fontSize(14)
+                  .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
                   .fontWeight(FontWeight.Regular)
               }.width(24).height(28)
                 .onClick(() => this.navigateToPage(this.displayPage + 1, PageNavigationSource.PAGER_BUTTON))
             }
             if (this.mgr.totalPages > 2) {
               Divider().vertical(true).height(16).color(AppColors.dividerStrong)
-              Text('到').fontSize(13).fontColor(AppColors.primary).padding({ left: 4, right: 2 })
+              Text('到').fontSize(13).fontColor(UIMaterialManager.adaptiveForeground)
+                .padding({ left: 4, right: 2 })
                 .onClick(() => {
                   this.pagePickerCurrentPage = this.displayPage
                   this.pagePickerTotalPages = this.mgr.totalPages
@@ -1696,7 +1700,7 @@ export struct ThreadPanel {
 
         Stack() {
           Image($r('app.media.icon_reply'))
-            .width(20).height(20).fillColor(AppColors.primary)
+            .width(20).height(20).fillColor(UIMaterialManager.adaptiveForeground)
         }
         .width(40).height(40).borderRadius(20)
         .backgroundColor(Color.Transparent)

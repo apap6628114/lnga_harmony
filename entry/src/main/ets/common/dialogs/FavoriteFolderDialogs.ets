@@ -53,6 +53,9 @@ export struct FavoriteFolderNameDialog {
       TextInput({ text: this.name, placeholder: '输入收藏夹名称' })
         .height(44)
         .fontSize(15)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
         .borderRadius(12)
         .backgroundColor(Color.Transparent)
         .systemMaterial(UIMaterialManager.inputMaterial)
@@ -81,7 +84,7 @@ export struct FavoriteFolderNameDialog {
           .backgroundColor(Color.Transparent)
           .systemMaterial(UIMaterialManager.buttonMaterial)
           .fontColor(this.name.trim().length > 0
-            ? AppColors.white : AppColors.textTertiary)
+            ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
           .fontWeight(FontWeight.Bold)
           .fontSize(16)
           .onClick((): void => {

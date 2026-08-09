@@ -108,7 +108,7 @@ export struct PanelNavBar {
       Row() {
         if (this.showBack) {
           Row() {
-            this.iconPod($r('app.media.icon_back'), AppColors.primary, 0, '返回', () => {
+            this.iconPod($r('app.media.icon_back'), UIMaterialManager.adaptiveForeground, 0, '返回', () => {
               if (this.onBack) { this.onBack() } else { routerStore.back() }
             })
           }
@@ -127,7 +127,7 @@ export struct PanelNavBar {
             if (this.rightIcon) {
               this.iconPod(
                 this.rightIcon,
-                this.rightIconColor || AppColors.primary,
+                this.rightIconColor || UIMaterialManager.adaptiveForeground,
                 this.rightIconBadge,
                 this.rightIconAccessibilityText,
                 () => { if (this.onRightClick) { this.onRightClick() } }
@@ -136,7 +136,7 @@ export struct PanelNavBar {
             if (this.secondaryRightIcon) {
               this.iconPod(
                 this.secondaryRightIcon,
-                this.secondaryRightIconColor || AppColors.primary,
+                this.secondaryRightIconColor || UIMaterialManager.adaptiveForeground,
                 this.secondaryRightIconBadge,
                 this.secondaryRightIconAccessibilityText,
                 () => {

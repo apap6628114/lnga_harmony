@@ -854,6 +854,9 @@ export struct AiSettingsPanel {
         .systemMaterial(UIMaterialManager.inputMaterial)
         .borderRadius(8)
         .fontSize(14)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
         .padding({ left: 12, right: 12, top: 8, bottom: 8 })
 
       // Reset button + info
@@ -1056,6 +1059,9 @@ export struct AiSettingsPanel {
         .systemMaterial(UIMaterialManager.inputMaterial)
         .borderRadius(8)
         .fontSize(14)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
         .padding({ left: 12, right: 12 })
     }
     .width('100%')
@@ -1103,6 +1109,9 @@ export struct AiSettingsPanel {
         .systemMaterial(UIMaterialManager.inputMaterial)
         .borderRadius(8)
         .fontSize(14)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
         .padding({ left: 12, right: 12 })
     }
     .width('100%')
@@ -1125,6 +1134,9 @@ export struct AiSettingsPanel {
         .systemMaterial(UIMaterialManager.inputMaterial)
         .borderRadius(8)
         .fontSize(14)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
         .padding({ left: 12, right: 12 })
     }
     .width('100%')
