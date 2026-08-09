@@ -67,6 +67,17 @@ export class UIMaterialManager {
     applyShadow: true
   })
 
+  /**
+   * 中性主操作材质：不添加主题色染色，以自适应前景和白色流光保证明暗背景下的纯净对比。
+   */
+  static readonly neutralActionMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+    style: uiMaterial.ImmersiveStyle.THIN,
+    interactive: true,
+    lightEffect: { color: '#66FFFFFF' },
+    colorInvert: true,
+    applyShadow: true
+  })
+
   /** 输入框材质：薄材质叠加主题透明偏色，并由系统前景色保证正文、占位符与光标可读。 */
   static readonly inputMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
     style: uiMaterial.ImmersiveStyle.THIN,

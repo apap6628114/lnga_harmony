@@ -6,13 +6,22 @@ import { ProfileCardPopup } from './ProfileCardPopup'
 import { ReplyDialog } from './ReplyDialog'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 
+/** 承载图片预览、资料卡、回复编辑器与确认弹窗的全局浮层。 */
 @Component
 export struct FloatingLayerComponent {
+  /** 全局浮层状态。 */
   @State private floating: FloatingLayerStoreClass = floatingLayerStore
+
+  /** 当前窗口断点。 */
   @Prop currentBreakpoint: string = 'sm'
+
+  /** 应用导航栏高度。 */
   @StorageProp('navBarHeight') navBarHeight: number = 0
+
+  /** 浮层区域是否已完成布局。 */
   private areaSettled: boolean = false
 
+  /** 构建全局浮层。 */
   build() {
     Stack() {
       if (this.floating.top === FloatingPage.IMAGE_VIEWER) {
@@ -50,6 +59,7 @@ export struct FloatingLayerComponent {
               dialogTitle: this.floating.replyDialogTitle,
               editMode: this.floating.editMode,
               initialContent: this.floating.editInitialContent,
+              currentBreakpoint: this.currentBreakpoint,
               onSend: this.floating.replyOnSend,
               onClose: () => {
                 this.floating.registerReplyCloseHandler(null)
@@ -57,7 +67,13 @@ export struct FloatingLayerComponent {
               }
             })
           }
-          .align(Alignment.Center)
+          .width('100%')
+          .padding({
+            left: this.currentBreakpoint === 'sm' ? 10 : 24,
+            right: this.currentBreakpoint === 'sm' ? 10 : 24,
+            bottom: this.currentBreakpoint === 'sm' ? 8 : 24
+          })
+          .align(this.currentBreakpoint === 'sm' ? Alignment.Bottom : Alignment.Center)
         }
         .width('100%').height('100%')
       }
@@ -132,7 +148,10 @@ export struct FloatingLayerComponent {
           }
           .width(270)
           .backgroundColor(Color.Transparent)
-          .borderRadius(14)
+          .borderRadius(20)
+          .border({ width: 1, color: '#52FFFFFF' })
+          .shadow({ radius: 24, color: AppColors.shadow, offsetY: 10 })
+          .clip(true)
           .alignItems(HorizontalAlign.Center)
           .systemMaterial(UIMaterialManager.surfaceMaterial)
         }
