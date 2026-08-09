@@ -31,6 +31,7 @@ import {
 import { AuthScope } from '../store/AuthScope'
 import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
+import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 const logger = new Logger(DOMAIN_UI, 'TopicListPanel')
 
@@ -77,6 +78,10 @@ export struct TopicListPanel {
   @StorageProp('unreadNotiCount') unreadNotiCount: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
   @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
+  /** 标题栏渐变模糊与偏色的滚动联动进度。 */
+  @State titleScrollEffectProgress: number = 0
+  /** 列表当前视口高度。 */
+  @State listViewportHeight: number = 1
   @State loadingContentOpacity: number = 0
   private loadingDelayTimer: number = -1
   /** 是否显示标题栏更多菜单。 */
@@ -96,6 +101,17 @@ export struct TopicListPanel {
   private handledFavoriteMutationVersion: number = 0
 
   private scroller: Scroller = new Scroller()
+
+  /** 按列表绝对滚动偏移同步标题栏视觉效果。 */
+  private syncTitleScrollEffect(): void {
+    const progress: number = TitleScrollEffect.getProgress(
+      this.scroller.currentOffset().yOffset,
+      this.statusBarHeight
+    )
+    if (TitleScrollEffect.shouldUpdateProgress(this.titleScrollEffectProgress, progress)) {
+      this.titleScrollEffectProgress = progress
+    }
+  }
 
   private twentyFourCache: object[] = []
 
@@ -480,6 +496,7 @@ export struct TopicListPanel {
     const authScope: AuthScope = AuthScope.capture(appStore.auth, 0)
     const favoriteFolderId: string = this.favor
     if (page === 1) {
+      this.titleScrollEffectProgress = 0
       this.isLoading = true
       this.loadingContentOpacity = 0
       clearTimeout(this.loadingDelayTimer)
@@ -659,29 +676,28 @@ export struct TopicListPanel {
     Stack() {
       Column() {
         if (this.isLoading) {
-          Row().width('100%').height(44 + this.statusBarHeight)
+          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           Column() {
             LoadingStateView()
           }.opacity(this.loadingContentOpacity).width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
           .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
         } else if (this.hasError) {
-          Row().width('100%').height(44 + this.statusBarHeight)
+          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           Column() {
             ErrorStateView({ msg: this.errorMsg || '加载失败', onRetry: () => this.loadTopics(1) })
           }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
           .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
         } else if (this.mgr.threads.length === 0) {
-          Row().width('100%').height(44 + this.statusBarHeight)
+          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           Column() {
             EmptyStateView({ msg: '暂无主题', icon: $r('app.media.icon_chat_bubble') })
           }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
           .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
         } else {
           List({ scroller: this.scroller }) {
-            ListItem() {
-              if (this.showSort) {
+            if (this.showSort) {
+              ListItem() {
                 Column() {
-                  Row().width('100%').height(44 + this.statusBarHeight)
                   Row() {
                     ForEach(SORT_MODES, (mode: SortMode) => {
                       Text(mode.label)
@@ -704,8 +720,6 @@ export struct TopicListPanel {
                   .width('92%').margin({ top: 8, bottom: 4 }).padding(3)
                   .backgroundColor(AppColors.bgSecondary).borderRadius(10)
                 }
-              } else {
-                Row().width('100%').height(44 + this.statusBarHeight)
               }
             }
             LazyForEach(this.threadsDataSource, (thread: object) => {
@@ -745,6 +759,26 @@ export struct TopicListPanel {
           .lanes(new BreakpointType(1, 1, 1).getValue(this.currentBreakpoint), 12)
           .edgeEffect(EdgeEffect.Spring)
           .cachedCount(3)
+          .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
+          .linearGradientBlur(
+            TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+            {
+              fractionStops: TitleScrollEffect.getBlurStops(this.listViewportHeight, this.statusBarHeight),
+              direction: GradientDirection.Bottom
+            }
+          )
+          .onAreaChange((_oldValue: Area, newValue: Area): void => {
+            if (typeof newValue.height === 'number' && newValue.height > 0 &&
+              newValue.height !== this.listViewportHeight) {
+              this.listViewportHeight = newValue.height
+            }
+          })
+          .onDidScroll((): void => {
+            this.syncTitleScrollEffect()
+          })
+          .onAppear((): void => {
+            this.syncTitleScrollEffect()
+          })
           .onScrollIndex((start: number, end: number): void => {
             const total: number = this.threadsDataSource.totalCount()
             if (end >= total - 3 && total > 0) {
@@ -758,6 +792,7 @@ export struct TopicListPanel {
 
       PanelNavBar({
         title: this.boardName,
+        scrollEffectProgress: this.titleScrollEffectProgress,
         showBack: this.showBack,
         rightIcon: this.canManageCurrentBoard() ? $r('app.media.icon_bell') : '',
         rightIconBadge: this.canManageCurrentBoard() ? this.unreadNotiCount : 0,

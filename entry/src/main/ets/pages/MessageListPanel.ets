@@ -17,6 +17,7 @@ import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/comp
 import { PageScope } from '../common/concurrency/PageScope'
 import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
+import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 @Component
 export struct MessageListPanel {
@@ -33,9 +34,26 @@ export struct MessageListPanel {
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
   @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
+  /** 标题栏渐变模糊与偏色的滚动联动进度。 */
+  @State titleScrollEffectProgress: number = 0
+  /** 列表当前视口高度。 */
+  @State listViewportHeight: number = 1
+  /** 私信列表滚动控制器。 */
+  private scroller: Scroller = new Scroller()
   private threadsDataSource: MessageThreadDataSource = new MessageThreadDataSource()
   /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
   private scope: PageScope = new PageScope()
+
+  /** 按列表绝对滚动偏移同步标题栏视觉效果。 */
+  private syncTitleScrollEffect(): void {
+    const progress: number = TitleScrollEffect.getProgress(
+      this.scroller.currentOffset().yOffset,
+      this.statusBarHeight
+    )
+    if (TitleScrollEffect.shouldUpdateProgress(this.titleScrollEffectProgress, progress)) {
+      this.titleScrollEffectProgress = progress
+    }
+  }
 
   aboutToAppear(): void {
     const currentGeneration: number = this.scope.begin()
@@ -71,6 +89,7 @@ export struct MessageListPanel {
   private async loadMessages(appearanceGeneration: number): Promise<void> {
     this.isLoading = true
     this.hasError = false
+    this.titleScrollEffectProgress = 0
     try {
       const result: MessageListResult = await getMessageList(appStore.auth.token, '1')
       if (!this.scope.isActive(appearanceGeneration)) {
@@ -124,28 +143,25 @@ export struct MessageListPanel {
     Stack() {
       Column() {
         if (this.isLoading) {
-          Row().width('100%').height(44 + this.statusBarHeight)
+          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           Column() {
             LoadingStateView()
           }
           .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
         } else if (this.hasError) {
-          Row().width('100%').height(44 + this.statusBarHeight)
+          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           Column() {
             ErrorStateView({ msg: '加载失败', onRetry: () => this.loadMessages(this.scope.begin()) })
           }
           .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
         } else if (this.threads.length === 0) {
-          Row().width('100%').height(44 + this.statusBarHeight)
+          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           Column() {
             EmptyStateView({ msg: '暂无私信', icon: $r('app.media.icon_mail') })
           }
           .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
         } else {
-          List() {
-            ListItem() {
-              Row().width('100%').height(44 + this.statusBarHeight)
-            }
+          List({ scroller: this.scroller }) {
             LazyForEach(this.threadsDataSource, (thread: MessageThreadInfo) => {
               ListItem() {
                 Row() {
@@ -169,11 +185,37 @@ export struct MessageListPanel {
           .width('100%').layoutWeight(1)
           .divider({ strokeWidth: 0.5, color: AppColors.separator })
           .lanes(new BreakpointType(1, 2, 2).getValue(this.currentBreakpoint), 12)
+          .edgeEffect(EdgeEffect.Spring)
+          .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
+          .linearGradientBlur(
+            TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+            {
+              fractionStops: TitleScrollEffect.getBlurStops(this.listViewportHeight, this.statusBarHeight),
+              direction: GradientDirection.Bottom
+            }
+          )
+          .onAreaChange((_oldValue: Area, newValue: Area): void => {
+            if (typeof newValue.height === 'number' && newValue.height > 0 &&
+              newValue.height !== this.listViewportHeight) {
+              this.listViewportHeight = newValue.height
+            }
+          })
+          .onDidScroll((): void => {
+            this.syncTitleScrollEffect()
+          })
+          .onAppear((): void => {
+            this.syncTitleScrollEffect()
+          })
         }
       }
       .width('100%').height('100%')
 
-      PanelNavBar({ title: '私信', rightIcon: $r('app.media.icon_compose'), onRightClick: (): void => { this.showCompose = true } })
+      PanelNavBar({
+        title: '私信',
+        rightIcon: $r('app.media.icon_compose'),
+        scrollEffectProgress: this.titleScrollEffectProgress,
+        onRightClick: (): void => { this.showCompose = true }
+      })
         .width('100%').position({ x: 0, y: 0 })
 
       if (this.showCompose) {

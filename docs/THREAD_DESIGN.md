@@ -208,10 +208,11 @@ hdc shell hilog -x -T ThreadPanel -v time
 实现依据是华为官方的[沉浸光感](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/ui-design-hds-component-material)与[标题栏动态模糊](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/ui-design-navigation-dynamic-blur)指南。项目保留自定义路由和 `PanelNavBar`，但视觉语义与 HDS 标题栏一致；全部改动都是纯视觉，不触碰本章任何数据不变量：
 
 - **系统材质只用于可操作按钮**：返回、更多等按钮为 36×36 圆形光感底板，使用 API 26 `systemMaterial` 与 `UIMaterialManager.fabMaterial`（ULTRA_THIN、interactive、lightEffect）；标题栏本体不再使用 `titleBarMaterial`。沉浸光感关闭时，按钮回退到 `AppColors.frostGlass` 圆底，标题区回退到原有 `frostGlassStrong` 背板。
-- **正文采用官方 `GRADIENT_BLUR` 语义**：均匀模糊和分割线会强化标题区的矩形边界，因此 Thread 使用 `List.linearGradientBlur` 直接处理进入标题下方的正文。标题区内保持最大模糊，标题底部以下 `TITLE_BLUR_FADE_DISTANCE`（32vp）连续衰减到零，完全生效时最大半径为 `TITLE_BLUR_RADIUS`（16）。
+- **正文采用官方 `GRADIENT_BLUR` 语义**：均匀模糊和分割线会强化标题区的矩形边界，因此滚动列表使用 `List.linearGradientBlur` 直接处理进入标题下方的正文。标题区内保持最大模糊，标题底部以下 `TITLE_BLUR_FADE_DISTANCE`（32vp）连续衰减到零，完全生效时最大半径为 `TITLE_BLUR_RADIUS`（16）。
 - 正文初始通过 `contentStartOffset` 规避标题区；开始滚动后，渐变模糊随滚动进度增强。标题层只负责 `title_backdrop_tint` 到 `title_backdrop_clear` 的同色透明渐变，并向标题底部以下延伸 32vp；不再使用均匀 `backgroundBlurStyle` 或底部分割线，因此不会形成独立标题块。
-- 联动状态 `titleScrollEffectProgress` 只使用 `scroller.currentOffset().yOffset` 的绝对偏移计算。官方示例的生效区间为 0–20vp，因此这里使用 `clamp(yOffset / TITLE_SCROLL_EFFECT_DISTANCE, 0, 1)`；`onDidScroll` 每帧同步，`List.onAppear` 重新校准，REPLACE 加载开始时归零。
+- 联动状态 `titleScrollEffectProgress` 使用 `scroller.currentOffset().yOffset` 与 `contentStartOffset` 共同计算。`List` 位于起点时，其绝对偏移为 `-contentStartOffset`，首项到达屏幕顶部时才为 `0`；因此正文侵入标题区的真实距离是 `yOffset + contentStartOffset`。官方示例的生效区间为 0–20vp，这里使用 `clamp((yOffset + contentStartOffset) / TITLE_SCROLL_EFFECT_DISTANCE, 0, 1)`；`onDidScroll` 每帧同步，`List.onAppear` 重新校准，REPLACE 加载开始时归零。
+- 原始滚动进度只表达正文与标题区开始重叠后的几何距离；背景偏色透明度与正文模糊半径均使用线性映射，避免用视觉曲线掩盖坐标误差。起点回弹时进度保持为零，正文开始越过初始安全区后效果立即连续生效。
 - 渐变偏色层使用 `hitTestBehavior(HitTestMode.None)`，不会拦截下方帖子交互；视觉效果不占列表索引，也不改变 `contentStartOffset` / `restoreOffset` 公式，两者继续共用 `NAV_BAR_H`。
 - 页面位于顶部时渐变模糊与偏色均隐藏，首帖完整可见性不受影响，与第六节回归清单第 1 条一致。
 
-材质参数由 `UIMaterialManager` 静态单例一次性确定，不逐列表项创建材质。`PanelNavBar` 默认 `scrollEffectProgress=0`，只有 Thread 页传入滚动进度，其他页面保持原有视觉。
+材质参数由 `UIMaterialManager` 静态单例一次性确定，不逐列表项创建材质。标题区的滚动进度、起始避让、模糊半径和渐变停靠点统一由 `TitleScrollEffect` 计算，避免页面之间出现视觉参数漂移。`PanelNavBar` 默认 `scrollEffectProgress=0`；Thread、主题列表、通知、私信、浏览历史、收藏夹、黑名单、关键词屏蔽和用户备注页传入各自列表的实时滚动进度，静态表单和 WebView 等不符合覆盖式列表模型的页面仍保持原有布局。

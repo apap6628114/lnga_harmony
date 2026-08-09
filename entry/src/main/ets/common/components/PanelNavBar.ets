@@ -2,6 +2,7 @@ import { routerStore } from '../../store/RouterStore'
 import { AppColors, NAV_BAR_H, TITLE_BLUR_FADE_DISTANCE } from '../constants/Constants'
 import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../constants/AppStorageKeys'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
+import { TitleScrollEffect } from '../utils/TitleScrollEffect'
 
 /**
  * 面板通用标题栏。
@@ -91,7 +92,7 @@ export struct PanelNavBar {
               [$r('app.color.title_backdrop_clear'), 1]
             ]
           })
-          .opacity(Math.max(0, Math.min(this.scrollEffectProgress, 1)))
+          .opacity(TitleScrollEffect.getBackdropOpacity(this.scrollEffectProgress))
           .hitTestBehavior(HitTestMode.None)
       }
 

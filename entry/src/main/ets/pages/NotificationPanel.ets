@@ -19,6 +19,8 @@ import { Avatar } from '../common/components/Avatar'
 import { NotificationDataSource } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/components/PageStateView'
 import { PageScope } from '../common/concurrency/PageScope'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
+import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 @Component
 export struct NotificationPanel {
@@ -28,12 +30,29 @@ export struct NotificationPanel {
   @State errorMsg: string = ''
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
+  /** 是否启用沉浸式材质。 */
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
+  /** 标题栏渐变模糊与偏色的滚动联动进度。 */
+  @State titleScrollEffectProgress: number = 0
+  /** 列表当前视口高度。 */
+  @State listViewportHeight: number = 1
   /** 通知 Store 的页面刷新信号。 */
   @StorageProp('notificationVersion') @Watch('onNotificationVersionChange') notificationVersion: number = 0
   private notificationsDataSource: NotificationDataSource = new NotificationDataSource()
   private scroller: Scroller = new Scroller()
   /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
   private scope: PageScope = new PageScope()
+
+  /** 按列表绝对滚动偏移同步标题栏视觉效果。 */
+  private syncTitleScrollEffect(): void {
+    const progress: number = TitleScrollEffect.getProgress(
+      this.scroller.currentOffset().yOffset,
+      this.statusBarHeight
+    )
+    if (TitleScrollEffect.shouldUpdateProgress(this.titleScrollEffectProgress, progress)) {
+      this.titleScrollEffectProgress = progress
+    }
+  }
 
   aboutToAppear(): void {
     const currentGeneration: number = this.scope.begin()
@@ -55,6 +74,9 @@ export struct NotificationPanel {
   private syncFromStore(): void {
     this.notifications = appStore.getCachedNotifications() as NotificationInfo[]
     this.notificationsDataSource.replaceAll(this.notifications)
+    if (this.notifications.length === 0) {
+      this.titleScrollEffectProgress = 0
+    }
   }
 
   /**
@@ -212,19 +234,20 @@ export struct NotificationPanel {
   build() {
     Stack() {
       Column() {
-        Row().width('100%').height(44 + this.statusBarHeight)
-
         if (this.isLoading) {
+          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           Column() {
             LoadingStateView()
           }
           .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
         } else if (this.hasError) {
+          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           Column() {
             ErrorStateView({ msg: this.errorMsg, onRetry: () => this.loadNotifications(this.scope.begin()) })
           }
           .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
         } else if (this.notifications.length === 0) {
+          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           Column() {
             EmptyStateView({ msg: '暂无通知', icon: $r('app.media.icon_bell') })
           }
@@ -290,12 +313,33 @@ export struct NotificationPanel {
           .divider({ strokeWidth: 0.5, color: AppColors.separator })
           .lanes(new BreakpointType(1, 1, 1).getValue(this.currentBreakpoint), 12)
           .edgeEffect(EdgeEffect.Spring)
+          .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
+          .linearGradientBlur(
+            TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+            {
+              fractionStops: TitleScrollEffect.getBlurStops(this.listViewportHeight, this.statusBarHeight),
+              direction: GradientDirection.Bottom
+            }
+          )
+          .onAreaChange((_oldValue: Area, newValue: Area): void => {
+            if (typeof newValue.height === 'number' && newValue.height > 0 &&
+              newValue.height !== this.listViewportHeight) {
+              this.listViewportHeight = newValue.height
+            }
+          })
+          .onDidScroll((): void => {
+            this.syncTitleScrollEffect()
+          })
+          .onAppear((): void => {
+            this.syncTitleScrollEffect()
+          })
         }
       }
       .width('100%').height('100%')
 
       PanelNavBar({
         title: '通知',
+        scrollEffectProgress: this.titleScrollEffectProgress,
         rightLabel: '全部已读',
         rightLabelColor: this.hasUnreadNotifications() ? AppColors.primary : AppColors.textTertiary,
         onRightClick: (): void => { this.handleMarkAllSeen() }

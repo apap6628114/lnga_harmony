@@ -18,10 +18,7 @@ import { preWarmPosts } from '../common/utils/PostWarmup'
 import {
   AppColors,
   NAV_BAR_H,
-  ThreadNavMode,
-  TITLE_BLUR_FADE_DISTANCE,
-  TITLE_BLUR_RADIUS,
-  TITLE_SCROLL_EFFECT_DISTANCE
+  ThreadNavMode
 } from '../common/constants/Constants'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { PostItem } from '../common/components/PostItem'
@@ -43,6 +40,7 @@ import { getActiveAiValidationMessage } from '../service/ai/ActiveAiService'
 import { applyBlacklistStateToPosts } from '../common/utils/BlacklistUtils'
 import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
+import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 const logger = new Logger(DOMAIN_UI, 'ThreadPanel')
 
@@ -145,10 +143,11 @@ export struct ThreadPanel {
    * 内从 0 线性变化到 1，回到顶部或发生顶部回弹时归零。
    */
   private syncTitleScrollEffect(): void {
-    const offset: number = Math.max(this.scroller.currentOffset().yOffset, 0)
-    const progress: number = Math.min(offset / TITLE_SCROLL_EFFECT_DISTANCE, 1)
-    if (progress !== this.titleScrollEffectProgress &&
-      (progress === 0 || progress === 1 || Math.abs(progress - this.titleScrollEffectProgress) >= 0.001)) {
+    const progress: number = TitleScrollEffect.getProgress(
+      this.scroller.currentOffset().yOffset,
+      this.statusBarHeight
+    )
+    if (TitleScrollEffect.shouldUpdateProgress(this.titleScrollEffectProgress, progress)) {
       this.titleScrollEffectProgress = progress
     }
   }
@@ -162,15 +161,7 @@ export struct ThreadPanel {
    * @returns 渐变模糊强度与位置组成的停靠点
    */
   private getTitleBlurStops(): FractionStop[] {
-    const titleHeight: number = this.statusBarHeight + NAV_BAR_H
-    const minimumViewportHeight: number = titleHeight + TITLE_BLUR_FADE_DISTANCE
-    const viewportHeight: number = Math.max(this.listViewportHeight, minimumViewportHeight)
-    const titleEnd: number = Math.min(titleHeight / viewportHeight, 0.8)
-    const fadeEnd: number = Math.min(
-      (titleHeight + TITLE_BLUR_FADE_DISTANCE) / viewportHeight,
-      0.9
-    )
-    return [[1, 0], [1, titleEnd], [0, fadeEnd], [0, 1]]
+    return TitleScrollEffect.getBlurStops(this.listViewportHeight, this.statusBarHeight)
   }
 
   /** onScrollIndex 最近上报的首个可见列表项下标，用于判断是否靠近顶部。 */
@@ -1527,14 +1518,14 @@ export struct ThreadPanel {
           }
         }
         .width('100%').layoutWeight(1)
-        .contentStartOffset(NAV_BAR_H + this.statusBarHeight)
+        .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
         .scrollBar(BarState.Off)
         .divider({ strokeWidth: 0.5, color: AppColors.separator })
         .edgeEffect(EdgeEffect.Spring)
         .cachedCount(6)
         .maintainVisibleContentPosition(true)
         .linearGradientBlur(
-          this.materialEnabled ? TITLE_BLUR_RADIUS * this.titleScrollEffectProgress : 0,
+          TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
           {
             fractionStops: this.getTitleBlurStops(),
             direction: GradientDirection.Bottom

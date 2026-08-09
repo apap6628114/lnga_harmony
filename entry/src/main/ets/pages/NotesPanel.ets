@@ -8,6 +8,8 @@ import { NotesDataSource } from '../common/datasource/LazyDataSource'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { ConfirmDialog, MakeNoteDialog, AddNoteDialog } from '../common/dialogs/Dialogs'
 import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
+import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 @Component
 export struct NotesPanel {
@@ -16,8 +18,27 @@ export struct NotesPanel {
   @State notesCount: number = 0
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
+  /** 是否启用沉浸式材质。 */
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
+  /** 标题栏渐变模糊与偏色的滚动联动进度。 */
+  @State titleScrollEffectProgress: number = 0
+  /** 列表当前视口高度。 */
+  @State listViewportHeight: number = 1
 
+  /** 用户备注列表滚动控制器。 */
+  private scroller: Scroller = new Scroller()
   private notesDataSource: NotesDataSource = new NotesDataSource()
+
+  /** 按列表绝对滚动偏移同步标题栏视觉效果。 */
+  private syncTitleScrollEffect(): void {
+    const progress: number = TitleScrollEffect.getProgress(
+      this.scroller.currentOffset().yOffset,
+      this.statusBarHeight
+    )
+    if (TitleScrollEffect.shouldUpdateProgress(this.titleScrollEffectProgress, progress)) {
+      this.titleScrollEffectProgress = progress
+    }
+  }
 
   noteDialogController?: CustomDialogController
   addDialogController?: CustomDialogController
@@ -77,6 +98,9 @@ export struct NotesPanel {
   private refreshNotes(): void {
     this.notesCount = appStore.settings.notes.length
     this.notesDataSource.replaceAll(appStore.settings.notes)
+    if (this.notesCount === 0) {
+      this.titleScrollEffectProgress = 0
+    }
   }
 
   private showProfileCard(uid: string, windowX: number, windowY: number): void {
@@ -105,26 +129,26 @@ export struct NotesPanel {
   build() {
     Stack() {
       Column() {
-        Row().width('100%').height(44 + this.statusBarHeight)
-
         if (this.notesCount === 0) {
+          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           Column() {
             Image($r('app.media.icon_text_fields')).width(40).height(40).fillColor(AppColors.textTertiary).opacity(0.4)
             Text('暂无备注').fontSize(15).fontColor(AppColors.textTertiary).margin({ top: 8 })
           }
           .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
         } else {
-          Row() {
-            Text('共 ' + String(this.notesCount) + ' 条备注').fontSize(13).fontColor(AppColors.textTertiary).layoutWeight(1)
-            Text('删除全部').fontSize(13).fontColor(AppColors.destructive)
-              .onClick(() => {
-                appStore.settingsStore.removeAllNotes()
-                this.refreshNotes()
-                appStore.showToast('已清空备注')
-              })
-          }.width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
-
-          List() {
+          List({ scroller: this.scroller }) {
+            ListItem() {
+              Row() {
+                Text('共 ' + String(this.notesCount) + ' 条备注').fontSize(13).fontColor(AppColors.textTertiary).layoutWeight(1)
+                Text('删除全部').fontSize(13).fontColor(AppColors.destructive)
+                  .onClick(() => {
+                    appStore.settingsStore.removeAllNotes()
+                    this.refreshNotes()
+                    appStore.showToast('已清空备注')
+                  })
+              }.width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
+            }
             LazyForEach(this.notesDataSource, (entry: UserNoteEntry) => {
               ListItem() {
                 Row() {
@@ -169,12 +193,33 @@ export struct NotesPanel {
             }, (entry: UserNoteEntry) => entry.userId)
           }
           .width('100%').layoutWeight(1)
+          .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           .divider({ strokeWidth: 0.5, color: AppColors.separator })
+          .edgeEffect(EdgeEffect.Spring)
+          .linearGradientBlur(
+            TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+            {
+              fractionStops: TitleScrollEffect.getBlurStops(this.listViewportHeight, this.statusBarHeight),
+              direction: GradientDirection.Bottom
+            }
+          )
+          .onAreaChange((_oldValue: Area, newValue: Area): void => {
+            if (typeof newValue.height === 'number' && newValue.height > 0 &&
+              newValue.height !== this.listViewportHeight) {
+              this.listViewportHeight = newValue.height
+            }
+          })
+          .onDidScroll((): void => {
+            this.syncTitleScrollEffect()
+          })
+          .onAppear((): void => {
+            this.syncTitleScrollEffect()
+          })
         }
       }
       .width('100%').height('100%')
 
-      PanelNavBar({ title: '用户备注', rightLabel: '+ 添加', onRightClick: (): void => {
+      PanelNavBar({ title: '用户备注', rightLabel: '+ 添加', scrollEffectProgress: this.titleScrollEffectProgress, onRightClick: (): void => {
         this.addDialogController = new CustomDialogController({
           builder: AddNoteDialog({
             onConfirm: (nickName: string, uid: string): void => {

@@ -8,6 +8,8 @@ import { EmptyStateView, ErrorStateView, LoadingStateView } from '../common/comp
 import { ConfirmDialog } from '../common/dialogs/Dialogs'
 import { FavoriteFolderNameDialog } from '../common/dialogs/FavoriteFolderDialogs'
 import { PageScope } from '../common/concurrency/PageScope'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
+import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 /**
  * NGA 主题收藏夹管理与主题归档选择面板。
@@ -48,6 +50,14 @@ export struct FavoriteFoldersPanel {
    * 状态栏高度。
    */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
+  /** 是否启用沉浸式材质。 */
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
+  /** 标题栏渐变模糊与偏色的滚动联动进度。 */
+  @State titleScrollEffectProgress: number = 0
+  /** 列表当前视口高度。 */
+  @State listViewportHeight: number = 1
+  /** 收藏夹列表滚动控制器。 */
+  private scroller: Scroller = new Scroller()
   /**
    * 收藏夹名称编辑对话框控制器。
    */
@@ -64,6 +74,17 @@ export struct FavoriteFoldersPanel {
    * 当前页面会话代际。
    */
   private pageScopeGeneration: number = 0
+
+  /** 按列表绝对滚动偏移同步标题栏视觉效果。 */
+  private syncTitleScrollEffect(): void {
+    const progress: number = TitleScrollEffect.getProgress(
+      this.scroller.currentOffset().yOffset,
+      this.statusBarHeight
+    )
+    if (TitleScrollEffect.shouldUpdateProgress(this.titleScrollEffectProgress, progress)) {
+      this.titleScrollEffectProgress = progress
+    }
+  }
 
   /**
    * 初始化页面快照并从 NGA 服务端加载收藏夹。
@@ -110,6 +131,9 @@ export struct FavoriteFoldersPanel {
    */
   private syncFromStore(): void {
     this.folders = appStore.favoriteStore.getFolders()
+    if (this.folders.length === 0) {
+      this.titleScrollEffectProgress = 0
+    }
   }
 
   /**
@@ -496,9 +520,8 @@ export struct FavoriteFoldersPanel {
   build() {
     Stack() {
       Column() {
-        Row().width('100%').height(44 + this.statusBarHeight)
-
         if (this.refreshing && this.folders.length === 0) {
+          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           Column() {
             LoadingStateView()
           }
@@ -507,6 +530,7 @@ export struct FavoriteFoldersPanel {
           .justifyContent(FlexAlign.Center)
           .alignItems(HorizontalAlign.Center)
         } else if (this.folders.length === 0 && appStore.favoriteStore.error.length > 0) {
+          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           Column() {
             ErrorStateView({
               msg: appStore.favoriteStore.error,
@@ -520,6 +544,7 @@ export struct FavoriteFoldersPanel {
           .justifyContent(FlexAlign.Center)
           .alignItems(HorizontalAlign.Center)
         } else if (this.folders.length === 0) {
+          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           Column() {
             EmptyStateView({ msg: '暂无收藏夹', icon: $r('app.media.profile_favorites') })
           }
@@ -528,7 +553,7 @@ export struct FavoriteFoldersPanel {
           .justifyContent(FlexAlign.Center)
           .alignItems(HorizontalAlign.Center)
         } else {
-          List() {
+          List({ scroller: this.scroller }) {
             ForEach(this.folders, (folder: FavoriteTopicFolder): void => {
               ListItem() {
                 this.FolderRow(folder)
@@ -537,8 +562,28 @@ export struct FavoriteFoldersPanel {
           }
           .width('100%')
           .layoutWeight(1)
+          .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           .divider({ strokeWidth: 0.5, color: AppColors.separator })
           .edgeEffect(EdgeEffect.Spring)
+          .linearGradientBlur(
+            TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+            {
+              fractionStops: TitleScrollEffect.getBlurStops(this.listViewportHeight, this.statusBarHeight),
+              direction: GradientDirection.Bottom
+            }
+          )
+          .onAreaChange((_oldValue: Area, newValue: Area): void => {
+            if (typeof newValue.height === 'number' && newValue.height > 0 &&
+              newValue.height !== this.listViewportHeight) {
+              this.listViewportHeight = newValue.height
+            }
+          })
+          .onDidScroll((): void => {
+            this.syncTitleScrollEffect()
+          })
+          .onAppear((): void => {
+            this.syncTitleScrollEffect()
+          })
         }
       }
       .width('100%')
@@ -546,6 +591,7 @@ export struct FavoriteFoldersPanel {
 
       PanelNavBar({
         title: this.topicId.length > 0 ? '收藏到…' : '收藏主题',
+        scrollEffectProgress: this.titleScrollEffectProgress,
         rightLabel: '+ 新建',
         onRightClick: (): void => {
           this.showCreateFolderDialog()

@@ -13,6 +13,8 @@ import { PanelNavBar } from '../common/components/PanelNavBar'
 import { EmptyStateView } from '../common/components/PageStateView'
 import { ConfirmDialog, AddBlacklistDialog } from '../common/dialogs/Dialogs'
 import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
+import { KEY_IMMERSIVE_MATERIAL_ENABLED } from '../common/constants/AppStorageKeys'
+import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 @Component
 export struct BlacklistPanel {
@@ -20,10 +22,29 @@ export struct BlacklistPanel {
   @State blacklistCount: number = 0
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
+  /** 是否启用沉浸式材质。 */
+  @StorageProp(KEY_IMMERSIVE_MATERIAL_ENABLED) materialEnabled: boolean = true
+  /** 标题栏渐变模糊与偏色的滚动联动进度。 */
+  @State titleScrollEffectProgress: number = 0
+  /** 列表当前视口高度。 */
+  @State listViewportHeight: number = 1
   /** 黑名单变更版本号。 */
   @StorageProp('blacklistVersion') @Watch('onBlacklistVersionChange') blacklistVersion: number = 0
 
+  /** 黑名单列表滚动控制器。 */
+  private scroller: Scroller = new Scroller()
   private blacklistDataSource: BlacklistDataSource = new BlacklistDataSource()
+
+  /** 按列表绝对滚动偏移同步标题栏视觉效果。 */
+  private syncTitleScrollEffect(): void {
+    const progress: number = TitleScrollEffect.getProgress(
+      this.scroller.currentOffset().yOffset,
+      this.statusBarHeight
+    )
+    if (TitleScrollEffect.shouldUpdateProgress(this.titleScrollEffectProgress, progress)) {
+      this.titleScrollEffectProgress = progress
+    }
+  }
 
   addDialogController?: CustomDialogController
 
@@ -106,28 +127,31 @@ export struct BlacklistPanel {
   private refreshBlacklist(): void {
     this.blacklistCount = appStore.settings.blacklist.length
     this.blacklistDataSource.replaceAll(appStore.settings.blacklist)
+    if (this.blacklistCount === 0) {
+      this.titleScrollEffectProgress = 0
+    }
   }
 
   build() {
     Stack() {
       Column() {
-        Row().width('100%').height(44 + this.statusBarHeight)
-
         if (this.blacklistCount === 0) {
+          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           Column() {
             EmptyStateView({ msg: '黑名单为空', icon: $r('app.media.icon_block') })
           }
           .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
         } else {
-          Row() {
-            Text('共 ' + String(this.blacklistCount) + ' 人').fontSize(13).fontColor(AppColors.textTertiary).layoutWeight(1)
-            Text('删除全部').fontSize(13).fontColor(AppColors.destructive)
-              .onClick(() => {
-                this.clearDialogController?.open()
-              })
-          }.width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
-
-          List() {
+          List({ scroller: this.scroller }) {
+            ListItem() {
+              Row() {
+                Text('共 ' + String(this.blacklistCount) + ' 人').fontSize(13).fontColor(AppColors.textTertiary).layoutWeight(1)
+                Text('删除全部').fontSize(13).fontColor(AppColors.destructive)
+                  .onClick(() => {
+                    this.clearDialogController?.open()
+                  })
+              }.width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
+            }
             LazyForEach(this.blacklistDataSource, (entry: BlacklistEntry) => {
               ListItem() {
                 Row() {
@@ -160,12 +184,33 @@ export struct BlacklistPanel {
             }, (entry: BlacklistEntry) => entry.userId)
           }
           .width('100%').layoutWeight(1)
+          .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
           .divider({ strokeWidth: 0.5, color: AppColors.separator })
+          .edgeEffect(EdgeEffect.Spring)
+          .linearGradientBlur(
+            TitleScrollEffect.getBlurRadius(this.materialEnabled, this.titleScrollEffectProgress),
+            {
+              fractionStops: TitleScrollEffect.getBlurStops(this.listViewportHeight, this.statusBarHeight),
+              direction: GradientDirection.Bottom
+            }
+          )
+          .onAreaChange((_oldValue: Area, newValue: Area): void => {
+            if (typeof newValue.height === 'number' && newValue.height > 0 &&
+              newValue.height !== this.listViewportHeight) {
+              this.listViewportHeight = newValue.height
+            }
+          })
+          .onDidScroll((): void => {
+            this.syncTitleScrollEffect()
+          })
+          .onAppear((): void => {
+            this.syncTitleScrollEffect()
+          })
         }
       }
       .width('100%').height('100%')
 
-      PanelNavBar({ title: '黑名单管理', rightLabel: '+ 添加', onRightClick: (): void => {
+      PanelNavBar({ title: '黑名单管理', rightLabel: '+ 添加', scrollEffectProgress: this.titleScrollEffectProgress, onRightClick: (): void => {
         this.addDialogController = new CustomDialogController({
           builder: AddBlacklistDialog({
             currentUserId: appStore.auth.uid,
