@@ -196,6 +196,7 @@ function fillThreadResult(raw: Record<string, Object>, result: ThreadResult,
     post.isanonymous = row.isanonymous || (rawAuthor.startsWith('#anony_') && rawAuthor.length === 39);
     post.subject = row.subject;
     post.content = row.content;
+    post.vote = row.vote;
     post.postdate = row.postdate;
     const memberid: number = Number(userInfo?.['memberid'] ?? 0);
     const rvrc: number = Number(userInfo?.['rvrc'] ?? 0);
@@ -273,6 +274,21 @@ function fillThreadResult(raw: Record<string, Object>, result: ThreadResult,
         topic_misc: String(rawT['topic_misc'] ?? ''),
       };
       result.threadInfo = info;
+      // 防御性兜底：主题级投票 __T.post_misc_var.vote 回填到主楼。
+      // JSON 模式主楼 vote 与主题级一致（此分支通常不触发）；
+      // 保留以防 JSON 模式 __R[0] 缺 vote 而 __T 有值的异常情况
+      const pmv: Record<string, Object> | undefined = rawT['post_misc_var'] as Record<string, Object> | undefined;
+      if (pmv) {
+        const topicVote: string = String(pmv['vote'] ?? '');
+        if (topicVote.length > 0) {
+          for (let pi: number = 0; pi < result.posts.length; pi++) {
+            if (result.posts[pi].lou === 0 && result.posts[pi].vote.length === 0) {
+              result.posts[pi].vote = topicVote;
+              break;
+            }
+          }
+        }
+      }
     }
   }
 

@@ -262,6 +262,8 @@ class AppStoreClass {
   }
   removeVoteRecord(uid: string, tid: string): Promise<void> { return this.voteStore.removeVoteRecord(uid, tid) }
   clearVoteRecords(uid: string): Promise<void> { return this.voteStore.clearVoteRecords(uid) }
+  loadPollVoted(uid: string): Promise<string[]> { return this.voteStore.loadPollVoted(uid) }
+  markPollVoted(uid: string, tid: string): Promise<void> { return this.voteStore.markPollVoted(uid, tid) }
 
   // ---------- Facade: Browse History ----------
 

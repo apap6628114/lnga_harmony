@@ -242,4 +242,51 @@ function extractLastPostTs(html: string): number {
   return 0;
 }
 
-export { PostArgData, splitTopLevelArgs, parseAllPostArgs, extractUserInfo, extractTotalReplies, extractLastPostTs };
+/**
+ * 去除 JS 字符串参数首尾的成对引号。
+ *
+ * @param s 原始参数片段（可能带 ' 或 " 包裹）
+ * @returns 去引号后的内容
+ */
+function stripQuotes(s: string): string {
+  const len: number = s.length;
+  if (len >= 2 && ((s[0] === '"' && s[len - 1] === '"') || (s[0] === "'" && s[len - 1] === "'"))) {
+    return s.substring(1, len - 1);
+  }
+  return s;
+}
+
+/**
+ * 从 commonui.postArg.setDefault(fid,stid,tid,tAid,topicMiscBit1,punUsers,visit,mods,
+ * vote,customLevel,tType,tReplies,tLastTime,thisPagePosts) 提取主题投票信息。
+ *
+ * 第 9 个参数（index 8）为 vote 字符串（与 JSON API 楼级 vote / __T.post_misc_var.vote
+ * 同格式，实测投票帖 `208214~华为~...~max_select~1~end~<ts>~_208214~170,0,209~...`），
+ * 非投票帖为 `""` 或空串。
+ *
+ * @param html NGA 帖子页 HTML
+ * @returns 主题 vote 字符串；未找到或为空时返回 ''
+ */
+function extractSetDefaultVote(html: string): string {
+  const idx: number = html.indexOf(SETDEFAULT_MARKER);
+  if (idx < 0) {
+    return '';
+  }
+  const openPos: number = idx + SETDEFAULT_MARKER.length - 1;
+  const matched = scanBalanced(html, openPos, '(', ')');
+  if (!matched.value) {
+    return '';
+  }
+  const argsStr: string = matched.value.substring(1, matched.value.length - 1);
+  const args: string[] = splitTopLevelArgs(argsStr);
+  if (args.length < 9) {
+    return '';
+  }
+  const vote: string = stripQuotes(args[8].trim());
+  if (vote.length > 1) {
+    return vote;
+  }
+  return '';
+}
+
+export { PostArgData, splitTopLevelArgs, parseAllPostArgs, extractUserInfo, extractTotalReplies, extractLastPostTs, extractSetDefaultVote };

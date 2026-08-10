@@ -161,7 +161,7 @@ read.php 页面存在"隐楼"行为：被隐藏/删除的楼层不渲染但服�
 3. `npm run sync` 回写 `entry/src/main/ets/`
 4. DevEco 编译 + Hypium（`entry/src/test/BBCodeUnit.test.ets`）最终门禁
 
-> ⚠️ 禁止直接修改 `entry/src/main/ets` 下被镜像的 29 个文件——下次 `npm run sync`
+> ⚠️ 禁止直接修改 `entry/src/main/ets` 下被镜像的 30 个文件——下次 `npm run sync`
 > 会整体覆盖。确需直接改 .ets 时，改完立即反向同步回镜像。
 > 域名常量 `common/constants/NgaDomains.ts` 同样纳入镜像，切域时两侧都要同步。
 
@@ -228,6 +228,51 @@ runs.json 提取方式：浏览器内脚本遍历楼层 DOM，跳过 `.x` 表格
 - `bbNodesToPlainText` 剥除样式子树边缘空白；零丢失断言用 `concatTextNodes`（逐字保留）
 
 ## 修复记录
+
+- **2026-08-11 投票帖支持（tid=47344482 主楼验证，镜像 136 项全绿）**：
+  - 背景：投票帖在鸿蒙客户端完全不可见。排查结论：JSON 数据（楼级 `__R[0].vote` /
+    `__T.post_misc_var.vote`）完整，但 `ThreadParser` 只透传字符串、`mapRowToPost` 映射时
+    丢弃字段、渲染层无投票组件——整条链路从未实现（官方网页投票是正文外独立容器
+    `votec0`，由 JS 依 vote 字段渲染，与 BBCode 解析无关）
+  - vote 字符串格式（官方 `__NUKE.scEn/scDe` 编码）：`键~值~...` 两两配对；
+    `<选项ID>~<标题>` 数字键为选项，`_<ID>~<票数>,<投注量>,<总人数>` 为统计
+    （总人数取各选项第三段最大值），`max_select~n` 最多可选（缺省 1）、`end~ts` 结束
+    时间戳、`type~n`（0投票 1投注 2评分 3评分单条 4问答，缺省 0）、`opt~bit`
+    （&1 提交后可查看结果 &2 结束后可查看结果）、`min/max/priv/done` 投注评分用
+  - 提交接口（官方 js_read.js `commonui.vote.submit` → `__API.vote`）：
+    `POST nuke.php?__lib=vote&__act=vote&tid=<tid>&voteid=<逗号分隔选项ID>&raw=3`，
+    成功提示在 data[0]；`max_select>1` 时 checkbox 多选，否则 radio 单选
+  - 客户端实现：`parser/VoteParser.ets` 解码（镜像 scDe+voteFormat 语义，百分比
+    `((票/组总票*1000)|0)/10`、进度条组内最高项归一化 75% 宽度与官方一致）；
+    `model/Vote.ets` 模型；`PostInfo.vote` 字段 + `ThreadApi.mapRowToPost` 映射 +
+    `__T.post_misc_var.vote` 主题级兜底（HTML 模式主楼无 vote 时回填）；
+    `service/api/VoteApi.ets` 提交；`PostPoll.ets` 组件（选项行/票数/百分比/进度条/
+    信息行/提交/已投乐观更新），挂到 PostItem 主楼正文之后；Hypium 新增
+    `VoteUnit.test.ets`（4 例，真实样本 170/11/28 票与官方渲染一致）
+  - HTML 模式：`PostArgScanner` 新增 `extractSetDefaultVote`（`setDefault` 第 9 参，
+    与 `commonui.vote($('votec<N>'),tid,'...')` 内联调用同源），填入 lou=0 行 vote +
+    `__T.post_misc_var`；成对样本 `html-pair-47344482-p1` 固化，覆盖套件楼层元数据
+    逐字段零差异通过（该字段在 `ROW_FIELDS` 对比清单，投票样本将强制两侧一致）
+  - 官方源码推理（2026-08-11，js_commonui.js / js_read.js 逐行核对）：
+    - **编码端 `~` 消毒**：`scEn` 对 string 直接 `replace(/~/g,'')`——服务端生成 vote
+      字符串时删除标题中的 `~`，客户端 scDe 无需处理转义，双端天然一致（标题含 `~`
+      不可能出现）
+    - **结束时间用服务端时钟**：官方 `atv = !x.end || w.__NOW<=x.end`（`__NOW` 为服务端
+      注入时间戳）；客户端无 `__NOW`，用 `Date.now()/1000` 替代（epoch 秒无时区问题，
+      仅客户端时钟漂移），边界 `<=` 与官方逐字一致
+    - **`max_select~0` 官方残缺语义**：发帖注释"0不限"但渲染/提交未实现——UI 走
+      radio（单选），提交时 `myvote>max_select` 即 `1>0` 直接拒绝（官方 bug 行为）；
+      客户端归一化为 1（单选），UI 一致且避开拒绝 bug
+    - **进度条归一化**：`voteMul` 仅当组内最高项占比 `<0.75` 时取 `0.75/mostRate`
+      （最高项压到 75% 宽），否则 1 不缩放（最高票 81.3% 全宽展示），`barPercent` 同构
+    - **`opt` 位不隐藏结果**：票数/百分比/进度条无条件渲染，`opt&1/&2` 仅进信息行
+      文案（"提交后可查看结果"/"结束后可查看结果"）
+    - **无已投标识**：数据无已投字段，官方提交后仅 `alert(data[0])` 且不刷新——
+      客户端"提交后乐观更新 + 隐藏控件"体验优于官方
+    - **type 1/2/3/4 渲染**（客户端 PostPoll 按官方 voteBet/voteScore/TYPE_SCORE_VOTE/
+      TYPE_QACHART 对齐）：type 1 双指标（票数 + 投注铜币，结算 `done` 逗号串标"胜出"）；
+      type 2 均分 `((scoNum/voteNum*100)|0)/100` + 相对 `max` 进度条；type 3/4 只读列表
+      （问答带序号）；统计计算提取为可测纯函数 `votePercent`/`barPercent`/`scoreValue`
 
 - **2026-08-08 引用回复跳转：保留引用楼层页码（[pid=pid,tid,page]）**：
   - 问题：NGA 引用头 `[pid=pid,tid,page]Reply[/pid]` 携带被引楼层所在页（第 3 值，

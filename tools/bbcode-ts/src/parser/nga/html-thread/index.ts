@@ -9,7 +9,7 @@
  * 组装为 __R/__U/__T/__F/__ROWS/__R__ROWS_PAGE/__PAGE 结构。
  */
 
-import { PostArgData, parseAllPostArgs, extractUserInfo, extractTotalReplies, extractLastPostTs } from './PostArgScanner';
+import { PostArgData, parseAllPostArgs, extractUserInfo, extractTotalReplies, extractLastPostTs, extractSetDefaultVote } from './PostArgScanner';
 import {
   extractPostContent, extractPostSubject, extractPostDate,
   extractForumName, extractThreadSubject, extractPostAuthorName,
@@ -54,6 +54,9 @@ export function parseHtmlToRawJson(html: string): object {
   const __R: Record<string, Object> = {};
   let maxLou: number = -1;
   const defaultPostdate: string = '';
+  // 主题级投票（setDefault 第 9 参）：JSON API 语义下仅主楼行携带 vote 字段，
+  // 页面只提供主题级数据，填入 lou=0 行与 JSON 形状保持一致
+  const topicVote: string = extractSetDefaultVote(html);
 
   const procKeys: number[] = [];
   postArgs.forEach((_value: PostArgData, key: number): void => {
@@ -96,7 +99,7 @@ export function parseHtmlToRawJson(html: string): object {
       'content_length': arg.contentLength as Object,
       'from_client': arg.fromClient as Object,
       'from_client_model': arg.fromClientModel as Object,
-      'vote': '' as Object,
+      'vote': (lou === 0 ? topicVote : '') as Object,
       'alterinfo': '' as Object,
       'isanonymous': false as Object,
       'attachs': attachs as Object,
@@ -150,6 +153,8 @@ export function parseHtmlToRawJson(html: string): object {
     }
   }
 
+  const postMiscVar: Record<string, Object> = { 'vote': topicVote as Object };
+
   const __T: Record<string, Object> = {
     'tid': tid as Object,
     'fid': fid as Object,
@@ -161,6 +166,7 @@ export function parseHtmlToRawJson(html: string): object {
     'postdate': (firstPostTs || 0) as Object,
     'lastpost': (extractLastPostTs(html) || lastPostTs || 0) as Object,
     'lastposter': extractPostAuthorName(__U, lastAuthorId) as Object,
+    'post_misc_var': postMiscVar as Object,
     'type': 0 as Object,
     'locked': 0 as Object,
     'recommend': 0 as Object,

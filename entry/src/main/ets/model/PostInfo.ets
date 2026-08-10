@@ -31,6 +31,8 @@ export class PostInfo {
   author: string = '';
   subject: string = '';
   content: string = '';
+  /** 投票帖原始 vote 字符串（`~` 分隔键值对，仅主楼有值），经 VoteParser 解码渲染 */
+  vote: string = '';
   postdate: string = '';
   level: string = '';
   yz: string = '';

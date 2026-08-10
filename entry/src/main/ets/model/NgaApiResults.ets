@@ -25,6 +25,14 @@ export class VoteResult extends ApiResult {
 }
 
 /**
+ * 投票帖提交投票结果。
+ */
+export class VoteSubmitResult extends ApiResult {
+  /** 服务端提示文本（如"投票成功"） */
+  message: string = '';
+}
+
+/**
  * 验证码获取结果。
  */
 export class CaptchaResult extends ApiResult {

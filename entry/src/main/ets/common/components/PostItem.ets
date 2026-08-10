@@ -6,6 +6,7 @@ import { PostInfo } from '../../model/PostInfo'
 import { PostItemHeader } from './post-item/PostItemHeader'
 import { PostAttachments } from './post-item/PostAttachments'
 import { PostVoteBar } from './post-item/PostVoteBar'
+import { PostPoll } from './post-item/PostPoll'
 import { PostComments } from './post-item/PostComments'
 import { HotRepliesSection } from './post-item/HotRepliesSection'
 import { appStore } from '../../store/AppStore'
@@ -160,6 +161,11 @@ export struct PostItem {
             onSummarize: this.onSummarize,
             onReadAloud: this.onReadAloud,
           })
+        }
+
+        // 投票属于主题而非作者，主楼作者被屏蔽时仍应可投（官方 votec0 独立于正文渲染）
+        if (this.post.vote.length > 0) {
+          PostPoll({ post: this.post })
         }
 
         if (this.post.comments.length > 0) {
