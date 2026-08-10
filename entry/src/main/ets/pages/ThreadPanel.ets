@@ -1604,7 +1604,9 @@ export struct ThreadPanel {
           Row() {
             if (this.mgr.totalPages === 2) {
               Stack() {
-                Text('1').fontSize(14).fontColor(this.displayPage === 1 ? AppColors.primary : AppColors.textSecondary)
+                Text('1').fontSize(14)
+                  .fontColor(this.displayPage === 1
+                    ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
                   .fontWeight(this.displayPage === 1 ? FontWeight.Bold : FontWeight.Regular)
                 if (this.displayPage === 1) {
                   Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
@@ -1614,7 +1616,9 @@ export struct ThreadPanel {
                 .onClick(() => this.navigateToPage(1, PageNavigationSource.PAGER_BUTTON))
               Divider().vertical(true).height(16).color(AppColors.dividerStrong)
               Stack() {
-                Text('2').fontSize(14).fontColor(this.displayPage === 2 ? AppColors.primary : AppColors.textSecondary)
+                Text('2').fontSize(14)
+                  .fontColor(this.displayPage === 2
+                    ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
                   .fontWeight(this.displayPage === 2 ? FontWeight.Bold : FontWeight.Regular)
                 if (this.displayPage === 2) {
                   Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
