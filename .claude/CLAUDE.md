@@ -40,6 +40,13 @@ NGA 论坛客户端，stage 模型，API 6.1.0(23)，单 entry 模块。
 - HTML 模式覆盖套件：`npm run compare:html-json` 出报告；成对样本（JSON+HTML 同页）登记在
   `samples/html-pairs.lst`，已知缺口（如页面隐楼行号错位）声明在 `samples/html-pair-gaps.json`
 
+## 沉浸光感（Immersive Light）情报文档
+
+凡处理涉及沉浸光感的内容——`systemMaterial`、`ImmersiveMaterial`/`uiMaterial`、`colorInvert` 自动反色、
+材质按钮/面板/弹窗的适配与可视性问题——**必须先读取 `docs/IMMERSIVE_LIGHT_DESIGN.md` 再动手**。
+该文档是 API 26 沉浸光感的契约与踩坑结论：三层开关体系、自动反色特殊资源值表（表 1，`ohos_id_color_*`
+不生效）、生效属性白名单、属性冲突约束与故障排查清单。
+
 ## 规则索引
 
 ArkTS 语法编译约束 @.claude/rules/ArkTS-syntax.md

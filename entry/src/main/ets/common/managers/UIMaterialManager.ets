@@ -10,17 +10,19 @@ import { uiMaterial } from '@kit.ArkUI'
  * - 材质对象为纯配置对象，可跨组件共享复用；
  * - 悬浮、表面、栏位与输入材质关闭系统阴影，主按钮保留材质阴影；
  * - 组件背景保持透明，由 `systemMaterial` 统一承载材质表现。
- * - 薄材质前景使用系统颜色资源，使 `colorInvert` 可按背后内容自动反色。
+ * - 自动反色（colorInvert）仅对官方"特殊资源值"表内的系统颜色资源生效，
+ *   薄材质前景必须使用 `sys.color.font_*` / `sys.color.icon_*` 系列资源，
+ *   使用 `ohos_id_color_*` 系列资源不会触发反色。
  */
 export class UIMaterialManager {
-  /** 薄材质上的自适应主前景色。 */
-  static readonly adaptiveForeground: ResourceColor = $r('sys.color.ohos_id_color_foreground')
+  /** 薄材质上的自适应主前景色（特殊资源，可参与自动反色）。 */
+  static readonly adaptiveForeground: ResourceColor = $r('sys.color.font_primary')
 
-  /** 薄材质上的自适应次要前景色与禁用态前景色。 */
-  static readonly adaptiveSecondaryForeground: ResourceColor = $r('sys.color.ohos_id_color_text_secondary')
+  /** 薄材质上的自适应次要前景色与禁用态前景色（特殊资源，可参与自动反色）。 */
+  static readonly adaptiveSecondaryForeground: ResourceColor = $r('sys.color.font_secondary')
 
-  /** 输入控件的主题自适应正文色。 */
-  static readonly inputForeground: ResourceColor = $r('sys.color.ohos_id_color_text_primary')
+  /** 输入控件的主题自适应正文色（特殊资源，可参与自动反色）。 */
+  static readonly inputForeground: ResourceColor = $r('sys.color.font_primary')
 
   /**
    * 悬浮按钮材质：超薄通透玻璃球 + 按压交互形变 + 强光感流光反馈。
@@ -84,5 +86,16 @@ export class UIMaterialManager {
     materialColor: $r('app.color.material_input_tint'),
     colorInvert: true,
     applyShadow: false
+  })
+
+  /**
+   * 关闭按钮材质：超薄玻璃 + 自动反色。
+   *
+   * 严格对齐官方 colorInvert 示例（ULTRA_THIN + colorInvert），
+   * 不叠加 interactive、lightEffect、阴影与边框，保证反色触发条件最简。
+   */
+  static readonly closeButtonMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+    style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+    colorInvert: true
   })
 }

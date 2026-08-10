@@ -473,13 +473,19 @@ export struct ImageViewer {
           if ((newValue.height as number) > 0) this.containerH = newValue.height as number
         })
 
-        Image($r('app.media.icon_close'))
-          .width(38).height(38)
-          .fillColor(AppColors.white)
-          .position({ top: 4, right: 16 })
-          .onClick(() => {
-            this.onClose()
-          })
+        Stack() {
+          Image($r('app.media.icon_close'))
+            .width(20).height(20)
+            .fillColor(UIMaterialManager.adaptiveForeground)
+        }
+        .width(38).height(38).borderRadius(19)
+        .backgroundColor(Color.Transparent)
+        .position({ top: 4, right: 16 })
+        .accessibilityText('关闭图片预览')
+        .systemMaterial(UIMaterialManager.closeButtonMaterial)
+        .onClick(() => {
+          this.onClose()
+        })
       }
       .layoutWeight(1)
       .width('100%')
@@ -491,10 +497,10 @@ export struct ImageViewer {
         Button(this.sharing ? '分享中...' : '分享')
           .fontSize(14).fontColor(UIMaterialManager.adaptiveForeground)
           .backgroundColor(Color.Transparent)
-          .systemMaterial(UIMaterialManager.fabMaterial)
           .borderRadius(16)
           .height(32)
           .type(ButtonType.Capsule)
+          .systemMaterial(UIMaterialManager.neutralActionMaterial)
           .enabled(!this.sharing)
           .onClick(async () => {
             await this.shareCurrentImage()
