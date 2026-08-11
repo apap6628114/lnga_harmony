@@ -29,7 +29,7 @@ export struct PostItemHeader {
 
         Column() {
           Row() {
-            AnonymousName({ author: this.post.author, isAnonymous: this.post.isanonymous, fontSize: 14, normalColor: AppColors.primary })
+            AnonymousName({ author: this.post.author, isAnonymous: this.post.isanonymous, fontSize: 14, normalColor: AppColors.primary, isMuted: this.post.isMuted })
             if (this.post.userNote && this.post.userNote.length > 0) {
               Text('(' + this.post.userNote + ')')
                 .fontSize(11).fontColor(AppColors.warning).margin({ left: 4 })

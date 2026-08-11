@@ -113,7 +113,7 @@ export struct PostComments {
               })
 
             Column() {
-              AnonymousName({ author: c.author, isAnonymous: c.isanonymous, fontSize: 12, normalColor: AppColors.primary })
+              AnonymousName({ author: c.author, isAnonymous: c.isanonymous, fontSize: 12, normalColor: AppColors.primary, isMuted: c.isMuted })
               if (appStore.settingsStore.getNote(String(c.authorid)).length > 0) {
                 Text('(' + appStore.settingsStore.getNote(String(c.authorid)) + ')')
                   .fontSize(10).fontColor(AppColors.warning)

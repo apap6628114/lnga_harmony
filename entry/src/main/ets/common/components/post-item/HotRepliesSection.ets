@@ -63,7 +63,7 @@ export struct HotRepliesSection {
               })
 
             Column() {
-              AnonymousName({ author: r.author, isAnonymous: r.isanonymous, fontSize: 12, normalColor: AppColors.primary })
+              AnonymousName({ author: r.author, isAnonymous: r.isanonymous, fontSize: 12, normalColor: AppColors.primary, isMuted: r.isMuted })
               if (appStore.settingsStore.getNote(String(r.authorid)).length > 0) {
                 Text('(' + appStore.settingsStore.getNote(String(r.authorid)) + ')')
                   .fontSize(10).fontColor(AppColors.warning)

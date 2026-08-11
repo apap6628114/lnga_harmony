@@ -7,6 +7,7 @@ import bbcodeUnitTest from './BBCodeUnit.test';
 import hotReplyUnitTest from './HotReplyUnit.test';
 import threadPaginationUnitTest from './ThreadPaginationUnit.test';
 import voteUnitTest from './VoteUnit.test';
+import muteUnitTest from './MuteUnit.test';
 
 /**
  * 注册全部本地单元测试。
@@ -21,4 +22,5 @@ export default function testsuite(): void {
   hotReplyUnitTest();
   threadPaginationUnitTest();
   voteUnitTest();
+  muteUnitTest();
 }

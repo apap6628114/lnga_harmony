@@ -60,7 +60,6 @@ export interface ThreadRowInfo {
   userNote: string;
   imageUrlList: string[];
   formattedHtmlData: string;
-  isMuted: boolean;
   postCount: string;
   reputation: number;
   memberGroup: string;

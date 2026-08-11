@@ -8,6 +8,7 @@ import { appStore } from '../../store/AppStore';
 import { parseThreadData } from '../../parser/ThreadParser';
 import { parseNgaError } from '../../parser/ErrorParser';
 import { parseFromClient } from '../../parser/ClientParser';
+import { isUserMuted } from '../../parser/MuteParser';
 import { resolveAttachUrl } from '../../parser/_shared/AttachUrl';
 import { parseHtmlTask } from '../../parser/task/HtmlParseTask';
 import { taskpool } from '@kit.ArkTS';
@@ -228,11 +229,14 @@ function fillThreadResult(raw: Record<string, Object>, result: ThreadResult,
     post.score_2 = row.score_2;
     post.isInBlackList = row.isInBlackList;
     post.userNote = row.userNote;
-    post.isMuted = row.isMuted;
+    // 禁言判定（与官方网页数据同源）：
+    // 1. __U 用户表 mute_time（禁言到期时间戳）——JSON/HTML 双通道均有；
+    // 2. __U 用户表 buffs（105 = 禁言 buff）——JSON 通道增强。
+    post.muteTime = String(userInfo?.['mute_time'] ?? row.muteTime ?? '');
+    post.isMuted = isUserMuted(userInfo, row.muteTime);
     post.reputation = Number(userInfo?.['reputation'] ?? row.reputation ?? 0);
     post.memberGroup = groupMap.get(memberid) ?? String(row.memberGroup ?? '');
     post.postCount = String(userInfo?.['postnum'] ?? row.postCount ?? '');
-    post.muteTime = String(userInfo?.['mute_time'] ?? row.muteTime ?? '');
     return post;
   };
 
