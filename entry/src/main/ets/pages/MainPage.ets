@@ -25,6 +25,7 @@ import { EmptyHint } from '../common/components/EmptyHint'
 import { ToastComponent } from '../common/components/Toast'
 import { TtsProgressIndicator } from '../common/components/TtsProgressIndicator'
 import { Logger, DOMAIN_UI } from '../common/utils/Logger'
+import { enableKeepScreenOn, disableKeepScreenOn } from '../common/managers/ScreenOnManager'
 
 const logger = new Logger(DOMAIN_UI, 'MainPage')
 
@@ -38,7 +39,13 @@ struct MainPage {
   @State private floating: FloatingLayerStoreClass = floatingLayerStore
 
   aboutToAppear(): void {
+    // 登录进入主页面后保持屏幕常亮（不息屏），离开主页面时恢复自动息屏
+    enableKeepScreenOn()
     this.checkAuth()
+  }
+
+  aboutToDisappear(): void {
+    disableKeepScreenOn()
   }
 
   private onProfileRefresh(): void {

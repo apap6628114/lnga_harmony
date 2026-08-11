@@ -3,6 +3,7 @@ import { Logger, DOMAIN_APP, formatError } from '../common/utils/Logger'
 import { display, window } from '@kit.ArkUI';
 import { appStore } from '../store/AppStore';
 import { initStatusBarManager, updateStatusBarStyle } from '../common/managers/StatusBarManager';
+import { initScreenOnManager } from '../common/managers/ScreenOnManager';
 import { startNetworkMonitor } from '../common/managers/NetworkMonitor';
 import {
   KEY_THEME_NAME,
@@ -87,6 +88,7 @@ export default class EntryAbility extends UIAbility {
           })
 
         initStatusBarManager(mainWindow)
+        initScreenOnManager(mainWindow)
         const isDark: boolean = (AppStorage.get<string>(KEY_EFFECTIVE_COLOR_MODE) ?? 'light') === 'dark'
         updateStatusBarStyle(isDark)
 
