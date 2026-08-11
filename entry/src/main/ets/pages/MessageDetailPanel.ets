@@ -141,6 +141,13 @@ export struct MessageDetailPanel {
                     Row() {
                       Text(unescapeHtml(msg.author || msg.from || '未知'))
                         .fontSize(14).fontColor(AppColors.primary).fontWeight(FontWeight.Medium)
+                      if (Number(msg.mute_time) > 0) {
+                        Text('禁言中')
+                          .fontSize(10).fontColor(AppColors.white)
+                          .backgroundColor(AppColors.destructive).borderRadius(4)
+                          .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+                          .margin({ left: 4 })
+                      }
                       Text(formatTime(Number(msg.time))).fontSize(12).fontColor(AppColors.textTertiary)
                         .margin({ left: 8 })
                     }

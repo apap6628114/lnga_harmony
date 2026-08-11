@@ -12,6 +12,7 @@ import { openImageViewer } from '../utils/LinkUtils'
 import { getUserActivityAnalysis } from '../../service/api/UserApi'
 import type { UserActivityAnalysis, ForumStat } from '../../model/NgaApiResults'
 import { getActiveAiValidationMessage } from '../../service/ai/ActiveAiService'
+import { normalizeMuteTimeDisplay } from '../../parser/MuteParser'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 
 @Component
@@ -396,6 +397,17 @@ export struct ProfileCardPopup {
   @Builder
   DetailRows(profile: ProfileData) {
     Column() {
+      if (profile.muteTime && profile.muteTime.length > 0) {
+        Row() {
+          Text('禁言至').fontSize(12).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+          Text(normalizeMuteTimeDisplay(profile.muteTime))
+            .fontSize(12).fontColor(AppColors.destructive).fontWeight(FontWeight.Medium)
+            .layoutWeight(1).textAlign(TextAlign.End)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .width('100%')
+        .padding({ top: 5, bottom: 5 })
+      }
       if (profile.regdate) {
         this.DetailRow('注册日期', formatTime(Number(profile.regdate)))
       }

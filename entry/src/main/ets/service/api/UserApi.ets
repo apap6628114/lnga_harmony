@@ -9,6 +9,8 @@ import {
 } from '../../model/NgaApiResults';
 import { UserInfo } from '../../model/UserInfo';
 import { ProfileData, ReputationData, AdminForumsData } from '../../model/User';
+import { resolveEffectiveMuteTs } from '../../parser/MuteParser';
+import { formatTimestampCST } from '../../common/utils/Utils';
 
 // ============== 当前用户 ==============
 
@@ -80,7 +82,12 @@ export async function getUserProfile(token: string, uid: string): Promise<UserPr
     const rawInner = (raw?.['data'] ?? {}) as Record<string, Object>;
     const d = (rawInner['0'] ?? rawInner) as Record<string, Object>;
     const regTimestamp = Number(d['regdate']) || 0;
-    const muteTime = Number(d['muteTime']) || 0;
+    // 禁言到期时间：maxBuffMute 为 buff 类禁言（105）到期时间戳，muteTime 为旧字段
+    // （仅反映历史 mute_time，对 buff 禁言恒为 0）——优先 maxBuffMute
+    const effectiveMuteTs = resolveEffectiveMuteTs(
+      Number(d['muteTime']) || 0,
+      Number(d['maxBuffMute']) || 0
+    );
     const medalStr = String(d['medal'] ?? '0');
     const hasMedal = medalStr !== '0' && medalStr !== '';
 
@@ -136,7 +143,7 @@ export async function getUserProfile(token: string, uid: string): Promise<UserPr
     profile.sign = String(d['sign'] ?? '');
     profile.ipLoc = String(d['ipLoc'] ?? '');
     profile.medal = hasMedal ? medalStr : '';
-    profile.muteTime = muteTime > 0 ? new Date(muteTime * 1000).toISOString().slice(0, 16) : '';
+    profile.muteTime = effectiveMuteTs > 0 ? formatTimestampCST(effectiveMuteTs) : '';
     profile.followByNum = String(d['follow_by_num'] ?? '');
     profile.adminForums = adminList;
     profile.reputationEntryList = repList;

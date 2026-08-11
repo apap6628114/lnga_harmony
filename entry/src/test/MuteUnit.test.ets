@@ -1,5 +1,7 @@
 import { describe, it, expect } from '@ohos/hypium'
-import { isUserMuted } from '../main/ets/parser/MuteParser'
+import {
+  isUserMuted, isMutedByMuteTime, resolveEffectiveMuteTs, normalizeMuteTimeDisplay,
+} from '../main/ets/parser/MuteParser'
 
 /**
  * 禁言判定工具单元测试。
@@ -96,6 +98,50 @@ export default function muteUnitTest(): void {
       const user: Record<string, Object> =
         JSON.parse('{"mute_time":"","buffs":"oops"}') as Record<string, Object>
       expect(isUserMuted(user)).assertFalse()
+    })
+  })
+
+  describe('isMutedByMuteTime', (): void => {
+    it('mutedWhenTimestampString', 0, (): void => {
+      expect(isMutedByMuteTime('1786623325')).assertTrue()
+    })
+
+    it('notMutedWhenEmptyOrZeroOrInvalid', 0, (): void => {
+      expect(isMutedByMuteTime('')).assertFalse()
+      expect(isMutedByMuteTime('0')).assertFalse()
+      expect(isMutedByMuteTime('abc')).assertFalse()
+    })
+  })
+
+  describe('resolveEffectiveMuteTs', (): void => {
+    it('prefersBuffMuteWhenBothPresent', 0, (): void => {
+      expect(resolveEffectiveMuteTs(0, 1786623325)).assertEqual(1786623325)
+      expect(resolveEffectiveMuteTs(1700000000, 1786623325)).assertEqual(1786623325)
+    })
+
+    it('fallsBackToLegacyMuteTime', 0, (): void => {
+      expect(resolveEffectiveMuteTs(1700000000, 0)).assertEqual(1700000000)
+    })
+
+    it('returnsZeroWhenNotMuted', 0, (): void => {
+      expect(resolveEffectiveMuteTs(0, 0)).assertEqual(0)
+    })
+  })
+
+  describe('normalizeMuteTimeDisplay', (): void => {
+    it('keepsNewLocalFormat', 0, (): void => {
+      expect(normalizeMuteTimeDisplay('2026-08-13 20:15')).assertEqual('2026-08-13 20:15')
+    })
+
+    it('convertsLegacyUtcIsoFormatToLocalShape', 0, (): void => {
+      const result: string = normalizeMuteTimeDisplay('2026-08-13T12:15')
+      expect(result.includes('T')).assertFalse()
+      const shape: RegExp = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/
+      expect(shape.test(result)).assertTrue()
+    })
+
+    it('returnsEmptyForEmptyInput', 0, (): void => {
+      expect(normalizeMuteTimeDisplay('')).assertEqual('')
     })
   })
 }
