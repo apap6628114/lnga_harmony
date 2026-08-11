@@ -4,7 +4,7 @@
  */
 
 import { appStore } from '../../store/AppStore'
-import { AppColors } from '../constants/Constants'
+import { AppColors, TOAST_BOTTOM_MARGIN } from '../constants/Constants'
 
 @CustomDialog
 export struct ToastOverlay {
@@ -69,7 +69,7 @@ export struct ToastComponent {
       .width('100%')
       .height('100%')
       .alignContent(Alignment.Bottom)
-      .margin({ bottom: 100 + this.navBarHeight })
+      .margin({ bottom: TOAST_BOTTOM_MARGIN + this.navBarHeight })
       .hitTestBehavior(HitTestMode.Transparent)
     }
   }

@@ -14,10 +14,17 @@ import {
   TtsAvPlayerRenderer
 } from './TtsAvPlayerRenderer'
 import { TtsAudioEnqueueResult } from './TtsWavFileWriter'
+import { ttsProgress } from './TtsProgress'
 import { DOMAIN_MEDIA, formatError, Logger } from '../utils/Logger'
 
 const MAX_CHUNK_LEN: number = 10000
 const SYSTEM_SKIP_INTERVAL_MS: number = 15000
+/** 估算每字符 PCM 字节数：16kHz/16bit 单声道约 32000B/s，中文朗读约 5 字符/s（对语速设置不敏感，属估算固有误差）。 */
+const ESTIMATED_BYTES_PER_CHAR: number = 6400
+/** 每字符 PCM 字节数校准下限（对应语速上限场景）。 */
+const MIN_BYTES_PER_CHAR: number = 3200
+/** 每字符 PCM 字节数校准上限。 */
+const MAX_BYTES_PER_CHAR: number = 12800
 const logger: Logger = new Logger(DOMAIN_MEDIA, 'TtsPlayer')
 
 /**
@@ -133,6 +140,16 @@ class TtsPlaybackCoordinator {
   private pendingChunks: string[] = []
   /** 下一段待合成文本的索引。 */
   private chunkIndex: number = 0
+  /** 待合成文本的总字符数。 */
+  private totalChars: number = 0
+  /** 已完成合成的累计字符数。 */
+  private completedChars: number = 0
+  /** 已接收的累计 PCM 字节数。 */
+  private receivedPcmBytes: number = 0
+  /** 估算的每字符 PCM 字节数，首段合成完成后按实际比例校准。 */
+  private bytesPerChar: number = ESTIMATED_BYTES_PER_CHAR
+  /** 上一次发布的合成进度百分比，保证进度单调递增。 */
+  private lastSynthesisPercent: number = -1
   /** 当前朗读楼层标识。 */
   private speakingPid: number = -1
   /** 当前朗读任务代次。 */
@@ -147,8 +164,6 @@ class TtsPlaybackCoordinator {
   private backgroundPlaybackEnabled: boolean = false
   /** 已显示后台启动警告的任务代次。 */
   private backgroundWarningGeneration: number = -1
-  /** 已显示开始朗读提示的任务代次。 */
-  private startToastGeneration: number = -1
   /** TTS 临时 WAV 文件与 AVPlayer 播放组件。 */
   private readonly audioRenderer: TtsAvPlayerRenderer
   /** 系统媒体播控会话控制器。 */
@@ -287,9 +302,18 @@ class TtsPlaybackCoordinator {
     this.backgroundPlaybackEnabled = allowBackground
     this.pendingChunks = splitText(normalizedText)
     this.chunkIndex = 0
+    this.completedChars = 0
+    this.receivedPcmBytes = 0
+    this.bytesPerChar = ESTIMATED_BYTES_PER_CHAR
+    this.lastSynthesisPercent = -1
+    this.totalChars = 0
+    for (const chunk of this.pendingChunks) {
+      this.totalChars += chunk.length
+    }
     this.playbackPhase = TtsPlaybackPhase.PREPARING
     this.rendererReady = false
     this.interruptionResumePending = false
+    this.publishSynthesisProgress()
     if (allowBackground) {
       this.avSessionActivationOperation =
         this.avSessionController.start(this.resolveMediaMetadata(pid, metadata))
@@ -625,10 +649,6 @@ class TtsPlaybackCoordinator {
       )
       return
     }
-    if (this.startToastGeneration !== generation) {
-      this.startToastGeneration = generation
-      appStore.showToast('正在朗读')
-    }
   }
 
   /**
@@ -646,6 +666,17 @@ class TtsPlaybackCoordinator {
     }
     const generation: number = this.playbackGeneration
     this.clearActiveRequest()
+    if (this.chunkIndex > 0) {
+      this.completedChars += this.pendingChunks[this.chunkIndex - 1].length
+    }
+    if (this.completedChars > 0) {
+      const calibrated: number = this.receivedPcmBytes / this.completedChars
+      this.bytesPerChar = Math.max(
+        MIN_BYTES_PER_CHAR,
+        Math.min(MAX_BYTES_PER_CHAR, calibrated)
+      )
+    }
+    this.publishSynthesisProgress()
     this.synthesizeNextChunk(generation)
   }
 
@@ -701,18 +732,23 @@ class TtsPlaybackCoordinator {
         new Error('TTS WAV exceeded the storage or write backlog safety limit'),
         '朗读内容过长或缓存空间不足，已停止朗读'
       )
+      return
     } else if (enqueueResult === TtsAudioEnqueueResult.WRITE_FAILED) {
       this.handleAudioRendererError(
         generation,
         new Error('TTS WAV writer has already failed'),
         '写入朗读音频缓存失败'
       )
+      return
     } else if (enqueueResult === TtsAudioEnqueueResult.INACTIVE) {
       this.handleAudioRendererError(
         generation,
         new Error('TTS PCM data arrived outside the active WAV writer')
       )
+      return
     }
+    this.receivedPcmBytes += pcmData.byteLength
+    this.publishSynthesisProgress()
   }
 
   /**
@@ -744,6 +780,7 @@ class TtsPlaybackCoordinator {
    * @param generation 当前朗读任务代次。
    */
   private playSynthesizedAudio(generation: number): void {
+    ttsProgress.hide()
     this.audioRenderer.complete(generation).catch((error: Object): void => {
       this.handleAudioRendererError(generation, error)
     })
@@ -834,6 +871,32 @@ class TtsPlaybackCoordinator {
   }
 
   /**
+   * 发布合成阶段的实时估算进度。
+   *
+   * 以已接收的 PCM 字节数占总估算字节数（总字符数 × 每字符字节数）的比例估算，
+   * 每字符字节数在每段合成完成后按实际比例校准（钳制在估算上下限内）；
+   * 已完成段数与估算结果取较大值，并保持单调递增，避免估算波动导致进度回退。
+   * 合成阶段最高显示到 99%。
+   */
+  private publishSynthesisProgress(): void {
+    if (this.totalChars <= 0) {
+      return
+    }
+    const chunkPercent: number = this.completedChars / this.totalChars * 100
+    const estimatedTotalBytes: number = this.totalChars * this.bytesPerChar
+    let percent: number = estimatedTotalBytes > 0
+      ? this.receivedPcmBytes / estimatedTotalBytes * 100
+      : chunkPercent
+    percent = Math.max(percent, chunkPercent)
+    percent = Math.min(percent, 99)
+    if (percent < this.lastSynthesisPercent) {
+      percent = this.lastSynthesisPercent
+    }
+    this.lastSynthesisPercent = percent
+    ttsProgress.showSynthesizing(Math.round(percent))
+  }
+
+  /**
    * 在 AVPlayer 真正进入播放状态后同步系统媒体卡片。
    *
    * @param generation 当前朗读任务代次。
@@ -876,6 +939,7 @@ class TtsPlaybackCoordinator {
       this.audioRenderer.getDuration(),
       this.audioRenderer.getDuration()
     )
+    ttsProgress.hide()
   }
 
   /**
@@ -1022,6 +1086,7 @@ class TtsPlaybackCoordinator {
       if (!this.rendererReady) {
         this.playbackPhase = TtsPlaybackPhase.PREPARING
         this.synchronizeAvSessionPlaybackState()
+        this.publishSynthesisProgress()
         return
       }
     }
@@ -1256,15 +1321,20 @@ class TtsPlaybackCoordinator {
     this.speakingPid = -1
     this.pendingChunks = []
     this.chunkIndex = 0
+    this.totalChars = 0
+    this.completedChars = 0
+    this.receivedPcmBytes = 0
+    this.bytesPerChar = ESTIMATED_BYTES_PER_CHAR
+    this.lastSynthesisPercent = -1
     this.clearActiveRequest()
     this.backgroundPlaybackEnabled = false
     this.backgroundWarningGeneration = -1
-    this.startToastGeneration = -1
     this.playbackPhase = TtsPlaybackPhase.IDLE
     this.rendererReady = false
     this.interruptionResumePending = false
     this.avSessionActivationOperation = Promise.resolve(false)
     this.backgroundTaskController.stop()
+    ttsProgress.hide()
     if (avSessionActive) {
       this.avSessionController.stop()
     }

@@ -23,6 +23,7 @@ import { CommunityPanel } from './CommunityPanel'
 import { FloatingLayerComponent } from '../common/components/FloatingLayerComponent'
 import { EmptyHint } from '../common/components/EmptyHint'
 import { ToastComponent } from '../common/components/Toast'
+import { TtsProgressIndicator } from '../common/components/TtsProgressIndicator'
 import { Logger, DOMAIN_UI } from '../common/utils/Logger'
 
 const logger = new Logger(DOMAIN_UI, 'MainPage')
@@ -118,6 +119,7 @@ struct MainPage {
 
       FloatingLayerComponent({ currentBreakpoint: this.currentBreakpoint })
       ToastComponent()
+      TtsProgressIndicator()
     }
     .width('100%').height('100%')
   }

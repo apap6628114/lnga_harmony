@@ -12,6 +12,12 @@ import { NGA_HOSTS } from './NgaDomains'
 /** 标题栏高度（vp）。所有固定标题栏与 Thread 页 contentStartOffset 共用此常量。 */
 export const NAV_BAR_H: number = 44
 
+/** Toast 提示距底部的高度（vp）。 */
+export const TOAST_BOTTOM_MARGIN: number = 100
+
+/** TTS 合成进度指示器距底部的高度（vp），位于 Toast 上方。 */
+export const TTS_PROGRESS_BOTTOM_MARGIN: number = 148
+
 /** 标题栏滚动模糊从透明过渡到完全生效的距离（vp）。 */
 export const TITLE_SCROLL_EFFECT_DISTANCE: number = 20
 
