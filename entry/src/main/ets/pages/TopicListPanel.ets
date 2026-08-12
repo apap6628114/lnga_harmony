@@ -9,10 +9,13 @@ import { motion } from '@kit.MultimodalAwarenessKit'
 import { BusinessError } from '@kit.BasicServicesKit'
 import { appStore } from '../store/AppStore'
 import { routerStore, Screen } from '../store/RouterStore'
+import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
 import { withTimeout } from '../common/utils/TimeoutUtils'
 import { getTopicList, createTopicListParams, setSubforumFilter } from '../service/api/ForumApi'
 import type { TopicListParams } from '../service/api/ForumApi'
 import type { TopicListResult } from '../model/NgaApiResults'
+import { newTopicManager } from '../common/managers/NewTopicManager'
+import type { PostReplyResult } from '../model/ThreadResult'
 import type { SubBoard } from '../model/Forum'
 import { FavBoard } from '../model/SocialEntries'
 import { AppColors, FONT_COLORS, SORT_MODES, HOT_RANGES, SortMode, BreakpointType } from '../common/constants/Constants'
@@ -267,6 +270,45 @@ export struct TopicListPanel {
   private canManageCurrentBoard(): boolean {
     return this.boardFid !== 0 && !this.isFavorites && !this.favor
       && !this.authorid && !this.searchKey && !this.author && !this.searchpost
+  }
+
+  /**
+   * 打开发新主题编辑器。
+   *
+   * 仅真实版块（canManageCurrentBoard）提供入口；未登录时提示登录。
+   */
+  private openNewTopic(): void {
+    if (!appStore.auth.isAuthenticated) {
+      appStore.showToast('请先登录后发帖')
+      return
+    }
+    const parsedStid: number = Number(this.boardStid)
+    const stid: number = Number.isFinite(parsedStid) && parsedStid !== 0 ? parsedStid : 0
+    newTopicManager.start(this.boardFid, stid, this.boardName)
+    floatingLayerStore.newTopicOnSend = (subject: string, content: string, isAnony: boolean): Promise<void> => {
+      return this.handleNewTopicSend(subject, content, isAnony)
+    }
+    floatingLayerStore.push(FloatingPage.NEW_TOPIC_DIALOG)
+  }
+
+  /**
+   * 发布新主题。
+   *
+   * 成功后刷新版面列表并跳转到新主题详情；失败时抛出错误，
+   * 使编辑器保留内容与草稿。
+   */
+  private async handleNewTopicSend(subject: string, content: string, isAnony: boolean): Promise<void> {
+    const result: PostReplyResult = await newTopicManager.send(subject, content, isAnony)
+    if (result.ok) {
+      appStore.showToast('发帖成功')
+      this.loadTopics(1)
+      if (result.tid > 0) {
+        routerStore.navigateActivity(Screen.thread(String(result.tid)))
+      }
+    } else {
+      appStore.showToast(result.error || '发帖失败')
+      throw new Error(result.error || '发帖失败')
+    }
   }
 
   /**
@@ -1099,7 +1141,19 @@ export struct TopicListPanel {
       })
         .width('100%').position({ x: 0, y: 0 })
 
-      Row() {
+      Row({ space: 12 }) {
+        if (this.canManageCurrentBoard()) {
+          Stack() {
+            Image($r('app.media.icon_compose'))
+              .width(22).height(22)
+              .fillColor(UIMaterialManager.adaptiveForeground)
+          }
+          .width(44).height(44).borderRadius(22)
+          .backgroundColor(Color.Transparent)
+          .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
+          .systemMaterial(UIMaterialManager.fabMaterial)
+          .onClick(() => this.openNewTopic())
+        }
         Stack() {
           Image($r('app.media.icon_refresh'))
             .width(22).height(22)

@@ -3,6 +3,7 @@ export enum FloatingPage {
   IMAGE_VIEWER = 'imageViewer',
   PROFILE_CARD = 'profileCard',
   REPLY_DIALOG = 'replyDialog',
+  NEW_TOPIC_DIALOG = 'newTopicDialog',
   CONFIRM_DIALOG = 'confirmDialog'
 }
 
@@ -22,6 +23,9 @@ export class FloatingLayerStoreClass {
   replyOnSend?: (text: string, isAnony: boolean) => Promise<void>
   editMode: boolean = false
   editInitialContent: string = ''
+
+  /** 发新主题提交回调（push 前赋值；发送失败需 reject，编辑器将保留内容与草稿）。 */
+  newTopicOnSend?: (subject: string, content: string, isAnony: boolean) => Promise<void>
 
   confirmTitle: string = ''
   confirmMessage: string = ''
@@ -89,9 +93,16 @@ export class FloatingLayerStoreClass {
     this.replyConfirmActive = false
   }
 
+  /**
+   * 放弃当前编辑器内容。
+   *
+   * 弹出栈顶编辑器浮层（回复或发新主题）并清空关闭处理器；
+   * 仅由"放弃编辑"确认弹窗调用，此时栈顶必为编辑器浮层。
+   */
   confirmAbandon(): void {
     this.registerReplyCloseHandler(null)
-    this.stack = this.stack.filter(p => p !== FloatingPage.REPLY_DIALOG)
+    // 放弃当前编辑器浮层（回复或发新主题），从栈顶弹出
+    this.pop()
     this.replyConfirmActive = false
   }
 

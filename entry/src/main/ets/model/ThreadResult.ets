@@ -45,3 +45,11 @@ export class PostReplyResult extends ApiResult {
   tid: number = 0;
   pid: string = '';
 }
+
+/**
+ * 主题分类（发新主题时的标题分类标签）查询结果。
+ */
+export class TopicCategoriesResult extends ApiResult {
+  /** 分类名列表。 */
+  categories: string[] = [];
+}

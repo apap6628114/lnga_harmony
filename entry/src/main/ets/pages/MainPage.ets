@@ -58,7 +58,8 @@ struct MainPage {
 
   onBackPress(): boolean {
     if (this.floating.size > 0) {
-      if (this.floating.top === FloatingPage.REPLY_DIALOG) {
+      if (this.floating.top === FloatingPage.REPLY_DIALOG ||
+        this.floating.top === FloatingPage.NEW_TOPIC_DIALOG) {
         this.floating.notifyReplyCloseRequested()
       } else if (this.floating.top === FloatingPage.CONFIRM_DIALOG) {
         this.floating.hideConfirm()

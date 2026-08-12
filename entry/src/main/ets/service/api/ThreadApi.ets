@@ -18,9 +18,9 @@ import { fetchImageSize } from '../../common/media/ImageSizeUtil';
 import { isWifiConnected } from '../../common/utils/NetworkUtil';
 import type { ThreadData, ThreadRowInfo, Attachment, ThreadInfo } from '../../model/Thread';
 import { PostInfo, PostAttachInfo } from '../../model/PostInfo';
-import { ThreadResult, ThreadPaging, PostAuthResult, PostReplyResult } from '../../model/ThreadResult';
+import { ThreadResult, ThreadPaging, PostAuthResult, PostReplyResult, TopicCategoriesResult } from '../../model/ThreadResult';
 import { UploadAttachmentResult } from '../../model/NgaApiResults';
-import { Logger, DOMAIN_SERVICE } from '../../common/utils/Logger'
+import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger'
 
 const logger = new Logger(DOMAIN_SERVICE, 'ThreadApi')
 
@@ -344,8 +344,78 @@ export async function getThreadHtml(token: string, tid: string, page: string,
 
 // ============== 发帖/回帖 ==============
 
+/**
+ * 获取版块的发主题分类标签（对应官方客户端 TopicPostModel.loadTopicCategory）。
+ *
+ * @param token - 会话令牌
+ * @param fid - 版块 ID
+ * @returns 分类名列表；无分类时返回空列表
+ */
+export async function getTopicCategories(token: string, fid: number): Promise<TopicCategoriesResult> {
+  const result = new TopicCategoriesResult();
+  const session = appStore.getSession(token);
+  if (!session) {
+    result.error = '未登录';
+    return result;
+  }
+
+  try {
+    const params: Record<string, string> = {
+      '__lib': 'topic_key',
+      '__act': 'get',
+      'fid': String(fid),
+      '__output': '8',
+    };
+    const raw = await ngaClient.get('/nuke.php', params, { uid: session.uid, cid: session.cid }) as Record<string, Object>;
+    const err = parseNgaError(raw);
+    if (err) {
+      result.error = err;
+      return result;
+    }
+    // 响应结构: data["0"] 为有序分类表，每项形如 {"0": "分类名"}
+    const dataObj = raw?.['data'] as Record<string, Object> | undefined;
+    const table = dataObj?.['0'] as Record<string, Object> | undefined;
+    if (table) {
+      const keys: string[] = Object.keys(table);
+      for (let i = 0; i < keys.length; i++) {
+        const entry: Object | undefined = table[keys[i]];
+        if (entry === undefined) {
+          continue;
+        }
+        // 兼容条目为原始字符串或 {"0": "分类名"} 对象两种形状
+        const name: string = typeof entry === 'string' ? String(entry)
+          : String((entry as Record<string, Object>)['0'] ?? '');
+        if (name.length > 0) {
+          result.categories.push(name);
+        }
+      }
+    }
+    result.ok = true;
+  } catch (e) {
+    logger.warn('获取主题分类失败: %{public}s', formatError(e));
+    result.error = (e as Error).message ?? '获取主题分类失败';
+  }
+  return result;
+}
+
+/**
+ * 发帖/回复/评论前的鉴权预检。
+ *
+ * 对应官方客户端 TopicPostModel.getPostInfo：请求 post.php 并解析
+ * window.script_muti_get_var_store 前缀的 JSON，返回 auth（附件上传校验码）、
+ * 附件上传地址与版主标记。
+ *
+ * @param token - 会话令牌
+ * @param fid - 版块 ID
+ * @param action - 操作类型（new/reply/modify 等）
+ * @param tid - 主题 ID（回复/编辑场景）
+ * @param pid - 楼层 ID（回复/编辑场景）
+ * @param comment - 是否贴条（1 表示贴条）
+ * @param stid - 子版块 ID（发新主题到子版块时传，0 表示父版块）
+ * @returns 鉴权结果；服务端返回错误时 ok 为 false
+ */
 export async function getPostAuth(token: string, fid: number, action: string,
-  tid: number, pid: number, comment: number): Promise<PostAuthResult> {
+  tid: number, pid: number, comment: number, stid: number = 0): Promise<PostAuthResult> {
   const result = new PostAuthResult();
   const session = appStore.getSession(token);
   if (!session) {
@@ -362,8 +432,14 @@ export async function getPostAuth(token: string, fid: number, action: string,
     if (pid) authParams['pid'] = String(pid);
     if (tid) authParams['tid'] = String(tid);
     if (comment) authParams['comment'] = String(comment);
+    if (stid) authParams['stid'] = String(stid);
 
     const raw = await ngaClient.postWithQuery('/post.php', authParams, { uid: session.uid, cid: session.cid }) as Record<string, Object>;
+    const err = parseNgaError(raw);
+    if (err) {
+      result.error = err;
+      return result;
+    }
     const dataObj = raw?.['data'] as Record<string, Object> | undefined;
     result.auth = String(dataObj?.['auth'] ?? '');
     result.attachUrl = String(dataObj?.['attach_url'] ?? '');
@@ -414,6 +490,64 @@ export async function postReply(token: string, tid: number, fid: number,
     result.ok = true;
   } catch (e) {
     result.error = (e as Error).message ?? '回复失败';
+  }
+  return result;
+}
+
+/**
+ * 发布新主题。
+ *
+ * 对应官方客户端 TopicPostTask + PostParam.toString()：POST post.php，
+ * action=new、step=2；post_subject 与 post_content 走 GBK 百分号编码。
+ * 响应带 __output=8 时为 JSON，data.tid 为新主题 ID。
+ *
+ * @param token - 会话令牌
+ * @param fid - 版块 ID
+ * @param stid - 子版块 ID（0 表示发在父版块）
+ * @param subject - 标题
+ * @param content - 正文（BBCode）
+ * @param anony - 是否匿名（1 表示匿名）
+ * @param attachments - 附件参数（tab 分隔）
+ * @param attachmentsCheck - 附件校验参数（tab 分隔）
+ * @returns 提交结果；成功时 tid 为新主题 ID
+ */
+export async function postNewTopic(token: string, fid: number, stid: number,
+  subject: string, content: string, anony: number, attachments: string,
+  attachmentsCheck: string): Promise<PostReplyResult> {
+  const result = new PostReplyResult();
+  const session = appStore.getSession(token);
+  if (!session) {
+    result.error = '未登录';
+    return result;
+  }
+
+  try {
+    const fields: Record<string, string> = {
+      'step': '2',
+      'action': 'new',
+      'fid': String(fid),
+      'post_subject': subject,
+      'post_content': content,
+      'anony': String(anony),
+      'attachments': attachments,
+      'attachments_check': attachmentsCheck,
+      '__output': '8',
+    };
+    if (stid) fields['stid'] = String(stid);
+
+    const raw = await ngaClient.post('/post.php', fields,
+      { uid: session.uid, cid: session.cid }, ['post_content', 'post_subject']) as Record<string, Object>;
+    const error = parseNgaError(raw);
+    if (error) {
+      result.error = error;
+      return result;
+    }
+    const dataObj = raw?.['data'] as Record<string, Object> | undefined;
+    result.tid = Number(dataObj?.['tid'] ?? 0);
+    result.pid = String(dataObj?.['pid'] ?? '');
+    result.ok = true;
+  } catch (e) {
+    result.error = (e as Error).message ?? '发帖失败';
   }
   return result;
 }

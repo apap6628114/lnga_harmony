@@ -4,6 +4,7 @@ import { AppColors, IconColors } from '../constants/Constants'
 import { ImageViewer } from './ImageViewer'
 import { ProfileCardPopup } from './ProfileCardPopup'
 import { ReplyDialog } from './ReplyDialog'
+import { NewTopicDialog } from './NewTopicDialog'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 
 /** 承载图片预览、资料卡、回复编辑器与确认弹窗的全局浮层。 */
@@ -64,6 +65,34 @@ export struct FloatingLayerComponent {
               onClose: () => {
                 this.floating.registerReplyCloseHandler(null)
                 this.floating.remove(FloatingPage.REPLY_DIALOG)
+              }
+            })
+          }
+          .width('100%')
+          .padding({
+            left: this.currentBreakpoint === 'sm' ? 10 : 24,
+            right: this.currentBreakpoint === 'sm' ? 10 : 24,
+            bottom: this.currentBreakpoint === 'sm' ? 8 : 24
+          })
+          .align(this.currentBreakpoint === 'sm' ? Alignment.Bottom : Alignment.Center)
+        }
+        .width('100%').height('100%')
+      }
+
+      if (this.floating.top === FloatingPage.NEW_TOPIC_DIALOG) {
+        Stack() {
+          Column().width('100%').height('100%').backgroundColor(AppColors.overlay)
+
+          Column().width('100%').height('100%')
+            .onClick(() => { this.floating.notifyReplyCloseRequested() })
+
+          Column() {
+            NewTopicDialog({
+              currentBreakpoint: this.currentBreakpoint,
+              onSend: this.floating.newTopicOnSend,
+              onClose: () => {
+                this.floating.registerReplyCloseHandler(null)
+                this.floating.remove(FloatingPage.NEW_TOPIC_DIALOG)
               }
             })
           }
@@ -163,6 +192,7 @@ export struct FloatingLayerComponent {
       (this.floating.top === FloatingPage.IMAGE_VIEWER ||
        this.floating.top === FloatingPage.PROFILE_CARD ||
        this.floating.top === FloatingPage.REPLY_DIALOG ||
+       this.floating.top === FloatingPage.NEW_TOPIC_DIALOG ||
        this.floating.top === FloatingPage.CONFIRM_DIALOG)
         ? HitTestMode.Default : HitTestMode.None
     )
