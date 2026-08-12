@@ -7,6 +7,7 @@ import { NGA_IMG4_BASE } from '../common/constants/NgaDomains'
 import { CategoryDataSource, SidebarDataSource, SidebarSection, SidebarBoardItem } from '../common/datasource/LazyDataSource'
 import type { Category, BoardContent } from '../model/Forum'
 import { Avatar } from '../common/components/Avatar'
+import { BoardIcon } from '../common/components/BoardIcon'
 
 @Component
 export struct CommunityPanel {
@@ -177,12 +178,7 @@ export struct CommunityPanel {
               ForEach(section.items, (item: SidebarBoardItem) => {
                 ListItem() {
                   Row() {
-                    Image(`${NGA_IMG4_BASE}/ngabbs/nga_classic/f/app/${item.fid}.png`)
-                      .width(section.collapsible ? 18 : 20)
-                      .height(section.collapsible ? 18 : 20)
-                      .borderRadius(section.collapsible ? 4 : 5)
-                      .objectFit(ImageFit.Cover)
-                      .onError(() => {})
+                    BoardIcon({ url: `${NGA_IMG4_BASE}/ngabbs/nga_classic/f/app/${item.fid}.png`, iconSize: section.collapsible ? 18 : 20, iconRadius: section.collapsible ? 4 : 5 })
                     Text(item.name)
                       .fontSize(12).maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -439,9 +435,7 @@ export struct CommunityPanel {
           ForEach(this.favoritesList, (fav: FavBoard) => {
             ListItem() {
               Row() {
-                Image(`${NGA_IMG4_BASE}/ngabbs/nga_classic/f/app/${fav.fid}.png`)
-                  .width(36).height(36).borderRadius(8).objectFit(ImageFit.Cover)
-                  .onError(() => {})
+                BoardIcon({ url: `${NGA_IMG4_BASE}/ngabbs/nga_classic/f/app/${fav.fid}.png`, iconSize: 36, iconRadius: 8 })
                 Text(fav.name)
                   .fontSize(14).fontColor(AppColors.textPrimary).maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -490,9 +484,7 @@ export struct CommunityPanel {
               ForEach(this.collectBoardsFromCat(cat), (board: BoardContent) => {
                 ListItem() {
                   Row() {
-                    Image(`${NGA_IMG4_BASE}/ngabbs/nga_classic/f/app/${board.fid}.png`)
-                      .width(36).height(36).borderRadius(8).objectFit(ImageFit.Cover)
-                      .onError(() => {})
+                    BoardIcon({ url: `${NGA_IMG4_BASE}/ngabbs/nga_classic/f/app/${board.fid}.png`, iconSize: 36, iconRadius: 8 })
                     Column() {
                       Text(board.name)
                         .fontSize(14).fontColor(AppColors.textPrimary).maxLines(1)
@@ -555,9 +547,7 @@ export struct CommunityPanel {
           GridCol() {
             Column() {
               Stack() {
-                Image(`${NGA_IMG4_BASE}/ngabbs/nga_classic/f/app/${fav.fid}.png`)
-                  .width(44).height(44).borderRadius(12).objectFit(ImageFit.Cover)
-                  .onError(() => {})
+                BoardIcon({ url: `${NGA_IMG4_BASE}/ngabbs/nga_classic/f/app/${fav.fid}.png`, iconSize: 44, iconRadius: 12 })
               }
               .width(44).height(44).borderRadius(12).backgroundColor(AppColors.bgSecondary)
 
@@ -598,9 +588,7 @@ export struct CommunityPanel {
           GridCol() {
             Column() {
               Stack() {
-                Image(`${NGA_IMG4_BASE}/ngabbs/nga_classic/f/app/${board.fid}.png`)
-                  .width(40).height(40).borderRadius(10).objectFit(ImageFit.Cover)
-                  .onError(() => {})
+                BoardIcon({ url: `${NGA_IMG4_BASE}/ngabbs/nga_classic/f/app/${board.fid}.png`, iconSize: 40, iconRadius: 10 })
               }
               .width(40).height(40).borderRadius(10).backgroundColor(AppColors.bgSecondary)
 

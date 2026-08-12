@@ -13,6 +13,7 @@ import { formatTime, escHtml } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { ThreadDataSource } from '../common/datasource/LazyDataSource'
 import { AnonymousName } from '../common/components/AnonymousName'
+import { BoardIcon } from '../common/components/BoardIcon'
 import { PageScope } from '../common/concurrency/PageScope'
 import {
   ReadingFontRole,
@@ -274,8 +275,10 @@ export struct SearchPanel {
             LazyForEach(this.forumsDataSource, (forum: object) => {
               ListItem() {
                 Row() {
-                  Image(`${NGA_IMG4_BASE}/ngabbs/nga_classic/f/app/${(forum as Record<string, Object>)['fid']}.png`)
-                    .width(40).height(40).borderRadius(10).objectFit(ImageFit.Cover).backgroundColor(AppColors.bgSecondary).margin({ right: 12 }).onError(() => {})
+                  Stack() {
+                    BoardIcon({ url: `${NGA_IMG4_BASE}/ngabbs/nga_classic/f/app/${(forum as Record<string, Object>)['fid']}.png`, iconSize: 40, iconRadius: 10 })
+                  }
+                  .width(40).height(40).borderRadius(10).backgroundColor(AppColors.bgSecondary).margin({ right: 12 })
                   Column() {
                     Text(unescapeHtml(String((forum as Record<string, Object>)['name'] ?? ''))).fontSize(15).fontColor(AppColors.textPrimary)
                       .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })

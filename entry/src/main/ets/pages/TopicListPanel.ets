@@ -22,6 +22,7 @@ import { PanelNavBar } from '../common/components/PanelNavBar'
 import { ThreadDataSource } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/components/PageStateView'
 import { AnonymousName } from '../common/components/AnonymousName'
+import { BoardIcon } from '../common/components/BoardIcon'
 import { TopicPaginationManager } from '../common/managers/TopicPaginationManager'
 import { Logger, DOMAIN_UI } from '../common/utils/Logger'
 import {
@@ -1258,11 +1259,7 @@ export struct TopicListPanel {
               ForEach(this.subBoards, (subBoard: SubBoard) => {
                 ListItem() {
                   Row() {
-                    Image(subBoard.boardHead)
-                      .width(36).height(36)
-                      .borderRadius(8)
-                      .objectFit(ImageFit.Cover)
-                      .onError(() => {})
+                    BoardIcon({ url: subBoard.boardHead, iconSize: 36, iconRadius: 8 })
 
                     Column() {
                       Text(unescapeHtml(subBoard.name))
