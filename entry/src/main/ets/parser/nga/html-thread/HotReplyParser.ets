@@ -126,6 +126,11 @@ class CommentMeta {
 /**
  * 从 `commonui.postArg.proc( '__<pid>', ... )` 调用提取热点回复元数据。
  *
+ * 页面中每条热点回复在 hightlight_for 容器内有独立的 `proc( '__<pid>', ... )`
+ * 调用（位于各自的 `<script>` 块内），故按 pid 精确定位（标记含闭合引号，
+ * 避免 `'__1'` 前缀误命中 `'__12'`），而非取页面第一个 proc 调用——
+ * 后者多为楼主楼调用，会使全部热评元数据落空（pid/authorid/score 全 0）。
+ *
  * 参数布局与主楼行一致：[10]=pid, [11]=type, [13]=authorid, [14]=postdatetimestamp,
  * [15]=score（score_2,score 逗号分隔）, [16]=content_length（此处恒 null，不取）。
  * 参数 [0] 须为 `'__<pid>'`（评论标识），据此排除主楼行的 proc 调用。
@@ -136,7 +141,7 @@ class CommentMeta {
  */
 function extractCommentMeta(html: string, pid: string): CommentMeta {
   const meta: CommentMeta = new CommentMeta();
-  const startIdx: number = html.indexOf(PROC_MARKER);
+  const startIdx: number = html.indexOf(PROC_MARKER + '__' + pid + "'");
   if (startIdx < 0) {
     return meta;
   }
