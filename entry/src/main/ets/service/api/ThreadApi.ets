@@ -27,7 +27,7 @@ const logger = new Logger(DOMAIN_SERVICE, 'ThreadApi')
 // ============== 调试开关 ==============
 
 /** 调试开关：true 时 getThread 强制走 HTML 解析模式，跳过 JSON API */
-function getForceHtmlMode(): boolean {
+export function getForceHtmlMode(): boolean {
   const stored: boolean = AppStorage.get<boolean>(KEY_FORCE_HTML_MODE) ?? false
   return stored
 }
