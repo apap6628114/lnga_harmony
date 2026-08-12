@@ -65,7 +65,7 @@ export interface TopicListParams {
   authorid: string;
   favor: string;
   recommend: string;
-  twentyfour: string;
+  orderBy: string;
   searchpost: string;
   content: string;
   fidgroup: string;
@@ -74,7 +74,7 @@ export interface TopicListParams {
 export function createTopicListParams(): TopicListParams {
   return {
     fid: '', stid: '', page: '1', key: '', author: '', authorid: '',
-    favor: '', recommend: '', twentyfour: '', searchpost: '', content: '', fidgroup: '',
+    favor: '', recommend: '', orderBy: '', searchpost: '', content: '', fidgroup: '',
   };
 }
 
@@ -113,6 +113,9 @@ export async function getTopicList(token: string, params: TopicListParams,
       ngaParams['recommend'] = params.recommend;
       ngaParams['order_by'] = 'postdatedesc';
       ngaParams['user'] = '1';
+    } else if (params.orderBy) {
+      // 与 recommend 互斥（TopicListPanel 侧不会同时设置），避免 order_by 被覆盖后残留 user 参数
+      ngaParams['order_by'] = params.orderBy;
     }
 
     const raw = await ngaClient.get('/thread.php', ngaParams, { uid: session.uid, cid: session.cid }) as Record<string, Object>;

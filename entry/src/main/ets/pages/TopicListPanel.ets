@@ -4,6 +4,7 @@
  * 点击主题通过 routerStore 导航
  */
 
+import { SegmentButton, SegmentButtonOptions, SegmentButtonItemTuple, SegmentButtonTextItem } from '@kit.ArkUI'
 import { motion } from '@kit.MultimodalAwarenessKit'
 import { BusinessError } from '@kit.BasicServicesKit'
 import { appStore } from '../store/AppStore'
@@ -14,7 +15,7 @@ import type { TopicListParams } from '../service/api/ForumApi'
 import type { TopicListResult } from '../model/NgaApiResults'
 import type { SubBoard } from '../model/Forum'
 import { FavBoard } from '../model/SocialEntries'
-import { AppColors, FONT_COLORS, SORT_MODES, SortMode, BreakpointType } from '../common/constants/Constants'
+import { AppColors, FONT_COLORS, SORT_MODES, HOT_RANGES, SortMode, BreakpointType } from '../common/constants/Constants'
 import { formatTime } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { PanelNavBar } from '../common/components/PanelNavBar'
@@ -49,6 +50,23 @@ class PrefetchPageResult {
   totalPages: number = 0
 }
 
+/**
+ * 排序模式的分页状态快照（模仿 MNGA 每种 order 独立数据源的会话级缓存）。
+ * 切换排序/时间窗时保存，切回时恢复，避免整页重拉。
+ */
+class TopicModeState {
+  /** 已加载的主题列表快照。 */
+  threads: object[] = []
+  /** 当前页码（1 基）。 */
+  currentPage: number = 1
+  /** 服务端返回的总页数。 */
+  totalPages: number = 0
+  /** 是否还有更多页可加载。 */
+  hasMore: boolean = true
+  /** 热门模式聚合缓存（对应具体时间窗）。 */
+  hotCache: object[] = []
+}
+
 @Component
 export struct TopicListPanel {
   @Prop @Watch('onBoardChanged') boardFid: number = 0
@@ -71,6 +89,32 @@ export struct TopicListPanel {
   private threadsDataSource: ThreadDataSource = new ThreadDataSource()
 
   @State sortMode: string = 'latest'
+  /** 热门模式的时间窗档位（day/week/month），模仿 MNGA 的 DAY/WEEK/MONTH。 */
+  @State hotRange: string = 'day'
+  /** 各排序模式的分页状态缓存，键为模式键（hot 时含时间窗）。 */
+  private modeStates: Map<string, TopicModeState> = new Map()
+  /** 排序条分段按钮选项（原生 SegmentButton，胶囊单选），文案由 SORT_MODES 生成避免双份维护。 */
+  @State sortOptions: SegmentButtonOptions = SegmentButtonOptions.capsule({
+    buttons: SORT_MODES.map((mode: SortMode): SegmentButtonTextItem => {
+      const item: SegmentButtonTextItem = { text: mode.key === 'hot' ? `${mode.label} ▾` : mode.label }
+      return item
+    }) as SegmentButtonItemTuple,
+    multiply: false,
+    fontColor: AppColors.textSecondary,
+    selectedFontColor: Color.White,
+    fontSize: 13,
+    selectedFontSize: 13,
+    fontWeight: FontWeight.Normal,
+    selectedFontWeight: FontWeight.Bold,
+    backgroundColor: AppColors.bgSecondary,
+    selectedBackgroundColor: AppColors.primary,
+  })
+  /** 排序条分段按钮选中项（SegmentButton 双向绑定，单选取 [index]）。 */
+  @State sortSelected: number[] = [0]
+  /** 是否显示热门时间窗气泡菜单。 */
+  @State showHotRangeMenu: boolean = false
+  /** 排序条在窗口中的底部纵坐标（onAreaChange 实时采集，供时间窗气泡锚定与状态视图撑满）。 */
+  private sortBarBottomY: number = 0
   @State showSort: boolean = true
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
@@ -160,6 +204,8 @@ export struct TopicListPanel {
     this.stopHoldingHandMonitoring()
     // 推进分页代际，使未完成的分页/预取异步回调失效，避免回写已销毁页面
     this.mgr.reset()
+    // 排序模式缓存随面板生命周期释放（板块数据可能已变化）
+    this.modeStates.clear()
   }
 
   private onBoardChanged(): void {
@@ -167,6 +213,10 @@ export struct TopicListPanel {
     this.threadsDataSource.clear()
     this.hasError = false
     this.sortMode = 'latest'
+    this.hotRange = 'day'
+    this.sortSelected = [0]
+    this.showHotRangeMenu = false
+    this.modeStates.clear()
     this.showMoreMenu = false
     this.showSubBoardFilterPanel = false
     this.subBoards = []
@@ -204,6 +254,8 @@ export struct TopicListPanel {
     }
     this.mgr.threads = filtered
     this.threadsDataSource.replaceAll(filtered)
+    // 同步模式缓存，避免切走再切回时已删除主题“复活”
+    this.saveCurrentModeState()
   }
 
   /**
@@ -321,6 +373,8 @@ export struct TopicListPanel {
         return
       }
       appStore.showToast(show ? `已显示“${subBoard.name}”` : `已屏蔽“${subBoard.name}”`)
+      // 子版块屏蔽改变了服务端列表，其余排序模式缓存随之过期，统一失效重建
+      this.modeStates.clear()
       await this.loadTopics(1)
     } catch (e) {
       this.replaceSubBoardSelection(subBoard.filterId, previous)
@@ -344,10 +398,10 @@ export struct TopicListPanel {
     if (this.author) params.author = this.author
     if (this.searchpost) params.searchpost = this.searchpost
     if (this.showSort) {
-      if (this.sortMode === 'recommend') {
+      if (this.sortMode === 'postdate') {
+        params.orderBy = 'postdatedesc'
+      } else if (this.sortMode === 'recommend') {
         params.recommend = '1'
-      } else if (this.sortMode === 'hot') {
-        params.twentyfour = '1'
       }
     }
     return params
@@ -381,24 +435,43 @@ export struct TopicListPanel {
     const gen: number = this.mgr.getGeneration()
 
     try {
-      const pages: number[] = [1, 2, 3, 4, 5]
+      const fetchPages: number = this.getHotFetchPages()
+      const pages: number[] = []
+      for (let i = 1; i <= fetchPages; i++) {
+        pages.push(i)
+      }
       const promises: Promise<TopicListResult>[] = []
       for (let i = 0; i < pages.length; i++) {
         const p: number = pages[i]
         const params: TopicListParams = this.buildTopicParams(p)
         promises.push(withTimeout<TopicListResult>(getTopicList(appStore.auth.token, params, appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords()), 15000))
       }
-      const results: TopicListResult[] = await Promise.all(promises)
+      // 逐页容错：单页失败/超时不拖垮整批聚合（并发页数随时间窗放大后尤为重要）
+      const settled: Promise<TopicListResult | undefined>[] = []
+      for (let i = 0; i < promises.length; i++) {
+        const p: Promise<TopicListResult> = promises[i]
+        settled.push((async (): Promise<TopicListResult | undefined> => {
+          try {
+            return await p
+          } catch (e) {
+            return undefined
+          }
+        })())
+      }
+      const results: (TopicListResult | undefined)[] = await Promise.all(settled)
 
       if (gen !== this.mgr.getGeneration()) return
 
       let curTime: number = 0
+      let okCount: number = 0
       const allThreads: object[] = []
+      const seenTids: Set<number> = new Set()
       let loadedSubBoards: SubBoard[] = []
 
       for (let i = 0; i < results.length; i++) {
-        const result: TopicListResult = results[i]
-        if (result.ok && result.data) {
+        const result: TopicListResult | undefined = results[i]
+        if (result !== undefined && result.ok && result.data) {
+          okCount++
           if (curTime === 0) {
             curTime = result.data.curTime
           }
@@ -407,16 +480,33 @@ export struct TopicListPanel {
           }
           const list: object[] = result.data.threadPageList
           for (let j = 0; j < list.length; j++) {
-            allThreads.push(list[j])
+            const t: object = list[j]
+            const tid: number = Number((t as Record<string, Object>)['tid'] ?? 0)
+            // 跨页按 tid 去重，避免超页返回重复内容导致列表重复
+            if (tid > 0 && seenTids.has(tid)) {
+              continue
+            }
+            if (tid > 0) {
+              seenTids.add(tid)
+            }
+            allThreads.push(t)
           }
         }
       }
 
+      // 全部页都失败时按错误态处理，而非误显空列表
+      if (okCount === 0) {
+        this.hasError = true
+        this.errorMsg = '加载失败'
+        return
+      }
+
+      const windowSeconds: number = this.getHotWindowSeconds()
       const filtered: object[] = []
       for (let i = 0; i < allThreads.length; i++) {
         const t: object = allThreads[i]
         const postDate: number = Number((t as Record<string, Object>)['postDate'] ?? 0)
-        if (curTime - postDate <= 24 * 60 * 60) {
+        if (curTime - postDate <= windowSeconds) {
           filtered.push(t)
         }
       }
@@ -443,15 +533,21 @@ export struct TopicListPanel {
       }
       this.mgr.replaceWith(firstPage, 1, capped.length > 0 ? Math.ceil(capped.length / 20) : 0)
       this.threadsDataSource.replaceAll(firstPage)
+      this.saveCurrentModeState()
     } catch (e) {
-      this.hasError = true
-      this.errorMsg = (e as Error).message || '加载失败'
+      if (gen === this.mgr.getGeneration()) {
+        this.hasError = true
+        this.errorMsg = (e as Error).message || '加载失败'
+      }
     } finally {
-      clearTimeout(this.loadingDelayTimer)
-      this.loadingDelayTimer = -1
-      this.loadingContentOpacity = 0
-      this.isLoading = false
-      this.isLoadingMore = false
+      // 代际校验：模式切换后的过期会话不得复位新会话的加载态
+      if (gen === this.mgr.getGeneration()) {
+        clearTimeout(this.loadingDelayTimer)
+        this.loadingDelayTimer = -1
+        this.loadingContentOpacity = 0
+        this.isLoading = false
+        this.isLoadingMore = false
+      }
     }
   }
 
@@ -507,6 +603,10 @@ export struct TopicListPanel {
       }, 400)
       this.hasError = false
       this.mgr.clearPrefetchedPages()
+      // 清空残留数据：避免加载中切走时把上一模式的 threads 以当前模式 key 存入缓存，
+      // 也防止过期会话期间残留列表被渲染/翻页混排
+      this.mgr.threads = []
+      this.threadsDataSource.clear()
       if (this.sortMode === 'hot') {
         await this.loadTwentyFourTopics()
         return
@@ -533,6 +633,7 @@ export struct TopicListPanel {
           this.subBoards = this.canManageCurrentBoard() ? result.data.subBoardList : []
           this.mgr.replaceWith(list, page, result.data.pagination.totalPages)
           this.threadsDataSource.replaceAll(list)
+          this.saveCurrentModeState()
         } else {
           const added: object[] = this.mgr.appendWith(list, page, result.data.pagination.totalPages)
           if (added.length > 0) {
@@ -545,16 +646,199 @@ export struct TopicListPanel {
         this.errorMsg = result.error || '加载失败'
       }
     } catch (e) {
-      if (page === 1) {
+      // 代际校验：过期会话的失败不得污染新模式/新板块的 UI 状态
+      if (page === 1 && gen === this.mgr.getGeneration()) {
         this.hasError = true
         this.errorMsg = (e as Error).message || '加载失败'
       }
     }
+    if (gen === this.mgr.getGeneration()) {
+      clearTimeout(this.loadingDelayTimer)
+      this.loadingDelayTimer = -1
+      this.loadingContentOpacity = 0
+      this.isLoading = false
+      this.isLoadingMore = false
+    }
+  }
+
+  /**
+   * 当前排序模式的状态缓存键（热门模式按时间窗细分，模仿 MNGA 的独立数据源隔离）。
+   *
+   * @returns 模式键
+   */
+  private currentModeKey(): string {
+    if (this.sortMode === 'hot') {
+      return `hot:${this.hotRange}`
+    }
+    return this.sortMode
+  }
+
+  /**
+   * 将当前排序模式的分页状态快照存入缓存（切换走之前调用）。
+   * 首屏数据提交后也会调用，保证刷新后缓存同步。
+   */
+  private saveCurrentModeState(): void {
+    const key: string = this.currentModeKey()
+    const state: TopicModeState = new TopicModeState()
+    state.threads = this.mgr.threads.slice()
+    state.currentPage = this.mgr.currentPage
+    state.totalPages = this.mgr.totalPages
+    state.hasMore = this.mgr.hasMore
+    if (this.sortMode === 'hot') {
+      state.hotCache = this.twentyFourCache.slice()
+    }
+    this.modeStates.set(key, state)
+  }
+
+  /**
+   * 从缓存恢复排序模式的分页状态（切回时秒开，不重新请求）。
+   *
+   * @param state - 目标模式的快照
+   */
+  private restoreModeState(state: TopicModeState): void {
+    this.mgr.threads = state.threads
+    this.mgr.currentPage = state.currentPage
+    this.mgr.totalPages = state.totalPages
+    this.mgr.hasMore = state.hasMore
+    this.mgr.clearPrefetchedPages()
+    if (this.sortMode === 'hot') {
+      this.twentyFourCache = state.hotCache.slice()
+    } else {
+      this.twentyFourCache = []
+    }
+    this.threadsDataSource.replaceAll(state.threads)
+    this.hasError = false
+    this.isLoading = false
+    this.isLoadingMore = false
     clearTimeout(this.loadingDelayTimer)
     this.loadingDelayTimer = -1
     this.loadingContentOpacity = 0
-    this.isLoading = false
-    this.isLoadingMore = false
+    // 恢复后重新建立预取链（restore 前 clearPrefetchedPages 已清空缓存）
+    this.triggerPrefetch()
+  }
+
+  /**
+   * 切换排序模式：保存当前模式状态，恢复目标模式缓存或首次加载。
+   *
+   * @param mode - 目标排序模式键
+   */
+  private switchSortMode(mode: string): void {
+    if (mode === this.sortMode) {
+      return
+    }
+    this.saveCurrentModeState()
+    this.sortMode = mode
+    this.switchToMode()
+  }
+
+  /**
+   * 切换热门时间窗（24小时/7天/30天），不同窗口使用独立缓存。
+   *
+   * @param range - 目标时间窗键
+   */
+  private switchHotRange(range: string): void {
+    if (range === this.hotRange) {
+      return
+    }
+    this.saveCurrentModeState()
+    this.hotRange = range
+    this.switchToMode()
+  }
+
+  /**
+   * 排序条分段按钮点击：热门未选中时进入热门模式，已选中时弹出时间窗气泡。
+   *
+   * @param index - 被点击的选项下标
+   */
+  private handleSortClicked(index: number): void {
+    if (index < 0 || index >= SORT_MODES.length) {
+      return
+    }
+    const mode: string = SORT_MODES[index].key
+    if (mode === 'hot') {
+      if (this.sortMode === 'hot') {
+        this.showMoreMenu = false
+        this.showHotRangeMenu = true
+        return
+      }
+      this.sortSelected = [index]
+      this.switchSortMode('hot')
+      return
+    }
+    this.sortSelected = [index]
+    this.switchSortMode(mode)
+  }
+
+  /**
+   * 时间窗气泡选项点击：关闭气泡并切换热门时间窗（同窗仅关闭）。
+   *
+   * @param range - 目标时间窗键
+   */
+  private handleHotRangeSelect(range: string): void {
+    this.showHotRangeMenu = false
+    this.switchHotRange(range)
+  }
+
+  /**
+   * 切换到当前 sortMode/hotRange 指向的模式：有非空缓存则恢复，否则首次加载。
+   */
+  private switchToMode(): void {
+    // 废弃在途请求（预取/翻页），防止旧模式响应回写当前模式
+    this.mgr.nextGeneration()
+    const cached: TopicModeState | undefined = this.modeStates.get(this.currentModeKey())
+    if (cached !== undefined && cached.threads.length > 0) {
+      this.restoreModeState(cached)
+    } else {
+      this.loadTopics(1)
+    }
+  }
+
+  /**
+   * 热门模式的并发拉取页数（按时间窗调整，模仿 MNGA 的大窗口下限保护）。
+   *
+   * @returns 并发页数
+   */
+  private getHotFetchPages(): number {
+    if (this.hotRange === 'week') {
+      return 8
+    }
+    if (this.hotRange === 'month') {
+      return 10
+    }
+    return 5
+  }
+
+  /**
+   * 热门模式的过滤时间窗（秒），以服务端 curTime 为基准。
+   *
+   * @returns 时间窗秒数
+   */
+  private getHotWindowSeconds(): number {
+    if (this.hotRange === 'week') {
+      return 7 * 24 * 60 * 60
+    }
+    if (this.hotRange === 'month') {
+      return 30 * 24 * 60 * 60
+    }
+    return 24 * 60 * 60
+  }
+
+  /**
+   * 计算列表状态视图（加载/错误/空态）的撑满高度。
+   *
+   * 减去排序条占据的顶部区域，使状态内容居中于列表可视区；
+   * 排序条坐标尚未实测（首帧）时用标题区高度 + 排序条占位估算兜底，避免高度跳变。
+   *
+   * @returns 状态视图高度
+   */
+  private getStateViewHeight(): number {
+    let topOffset: number = 0
+    if (this.showSort) {
+      topOffset = this.sortBarBottomY > 0
+        ? this.sortBarBottomY
+        : TitleScrollEffect.getContentStartOffset(this.statusBarHeight) + 50
+    }
+    return Math.max(this.listViewportHeight - topOffset, 400)
   }
 
   /**
@@ -640,7 +924,10 @@ export struct TopicListPanel {
     } catch (e) {
       // silently fall back
     } finally {
-      this.mgr.prefetchInProgress = false
+      // 代际校验：旧模式的过期预取会话不得误复位新模式的 prefetchInProgress
+      if (gen === this.mgr.getGeneration()) {
+        this.mgr.prefetchInProgress = false
+      }
     }
   }
 
@@ -673,54 +960,58 @@ export struct TopicListPanel {
   build() {
     Stack() {
       Column() {
-        if (this.isLoading) {
-          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
-          Column() {
-            LoadingStateView()
-          }.opacity(this.loadingContentOpacity).width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-          .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
-        } else if (this.hasError) {
-          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
-          Column() {
-            ErrorStateView({ msg: this.errorMsg || '加载失败', onRetry: () => this.loadTopics(1) })
-          }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-          .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
-        } else if (this.mgr.threads.length === 0) {
-          Row().width('100%').height(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
-          Column() {
-            EmptyStateView({ msg: '暂无主题', icon: $r('app.media.icon_chat_bubble') })
-          }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-          .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
-        } else {
-          List({ scroller: this.scroller }) {
-            if (this.showSort) {
-              ListItem() {
-                Column() {
-                  Row() {
-                    ForEach(SORT_MODES, (mode: SortMode) => {
-                      Text(mode.label)
-                        .fontSize(13)
-                        .fontColor(this.sortMode === mode.key ? AppColors.textPrimary : AppColors.textTertiary)
-                        .fontWeight(this.sortMode === mode.key ? FontWeight.Bold : FontWeight.Normal)
-                        .backgroundColor(this.sortMode === mode.key ? AppColors.bg : Color.Transparent)
-                        .borderRadius(7)
-                        .padding({ left: 12, right: 12, top: 5, bottom: 5 })
-                        .layoutWeight(1)
-                        .textAlign(TextAlign.Center)
-                        .onClick(() => {
-                          if (this.sortMode !== mode.key) {
-                            this.sortMode = mode.key
-                            this.loadTopics(1)
-                          }
-                        })
-                    })
+        List({ scroller: this.scroller }) {
+          if (this.showSort) {
+            ListItem() {
+              Row() {
+                SegmentButton({
+                  options: this.sortOptions,
+                  selectedIndexes: $sortSelected,
+                  onItemClicked: (index: number): void => {
+                    this.handleSortClicked(index)
                   }
-                  .width('92%').margin({ top: 8, bottom: 4 }).padding(3)
-                  .backgroundColor(AppColors.bgSecondary).borderRadius(10)
-                }
-                .width('100%')
+                })
               }
+              .width('100%')
+              .padding({ left: '4%', right: '4%' })
+              .margin({ top: 8, bottom: 6 })
+              .onAreaChange((_oldValue: Area, newValue: Area): void => {
+                // 采集排序条底部纵坐标：供时间窗气泡锚定、状态视图撑满排序条下方的列表可视区
+                if (typeof newValue.globalPosition.y === 'number' && typeof newValue.height === 'number') {
+                  this.sortBarBottomY = newValue.globalPosition.y + newValue.height
+                }
+              })
             }
+          }
+          if (this.isLoading) {
+            ListItem() {
+              Column() {
+                LoadingStateView()
+              }
+              .opacity(this.loadingContentOpacity)
+              .width('100%').height(this.getStateViewHeight())
+              .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+              .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+            }
+          } else if (this.hasError) {
+            ListItem() {
+              Column() {
+                ErrorStateView({ msg: this.errorMsg || '加载失败', onRetry: () => this.loadTopics(1) })
+              }
+              .width('100%').height(this.getStateViewHeight())
+              .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+              .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+            }
+          } else if (this.mgr.threads.length === 0) {
+            ListItem() {
+              Column() {
+                EmptyStateView({ msg: '暂无主题', icon: $r('app.media.icon_chat_bubble') })
+              }
+              .width('100%').height(this.getStateViewHeight())
+              .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+              .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+            }
+          } else {
             LazyForEach(this.threadsDataSource, (thread: object) => {
               ListItem() {
                 TopicCardComponent({
@@ -752,40 +1043,41 @@ export struct TopicListPanel {
               }.width('100%').justifyContent(FlexAlign.Center).padding({ top: 16, bottom: 16 })
             }
           }
-          .width('100%').layoutWeight(1)
-          .scrollBar(BarState.Off)
-          .divider({ strokeWidth: 0.5, color: AppColors.separator })
-          .lanes(new BreakpointType(1, 1, 1).getValue(this.currentBreakpoint), 12)
-          .edgeEffect(EdgeEffect.Spring)
-          .cachedCount(3)
-          .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
-          .linearGradientBlur(
-            TitleScrollEffect.getBlurRadius(this.titleScrollEffectProgress),
-            {
-              fractionStops: TitleScrollEffect.getBlurStops(this.listViewportHeight, this.statusBarHeight),
-              direction: GradientDirection.Bottom
-            }
-          )
-          .onAreaChange((_oldValue: Area, newValue: Area): void => {
-            if (typeof newValue.height === 'number' && newValue.height > 0 &&
-              newValue.height !== this.listViewportHeight) {
-              this.listViewportHeight = newValue.height
-            }
-          })
-          .onDidScroll((): void => {
-            this.syncTitleScrollEffect()
-          })
-          .onAppear((): void => {
-            this.syncTitleScrollEffect()
-          })
-          .onScrollIndex((start: number, end: number): void => {
-            const total: number = this.threadsDataSource.totalCount()
-            if (end >= total - 3 && total > 0) {
-              this.tryLoadNext()
-            }
-          })
-          .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
         }
+        .width('100%').layoutWeight(1)
+        .scrollBar(BarState.Off)
+        .divider({ strokeWidth: 0.5, color: AppColors.separator })
+        .lanes(new BreakpointType(1, 1, 1).getValue(this.currentBreakpoint), 12)
+        .edgeEffect(EdgeEffect.Spring)
+        .cachedCount(3)
+        .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
+        .linearGradientBlur(
+          TitleScrollEffect.getBlurRadius(this.titleScrollEffectProgress),
+          {
+            fractionStops: TitleScrollEffect.getBlurStops(this.listViewportHeight, this.statusBarHeight),
+            direction: GradientDirection.Bottom
+          }
+        )
+        .onAreaChange((_oldValue: Area, newValue: Area): void => {
+          if (typeof newValue.height === 'number' && newValue.height > 0 &&
+            newValue.height !== this.listViewportHeight) {
+            this.listViewportHeight = newValue.height
+          }
+        })
+        .onDidScroll((): void => {
+          this.syncTitleScrollEffect()
+          // 列表滚动时收起时间窗气泡（其锚定的排序条已随内容移动）
+          this.showHotRangeMenu = false
+        })
+        .onAppear((): void => {
+          this.syncTitleScrollEffect()
+        })
+        .onScrollIndex((start: number, end: number): void => {
+          const total: number = this.threadsDataSource.totalCount()
+          if (end >= total - 3 && total > 0) {
+            this.tryLoadNext()
+          }
+        })
       }
       .width('100%').height('100%')
 
@@ -863,6 +1155,55 @@ export struct TopicListPanel {
           .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
           .systemMaterial(UIMaterialManager.surfaceMaterial)
           .position({ top: this.statusBarHeight + 50, right: 12 })
+        }
+        .width('100%').height('100%')
+        .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
+      }
+
+      if (this.showHotRangeMenu) {
+        Stack() {
+          Column() {
+          }
+          .width('100%').height('100%')
+          .onClick(() => {
+            this.showHotRangeMenu = false
+          })
+
+          Column() {
+            ForEach(HOT_RANGES, (range: SortMode, index: number) => {
+              Column() {
+                Row() {
+                  Text(range.label)
+                    .fontSize(15)
+                    .fontColor(AppColors.textPrimary)
+                    .layoutWeight(1)
+                  if (this.hotRange === range.key) {
+                    Image($r('app.media.icon_check'))
+                      .width(16).height(16)
+                      .fillColor(AppColors.primary)
+                  }
+                }
+                .width('100%')
+                .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+                .onClick(() => {
+                  this.handleHotRangeSelect(range.key)
+                })
+
+                if (index < HOT_RANGES.length - 1) {
+                  Divider().width('100%').color(AppColors.separator)
+                }
+              }
+              .width('100%')
+            }, (range: SortMode) => {
+              return range.key
+            })
+          }
+          .width(150)
+          .backgroundColor(Color.Transparent)
+          .borderRadius(10)
+          .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
+          .systemMaterial(UIMaterialManager.surfaceMaterial)
+          .position({ top: this.sortBarBottomY + 6, right: '4%' })
         }
         .width('100%').height('100%')
         .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
