@@ -718,6 +718,7 @@ export struct TopicListPanel {
                   .width('92%').margin({ top: 8, bottom: 4 }).padding(3)
                   .backgroundColor(AppColors.bgSecondary).borderRadius(10)
                 }
+                .width('100%')
               }
             }
             LazyForEach(this.threadsDataSource, (thread: object) => {
