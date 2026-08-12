@@ -8,6 +8,7 @@
 
 import { AppColors } from '../constants/Constants'
 import { floatingLayerStore } from '../../store/FloatingLayerStore'
+import { BBCodePreviewPane } from './BBCodePreviewPane'
 import { newTopicManager } from '../managers/NewTopicManager'
 import { ReplyManagerClass } from '../managers/ReplyManager'
 import { appStore } from '../../store/AppStore'
@@ -77,6 +78,9 @@ export struct NewTopicDialog {
   /** 是否展示表情面板。 */
   @State showEmojiPanel: boolean = false
 
+  /** 是否处于发布预览模式（以 BBCode 渲染结果替换正文输入区）。 */
+  @State previewMode: boolean = false
+
   /** 当前表情分类。 */
   @State selectedCatKey: string = 'ac'
 
@@ -135,6 +139,24 @@ export struct NewTopicDialog {
       this.subject = category
     } else if (!trimmed.startsWith(category)) {
       this.subject = category + trimmed
+    }
+  }
+
+  /**
+   * 切换编辑/预览模式。
+   *
+   * 进入预览时收起表情面板；返回编辑后等待 TextArea 重建，
+   * 在下一帧恢复切换前的光标位置。
+   */
+  private togglePreview(): void {
+    if (this.previewMode) {
+      this.previewMode = false
+      setTimeout((): void => {
+        this.textAreaController.caretPosition(this.selStart)
+      }, 0)
+    } else {
+      this.showEmojiPanel = false
+      this.previewMode = true
     }
   }
 
@@ -345,41 +367,54 @@ export struct NewTopicDialog {
 
       Column() {
         Row() {
-          Text('格式工具')
+          Text(this.previewMode ? '发布预览' : '格式工具')
             .fontSize(11)
             .fontWeight(FontWeight.Medium)
             .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
           Blank().layoutWeight(1)
-          Text(this.showEmojiPanel ? '表情面板已展开' : '左右滑动查看更多')
-            .fontSize(10)
-            .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+          if (!this.previewMode) {
+            Text(this.showEmojiPanel ? '表情面板已展开' : '左右滑动查看更多')
+              .fontSize(10)
+              .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+              .margin({ right: 10 })
+          }
+          Text(this.previewMode ? '返回编辑' : '预览')
+            .fontSize(11)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(AppColors.primary)
+            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+            .borderRadius(10)
+            .backgroundColor(AppColors.primaryLight)
+            .onClick(() => { this.togglePreview() })
         }
         .width('100%')
         .padding({ left: 4, right: 4, bottom: 6 })
 
-        Scroll() {
-          Row({ space: 6 }) {
-            ForEach(FORMAT_ACTIONS, (action: FormatAction) => {
-              Text(action.label)
-                .fontSize(13)
-                .fontColor(action.tag === 'emoticon' && this.showEmojiPanel
-                  ? AppColors.primary : UIMaterialManager.adaptiveForeground)
-                .fontWeight(action.tag === 'emoticon' && this.showEmojiPanel
-                  ? FontWeight.Bold : FontWeight.Medium)
-                .height(32)
-                .padding({ left: 12, right: 12 })
-                .borderRadius(10)
-                .backgroundColor(action.tag === 'emoticon' && this.showEmojiPanel
-                  ? AppColors.primaryLight : Color.Transparent)
-                .border({ width: 0.5, color: AppColors.separator })
-                .onClick(() => { this.applyFormat(action) })
-            }, (action: FormatAction) => action.tag)
+        if (!this.previewMode) {
+          Scroll() {
+            Row({ space: 6 }) {
+              ForEach(FORMAT_ACTIONS, (action: FormatAction) => {
+                Text(action.label)
+                  .fontSize(13)
+                  .fontColor(action.tag === 'emoticon' && this.showEmojiPanel
+                    ? AppColors.primary : UIMaterialManager.adaptiveForeground)
+                  .fontWeight(action.tag === 'emoticon' && this.showEmojiPanel
+                    ? FontWeight.Bold : FontWeight.Medium)
+                  .height(32)
+                  .padding({ left: 12, right: 12 })
+                  .borderRadius(10)
+                  .backgroundColor(action.tag === 'emoticon' && this.showEmojiPanel
+                    ? AppColors.primaryLight : Color.Transparent)
+                  .border({ width: 0.5, color: AppColors.separator })
+                  .onClick(() => { this.applyFormat(action) })
+              }, (action: FormatAction) => action.tag)
+            }
+            .padding({ left: 2, right: 2 })
           }
-          .padding({ left: 2, right: 2 })
+          .width('100%')
+          .scrollable(ScrollDirection.Horizontal)
+          .scrollBar(BarState.Off)
         }
-        .width('100%')
-        .scrollable(ScrollDirection.Horizontal)
-        .scrollBar(BarState.Off)
       }
       .width('100%')
       .padding({ left: 8, right: 8, top: 8, bottom: 8 })
@@ -388,7 +423,7 @@ export struct NewTopicDialog {
       .systemMaterial(UIMaterialManager.inputMaterial)
       .margin({ bottom: 10 })
 
-      if (this.showEmojiPanel) {
+      if (this.showEmojiPanel && !this.previewMode) {
         Column() {
           Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
             ForEach(CATEGORY_KEYS, (key: string) => {
@@ -452,24 +487,34 @@ export struct NewTopicDialog {
         .margin({ bottom: 10 })
       }
 
-      TextArea({ text: this.content, placeholder: '写下正文…', controller: this.textAreaController })
-        .width('100%')
-        .height(this.showEmojiPanel ? 120 : (this.currentBreakpoint === 'sm' ? 190 : 240))
-        .padding(14)
-        .fontSize(15)
-        .fontColor(UIMaterialManager.inputForeground)
-        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .caretColor(UIMaterialManager.inputForeground)
-        .borderRadius(16)
-        .backgroundColor(Color.Transparent)
-        .border({ width: 0.5, color: AppColors.separator })
-        .systemMaterial(UIMaterialManager.inputMaterial)
-        .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-        .onChange((value: string) => { this.content = value })
-        .onTextSelectionChange((start: number, end: number) => {
-          this.selStart = start
-          this.selEnd = end
+      if (this.previewMode) {
+        BBCodePreviewPane({
+          content: this.content,
+          viewportHeight: this.currentBreakpoint === 'sm' ? 190 : 240
         })
+      } else {
+        TextArea({ text: this.content, placeholder: '写下正文…', controller: this.textAreaController })
+          .width('100%')
+          .height(this.showEmojiPanel ? 120 : (this.currentBreakpoint === 'sm' ? 190 : 240))
+          .padding(14)
+          .fontSize(15)
+          .fontColor(UIMaterialManager.inputForeground)
+          .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+          .caretColor(UIMaterialManager.inputForeground)
+          .borderRadius(16)
+          .backgroundColor(Color.Transparent)
+          .border({ width: 0.5, color: AppColors.separator })
+          .systemMaterial(UIMaterialManager.inputMaterial)
+          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .onChange((value: string) => { this.content = value })
+          .onTextSelectionChange((start: number, end: number) => {
+            if (this.previewMode) {
+              return
+            }
+            this.selStart = start
+            this.selEnd = end
+          })
+      }
 
       Row() {
         Text('内容将发布为新的主题帖')
