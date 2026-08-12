@@ -1274,38 +1274,64 @@ export struct ThreadPanel {
     this.loadPosts(previousPage, ThreadLoadMode.PREPEND)
   }
 
+  /**
+   * 发送回复/贴条。
+   *
+   * 发送失败时抛出错误，使编辑器保留内容与草稿（与发新主题流程一致）；
+   * 成功才由编辑器清除草稿并关闭。发送成功后的列表刷新失败不影响关闭。
+   */
   private async handleReplySend(text: string, isAnony: boolean): Promise<void> {
+    let result: PostReplyResult
     try {
-      const result: PostReplyResult = await replyManager.send(text, isAnony)
-      if (result.ok) {
-        const isComment: boolean = replyManager.type === ReplyType.COMMENT
-        appStore.showToast(isComment ? '贴条成功' : '回复成功')
-        if (this.mgr.loadedPageEnd >= this.mgr.totalPages) {
-          this.pendingTargetPid = ''
-          this.singlePostFallback = false
-          await this.loadPosts(1, ThreadLoadMode.REPLACE)
-        }
-      } else {
-        appStore.showToast(result.error || '操作失败')
-      }
+      result = await replyManager.send(text, isAnony)
     } catch (e) {
       appStore.showToast((e as Error).message || '操作失败')
+      throw new Error((e as Error).message || '操作失败')
     }
-  }
-
-  private async handleEditSend(text: string, isAnony: boolean): Promise<void> {
+    if (!result.ok) {
+      appStore.showToast(result.error || '操作失败')
+      throw new Error(result.error || '操作失败')
+    }
+    const isComment: boolean = replyManager.type === ReplyType.COMMENT
+    appStore.showToast(isComment ? '贴条成功' : '回复成功')
     try {
-      const result: PostReplyResult = await replyManager.send(text, isAnony)
-      if (result.ok) {
-        appStore.showToast('编辑成功')
+      if (this.mgr.loadedPageEnd >= this.mgr.totalPages) {
         this.pendingTargetPid = ''
         this.singlePostFallback = false
         await this.loadPosts(1, ThreadLoadMode.REPLACE)
-      } else {
-        appStore.showToast(result.error || '编辑失败')
       }
     } catch (e) {
+      // 发送已成功，刷新失败仅记录，不阻断编辑器关闭
+      logger.warn('回复成功后刷新列表失败: %{public}s', (e as Error).message)
+    }
+  }
+
+  /**
+   * 发送编辑修改。
+   *
+   * 发送失败时抛出错误，使编辑器保留内容与草稿（与发新主题流程一致）；
+   * 成功才由编辑器清除草稿并关闭。发送成功后的列表刷新失败不影响关闭。
+   */
+  private async handleEditSend(text: string, isAnony: boolean): Promise<void> {
+    let result: PostReplyResult
+    try {
+      result = await replyManager.send(text, isAnony)
+    } catch (e) {
       appStore.showToast((e as Error).message || '编辑失败')
+      throw new Error((e as Error).message || '编辑失败')
+    }
+    if (!result.ok) {
+      appStore.showToast(result.error || '编辑失败')
+      throw new Error(result.error || '编辑失败')
+    }
+    appStore.showToast('编辑成功')
+    try {
+      this.pendingTargetPid = ''
+      this.singlePostFallback = false
+      await this.loadPosts(1, ThreadLoadMode.REPLACE)
+    } catch (e) {
+      // 编辑已成功，刷新失败仅记录，不阻断编辑器关闭
+      logger.warn('编辑成功后刷新列表失败: %{public}s', (e as Error).message)
     }
   }
 

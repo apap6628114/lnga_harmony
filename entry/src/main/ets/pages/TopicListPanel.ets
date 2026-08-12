@@ -295,19 +295,24 @@ export struct TopicListPanel {
    * 发布新主题。
    *
    * 成功后刷新版面列表并跳转到新主题详情；失败时抛出错误，
-   * 使编辑器保留内容与草稿。
+   * 使编辑器保留内容与草稿（错误提示在此完成 Toast）。
    */
   private async handleNewTopicSend(subject: string, content: string, isAnony: boolean): Promise<void> {
-    const result: PostReplyResult = await newTopicManager.send(subject, content, isAnony)
-    if (result.ok) {
-      appStore.showToast('发帖成功')
-      this.loadTopics(1)
-      if (result.tid > 0) {
-        routerStore.navigateActivity(Screen.thread(String(result.tid)))
-      }
-    } else {
+    let result: PostReplyResult
+    try {
+      result = await newTopicManager.send(subject, content, isAnony)
+    } catch (e) {
+      appStore.showToast((e as Error).message || '发帖失败')
+      throw new Error((e as Error).message || '发帖失败')
+    }
+    if (!result.ok) {
       appStore.showToast(result.error || '发帖失败')
       throw new Error(result.error || '发帖失败')
+    }
+    appStore.showToast('发帖成功')
+    this.loadTopics(1)
+    if (result.tid > 0) {
+      routerStore.navigateActivity(Screen.thread(String(result.tid)))
     }
   }
 

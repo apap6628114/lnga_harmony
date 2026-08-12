@@ -112,6 +112,8 @@ export struct ReplyDialog {
       replyManager.saveDraft(this.replyText)
       floatingLayerStore.showReplyConfirm()
     } else {
+      // 内容为空时清掉旧草稿，避免下次打开又恢复已删除的内容
+      replyManager.clearDraft()
       this.onClose()
     }
   }
@@ -207,6 +209,8 @@ export struct ReplyDialog {
     this.onSend(this.replyText.trim(), this.isAnonymous).then(() => {
       replyManager.clearDraft()
       this.onClose()
+    }).catch(() => {
+      // 发送失败：保留内容与草稿（错误提示已由发送方 Toast 完成）
     }).finally(() => {
       this.sending = false
     })

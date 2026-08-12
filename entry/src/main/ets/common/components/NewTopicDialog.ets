@@ -220,8 +220,7 @@ export struct NewTopicDialog {
       newTopicManager.clearDraft()
       this.onClose()
     }).catch(() => {
-      // 发送失败：保留内容，由外层提示错误；此处兜底，防异常路径无任何反馈
-      appStore.showToast('发送失败，请稍后重试')
+      // 发送失败：保留内容与草稿（错误提示已由发送方 Toast 完成）
     }).finally(() => {
       this.sending = false
     })
