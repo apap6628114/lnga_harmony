@@ -11,6 +11,9 @@ import { UserInfo } from '../../model/UserInfo';
 import { ProfileData, ReputationData, AdminForumsData } from '../../model/User';
 import { resolveEffectiveMuteTs } from '../../parser/MuteParser';
 import { formatTimestampCST } from '../../common/utils/Utils';
+import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger';
+
+const logger = new Logger(DOMAIN_SERVICE, 'UserApi')
 
 // ============== 当前用户 ==============
 
@@ -42,6 +45,7 @@ export async function getCurrentUser(token: string): Promise<CurrentUserResult> 
     result.ok = true;
     result.user = user;
   } catch (e) {
+    logger.warn('获取当前用户失败，使用会话缓存: %{public}s', formatError(e));
     const user = new UserInfo();
     user.uid = session.uid;
     user.nickName = session.nickName;
@@ -151,6 +155,7 @@ export async function getUserProfile(token: string, uid: string): Promise<UserPr
     result.data = profile;
     result.ok = true;
   } catch (e) {
+    logger.warn('获取用户资料失败: %{public}s', formatError(e));
     result.error = (e as Error).message ?? '获取用户资料失败';
   }
   return result;
@@ -179,6 +184,7 @@ export async function resolveUidByUsername(token: string, username: string): Pro
     const match: RegExpMatchArray | null = text.match(/__UCPUSER\s*=\s*\{"uid":(\d+)/);
     return match ? match[1] : '';
   } catch (e) {
+    logger.warn('按用户名解析 UID 失败: %{public}s', formatError(e));
     return '';
   }
 }
@@ -298,6 +304,7 @@ export async function getUserActivityAnalysis(token: string, uid: string): Promi
 
     return result;
   } catch (e) {
+    logger.warn('获取用户成分分析失败: %{public}s', formatError(e));
     return null;
   }
 }

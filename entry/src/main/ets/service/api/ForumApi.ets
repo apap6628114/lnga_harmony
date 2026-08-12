@@ -8,6 +8,9 @@ import { parseForumCategories } from '../../parser/ForumParser';
 import { parseTopicList } from '../../parser/TopicParser';
 import { parseNgaError } from '../../parser/ErrorParser';
 import { ApiResult, CategoriesResult, TopicListResult, SearchForumResult } from '../../model/NgaApiResults';
+import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger';
+
+const logger = new Logger(DOMAIN_SERVICE, 'ForumApi')
 
 // ============== 版块分类 ==============
 
@@ -25,6 +28,7 @@ export async function getForumCategories(token: string): Promise<CategoriesResul
     result.data = parseForumCategories(raw as object);
     result.ok = true;
   } catch (e) {
+    logger.warn('获取板块分类失败: %{public}s', formatError(e));
     result.error = (e as Error).message ?? '获取板块分类失败';
   }
   return result;
@@ -44,6 +48,7 @@ export async function searchForum(token: string, key: string): Promise<SearchFor
     result.data = await ngaClient.get('/forum.php', params, { uid: session.uid, cid: session.cid });
     result.ok = true;
   } catch (e) {
+    logger.warn('搜索失败: %{public}s', formatError(e));
     result.error = (e as Error).message ?? '搜索失败';
   }
   return result;
@@ -122,6 +127,7 @@ export async function getTopicList(token: string, params: TopicListParams,
     result.data = parseTopicList(raw, blacklist, keywords, page);
     result.ok = true;
   } catch (e) {
+    logger.warn('获取主题列表失败: %{public}s', formatError(e));
     result.error = (e as Error).message ?? '获取主题列表失败';
   }
   return result;
@@ -174,6 +180,7 @@ export async function setSubforumFilter(token: string, parentFid: number,
     }
     result.ok = true;
   } catch (e) {
+    logger.warn('修改子版块屏蔽设置失败: %{public}s', formatError(e));
     result.error = (e as Error).message ?? '修改子版块屏蔽设置失败';
   }
   return result;

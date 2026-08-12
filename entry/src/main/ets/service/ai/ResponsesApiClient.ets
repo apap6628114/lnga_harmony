@@ -13,7 +13,7 @@ import { Logger, DOMAIN_SERVICE } from '../../common/utils/Logger'
 import type { AiProviderProfile } from '../../model/AiConfig'
 import { AiTestResult, DEFAULT_DEEPSEEK_ENDPOINT } from '../../model/AiConfig'
 
-const logger = new Logger(DOMAIN_SERVICE, 'ResponsesCli')
+const logger = new Logger(DOMAIN_SERVICE, 'ResponsesApiClient')
 
 /** 请求超时毫秒数（联网搜索可能比普通对话耗时更长） */
 const REQUEST_TIMEOUT: number = 90000

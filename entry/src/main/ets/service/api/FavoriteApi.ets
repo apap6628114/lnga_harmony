@@ -11,6 +11,9 @@ import {
 } from '../../model/NgaApiResults';
 import { TopicFavoriteOperation } from '../../model/Favorite';
 import { getFavoriteResponseData, parseFavoriteTopicFolders } from '../../parser/FavoriteParser';
+import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger';
+
+const logger = new Logger(DOMAIN_SERVICE, 'FavoriteApi')
 
 // ============== 版块收藏 ==============
 
@@ -46,6 +49,7 @@ export async function fetchForumFavorites(token: string): Promise<ForumFavorites
     }
     result.ok = true
   } catch (e) {
+    logger.warn('获取收藏板块失败: %{public}s', formatError(e));
     result.error = (e as Error).message ?? '获取收藏板块失败'
   }
   return result
@@ -83,6 +87,7 @@ export async function votePost(token: string, tid: number, pid: number, value: n
     }
     result.ok = true;
   } catch (e) {
+    logger.warn('投票失败: %{public}s', formatError(e));
     result.error = (e as Error).message ?? '操作失败';
   }
   return result;
@@ -120,6 +125,7 @@ export async function fetchFavoriteTopicFolders(token: string): Promise<Favorite
     result.data = parseFavoriteTopicFolders(raw)
     result.ok = true
   } catch (error) {
+    logger.warn('获取收藏夹失败: %{public}s', formatError(error));
     result.error = (error as Error).message ?? '获取收藏夹失败'
   }
   return result
@@ -172,6 +178,7 @@ export async function createFavoriteTopicFolder(token: string, name: string,
     }
     result.ok = true
   } catch (error) {
+    logger.warn('新建收藏夹失败: %{public}s', formatError(error));
     result.error = (error as Error).message ?? '新建收藏夹失败'
   }
   return result
@@ -219,6 +226,7 @@ async function mutateFavoriteTopicFolder(token: string, folderId: string,
     }
     result.ok = true
   } catch (error) {
+    logger.warn('修改收藏夹失败: %{public}s', formatError(error));
     result.error = (error as Error).message ?? '修改收藏夹失败'
   }
   return result
@@ -310,6 +318,7 @@ export async function mutateTopicFavorite(token: string, topicId: string, folder
     }
     result.ok = true
   } catch (error) {
+    logger.warn('修改收藏失败: %{public}s', formatError(error));
     result.error = (error as Error).message ?? '修改收藏失败'
   }
   return result
@@ -335,6 +344,7 @@ export async function checkin(token: string): Promise<CheckinResult> {
     result.data = raw?.['data'] ?? null;
     result.ok = true;
   } catch (e) {
+    logger.warn('签到失败: %{public}s', formatError(e));
     result.error = (e as Error).message ?? '签到失败';
   }
   return result;

@@ -16,6 +16,9 @@ import { util } from '@kit.ArkTS'
 import { webview } from '@kit.ArkWeb'
 import { PageScope } from '../common/concurrency/PageScope'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
+import { Logger, DOMAIN_UI, formatError } from '../common/utils/Logger'
+
+const logger = new Logger(DOMAIN_UI, 'LoginPage')
 
 
 /**
@@ -288,6 +291,8 @@ struct LoginPage {
                         this.handleWebLoginResult(String(data['uid']), String(data['token']))
                       }
                     } catch (_error) {
+                      // 回包 JSON 片段含 uid/token，不输出 formatError 详情以防凭据进入日志
+                      logger.warn('网页登录回包解析失败')
                     }
                   }
                 }
@@ -462,6 +467,7 @@ struct LoginPage {
         this.captcha = ''
       }
     } catch (_error) {
+      logger.warn('获取验证码失败: %{public}s', formatError(_error))
     }
   }
 

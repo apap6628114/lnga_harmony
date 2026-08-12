@@ -6,6 +6,9 @@ import { ngaClient } from '../NgaClient';
 import { sessionRegistry } from '../../store/SessionRegistry';
 import { parseNgaError } from '../../parser/ErrorParser';
 import { VoteSubmitResult } from '../../model/NgaApiResults';
+import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger';
+
+const logger = new Logger(DOMAIN_SERVICE, 'VoteApi')
 
 /**
  * 提交投票帖的投票。
@@ -57,6 +60,7 @@ export async function submitPollVote(token: string, tid: number, voteIds: string
     result.message = String(dataObj?.['0'] ?? '投票成功');
     result.ok = true;
   } catch (e) {
+    logger.warn('投票失败: %{public}s', formatError(e));
     result.error = (e as Error).message ?? '投票失败';
   }
   return result;

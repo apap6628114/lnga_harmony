@@ -247,7 +247,7 @@ export async function injectCredentials(uid: string, cid: string): Promise<Injec
 
 // ============== 登出 ==============
 
-const logoutLogger = new Logger(DOMAIN_SERVICE, 'AuthApi.Logout')
+const logger = new Logger(DOMAIN_SERVICE, 'AuthApi.Logout')
 
 /**
  * 通知 NGA 服务端使当前 token 对应的 cid 会话失效。
@@ -262,7 +262,7 @@ export async function invalidateServerSession(token: string): Promise<void> {
     try {
       await ngaClient.logout({ uid: session.uid, cid: session.cid });
     } catch (e) {
-      logoutLogger.warn('服务端登出失败: %{public}s', formatError(e));
+      logger.warn('服务端登出失败: %{public}s', formatError(e));
     }
   }
 }

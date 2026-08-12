@@ -19,7 +19,7 @@ import {
 import { translateError } from './AiErrorTranslator'
 import { Logger, DOMAIN_SERVICE } from '../../common/utils/Logger'
 
-const logger = new Logger(DOMAIN_SERVICE, 'ActiveAiSvc')
+const logger = new Logger(DOMAIN_SERVICE, 'ActiveAiService')
 
 /** AI 处理阶段状态回调，用于 UI 展示不同阶段的提示文案。 */
 export type ChatStatusCallback = (status: string) => void

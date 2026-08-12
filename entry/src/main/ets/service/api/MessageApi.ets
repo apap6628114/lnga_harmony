@@ -10,6 +10,9 @@ import { parseNgaError } from '../../parser/ErrorParser';
 import { NotificationsResult } from '../../model/NgaApiResults';
 import { MessageListResult, MessageDetailResult, MessageSendResult } from '../../model/MessageResult';
 import type { NotificationParseResult } from '../../model/Notification';
+import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger';
+
+const logger = new Logger(DOMAIN_SERVICE, 'MessageApi')
 
 /**
  * 判断私信接口响应是否包含解析器要求的数据容器。
@@ -58,6 +61,7 @@ export async function getNotifications(token: string): Promise<NotificationsResu
     result.serverUnreadHint = parsed.serverUnreadHint;
     result.ok = true;
   } catch (e) {
+    logger.warn('获取通知失败: %{public}s', formatError(e));
     result.error = (e as Error).message ?? '获取通知失败';
   }
   return result;
@@ -89,6 +93,7 @@ export async function getMessageList(token: string, page: string): Promise<Messa
     result.data = parseMessageList(raw as object);
     result.ok = true;
   } catch (e) {
+    logger.warn('获取私信列表失败: %{public}s', formatError(e));
     result.error = (e as Error).message ?? '获取私信列表失败';
   }
   return result;
@@ -118,6 +123,7 @@ export async function getMessageDetail(token: string, mid: string, page: string)
     result.data = parseMessageDetail(raw as object);
     result.ok = true;
   } catch (e) {
+    logger.warn('获取私信详情失败: %{public}s', formatError(e));
     result.error = (e as Error).message ?? '获取私信详情失败';
   }
   return result;
@@ -157,6 +163,7 @@ export async function sendMessage(token: string, to: string, mid: string,
     result.mid = String(dataObj?.['mid'] ?? mid ?? '');
     result.ok = true;
   } catch (e) {
+    logger.warn('发送私信失败: %{public}s', formatError(e));
     result.error = (e as Error).message ?? '发送私信失败';
   }
   return result;

@@ -55,10 +55,10 @@ export const DOMAIN_SETTINGS: number = 0x0009;
  * 统一处理 Error 对象、字符串异常、未知类型异常。
  * 对于 HarmonyOS BusinessError，会同时输出 code 和 message。
  *
- * 用法：
+ * 用法（catch 后降级返回等可恢复场景用 warn，见 Logger 类注释）：
  * ```
  * catch (e) {
- *   logger.error('操作失败: %{public}s', formatError(e));
+ *   logger.warn('操作失败: %{public}s', formatError(e));
  * }
  * ```
  * @param e - catch 块捕获的异常对象
@@ -99,9 +99,9 @@ export function formatError(e: Object): string {
  *   logger.verbose('响应体: %{public}s', bodyText);
  * }
  *
- * // 异常格式化
+ * // 异常格式化（降级返回等可恢复场景用 warn；无降级直接冒泡才用 error）
  * catch (e) {
- *   logger.error('请求失败: %{public}s', formatError(e));
+ *   logger.warn('请求失败: %{public}s', formatError(e));
  * }
  * ```
  */
@@ -148,7 +148,7 @@ export class Logger {
 
   /**
    * warn 级别日志（始终输出，受 LOG_ENABLED 控制）。
-   * 用于可恢复的异常、降级路径。
+   * 用于可恢复的异常、降级路径（含 catch 捕获后降级返回、应用继续运行的场景）。
    */
   warn(format: string, ...args: Object[]): void {
     if (!LOG_ENABLED) {
@@ -159,7 +159,8 @@ export class Logger {
 
   /**
    * error 级别日志（始终输出，受 LOG_ENABLED 控制）。
-   * 用于不可恢复的错误、catch 块异常。
+   * 用于不可恢复的错误：catch 捕获后直接冒泡给上层、无降级路径的异常。
+   * 注意：catch 后若能降级返回（如写入 result.error），属可恢复路径，请用 warn。
    */
   error(format: string, ...args: Object[]): void {
     if (!LOG_ENABLED) {
