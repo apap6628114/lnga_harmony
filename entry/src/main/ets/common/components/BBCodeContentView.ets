@@ -45,6 +45,7 @@ import {
   TableLayoutRow,
 } from './bbcode/table-layout'
 import { appStore } from '../../store/AppStore'
+import { decodeAnonymousName } from '../../parser/AnonymousParser'
 
 /** 单个 BBCode 视图允许缓存的最大内联节点组数量。 */
 const MAX_INLINE_RUN_CACHE_SIZE: number = 4096
@@ -566,7 +567,8 @@ export struct BBCodeContentView {
           .fontColor(AppColors.textTertiary)
       }
     } else if (run.kind === InlineRunKind.LINK) {
-      Span(run.text)
+      // 匿名回复被引用时，引用头名字是 #anony_ 编码（与楼层作者同源），须解码为显示名
+      Span(decodeAnonymousName(run.text))
         .fontWeight(run.style.bold ? FontWeight.Bold : FontWeight.Normal)
         .fontStyle(run.style.italic || ctx.inQuote ? FontStyle.Italic : FontStyle.Normal)
         .fontColor(AppColors.primary)
