@@ -69,6 +69,10 @@ export struct FloatingLayerComponent {
             })
           }
           .width('100%')
+          // 收窄悬浮容器到对话框实际宽度（600 + 左右 24 内边距），超宽屏（三折叠展开）下
+          // 两侧空白区才能落到下方点击捕获层触发关闭。
+          // 勿用 HitTestMode.Transparent：它放行兄弟节点，会让背景层在点击对话框本体时同时响应而误触发关闭。
+          .constraintSize({ maxWidth: 648 })
           .padding({
             left: this.currentBreakpoint === 'sm' ? 10 : 24,
             right: this.currentBreakpoint === 'sm' ? 10 : 24,
@@ -97,6 +101,10 @@ export struct FloatingLayerComponent {
             })
           }
           .width('100%')
+          // 收窄悬浮容器到对话框实际宽度（600 + 左右 24 内边距），超宽屏（三折叠展开）下
+          // 两侧空白区才能落到下方点击捕获层触发关闭。
+          // 勿用 HitTestMode.Transparent：它放行兄弟节点，会让背景层在点击对话框本体时同时响应而误触发关闭。
+          .constraintSize({ maxWidth: 648 })
           .padding({
             left: this.currentBreakpoint === 'sm' ? 10 : 24,
             right: this.currentBreakpoint === 'sm' ? 10 : 24,
