@@ -105,13 +105,13 @@ export struct TopicListPanel {
     }) as SegmentButtonItemTuple,
     multiply: false,
     fontColor: AppColors.textSecondary,
-    selectedFontColor: Color.White,
+    selectedFontColor: AppColors.primary,
     fontSize: 13,
     selectedFontSize: 13,
     fontWeight: FontWeight.Normal,
     selectedFontWeight: FontWeight.Bold,
     backgroundColor: AppColors.bgSecondary,
-    selectedBackgroundColor: AppColors.primary,
+    selectedBackgroundColor: AppColors.primaryLight,
   })
   /** 排序条分段按钮选中项（SegmentButton 双向绑定，单选取 [index]）。 */
   @State sortSelected: number[] = [0]
