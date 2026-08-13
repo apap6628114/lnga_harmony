@@ -70,7 +70,7 @@ export interface SubBoard extends Board {
   description: string;
   /** 父版块 ID 字符串。 */
   parentFidStr: string;
-  /** 提交 NGA 子版块屏蔽设置时使用的标识。 */
+  /** 提交 NGA 子版块显示设置时使用的标识。 */
   filterId: string;
   /** NGA 返回的原始子版块属性值。 */
   attributes: number;

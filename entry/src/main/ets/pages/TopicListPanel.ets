@@ -132,7 +132,7 @@ export struct TopicListPanel {
   private loadingDelayTimer: number = -1
   /** 是否显示标题栏更多菜单。 */
   @State showMoreMenu: boolean = false
-  /** 是否显示子版块屏蔽面板。 */
+  /** 是否显示子版块显示面板。 */
   @State showSubBoardFilterPanel: boolean = false
   /** 当前父版块返回的子版块。 */
   @State subBoards: SubBoard[] = []
@@ -354,12 +354,12 @@ export struct TopicListPanel {
   }
 
   /**
-   * 打开子版块屏蔽面板。
+   * 打开子版块显示面板。
    */
   private openSubBoardFilterPanel(): void {
     this.showMoreMenu = false
     if (!this.canManageCurrentBoard()) {
-      appStore.showToast('当前页面不支持子版块屏蔽')
+      appStore.showToast('当前页面不支持子版块显示')
       return
     }
     if (this.subBoards.length === 0) {
@@ -417,16 +417,16 @@ export struct TopicListPanel {
         appStore.auth.token, this.boardFid, subBoard.filterId, show)
       if (!result.ok) {
         this.replaceSubBoardSelection(subBoard.filterId, previous)
-        appStore.showToast(result.error || '修改子版块屏蔽设置失败')
+        appStore.showToast(result.error || '修改子版块显示设置失败')
         return
       }
       appStore.showToast(show ? `已显示“${subBoard.name}”` : `已屏蔽“${subBoard.name}”`)
-      // 子版块屏蔽改变了服务端列表，其余排序模式缓存随之过期，统一失效重建
+      // 子版块显示设置改变了服务端列表，其余排序模式缓存随之过期，统一失效重建
       this.modeStates.clear()
       await this.loadTopics(1)
     } catch (e) {
       this.replaceSubBoardSelection(subBoard.filterId, previous)
-      appStore.showToast((e as Error).message || '修改子版块屏蔽设置失败')
+      appStore.showToast((e as Error).message || '修改子版块显示设置失败')
     } finally {
       this.updatingSubBoardFilterId = ''
     }
@@ -1183,7 +1183,7 @@ export struct TopicListPanel {
 
           Column() {
             Column() {
-              Text('子版块屏蔽')
+              Text('子版块显示')
                 .fontSize(15)
                 .fontColor(AppColors.textPrimary)
                 .padding({ left: 16, right: 16, top: 12, bottom: 12 })
@@ -1284,16 +1284,21 @@ export struct TopicListPanel {
           Column() {
             Row() {
               Column() {
-                Text('子版块屏蔽')
+                Text('子版块显示')
                   .fontSize(17)
                   .fontWeight(FontWeight.Bold)
                   .fontColor(AppColors.textPrimary)
                   .width('100%')
-                Text('开关会同步到 NGA 账号，并刷新当前父版块的帖子列表')
-                  .fontSize(12)
-                  .fontColor(AppColors.textTertiary)
-                  .width('100%')
-                  .margin({ top: 3 })
+                Text() {
+                  Span('关闭即屏蔽，开关会同步到 ')
+                  Span('NGA 账号').fontWeight(FontWeight.Medium)
+                  Span('，并刷新当前父版块的帖子列表')
+                }
+                .fontSize(12)
+                .fontColor(AppColors.textSecondary)
+                .lineHeight(16)
+                .width('100%')
+                .margin({ top: 3 })
               }
               .layoutWeight(1)
               .alignItems(HorizontalAlign.Start)
@@ -1319,20 +1324,28 @@ export struct TopicListPanel {
                 ListItem() {
                   Row() {
                     BoardIcon({ url: subBoard.boardHead, iconSize: 36, iconRadius: 8 })
+                      .opacity(subBoard.checked ? 1 : 0.45)
 
                     Column() {
                       Text(unescapeHtml(subBoard.name))
                         .fontSize(15)
-                        .fontColor(AppColors.textPrimary)
+                        .fontColor(subBoard.checked ? AppColors.textPrimary : AppColors.textTertiary)
                         .maxLines(1)
                         .textOverflow({ overflow: TextOverflow.Ellipsis })
                         .width('100%')
-                      if (subBoard.description.length > 0) {
+                      if (subBoard.checked && subBoard.description.length > 0) {
                         Text(unescapeHtml(subBoard.description))
                           .fontSize(12)
                           .fontColor(AppColors.textTertiary)
                           .maxLines(1)
                           .textOverflow({ overflow: TextOverflow.Ellipsis })
+                          .width('100%')
+                          .margin({ top: 2 })
+                      }
+                      if (!subBoard.checked) {
+                        Text('已屏蔽')
+                          .fontSize(12)
+                          .fontColor(AppColors.textSecondary)
                           .width('100%')
                           .margin({ top: 2 })
                       }

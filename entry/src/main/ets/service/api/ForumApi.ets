@@ -183,8 +183,8 @@ export async function setSubforumFilter(token: string, parentFid: number,
     }
     result.ok = true;
   } catch (e) {
-    logger.warn('修改子版块屏蔽设置失败: %{public}s', formatError(e));
-    result.error = (e as Error).message ?? '修改子版块屏蔽设置失败';
+    logger.warn('修改子版块显示设置失败: %{public}s', formatError(e));
+    result.error = (e as Error).message ?? '修改子版块显示设置失败';
   }
   return result;
 }
