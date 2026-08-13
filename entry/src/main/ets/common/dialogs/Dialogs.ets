@@ -49,14 +49,12 @@ export struct ConfirmDialog {
             if (this.onCancel) this.onCancel()
           })
 
-        Divider().vertical(true).height(24).color(AppColors.separator)
-
         Button(this.confirmLabel)
           .layoutWeight(1)
           .height(44)
-          .backgroundColor(this.destructive ? AppColors.destructive : Color.Transparent)
-          .systemMaterial(!this.destructive ? UIMaterialManager.buttonMaterial : undefined)
-          .fontColor(this.destructive ? AppColors.white : UIMaterialManager.adaptiveForeground)
+          .margin({ left: 12 })
+          .backgroundColor(this.destructive ? AppColors.destructive : AppColors.primary)
+          .fontColor(AppColors.white)
           .fontWeight(FontWeight.Bold)
           .onClick(() => {
             this.controller.close()
@@ -65,7 +63,7 @@ export struct ConfirmDialog {
       }
     }
     .constraintSize({ maxWidth: 340, minWidth: 260 })
-    .padding({ left: 20, right: 20 })
+    .padding({ left: 20, right: 20, bottom: 12 })
       .backgroundColor(Color.Transparent)
     .borderRadius(14)
     .alignItems(HorizontalAlign.Center)
@@ -215,17 +213,15 @@ export struct CredentialPasswordDialog {
             if (this.onCancel) this.onCancel()
           })
 
-        Divider().vertical(true).height(24).color(AppColors.separator)
-
         Button(this.confirmLabel)
           .layoutWeight(1)
           .height(44)
-          .backgroundColor(Color.Transparent)
-          .systemMaterial(UIMaterialManager.buttonMaterial)
-          .fontColor(this.password.trim().length >= this.minLength
-            ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
+          .margin({ left: 12 })
+          .backgroundColor(AppColors.primary)
+          .fontColor(AppColors.white)
           .fontWeight(FontWeight.Bold)
           .fontSize(16)
+          .opacity(this.password.trim().length >= this.minLength ? 1 : 0.45)
           .onClick(() => {
             if (this.password.trim().length >= this.minLength) {
               const password = this.password
@@ -290,14 +286,12 @@ export struct MakeNoteDialog {
           .fontColor(AppColors.primary).fontSize(16)
           .onClick(() => { this.controller.close() })
 
-        Divider().vertical(true).height(24).color(AppColors.separator)
-
         Button('确认')
-          .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
-          .systemMaterial(UIMaterialManager.buttonMaterial)
-          .fontColor(this.noteText.length >= 1 && this.noteText.length <= 20
-            ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
+          .layoutWeight(1).height(44).margin({ left: 12 })
+          .backgroundColor(AppColors.primary)
+          .fontColor(AppColors.white)
           .fontWeight(FontWeight.Bold).fontSize(16)
+          .opacity(this.noteText.length >= 1 && this.noteText.length <= 20 ? 1 : 0.45)
           .onClick(() => {
             if (this.noteText.length >= 1 && this.noteText.length <= 20) {
               if (this.onConfirm) this.onConfirm(this.noteText, this.uid, this.userName)
@@ -400,14 +394,12 @@ export struct AddBlacklistDialog {
           .fontColor(AppColors.primary).fontSize(16)
           .onClick(() => { this.controller.close() })
 
-        Divider().vertical(true).height(24).color(AppColors.separator)
-
         Button('确定添加')
-          .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
-          .systemMaterial(UIMaterialManager.buttonMaterial)
-          .fontColor(this.canSubmit()
-            ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
+          .layoutWeight(1).height(44).margin({ left: 12 })
+          .backgroundColor(AppColors.primary)
+          .fontColor(AppColors.white)
           .fontWeight(FontWeight.Bold).fontSize(16)
+          .opacity(this.canSubmit() ? 1 : 0.45)
           .onClick(() => {
             const validationError: string = this.getValidationError()
             if (validationError.length > 0 || this.uid.trim().length === 0) {
@@ -466,14 +458,12 @@ export struct AddKeywordDialog {
           .fontColor(AppColors.primary).fontSize(16)
           .onClick(() => { this.controller.close() })
 
-        Divider().vertical(true).height(24).color(AppColors.separator)
-
         Button('确定添加')
-          .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
-          .systemMaterial(UIMaterialManager.buttonMaterial)
-          .fontColor(this.keyword.trim().length > 0
-            ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
+          .layoutWeight(1).height(44).margin({ left: 12 })
+          .backgroundColor(AppColors.primary)
+          .fontColor(AppColors.white)
           .fontWeight(FontWeight.Bold).fontSize(16)
+          .opacity(this.keyword.trim().length > 0 ? 1 : 0.45)
           .onClick(() => {
             if (this.keyword.trim()) {
               if (this.onConfirm) this.onConfirm(this.keyword.trim())
@@ -537,14 +527,12 @@ export struct AddNoteDialog {
           .fontColor(AppColors.primary).fontSize(16)
           .onClick(() => { this.controller.close() })
 
-        Divider().vertical(true).height(24).color(AppColors.separator)
-
         Button('确定添加')
-          .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
-          .systemMaterial(UIMaterialManager.buttonMaterial)
-          .fontColor(this.uid.trim().length > 0 && this.nickName.trim().length > 0
-            ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
+          .layoutWeight(1).height(44).margin({ left: 12 })
+          .backgroundColor(AppColors.primary)
+          .fontColor(AppColors.white)
           .fontWeight(FontWeight.Bold).fontSize(16)
+          .opacity(this.uid.trim().length > 0 && this.nickName.trim().length > 0 ? 1 : 0.45)
           .onClick(() => {
             if (this.uid.trim() && this.nickName.trim()) {
               if (this.onConfirm) this.onConfirm(this.nickName.trim(), this.uid.trim())

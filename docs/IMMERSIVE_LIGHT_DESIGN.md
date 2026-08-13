@@ -118,7 +118,9 @@
 
 ### 5.1 材质工厂
 
-[`UIMaterialManager.ets`](../entry/src/main/ets/common/managers/UIMaterialManager.ets) 按用途收敛材质单例：`fabMaterial`（ULTRA_THIN 玻璃球）、`surfaceMaterial`（REGULAR 面板）、`barMaterial`（栏位）、`buttonMaterial`（THIN 主题琥珀）、`neutralActionMaterial`（THIN 中性操作）、`inputMaterial`（THIN 输入）、`closeButtonMaterial`（ULTRA_THIN + colorInvert，严格对齐官方反色示例）。
+[`UIMaterialManager.ets`](../entry/src/main/ets/common/managers/UIMaterialManager.ets) 按用途收敛材质单例：`fabMaterial`（ULTRA_THIN 玻璃球）、`surfaceMaterial`（REGULAR 面板）、`barMaterial`（栏位）、`neutralActionMaterial`（THIN 中性操作）、`inputMaterial`（THIN 输入）、`closeButtonMaterial`（ULTRA_THIN + colorInvert，严格对齐官方反色示例）。
+
+> 主操作按钮**不接入材质**：曾用 `buttonMaterial`（THIN 主题琥珀玻璃）作确认/发送按钮，在材质背景框（弹窗/输入栏）上呈现"浅棕底 + 黑字、按钮背景贴边框"的适配问题。已全部改为**实底主题色 + 白字**（`backgroundColor(AppColors.primary/destructive)` + `fontColor(AppColors.white)`），与「AI 设置-保存」「退出登录」按钮一致；需按压反馈/流光的中性操作仍用 `neutralActionMaterial`（回复/发帖编辑器的发送按钮）。
 
 ### 5.2 图片查看器案例（自动反色的验证闭环）
 

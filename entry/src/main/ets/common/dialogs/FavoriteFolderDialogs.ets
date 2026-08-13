@@ -76,17 +76,15 @@ export struct FavoriteFolderNameDialog {
             this.controller.close()
           })
 
-        Divider().vertical(true).height(24).color(AppColors.separator)
-
         Button(this.confirmLabel)
           .layoutWeight(1)
           .height(44)
-          .backgroundColor(Color.Transparent)
-          .systemMaterial(UIMaterialManager.buttonMaterial)
-          .fontColor(this.name.trim().length > 0
-            ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
+          .margin({ left: 12 })
+          .backgroundColor(AppColors.primary)
+          .fontColor(AppColors.white)
           .fontWeight(FontWeight.Bold)
           .fontSize(16)
+          .opacity(this.name.trim().length > 0 ? 1 : 0.45)
           .onClick((): void => {
             const normalizedName: string = this.name.trim()
             if (normalizedName.length === 0) {

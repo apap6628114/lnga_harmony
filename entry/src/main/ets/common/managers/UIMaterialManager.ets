@@ -8,11 +8,13 @@ import { uiMaterial } from '@kit.ArkUI'
  *
  * 说明：
  * - 材质对象为纯配置对象，可跨组件共享复用；
- * - 悬浮、表面、栏位与输入材质关闭系统阴影，主按钮保留材质阴影；
+ * - 悬浮、表面、栏位与输入材质关闭系统阴影，由组件自定义阴影承载浮起感；
  * - 组件背景保持透明，由 `systemMaterial` 统一承载材质表现。
  * - 自动反色（colorInvert）仅对官方"特殊资源值"表内的系统颜色资源生效，
  *   薄材质前景必须使用 `sys.color.font_*` / `sys.color.icon_*` 系列资源，
  *   使用 `ohos_id_color_*` 系列资源不会触发反色。
+ * - 主操作按钮不使用材质（曾用 `buttonMaterial` 琥珀玻璃，在材质背景框上呈现
+ *   "浅棕+黑、按钮贴边"的适配问题），一律改为实底主题色 + 白字。
  */
 export class UIMaterialManager {
   /** 薄材质上的自适应主前景色（特殊资源，可参与自动反色）。 */
@@ -51,22 +53,6 @@ export class UIMaterialManager {
   static readonly barMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
     style: uiMaterial.ImmersiveStyle.REGULAR,
     applyShadow: false
-  })
-
-  /**
-   * 主操作按钮材质：通透琥珀玻璃 + 按压形变 + 光感流光 + 材质高光。
-   *
-   * materialColor 仅以低透明度着入主题主色，背后内容仍能透出；
-   * interactive + lightEffect 使按压时按钮形变并泛起暖色光波；
-   * applyShadow 打开材质自带阴影，让按钮像悬浮的玻璃透镜。
-   */
-  static readonly buttonMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-    style: uiMaterial.ImmersiveStyle.THIN,
-    materialColor: $r('app.color.material_accent_tint'),
-    interactive: true,
-    lightEffect: { color: '#66FFE9C9' },
-    colorInvert: true,
-    applyShadow: true
   })
 
   /**

@@ -264,9 +264,8 @@ export struct MessageListPanel {
 
           Button(this.sending ? '发送中...' : '发送')
             .width('92%').height(44).fontSize(16)
-            .fontColor(UIMaterialManager.adaptiveForeground)
-            .backgroundColor(Color.Transparent)
-            .systemMaterial(UIMaterialManager.buttonMaterial)
+            .fontColor(AppColors.white)
+            .backgroundColor(AppColors.primary)
             .borderRadius(12).margin({ top: 12, bottom: 20 })
             .enabled(!this.sending && this.composeTo.trim().length > 0 &&
               this.composeSubject.trim().length > 0 && this.composeContent.trim().length > 0)

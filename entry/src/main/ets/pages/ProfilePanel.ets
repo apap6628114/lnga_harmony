@@ -540,9 +540,8 @@ export struct ProfilePanel {
               Row() {
                 Button('发私信')
                   .fontSize(15)
-                  .fontColor(UIMaterialManager.adaptiveForeground)
-                  .backgroundColor(Color.Transparent)
-                  .systemMaterial(UIMaterialManager.buttonMaterial)
+                  .fontColor(AppColors.white)
+                  .backgroundColor(AppColors.primary)
                   .borderRadius(12)
                   .layoutWeight(1)
                   .height(44)

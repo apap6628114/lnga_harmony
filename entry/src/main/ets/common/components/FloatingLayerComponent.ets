@@ -124,12 +124,10 @@ export struct FloatingLayerComponent {
               Button('取消')
                 .layoutWeight(1).backgroundColor(Color.Transparent).fontColor(AppColors.primary)
                 .onClick(() => { this.floating.hideConfirm() })
-              Divider().vertical(true).height(20).color(AppColors.separator)
               Button(this.floating.confirmLabel)
-                .layoutWeight(1).backgroundColor(Color.Transparent)
-                .systemMaterial(!this.floating.confirmDestructive ? UIMaterialManager.buttonMaterial : undefined)
-                .fontColor(this.floating.confirmDestructive ? AppColors.destructive :
-                  UIMaterialManager.adaptiveForeground)
+                .layoutWeight(1).margin({ left: 12 })
+                .backgroundColor(this.floating.confirmDestructive ? AppColors.destructive : AppColors.primary)
+                .fontColor(AppColors.white)
                 .fontWeight(FontWeight.Bold)
                 .onClick(() => {
                   const handler = this.floating.confirmOnConfirm
@@ -140,7 +138,7 @@ export struct FloatingLayerComponent {
                 })
             }.height(44)
           }
-          .width(300).padding({ left: 20, right: 20 })
+          .width(300).padding({ left: 20, right: 20, bottom: 12 })
           .backgroundColor(Color.Transparent).borderRadius(14)
           .alignItems(HorizontalAlign.Center)
           .systemMaterial(UIMaterialManager.surfaceMaterial)
