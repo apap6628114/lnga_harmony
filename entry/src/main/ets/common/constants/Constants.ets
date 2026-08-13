@@ -59,6 +59,8 @@ export class AppColors {
   static warnText: Resource = $r('app.color.warn_text')
   static chevron: Resource = $r('app.color.chevron')
   static sheetIndicator: Resource = $r('app.color.sheet_indicator')
+  /** 玻璃面板（surfaceMaterial）上列表选中行的半透明琥珀高亮，避免不透明色块与材质割裂。 */
+  static selectionTint: Resource = $r('app.color.selection_tint')
   static quoteBorders: Resource[] = [
     $r('app.color.quote_border_1'),
     $r('app.color.quote_border_2'),

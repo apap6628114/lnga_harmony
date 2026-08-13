@@ -366,7 +366,7 @@ export struct ReplyDialog {
             .fontSize(10)
             .fontWeight(FontWeight.Bold)
             .fontColor(AppColors.primary)
-            .backgroundColor(AppColors.primaryLight)
+            .backgroundColor(AppColors.selectionTint)
             .borderRadius(8)
             .padding({ left: 7, right: 7, top: 3, bottom: 3 })
           Text('贴条将附着在该楼层下方（6~650字节）')
@@ -398,7 +398,7 @@ export struct ReplyDialog {
             .fontColor(AppColors.primary)
             .padding({ left: 10, right: 10, top: 4, bottom: 4 })
             .borderRadius(10)
-            .backgroundColor(AppColors.primaryLight)
+            .backgroundColor(AppColors.selectionTint)
             .onClick(() => { this.togglePreview() })
         }
         .width('100%')
@@ -418,7 +418,7 @@ export struct ReplyDialog {
                   .padding({ left: 12, right: 12 })
                   .borderRadius(10)
                   .backgroundColor(action.tag === 'emoticon' && this.showEmojiPanel
-                    ? AppColors.primaryLight : Color.Transparent)
+                    ? AppColors.selectionTint : Color.Transparent)
                   .border({ width: 0.5, color: AppColors.separator })
                   .onClick(() => { this.applyFormat(action) })
               }, (action: FormatAction) => action.tag)

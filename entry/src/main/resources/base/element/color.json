@@ -129,6 +129,10 @@
       "value": "#52C08A4A"
     },
     {
+      "name": "selection_tint",
+      "value": "#33C08A4A"
+    },
+    {
       "name": "quote_border_1",
       "value": "#4DC08A4A"
     },

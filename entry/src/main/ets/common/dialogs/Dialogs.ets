@@ -122,7 +122,7 @@ export struct ActionSheetDialog {
             .width('100%')
             .height(52)
             .padding({ left: 20, right: 20 })
-            .backgroundColor(opt.value === this.selected ? AppColors.primaryLight : Color.Transparent)
+            .backgroundColor(opt.value === this.selected ? AppColors.selectionTint : Color.Transparent)
             .onClick(() => {
               this.controller.close()
               if (this.onSelect) this.onSelect(opt.value)

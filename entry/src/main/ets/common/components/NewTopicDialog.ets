@@ -346,7 +346,7 @@ export struct NewTopicDialog {
                   .padding({ left: 12, right: 12 })
                   .borderRadius(10)
                   .backgroundColor(this.subject.trim().startsWith(category)
-                    ? AppColors.primaryLight : Color.Transparent)
+                    ? AppColors.selectionTint : Color.Transparent)
                   .border({ width: 0.5, color: AppColors.separator })
                   .onClick(() => { this.applyCategory(category) })
               }, (category: string) => category)
@@ -384,7 +384,7 @@ export struct NewTopicDialog {
             .fontColor(AppColors.primary)
             .padding({ left: 10, right: 10, top: 4, bottom: 4 })
             .borderRadius(10)
-            .backgroundColor(AppColors.primaryLight)
+            .backgroundColor(AppColors.selectionTint)
             .onClick(() => { this.togglePreview() })
         }
         .width('100%')
@@ -404,7 +404,7 @@ export struct NewTopicDialog {
                   .padding({ left: 12, right: 12 })
                   .borderRadius(10)
                   .backgroundColor(action.tag === 'emoticon' && this.showEmojiPanel
-                    ? AppColors.primaryLight : Color.Transparent)
+                    ? AppColors.selectionTint : Color.Transparent)
                   .border({ width: 0.5, color: AppColors.separator })
                   .onClick(() => { this.applyFormat(action) })
               }, (action: FormatAction) => action.tag)
