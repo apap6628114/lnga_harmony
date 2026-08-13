@@ -75,6 +75,11 @@ export struct FloatingLayerComponent {
             bottom: this.currentBreakpoint === 'sm' ? 8 : 24
           })
           .align(this.currentBreakpoint === 'sm' ? Alignment.Bottom : Alignment.Center)
+          // 悬浮层自身不参与命中测试、不阻塞下方点击捕获层：
+          // 在超宽屏（如三折叠展开）下对话框受 maxWidth 约束居中，wrapper 仍占满全宽，
+          // 若保持 Default，对话框两侧空白区会被 wrapper 吞掉点击，导致点外部无法关闭。
+          // 子节点（编辑器本体）仍正常响应，点击框内非交互区域不会误触发关闭。
+          .hitTestBehavior(HitTestMode.Transparent)
         }
         .width('100%').height('100%')
       }
@@ -103,6 +108,7 @@ export struct FloatingLayerComponent {
             bottom: this.currentBreakpoint === 'sm' ? 8 : 24
           })
           .align(this.currentBreakpoint === 'sm' ? Alignment.Bottom : Alignment.Center)
+          .hitTestBehavior(HitTestMode.Transparent)
         }
         .width('100%').height('100%')
       }
