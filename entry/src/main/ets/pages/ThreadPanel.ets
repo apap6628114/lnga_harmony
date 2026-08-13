@@ -77,6 +77,15 @@ enum PageNavigationSource {
 
 const PAGE_LOAD_AHEAD_ITEMS: number = 3
 
+/** 页码选择器省略号占位哨兵（0 不是合法页码）。 */
+const PAGE_PICKER_ELLIPSIS: number = 0
+
+/** 页码选择器直接展示全部页码的总页数上限；超过后改用省略号分页。 */
+const PAGE_PICKER_MAX_DIRECT: number = 7
+
+/** 省略号分页时当前页两侧各展示的页码数（首尾页除外）。 */
+const PAGE_PICKER_WINDOW_RADIUS: number = 2
+
 /**
  * 调试开关：控制更多菜单中"HTML 模式打开"入口的显示。
  * - false（默认）：隐藏
@@ -137,6 +146,8 @@ export struct ThreadPanel {
   private pagePickerTotalPages: number = 0
   private pagePickerCurrentPage: number = 0
   private pagePickerOnSelect: ((page: number) => void) | null = null
+  /** 页码选择器输入框当前文本（仅页数多时显示，用于直达任意中间页）。 */
+  private pagePickerInput: string = ''
   private scroller: Scroller = new Scroller()
   /** List 当前视口高度，用于将固定 vp 标题区换算为渐变模糊比例。 */
   @State listViewportHeight: number = 1
@@ -792,14 +803,62 @@ export struct ThreadPanel {
   /**
    * 构造页码选择器的数据源。
    *
-   * @returns 从 1 到总页数的连续页码
+   * 总页数不超过 {@link PAGE_PICKER_MAX_DIRECT} 时返回全部页码；
+   * 否则返回有界的省略号分页条目：首尾页 + 当前页两侧
+   * {@link PAGE_PICKER_WINDOW_RADIUS} 页，缺口用 {@link PAGE_PICKER_ELLIPSIS}（0）占位，
+   * 保证渲染的页码按钮数量恒定有界，避免上千页时一次性创建大量组件造成卡顿。
+   *
+   * @returns 页码与省略号哨兵组成的条目数组
    */
   private buildPageArray(): number[] {
+    const total: number = this.pagePickerTotalPages
+    const cur: number = this.pagePickerCurrentPage
+    if (total <= PAGE_PICKER_MAX_DIRECT) {
+      const arr: number[] = []
+      for (let i: number = 1; i <= total; i++) {
+        arr.push(i)
+      }
+      return arr
+    }
     const arr: number[] = []
-    for (let i: number = 1; i <= this.pagePickerTotalPages; i++) {
+    arr.push(1)
+    const start: number = Math.max(2, cur - PAGE_PICKER_WINDOW_RADIUS)
+    const end: number = Math.min(total - 1, cur + PAGE_PICKER_WINDOW_RADIUS)
+    if (start > 2) {
+      arr.push(PAGE_PICKER_ELLIPSIS)
+    }
+    for (let i: number = start; i <= end; i++) {
       arr.push(i)
     }
+    if (end < total - 1) {
+      arr.push(PAGE_PICKER_ELLIPSIS)
+    }
+    arr.push(total)
     return arr
+  }
+
+  /**
+   * 从页码选择器输入框读取页码并跳转。
+   *
+   * 仅在输入为 1..总页数 范围内的整数时生效，非法输入直接忽略。
+   * 复用 {@link pagePickerOnSelect} 的回调（与点击页码按钮同一跳转入口）。
+   */
+  private jumpToPageByInput(): void {
+    const raw: string = this.pagePickerInput.trim()
+    if (raw.length === 0) {
+      appStore.showToast('请输入页码')
+      return
+    }
+    const parsed: number = Number(raw)
+    if (isNaN(parsed) || parsed < 1 || parsed > this.pagePickerTotalPages) {
+      appStore.showToast('页码应在 1~' + this.pagePickerTotalPages + ' 之间')
+      return
+    }
+    const target: number = Math.floor(parsed)
+    if (this.pagePickerOnSelect) {
+      this.pagePickerOnSelect(target)
+    }
+    this.showPagePicker = false
   }
 
   /**
@@ -1727,6 +1786,7 @@ export struct ThreadPanel {
                 .onClick(() => {
                   this.pagePickerCurrentPage = this.displayPage
                   this.pagePickerTotalPages = this.mgr.totalPages
+                  this.pagePickerInput = ''
                   this.pagePickerOnSelect = (page: number): void => {
                     if (page !== this.displayPage) {
                       this.navigateToPage(page, PageNavigationSource.PAGE_PICKER)
@@ -1870,26 +1930,52 @@ export struct ThreadPanel {
             Scroll() {
               Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start, alignItems: ItemAlign.Start }) {
                 ForEach(this.buildPageArray(), (p: number) => {
-                  Text(String(p)).fontSize(15)
-                    .fontColor(p === this.pagePickerCurrentPage ? AppColors.primary : AppColors.textPrimary)
-                    .fontWeight(p === this.pagePickerCurrentPage ? FontWeight.Bold : FontWeight.Regular)
-                    .width(40).height(40).textAlign(TextAlign.Center).borderRadius(20)
-                    .border({
-                      width: p === this.pagePickerCurrentPage ? 1.5 : 0,
-                      color: AppColors.primary
-                    })
-                    .backgroundColor(Color.Transparent)
-                    .onClick(() => {
-                      if (this.pagePickerOnSelect) {
-                        this.pagePickerOnSelect(p)
-                      }
-                      this.showPagePicker = false
-                    })
+                  if (p === PAGE_PICKER_ELLIPSIS) {
+                    Text('…').fontSize(15)
+                      .fontColor(AppColors.textSecondary)
+                      .width(40).height(40).textAlign(TextAlign.Center)
+                  } else {
+                    Text(String(p)).fontSize(15)
+                      .fontColor(p === this.pagePickerCurrentPage ? AppColors.primary : AppColors.textPrimary)
+                      .fontWeight(p === this.pagePickerCurrentPage ? FontWeight.Bold : FontWeight.Regular)
+                      .width(40).height(40).textAlign(TextAlign.Center).borderRadius(20)
+                      .border({
+                        width: p === this.pagePickerCurrentPage ? 1.5 : 0,
+                        color: AppColors.primary
+                      })
+                      .backgroundColor(Color.Transparent)
+                      .onClick(() => {
+                        if (this.pagePickerOnSelect) {
+                          this.pagePickerOnSelect(p)
+                        }
+                        this.showPagePicker = false
+                      })
+                  }
                 }, (p: number) => String(p))
               }.width('100%')
-            }.width('100%').height(120).align(Alignment.TopStart)
+            }.width('100%')
+              .height(this.pagePickerTotalPages > PAGE_PICKER_MAX_DIRECT ? 84 : 120)
+              .align(Alignment.TopStart)
+            if (this.pagePickerTotalPages > PAGE_PICKER_MAX_DIRECT) {
+              Divider().color(AppColors.separator)
+              Row() {
+                TextInput({ text: this.pagePickerInput, placeholder: '输入页码' })
+                  .type(InputType.Number)
+                  .fontSize(14).backgroundColor(Color.Transparent)
+                  .fontColor(UIMaterialManager.inputForeground)
+                  .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+                  .caretColor(UIMaterialManager.inputForeground)
+                  .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+                  .onChange((value: string) => { this.pagePickerInput = value })
+                  .onSubmit(() => { this.jumpToPageByInput() })
+                  .height(32).layoutWeight(1)
+                Text('跳转').fontSize(14).fontColor(AppColors.primary).fontWeight(FontWeight.Medium)
+                  .height(32).padding({ left: 10 })
+                  .onClick(() => { this.jumpToPageByInput() })
+              }.width('100%').padding({ top: 8 }).alignItems(VerticalAlign.Center)
+            }
           }
-          .width(220).height(180).padding({ left: 10, right: 10 })
+          .width(220).height(180).padding({ left: 10, right: 10, bottom: 8 })
           .backgroundColor(Color.Transparent).borderRadius(12)
           .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
           .systemMaterial(UIMaterialManager.surfaceMaterial)
