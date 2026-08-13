@@ -299,10 +299,11 @@ export struct ProfileCardPopup {
           }
         }
         .width('100%')
-        .backgroundColor(AppColors.bgSecondary)
+        .backgroundColor(Color.Transparent)
         .borderRadius(8)
         .padding(6)
         .margin({ top: 12 })
+        .systemMaterial(UIMaterialManager.inputMaterial)
       }
 
       Column() {
@@ -387,7 +388,7 @@ export struct ProfileCardPopup {
   @Builder
   StatItem(value: string, label: string) {
     Column() {
-      Text(value).fontSize(13).fontWeight(FontWeight.Medium).fontColor(AppColors.textPrimary)
+      Text(value).fontSize(13).fontWeight(FontWeight.Medium).fontColor(UIMaterialManager.adaptiveForeground)
       Text(label).fontSize(10).fontColor(UIMaterialManager.adaptiveSecondaryForeground).margin({ top: 1 })
     }
     .layoutWeight(1)
