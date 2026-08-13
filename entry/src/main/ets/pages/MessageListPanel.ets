@@ -273,7 +273,7 @@ export struct MessageListPanel {
             .onClick(() => this.handleSend())
         }
         .width('100%').backgroundColor(Color.Transparent)
-        .borderRadius({ topLeft: 14, topRight: 14 }).alignItems(HorizontalAlign.Center)
+        .borderRadius(14).alignItems(HorizontalAlign.Center)
         .padding({ bottom: this.navBarHeight })
         .systemMaterial(UIMaterialManager.surfaceMaterial)
         .position({ x: 0, y: '40%' })

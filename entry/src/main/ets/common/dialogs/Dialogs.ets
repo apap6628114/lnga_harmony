@@ -150,7 +150,7 @@ export struct ActionSheetDialog {
     }
     .width('100%').constraintSize({ maxWidth: 420 })
       .backgroundColor(Color.Transparent)
-    .borderRadius({ topLeft: 16, topRight: 16 })
+    .borderRadius(16)
     .padding({ bottom: 20 })
     .systemMaterial(UIMaterialManager.surfaceMaterial)
   }
