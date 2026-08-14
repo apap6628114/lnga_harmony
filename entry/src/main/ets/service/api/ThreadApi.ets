@@ -99,6 +99,10 @@ export async function getThread(token: string, tid: string, pid: string,
       }
 
       if (!jsonOk) {
+        // 调试模式：JSON 接口失败降级为 HTML 解析时弹出提示，便于观察请求通道
+        if (appStore.settings.debugMode) {
+          appStore.showToast('JSON 接口失败，已降级为 HTML 模式：' + jsonError)
+        }
         const fallbackParams: Record<string, string> = {
           'tid': tid || '',
           'page': page || '1',
