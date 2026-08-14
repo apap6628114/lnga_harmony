@@ -16,8 +16,8 @@
  * 前置：cookie 依次取环境变量 NGA_COOKIE、tools/bbcode-ts/.nga-cookie.txt（本地持久化，
  * 浏览器登录后 document.cookie）；响应 GBK 编码，TextDecoder('gbk') 显式解码；UA 用 NGA_WP_JW。
  *
- * 注：官方网页渲染 DOM 无法静态抓取（read.php 对静态请求返回 JS 启动壳），
- * 渲染后楼层 DOM 需用浏览器 devtools 从已渲染页面提取（README 调试流程第 5-8 步）。
+ * 注：使用 NGA_WP_JW UA 与有效 Cookie 时，read.php 静态 HTML 可包含 postArg 与正文源文，
+ * 供 HTML 降级解析；官方最终渲染 DOM 仍需用浏览器从执行脚本后的页面提取。
  */
 import { writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'

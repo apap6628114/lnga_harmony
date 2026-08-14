@@ -8,6 +8,8 @@
     "build": "tsc",
     "test": "npm run build && node --test \"dist/tests/*.test.js\"",
     "snapshot": "npm run build && node dist/scripts/gen-snapshot.js",
+    "inspect:json": "node scripts/fetch-thread-json.mjs",
+    "inspect:html": "npm run build && node dist/scripts/inspect-thread-html.js",
     "compare:official": "npm run build && node dist/scripts/compare-official.js",
     "compare:html-json": "npm run build && node dist/scripts/compare-html-json.js",
     "sync": "node scripts/sync-to-ets.mjs"
