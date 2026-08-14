@@ -372,10 +372,13 @@ export async function postReply(token: string, tid: number, fid: number,
       'fid': String(fid),
       'post_content': content,
       'anony': String(anony),
-      'attachments': attachments,
-      'attachments_check': attachmentsCheck,
       '__output': '8',
     };
+    // 与官方协议一致：无附件时不携带 attachments 字段，否则服务端会进入附件确认校验并报错
+    if (attachments) {
+      fields['attachments'] = attachments;
+      fields['attachments_check'] = attachmentsCheck;
+    }
     if (tid) fields['tid'] = String(tid);
     if (pid) fields['pid'] = String(pid);
     if (postSubject) fields['post_subject'] = postSubject;
