@@ -1,9 +1,9 @@
-name: Build HarmonyOS HAP
+name: Build HarmonyOS HAP (oh23)
 
 on:
   push:
     branches:
-      - main
+      - oh23
   workflow_dispatch:
 
 permissions:
