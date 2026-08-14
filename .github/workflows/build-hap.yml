@@ -1,4 +1,4 @@
-name: Build HarmonyOS HAP
+name: Build HarmonyOS HAP (main)
 
 on:
   push:
