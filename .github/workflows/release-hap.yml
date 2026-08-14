@@ -33,6 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
+      GH_TOKEN: ${{ github.token }}
       HARMONY_CLI_VERSION: 6.1.0.816
       HARMONY_CLI_ARCHIVE: commandline-tools-linux-x64-6.1.0.816.zip
       HARMONY_CLI_SHA256: 4b21e8a4ce19fc7eb381425a570e936c80067b8a0bef9cdcfe8a49e4764038e2
