@@ -119,9 +119,39 @@ export NODE_OPTIONS="${NODE_OPTIONS}"
 "${HVIGORW}" assembleHap --mode module -p module=entry@default -p buildMode=${BUILD_MODE} --no-daemon
 ```
 
+PowerShell 等价命令（Windows 环境）：
+
+```powershell
+$env:DEVECO_SDK_HOME = 'C:/Program Files/Huawei/DevEco Studio/sdk'
+$env:_JAVA_OPTIONS = '-Xmx1024m -Xms256m -XX:+UseSerialGC'
+$env:NODE_OPTIONS = '--max-old-space-size=8192'
+& 'C:/Program Files/Huawei/DevEco Studio/tools/hvigor/bin/hvigorw.bat' assembleHap --mode module -p module=entry@default -p buildMode=debug --no-daemon
+```
+
 - `--no-daemon` 确保构建完成后进程退出
 - hvigorw 自带增量编译，即使重复执行也不会浪费太多时间
 - 如构建失败，检查 `DEVECO_SDK_HOME` 是否已导出
+
+### 构建成功判定
+
+- 唯一判定标准是日志尾部出现 **`BUILD SUCCESSFUL in <耗时>`**，且 HAP 产物
+  （`entry/build/default/outputs/default/entry-default-signed.hap`）时间戳更新。
+- 在 PowerShell 中用 `2>&1 | Select-Object ...` 重定向输出时，进程退出码可能被
+  stderr 重定向显示为 `1`（NativeCommandError 噪音）；只要日志含
+  `BUILD SUCCESSFUL` 即视为成功，不要被退出码误导。
+- `assembleHap` 只编译 `src/main`，**不编译 `entry/src/test` 的 Hypium 用例**；
+  单元测试验证须走 `harmonyos-test` skill 的 `hvigorw test` 流程。
+
+### 所需参数与环境条件
+
+| 条件 | 值/要求 | 缺失后果 |
+|------|---------|---------|
+| `DEVECO_SDK_HOME` | `C:/Program Files/Huawei/DevEco Studio/sdk`（config.sh 已导出） | 找不到 SDK 组件，构建失败 |
+| hvigorw 入口 | 从 DevEco 安装目录调用（项目根无 wrapper） | 命令找不到 |
+| `_JAVA_OPTIONS` | `-Xmx1024m -Xms256m -XX:+UseSerialGC` | Java `os::commit_memory` 失败 / 页面文件不足 |
+| `NODE_OPTIONS` | `--max-old-space-size=8192` | ArkTS 编译器 V8 `Fatal process out of memory` |
+| 用户级构建缓存 | `C:\Users\ll\.hvigor\project_caches\<hash>\workspace` 可写 | ENOENT/EPERM（见故障排查） |
+| `MSYS_NO_PATHCONV=1` | Git Bash 路径保护（config.sh 已设） | `/data/...` 被误转盘符路径 |
 
 ## 步骤 2：拉起模拟器
 
@@ -200,6 +230,72 @@ hdc shell aa start -a ${ABILITY_NAME} -b ${BUNDLE_NAME}
 
 成功标志：输出 `start ability successfully`。启动成功不代表功能验证通过。
 
+## 构建故障排查
+
+按现象定位，不盲目重跑。所有日志以 `BUILD SUCCESSFUL` 为准（见"构建成功判定"）。
+
+### 1. `ENOENT: no such file ...\workspace\node_modules\@ohos\hvigor\bin\hvigor.js`
+
+用户级 hvigor 工作区缓存损坏（缺文件或版本不一致）。
+
+```text
+hvigor ERROR: 00308003 Operation Error
+Error Message: ENOENT: no such file C:\Users\ll\.hvigor\project_caches\<hash>\workspace\node_modules\@ohos\hvigor\bin\hvigor.js
+* Try the following: > delete ...\workspace and retry.
+```
+
+处理步骤（按顺序）：
+
+1. 先删除 `C:\Users\ll\.hvigor\project_caches\<hash>\workspace`；若部分文件被占用删不掉，跳过被占用项继续。
+2. 重跑构建。hvigor 启动时会自动重建 workspace；若重建路径不可用（如下一步的权限/占用问题），改用第 3 步。
+3. 手动重建：从 DevEco 安装目录复制 hvigor 包到用户缓存：
+
+   ```powershell
+   $src = 'C:/Program Files/Huawei/DevEco Studio/tools/hvigor'
+   $dst = 'C:\Users\ll\.hvigor\project_caches\<hash>\workspace\node_modules\@ohos'
+   Copy-Item "$src\hvigor" "$dst\hvigor" -Recurse -Force
+   Copy-Item "$src\hvigor-ohos-plugin" "$dst\hvigor-ohos-plugin" -Recurse -Force
+   ```
+
+   `<hash>` 是项目对应的缓存目录名（报错路径中可见）。
+
+### 2. `EPERM: operation not permitted, unlink '...hvigor-simple.d.ts'` / 缓存目录删不掉
+
+先区分三种原因，按序排查：
+
+| 现象 | 原因 | 处理 |
+|------|------|------|
+| 报错里带 `[sandbox: ...]` 标记，或 PowerShell `Remove-Item` 报 Access denied 而 `cmd /c del /f /q` 能删 | 文件系统沙箱拦截了对用户目录的写操作 | 以完整权限（`sandbox_permissions: danger-full-access`）重跑构建；`cmd` 可绕过沙箱用于纯文件操作 |
+| 文件被进程占用（删除/重命名均失败，含 `cmd del`） | 构建异常退出遗留的 node 子进程，或 DevEco Studio 的 hvigor 服务持有 workspace 句柄 | 见第 3 节，精确终止残留进程 |
+| 复制自 Program Files 的文件带只读属性 | 源文件属性被保留 | `Get-ChildItem $ws -Recurse -Force -File | Where-Object IsReadOnly | ForEach-Object { $_.IsReadOnly = $false }` |
+
+### 3. 残留 node 进程占用 workspace
+
+构建异常退出（如被中断）后，node 子进程可能持有 `workspace` 句柄，导致缓存删除/重建失败。
+
+排查（不批量杀进程）：
+
+1. 列出 node 进程与启动时间：`Get-Process node | Select Id, StartTime, Path | Sort StartTime`。
+2. 与本次构建的启动时间比对——构建期间启动、路径为 `C:\Program Files\nodejs\node.exe`（而非 DevEco 的 `tools\node\node.exe`）的进程即为残留。
+3. 核对无歧义后只终止该精确进程：`Stop-Process -Id <pid> -Force`。
+
+禁止按进程名批量终止 Node、Java、Hvigor 或 DevEco Studio 进程；DevEco Studio（`tools\node`）的进程是 IDE 本体，不得终止。
+
+### 4. 沙箱 / 受限身份下的构建
+
+在受限文件沙箱（如 Codex 沙箱用户，ACL 仅 `ReadAndExecute`）中，hvigor 的 node 子进程无法写入用户级缓存：
+
+- 症状：`ENOENT`（装不了 hvigor 包）→ 修复后变 `EPERM unlink`（无法覆盖缓存文件）。
+- 判断：`Get-Acl` 看目标文件 ACL 是否只有 `CodexSandboxUsers: ReadAndExecute`；或 `whoami /groups` 检查当前身份。
+- 处理：构建命令本身需要完整权限（`sandbox_permissions: danger-full-access`），不能只靠复制文件绕过——hvigor 运行期仍要写缓存。
+
+### 5. 内存不足
+
+| 症状 | 处理 |
+|------|------|
+| Java `os::commit_memory` 失败 / `页面文件太小` | 确认 `_JAVA_OPTIONS` 已按 config.sh 导出 |
+| Node.js `Fatal process out of memory: Zone` | 确认 `NODE_OPTIONS=--max-old-space-size=8192` 已导出 |
+
 ## 踩坑记录
 
 | 问题 | 原因 | 解决 |
@@ -208,6 +304,11 @@ hdc shell aa start -a ${ABILITY_NAME} -b ${BUNDLE_NAME}
 | `hdc file recv ... C:/xxx` 拼成 `cwd\C:/xxx` | hdc 不认正斜杠盘符 | local 参数用相对文件名 |
 | `sys.boot.completed` 取不到 | 模拟器上该属性 errNum 1002 | 改用 `param get const.product.model` 返回 `emulator` |
 | hvigorw 找不到 | 项目根目录无 wrapper 脚本 | 从 DevEco Studio 安装目录调用 |
+| `ENOENT: ...\workspace\node_modules\@ohos\hvigor\bin\hvigor.js` | 用户级 workspace 缓存损坏 | 删除该 workspace 重跑；仍失败则从 `tools/hvigor/` 复制 `hvigor`、`hvigor-ohos-plugin` 到缓存（见故障排查 §1） |
+| `EPERM: operation not permitted, unlink '...hvigor-simple.d.ts'` | 沙箱拦截用户目录写操作，或残留 node 进程占用 workspace | 沙箱：以完整权限重跑构建；占用：按启动时间比对精确终止残留进程（见故障排查 §2/§3） |
+| 缓存目录删除报 Access denied，但 `cmd /c del` 可删 | 文件系统沙箱拦截 PowerShell 写操作 | 用 `cmd` 做纯文件操作；构建本身仍需完整权限 |
+| PowerShell 下退出码 1 但日志有 `BUILD SUCCESSFUL` | `2>&1 \| Select-Object` 把 stderr 当 NativeCommandError | 以 `BUILD SUCCESSFUL` 为成功判定，忽略退出码 |
+| `assembleHap` 通过但 Hypium 用例未验证 | `src/test` 不在 HAP 构建管线内 | 单元测试走 `harmonyos-test` skill 的 `hvigorw test` |
 | Java `os::commit_memory` 失败 / `页面文件太小` | Windows 虚拟内存不足 | `export _JAVA_OPTIONS="-Xmx1024m -Xms256m -XX:+UseSerialGC"`，或增大系统页面文件 |
 | Node.js `Fatal process out of memory: Zone` | ArkTS 编译器 V8 内存不足 | `export NODE_OPTIONS="--max-old-space-size=8192"` |
 | `SDK component missing` / 找不到 SDK | `sdk-pkg.json` 中 `path` 与实际目录名不匹配 | 检查 `DEVECO_SDK_HOME/default/sdk-pkg.json`，修正 `path` 字段 |
