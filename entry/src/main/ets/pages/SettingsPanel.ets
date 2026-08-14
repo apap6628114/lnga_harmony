@@ -543,7 +543,22 @@ export struct SettingsPanel {
             .borderRadius(12)
             .margin({ top: 12 })
 
-            // ---- Block 3B: 导出账号凭证 / 清除缓存 / 退出登录 ----
+            // ---- Block 3B: 调试模式 ----
+            Column() {
+              SettingToggleRow({
+                iconRes: $r('app.media.settings_debug_mode'), iconColor: SettingsIconColors.debugMode, label: '调试模式',
+                isOn: appStore.settings.debugMode,
+                onChange: (v: boolean) => {
+                  appStore.settingsStore.setDebugMode(v)
+                }
+              })
+            }
+            .width('92%')
+            .backgroundColor(AppColors.bgTertiary)
+            .borderRadius(12)
+            .margin({ top: 12 })
+
+            // ---- Block 3C: 导出账号凭证 / 清除缓存 / 退出登录 ----
             Column() {
               SettingRow({
                 iconRes: $r('app.media.settings_credential_export'), iconColor: SettingsIconColors.credentialExport, label: '导出账号凭证',

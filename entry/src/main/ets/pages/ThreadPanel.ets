@@ -86,13 +86,6 @@ const PAGE_PICKER_MAX_DIRECT: number = 7
 /** 省略号分页时当前页两侧各展示的页码数（首尾页除外）。 */
 const PAGE_PICKER_WINDOW_RADIUS: number = 2
 
-/**
- * 调试开关：控制更多菜单中"HTML 模式打开"入口的显示。
- * - false（默认）：隐藏
- * - true：显示，点击后在 HTML / JSON 解析模式间切换并重新加载帖子
- */
-export const SHOW_HTML_MODE_ENTRY: boolean = false
-
 /** 带请求页码的预取结果。 */
 class FetchPageResult {
   /** 请求页码。 */
@@ -141,6 +134,11 @@ export struct ThreadPanel {
   @State titleScrollEffectProgress: number = 0
   /** 黑名单变更版本号。 */
   @StorageProp('blacklistVersion') @Watch('onBlacklistVersionChange') blacklistVersion: number = 0
+  /**
+   * 调试模式（设置页"调试模式"开关）：开启后在更多菜单显示"HTML 模式打开"调试入口，
+   * 点击可在 HTML / JSON 解析模式间切换并重新加载帖子。
+   */
+  @StorageProp('nga_debugMode') debugMode: boolean = false
   @State showMoreMenu: boolean = false
   @State showPagePicker: boolean = false
   private pagePickerTotalPages: number = 0
@@ -397,6 +395,7 @@ export struct ThreadPanel {
 
   /**
    * 更多菜单中"HTML 模式打开"调试入口的文案，随强制模式状态变化。
+   * 该入口仅在设置页"调试模式"开启时显示。
    *
    * @returns 当前强制模式对应的菜单文案
    */
@@ -1892,7 +1891,7 @@ export struct ThreadPanel {
             }
             .width('100%')
 
-            if (SHOW_HTML_MODE_ENTRY) {
+            if (this.debugMode) {
               Divider().width('100%').color(AppColors.separator)
 
               Column() {

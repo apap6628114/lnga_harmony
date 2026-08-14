@@ -73,6 +73,9 @@ export const KEY_NETWORK_CHANGE_VERSION: string = 'networkChangeVersion'
 /** 调试开关：true 时帖子详情强制走 HTML 解析模式，跳过 JSON API */
 export const KEY_FORCE_HTML_MODE: string = 'nga_forceHtmlMode'
 
+/** 调试模式：true 时在帖子更多菜单中显示"HTML 模式打开"等调试入口 */
+export const KEY_DEBUG_MODE: string = 'nga_debugMode'
+
 /** 内置网页浏览：true 时没有可用 App Linking 应用的 URL 在应用内 WebView 打开 */
 export const KEY_USE_INTERNAL_WEBVIEW: string = 'useInternalWebView'
 

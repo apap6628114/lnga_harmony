@@ -134,6 +134,8 @@ export class SettingsIconColors {
   static readonly pagePrefetch: string = '#059669'
   /** 内置网页浏览的浏览器蓝色。 */
   static readonly internalBrowser: string = '#1D4ED8'
+  /** 调试模式的终端石灰绿。 */
+  static readonly debugMode: string = '#65A30D'
   /** 账号凭证导出的安全青色。 */
   static readonly credentialExport: string = '#0F766E'
   /** 清除缓存的维护琥珀色。 */

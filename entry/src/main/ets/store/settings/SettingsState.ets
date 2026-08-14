@@ -39,6 +39,8 @@ export class SettingsState {
   videoMuted: boolean = false
   /** 没有可用 App Linking 应用时，是否在应用内 WebView 打开 URL */
   useInternalWebView: boolean = true
+  /** 调试模式（控制帖子更多菜单中的 HTML 模式请求等调试入口显示） */
+  debugMode: boolean = false
   /** 自定义 AI 提供方配置列表 */
   aiProfiles: AiProviderProfile[] = []
   /** 当前激活的自定义 AI 配置 ID */

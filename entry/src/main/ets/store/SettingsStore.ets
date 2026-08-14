@@ -23,6 +23,7 @@ import {
   KEY_ENABLE_IMAGE_SIZE_PREFETCH,
   KEY_VIDEO_MUTED,
   KEY_USE_INTERNAL_WEBVIEW,
+  KEY_DEBUG_MODE,
   KEY_CONTENT_FONT_SIZE,
   KEY_TOPIC_FONT_SIZE,
 } from '../common/constants/AppStorageKeys'
@@ -114,12 +115,16 @@ export class SettingsStore extends BaseStore<SettingsState> {
       if (saved.useInternalWebView !== undefined) {
         this.state.useInternalWebView = saved.useInternalWebView
       }
+      if (saved.debugMode !== undefined) {
+        this.state.debugMode = saved.debugMode
+      }
     }
     AppStorage.setOrCreate(KEY_SHOW_SIGNATURE, this.state.showSignature)
     AppStorage.setOrCreate(KEY_IMAGE_LOAD_STRATEGY, this.state.imageLoadStrategy)
     AppStorage.setOrCreate(KEY_ENABLE_IMAGE_SIZE_PREFETCH, this.state.enableImageSizePrefetch)
     AppStorage.setOrCreate(KEY_VIDEO_MUTED, this.state.videoMuted)
     AppStorage.setOrCreate(KEY_USE_INTERNAL_WEBVIEW, this.state.useInternalWebView)
+    AppStorage.setOrCreate(KEY_DEBUG_MODE, this.state.debugMode)
     AppStorage.setOrCreate(KEY_CONTENT_FONT_SIZE, this.state.fontSize)
     AppStorage.setOrCreate(KEY_TOPIC_FONT_SIZE, this.state.topicFontSize)
   }
@@ -171,6 +176,14 @@ export class SettingsStore extends BaseStore<SettingsState> {
   setUseInternalWebView(enabled: boolean): void {
     this.state.useInternalWebView = enabled
     AppStorage.setOrCreate(KEY_USE_INTERNAL_WEBVIEW, enabled)
+    this.persistSettings()
+  }
+
+  // --- Debug ---
+  /** 设置调试模式（开启后在帖子更多菜单显示"HTML 模式打开"等调试入口） */
+  setDebugMode(enabled: boolean): void {
+    this.state.debugMode = enabled
+    AppStorage.setOrCreate(KEY_DEBUG_MODE, enabled)
     this.persistSettings()
   }
 
