@@ -284,6 +284,17 @@ class AppStoreClass {
   }
 
   showToast(msg: string): void { this.toastManager.show(msg) }
+
+  /**
+   * 展示带动作按钮的 Toast（如回复成功后的「前往查看」）。
+   *
+   * @param msg - 主文案
+   * @param actionText - 按钮文案
+   * @param onAction - 点击回调；回调可能晚于 Toast 消失触发，闭包内不得依赖已销毁的组件实例
+   */
+  showToastAction(msg: string, actionText: string, onAction: () => void): void {
+    this.toastManager.showAction(msg, actionText, onAction)
+  }
 }
 
 export const appStore = new AppStoreClass()
