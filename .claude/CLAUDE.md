@@ -1,6 +1,6 @@
 # 项目规则 — NGA OH (HarmonyOS ArkUI)
 
-NGA 论坛客户端，stage 模型，API 6.1.0(23)，单 entry 模块。
+NGA 论坛客户端，stage 模型，API 7.0.0(26)，单 entry 模块。
 
 ## 构建与部署
 
