@@ -1,5 +1,6 @@
 import { BBNode, BBNodeType } from '../../../model/BBCodeNode'
 import { ReadingFontRole, ReadingTypography } from '../../typography/ReadingTypography'
+import { decodeAnonymousName } from '../../../parser/AnonymousParser'
 
 /**
  * CSS 命名色与 NGA 官方编辑器色板到十六进制颜色的映射。
@@ -358,16 +359,19 @@ function appendRun(state: InlineRunBuildState, run: InlineRun): void {
  * @param node 当前节点
  * @param inherited 父级样式
  * @param inheritedHref 父级链接地址
+ * @param inheritedAnonymousName 是否处于无跳转地址的 UID 匿名名节点中
  * @param state Run 构建状态
  */
 function flattenInlineNode(node: BBNode, inherited: InlineTextStyle, inheritedHref: string,
-  state: InlineRunBuildState): void {
+  inheritedAnonymousName: boolean, state: InlineRunBuildState): void {
   const continuedStyle: InlineTextStyle = node.inheritedFormatTags.length > 0 ?
     applyInlineFormatTags(node.inheritedFormatTags, inherited) : inherited
   const style: InlineTextStyle = deriveNodeStyle(node, continuedStyle)
   const isLink: boolean = node.type === BBNodeType.URL || node.type === BBNodeType.PID_LINK ||
     node.type === BBNodeType.UID_LINK || node.type === BBNodeType.TID_LINK || node.type === BBNodeType.MENTION
   const href: string = isLink ? node.href : inheritedHref
+  const anonymousName: boolean = inheritedAnonymousName ||
+    (node.type === BBNodeType.UID_LINK && node.href.length === 0)
 
   if (node.type === BBNodeType.EMOTION) {
     const run = new InlineRun()
@@ -382,7 +386,7 @@ function flattenInlineNode(node: BBNode, inherited: InlineTextStyle, inheritedHr
 
   if (node.children.length > 0) {
     for (let i: number = 0; i < node.children.length; i++) {
-      flattenInlineNode(node.children[i], style, href, state)
+      flattenInlineNode(node.children[i], style, href, anonymousName, state)
     }
     return
   }
@@ -390,7 +394,7 @@ function flattenInlineNode(node: BBNode, inherited: InlineTextStyle, inheritedHr
   if (node.text.length > 0) {
     const run = new InlineRun()
     run.kind = href.length > 0 ? InlineRunKind.LINK : InlineRunKind.TEXT
-    run.text = node.text
+    run.text = anonymousName ? decodeAnonymousName(node.text) : node.text
     run.href = href
     run.style = style
     appendRun(state, run)
@@ -408,7 +412,7 @@ export function flattenInlineNodes(nodes: BBNode[], inherited?: InlineTextStyle)
   const state = new InlineRunBuildState()
   const baseStyle: InlineTextStyle = inherited === undefined ? new InlineTextStyle() : cloneInlineTextStyle(inherited)
   for (let i: number = 0; i < nodes.length; i++) {
-    flattenInlineNode(nodes[i], baseStyle, '', state)
+    flattenInlineNode(nodes[i], baseStyle, '', false, state)
   }
   flushPendingRun(state)
   // 渲染前压缩连续换行：NGA 楼层正文的空行以 <br/> 序列表达，预处理后成为连续 \n。

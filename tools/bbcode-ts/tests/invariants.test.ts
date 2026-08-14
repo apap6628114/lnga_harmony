@@ -688,6 +688,36 @@ describe('线性扫描与批量格式化回归', () => {
   })
 })
 
+describe('匿名引用用户名渲染', () => {
+  it('真实引用样本中的无属性 UID 匿名名在渲染层解码且解析树保留原文', () => {
+    const encodedName: string = '#anony_0d89af3611314647cc3f028cd0976872'
+    const content: string = loadSampleContent('tid47373567-lou20-anonymous-quote.txt')
+    const nodes: BBNode[] = parseBBCode(content)
+    const quote: BBNode | undefined = findType(nodes, BBNodeType.QUOTE)
+    if (!quote) assert.fail('未找到 QUOTE 节点')
+
+    assert.ok(concatTextNodes(quote.children).includes(encodedName))
+    const rendered: string = flattenInlineNodes(quote.children).map((run: InlineRun): string => run.text).join('')
+    assert.ok(rendered.includes('甲瞿涂丁武罗'))
+    assert.ok(!rendered.includes(encodedName))
+  })
+
+  it('无 quote 外壳的回复头同样解码匿名名且普通无属性 UID 保持原文', () => {
+    const encodedName: string = '#anony_e78f2586f09b0df8b407a1ae9509c416'
+    const content: string = '[b]Reply to [pid=878473187,47373567,1]Reply[/pid] Post by ' +
+      '[uid]' + encodedName + '[/uid][color=gray](13楼)[/color] (2026-08-14 21:46)[/b]'
+    const rendered: string = flattenInlineNodes(parseBBCode(content))
+      .map((run: InlineRun): string => run.text).join('')
+    assert.ok(rendered.includes('辰聂丛壬安周'))
+    assert.ok(!rendered.includes(encodedName))
+
+    const ordinaryRuns: InlineRun[] = flattenInlineNodes(parseBBCode('[b]Post by [uid]普通用户[/uid][/b]'))
+    assert.equal(ordinaryRuns.length, 1)
+    assert.equal(ordinaryRuns[0].kind, InlineRunKind.TEXT)
+    assert.equal(ordinaryRuns[0].text, 'Post by 普通用户')
+  })
+})
+
 // ---------------------------------------------------------------------------
 // 渲染层空白行折叠（回归：历史修复 be0ec156 在镜像化时丢失）
 // ---------------------------------------------------------------------------

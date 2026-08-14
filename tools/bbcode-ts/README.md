@@ -161,7 +161,7 @@ read.php 页面存在"隐楼"行为：被隐藏/删除的楼层不渲染但服�
 3. `npm run sync` 回写 `entry/src/main/ets/`
 4. DevEco 编译 + Hypium（`entry/src/test/BBCodeUnit.test.ets`）最终门禁
 
-> ⚠️ 禁止直接修改 `entry/src/main/ets` 下被镜像的 30 个文件——下次 `npm run sync`
+> ⚠️ 禁止直接修改 `entry/src/main/ets` 下被镜像的 31 个文件——下次 `npm run sync`
 > 会整体覆盖。确需直接改 .ets 时，改完立即反向同步回镜像。
 > 域名常量 `common/constants/NgaDomains.ts` 同样纳入镜像，切域时两侧都要同步。
 
@@ -228,6 +228,17 @@ runs.json 提取方式：浏览器内脚本遍历楼层 DOM，跳过 `.x` 表格
 - `bbNodesToPlainText` 剥除样式子树边缘空白；零丢失断言用 `concatTextNodes`（逐字保留）
 
 ## 修复记录
+
+- **2026-08-15 无属性 `[uid]` 匿名引用名解码（tid=47373567 的 20/23/34 楼验证）**：
+  - 症状：已有修复只在 `InlineRunKind.LINK` 分支调用 `decodeAnonymousName`；该帖引用匿名楼层时，
+    服务端输出 `[uid]#anony_...[/uid]`（无 UID 属性），节点因无 href 被扁平化为普通 TEXT，且会与
+    前置 `Post by ` 合并，最终显示原始匿名编码。
+  - 取数：该帖 `__output=8` JSON 与 `__output=9` XML 响应均在流中途截断；改用完整 read.php HTML
+    经 `parseHtmlToRawJson` 还原第 2 页 20 楼，确认 20/23/34 楼均为无属性 `[uid]` 变体。
+  - 修复：把 `AnonymousParser` 纳入 TS 镜像；`flattenInlineNode` 仅在无 href 的 UID 子树中解码文字，
+    解析树继续保留原始编码以维持文本零丢失，普通无属性 UID 保持原文且不伪装成可点击链接。
+  - 回归：固化 `tid47373567-lou20-anonymous-quote.txt` 与快照；镜像覆盖带/不带 quote 外壳两种真实
+    形态及普通 UID，Hypium 增加 `decodesAnonymousNameInAttributeLessUidQuote`。
 
 - **2026-08-11 投票帖支持（tid=47344482 主楼验证，镜像 136 项全绿）**：
   - 背景：投票帖在鸿蒙客户端完全不可见。排查结论：JSON 数据（楼级 `__R[0].vote` /

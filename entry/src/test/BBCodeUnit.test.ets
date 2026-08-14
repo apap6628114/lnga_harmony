@@ -72,6 +72,21 @@ export default function bbcodeUnitTest(): void {
       expect(runs[0].style.italic).assertTrue()
     })
 
+    it('decodesAnonymousNameInAttributeLessUidQuote', 0, (): void => {
+      const encodedName: string = '#anony_0d89af3611314647cc3f028cd0976872'
+      const nodes: BBNode[] = parseBBCode(
+        '[quote][pid=878473588,47373567,1]Reply[/pid] [b]Post by [uid]' + encodedName +
+        '[/uid][color=gray](18楼)[/color] (2026-08-14 21:52):[/b]<br/><br/>引用正文[/quote]')
+      const runs: InlineRun[] = flattenInlineNodes(nodes[0].children)
+      let rendered: string = ''
+      for (let index: number = 0; index < runs.length; index++) {
+        rendered += runs[index].text
+      }
+
+      expect(rendered.indexOf('甲瞿涂丁武罗') >= 0).assertTrue()
+      expect(rendered.indexOf(encodedName)).assertEqual(-1)
+    })
+
     it('keepsHrefOfOverlongTextFragmentUrl', 0, (): void => {
       const href: string = 'https://example.com/news/2026-08-05/doc-x.shtml#:~:text=' +
         '%E7%AB%B9%E7%9F%A5%E4%BA%86'.repeat(80)

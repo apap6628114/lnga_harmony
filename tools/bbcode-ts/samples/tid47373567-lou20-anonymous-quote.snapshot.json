@@ -1,0 +1,61 @@
+[
+ {
+  "type": "QUOTE",
+  "children": [
+   {
+    "type": "PID_LINK",
+    "href": "#/thread?tid=47373567&pid=878473588&page=1",
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "Reply"
+     }
+    ]
+   },
+   {
+    "type": "TEXT",
+    "text": " "
+   },
+   {
+    "type": "BOLD",
+    "children": [
+     {
+      "type": "TEXT",
+      "text": "Post by "
+     },
+     {
+      "type": "UID_LINK",
+      "children": [
+       {
+        "type": "TEXT",
+        "text": "#anony_0d89af3611314647cc3f028cd0976872"
+       }
+      ]
+     },
+     {
+      "type": "COLOR",
+      "color": "gray",
+      "children": [
+       {
+        "type": "TEXT",
+        "text": "(18楼)"
+       }
+      ]
+     },
+     {
+      "type": "TEXT",
+      "text": " (2026-08-14 21:52):"
+     }
+    ]
+   },
+   {
+    "type": "TEXT",
+    "text": "\n\n和我母亲症状一样，可以就医吃药治疗，要注意坚持用药。"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n\n祝您母亲早日康复，身体健康。"
+ }
+]
