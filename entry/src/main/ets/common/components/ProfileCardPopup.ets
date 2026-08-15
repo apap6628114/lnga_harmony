@@ -2,7 +2,7 @@ import { appStore } from '../../store/AppStore'
 import { routerStore, Screen } from '../../store/RouterStore'
 import { ProfileData, AdminForumsData } from '../../model/User'
 import { AppColors } from '../constants/Constants'
-import { formatTime, fmtNum, escHtml, getAvatarUrl } from '../utils/Utils'
+import { formatTime, fmtNum, formatMoney, escHtml, getAvatarUrl } from '../utils/Utils'
 import { unescapeHtml } from '../../parser/_shared/HtmlEntityCodec'
 import { Avatar } from './Avatar'
 import { MakeNoteDialog } from '../dialogs/Dialogs'
@@ -283,19 +283,16 @@ export struct ProfileCardPopup {
       .padding({ left: 16, right: 16, top: 16 })
       .alignItems(VerticalAlign.Center)
 
-      if (Number(profile.posts) || Number(profile.fame) || Number(profile.rvrc) || Number(profile.money)) {
+      if (Number(profile.posts) || Number(profile.rvrc) || Number(profile.money)) {
         Row() {
           if (Number(profile.posts)) {
             this.StatItem(fmtNum(profile.posts), '发帖')
           }
-          if (Number(profile.fame)) {
-            this.StatItem(fmtNum(profile.fame), '威望')
-          }
           if (Number(profile.rvrc)) {
-            this.StatItem(fmtNum(profile.rvrc), 'RVRC')
+            this.StatItem(fmtNum(profile.rvrc), '威望')
           }
           if (Number(profile.money)) {
-            this.StatItem(fmtNum(profile.money), '金钱')
+            this.StatItem(formatMoney(profile.money), '金钱')
           }
         }
         .width('100%')

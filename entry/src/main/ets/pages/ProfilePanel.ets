@@ -3,7 +3,7 @@ import { routerStore, Screen } from '../store/RouterStore'
 import { checkin } from '../service/api/FavoriteApi'
 import { ProfileData, ReputationData } from '../model/User'
 import { AppColors, BreakpointType, ProfileActionIconColors } from '../common/constants/Constants'
-import { formatTime, fmtNum, escHtml } from '../common/utils/Utils'
+import { formatTime, fmtNum, formatMoney, escHtml } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { Avatar } from '../common/components/Avatar'
 import { AnonymousName } from '../common/components/AnonymousName'
@@ -163,8 +163,9 @@ export struct ProfilePanel {
   /**
    * 构造个人主页统计项数组（数据驱动 Grid ForEach）。
    * 格式化规则与原 7 个硬编码 GridItem 逐字一致：
-   * posts/money/rvrc 走 fmtNum；regdate 走 formatTime 或兜底「未知」；
-   * group 兜底「普通会员」；fame/followByNum 仅在 >0 时显示。
+   * posts/money/fame 走 fmtNum；regdate 走 formatTime 或兜底「未知」；
+   * group 兜底「普通会员」；followByNum 仅在 >0 时显示。
+   * 威望按官方口径展示 fame/10（fame 为 ×10 存储的威望，见 NGA js_ucp.js）。
    */
   private buildStatItems(): StatItem[] {
     const items: StatItem[] = []
@@ -179,13 +180,13 @@ export struct ProfilePanel {
     const s2: StatItem = new StatItem()
     s2.iconRes = $r('app.media.icon_money')
     s2.label = '金钱'
-    s2.value = fmtNum(p.money)
+    s2.value = formatMoney(p.money)
     items.push(s2)
 
     const s3: StatItem = new StatItem()
     s3.iconRes = $r('app.media.icon_medal')
     s3.label = '威望'
-    s3.value = fmtNum(p.rvrc)
+    s3.value = fmtNum(Math.floor(Number(p.fame) / 10))
     items.push(s3)
 
     const s4: StatItem = new StatItem()
@@ -199,14 +200,6 @@ export struct ProfilePanel {
     s5.label = '会员组'
     s5.value = p.group || '普通会员'
     items.push(s5)
-
-    if (Number(p.fame) > 0) {
-      const s6: StatItem = new StatItem()
-      s6.iconRes = $r('app.media.icon_star')
-      s6.label = '声望'
-      s6.value = fmtNum(p.fame)
-      items.push(s6)
-    }
 
     if (Number(p.followByNum) > 0) {
       const s7: StatItem = new StatItem()

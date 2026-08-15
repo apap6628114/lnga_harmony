@@ -54,6 +54,24 @@ export function fmtNum(n: string | number): string {
   return String(num)
 }
 
+/**
+ * NGA 金钱格式化（金/银/铜三段制，对应官方 commonui.calc_money 的 title 文本）：
+ * 1 金 = 10000 铜，1 银 = 100 铜；如 600 → "6银币"。
+ * 与官方展示口径一致（官方 ucp 页面 money=600 显示为 6 银币）。
+ */
+export function formatMoney(raw: string | number): string {
+  const c = Number(raw)
+  if (isNaN(c) || c <= 0) return '0'
+  const g = Math.floor(c / 10000)
+  const s = Math.floor(c / 100) - g * 100
+  const t = c - g * 10000 - s * 100
+  let out: string = ''
+  if (g > 0) out += g + '金币 '
+  if (s > 0) out += s + '银币 '
+  if (t > 0) out += t + '铜币 '
+  return out.trim()
+}
+
 export function escHtml(s: string): string {
   if (!s) return ''
   return s
