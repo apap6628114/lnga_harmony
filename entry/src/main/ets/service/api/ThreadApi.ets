@@ -39,12 +39,145 @@ export function setForceHtmlMode(v: boolean): void {
 
 // ============== 帖子详情 ==============
 
+/**
+ * 双通道取数结果：原始同形状数据 + 通道信息。
+ */
+interface ThreadRawResult {
+  /** 与 JSON 同形状的原始数据（JSON 响应或 HTML 解析结果）；双通道均失败时为 null。 */
+  raw: Record<string, Object> | null
+  /** 是否经由 HTML 通道（强制 HTML / pid-only 特例 / JSON 失败降级）。 */
+  viaHtml: boolean
+  /** JSON 通道的错误信息（供日志/Toast/错误消息拼接；HTML 通道为空串）。 */
+  jsonError: string
+}
+
+/**
+ * 取一页原始数据中页末楼层的 pid。
+ *
+ * 与 parseThreadData 的 rowList 末尾语义一致：楼层顺序即 Object.keys 顺序，
+ * 跳过缺失 pid 的行与贴条行（comment_to_id 存在且无 content，不占楼层）。
+ *
+ * @param raw - 同形状原始数据
+ * @returns 页末楼层 pid；无有效楼层时返回 -1
+ */
+function lastPidOfPage(raw: Record<string, Object>): number {
+  const dataObj = raw['data'] as Record<string, Object> | undefined;
+  const rows = dataObj?.['__R'] as Record<string, Object> | undefined;
+  if (!rows) {
+    return -1;
+  }
+  const keys: string[] = Object.keys(rows);
+  for (let i = keys.length - 1; i >= 0; i--) {
+    const row = rows[keys[i]] as Record<string, Object>;
+    if (!row) {
+      continue;
+    }
+    if (row['pid'] === undefined || row['pid'] === null) {
+      continue;
+    }
+    if (row['comment_to_id'] !== undefined && row['comment_to_id'] !== null
+      && row['content'] === undefined) {
+      continue;
+    }
+    return Number(row['pid']);
+  }
+  return -1;
+}
+
+/**
+ * 双通道取数原语：read.php JSON 优先，残缺/错误时降级 HTML，返回同形状原始对象。
+ *
+ * 这是 getThread（渲染整页）与 locatePidPage（仅取 pid 序列）共享的底层取数：
+ * 不解析、不过滤、不预热、不触碰渲染状态。JSON 被官方阻断为残缺响应
+ * （README Rule 2：Unterminated string / 意外 EOF / HTML 错误页）或返回业务
+ * 错误时，自动降级 read.php HTML 解析（parseHtmlTask）。本函数保证不抛异常：
+ * 双通道均失败时返回 raw=null。
+ *
+ * @param token - 会话令牌
+ * @param tid - 主题 ID（可空：仅 pid 场景走 HTML 特例）
+ * @param pid - 楼层 pid（可空）
+ * @param authorid - 只看楼主用户 ID（可空）
+ * @param page - 页码（'e' 表示末页）
+ * @returns 取数结果
+ */
+async function fetchThreadRaw(token: string, tid: string, pid: string,
+  authorid: string, page: string): Promise<ThreadRawResult> {
+  const session = appStore.getSession(token);
+  if (!session) {
+    return { raw: null, viaHtml: false, jsonError: '未登录' };
+  }
+
+  if (getForceHtmlMode() || !tid) {
+    // 调试模式 / 强制走 HTML 解析 / 仅 pid 无 tid（现有特例）：直接 HTML 通道
+    const htmlParams: Record<string, string> = {
+      'tid': tid || '',
+      'page': page || '1',
+    };
+    if (pid) htmlParams['pid'] = pid;
+    if (authorid) htmlParams['authorid'] = authorid;
+    try {
+      const html: string = await ngaClient.getHtmlText('/read.php', htmlParams,
+        { uid: session.uid, cid: session.cid });
+      const rawObj: Object = await taskpool.execute(parseHtmlTask, html)
+      return { raw: rawObj as Record<string, Object>, viaHtml: true, jsonError: '' };
+    } catch (e) {
+      return { raw: null, viaHtml: true, jsonError: (e as Error).message ?? 'HTML 解析异常' };
+    }
+  }
+
+  // JSON 主通道
+  let jsonError: string = '';
+  try {
+    const ngaParams: Record<string, string> = {
+      'page': page || '1',
+      '__output': '8',
+      'noprefix': '',
+      'v2': '',
+    };
+    if (tid) ngaParams['tid'] = tid;
+    if (pid) ngaParams['pid'] = pid;
+    if (authorid) ngaParams['authorid'] = authorid;
+    const raw = await ngaClient.get('/read.php', ngaParams,
+      { uid: session.uid, cid: session.cid }) as Record<string, Object>;
+    const err = parseNgaError(raw);
+    if (err) {
+      jsonError = err;
+    } else {
+      return { raw: raw, viaHtml: false, jsonError: '' };
+    }
+  } catch (e) {
+    jsonError = (e as Error).message ?? 'JSON 请求异常';
+    logger.error('[NGA][REQ] JSON API 请求失败，降级 HTML: %{public}s', jsonError);
+  }
+
+  // HTML 降级
+  const fallbackParams: Record<string, string> = {
+    'tid': tid || '',
+    'page': page || '1',
+  };
+  if (pid) fallbackParams['pid'] = pid;
+  if (authorid) fallbackParams['authorid'] = authorid;
+  try {
+    const html: string = await ngaClient.getHtmlText('/read.php', fallbackParams,
+      { uid: session.uid, cid: session.cid });
+    const rawObj: Object = await taskpool.execute(parseHtmlTask, html)
+    return { raw: rawObj as Record<string, Object>, viaHtml: true, jsonError: jsonError };
+  } catch (e) {
+    return { raw: null, viaHtml: true, jsonError: jsonError };
+  }
+}
+
+/**
+ * 获取帖子详情（JSON 主通道优先，残缺/错误时自动降级 HTML 解析）。
+ *
+ * 双通道取数由 fetchThreadRaw 完成，本函数负责解析（fillThreadResult）与
+ * 过滤/预热，是 ThreadPanel 渲染整页的唯一取数入口。
+ */
 export async function getThread(token: string, tid: string, pid: string,
   authorid: string, page: string,
   blacklist: Set<string> = new Set(),
   keywords: string[] = [],
-  noteMap: Record<string, string> = {},
-  skipImagePrefetch: boolean = false): Promise<ThreadResult> {
+  noteMap: Record<string, string> = {}): Promise<ThreadResult> {
   const result = new ThreadResult();
   const session = appStore.getSession(token);
   if (!session) {
@@ -52,78 +185,31 @@ export async function getThread(token: string, tid: string, pid: string,
     return result;
   }
 
-  let jsonError: string = '';
-
   try {
     if (!tid && !pid) {
       result.error = '缺少 tid 或 pid';
       return result;
     }
 
-    if (getForceHtmlMode() || !tid) {
-      // 调试模式 / 强制走 HTML 解析
-      const htmlParams: Record<string, string> = {
-        'tid': tid || '',
-        'page': page || '1',
-      };
-      if (pid) htmlParams['pid'] = pid;
-      if (authorid) htmlParams['authorid'] = authorid;
-      const html: string = await ngaClient.getHtmlText('/read.php', htmlParams, { uid: session.uid, cid: session.cid });
-      const rawObj: Object = await taskpool.execute(parseHtmlTask, html)
-      const rawHtml: Record<string, Object> = rawObj as Record<string, Object>
-      fillThreadResult(rawHtml, result, blacklist, keywords, noteMap, skipImagePrefetch);
-    } else {
-      // 优先尝试 JSON API (__output=8)；失败时降级 HTML 解析
-      const ngaParams: Record<string, string> = {
-        'page': page || '1',
-        '__output': '8',
-        'noprefix': '',
-        'v2': '',
-      };
-      if (tid) ngaParams['tid'] = tid;
-      if (pid) ngaParams['pid'] = pid;
-      if (authorid) ngaParams['authorid'] = authorid;
-
-      let jsonOk: boolean = false;
-      jsonError = '';
-      try {
-        const raw = await ngaClient.get('/read.php', ngaParams, { uid: session.uid, cid: session.cid }) as Record<string, Object>;
-        const err = parseNgaError(raw);
-        if (err) {
-          jsonError = err;
-        } else {
-          fillThreadResult(raw as Record<string, Object>, result, blacklist, keywords, noteMap, skipImagePrefetch);
-          jsonOk = true;
-        }
-      } catch (e) {
-        jsonError = (e as Error).message ?? 'JSON 请求异常';
-        logger.error('[NGA][REQ] JSON API 请求失败，降级 HTML: %{public}s', jsonError);
-      }
-
-      if (!jsonOk) {
-        // 调试模式：JSON 接口失败降级为 HTML 解析时弹出提示，便于观察请求通道
-        if (appStore.settings.debugMode) {
-          appStore.showToast('JSON 接口失败，已降级为 HTML 模式：' + jsonError)
-        }
-        const fallbackParams: Record<string, string> = {
-          'tid': tid || '',
-          'page': page || '1',
-        };
-        if (pid) fallbackParams['pid'] = pid;
-        if (authorid) fallbackParams['authorid'] = authorid;
-        const html: string = await ngaClient.getHtmlText('/read.php', fallbackParams, { uid: session.uid, cid: session.cid });
-        const rawObj: Object = await taskpool.execute(parseHtmlTask, html)
-        const rawHtml: Record<string, Object> = rawObj as Record<string, Object>
-        fillThreadResult(rawHtml, result, blacklist, keywords, noteMap, skipImagePrefetch);
-        if (result.posts.length === 0) {
-          result.ok = false;
-          result.error = jsonError || result.error || '无法加载该帖子';
-        }
-      }
+    const fetched: ThreadRawResult = await fetchThreadRaw(token, tid, pid, authorid, page);
+    if (!fetched.raw) {
+      // 双通道均失败
+      result.error = fetched.jsonError || '无法加载该帖子';
+      return result;
+    }
+    // 调试模式：JSON 接口失败降级为 HTML 解析时弹出提示，便于观察请求通道
+    if (fetched.viaHtml && fetched.jsonError.length > 0 && appStore.settings.debugMode) {
+      appStore.showToast('JSON 接口失败，已降级为 HTML 模式：' + fetched.jsonError)
+    }
+    fillThreadResult(fetched.raw, result, blacklist, keywords, noteMap);
+    // 降级通道解析不到楼层时判定失败（JSON 主通道保持原语义：填充即 ok）
+    if (fetched.viaHtml && fetched.jsonError.length > 0 && result.posts.length === 0) {
+      result.ok = false;
+      result.error = fetched.jsonError || result.error || '无法加载该帖子';
     }
   } catch (e) {
     const htmlErr: string = (e as Error).message ?? 'HTML 解析异常';
-    result.error = jsonError ? `${htmlErr}（JSON 先失败: ${jsonError}）` : htmlErr;
+    result.error = htmlErr;
   }
   return result;
 }
@@ -160,16 +246,14 @@ function prefetchPostImages(posts: PostInfo[]): void {
 /**
  * 二分查找目标楼层 pid 所在页码。
  *
- * 纯数据行为：不预热（getThread 以 skipImagePrefetch 关闭）、不过滤、不注入，
- * 不依赖任何渲染窗口状态。取数通道与 getThread 完全一致——JSON 主通道
- * （read.php __output=8）优先，官方将 JSON 阻断为残缺响应（README Rule 2：
- * Unterminated string / 意外 EOF / HTML 错误页）时自动降级 read.php HTML 解析
- * （parseHtmlTask），保证定位在 JSON 通道异常时仍可用。利用 NGA 楼层 pid 在
- * 主题内随楼号严格递增的性质（删除楼层只产生 pid 空洞、不破坏单调性）二分
- * 定位。总页数自包含获取：先请求末页（page=e），其分页信息即真实总页数，
- * 同时以主题末楼 pid 排除「目标 pid 超出主题末楼」（楼层不存在或已删除）的
- * 情形；主题内部的删除空洞无法在此拦截，由 ThreadPanel 页内未命中后的
- * 单帖兜底处理。
+ * 纯数据行为：经由双通道取数原语 fetchThreadRaw（JSON 主通道优先，被官方
+ * 阻断为残缺响应时自动降级 HTML），只读原始 __R 的页末 pid 与 __ROWS 分页
+ * 信息，不解析、不过滤、不预热、不依赖渲染状态。利用 NGA 楼层 pid 在主题内
+ * 随楼号严格递增的性质（删除楼层只产生 pid 空洞、不破坏单调性）二分定位。
+ * 总页数自包含获取：先请求末页（page=e），以 __ROWS/__R__ROWS_PAGE 按
+ * parseThreadData 同款公式换算真实总页数，同时以主题末楼 pid 排除「目标 pid
+ * 超出主题末楼」（楼层不存在或已删除）的情形；主题内部的删除空洞无法在此
+ * 拦截，由 ThreadPanel 页内未命中后的单帖兜底处理。
  *
  * 本方法保证不抛异常：任一页请求失败/超时/数据异常均返回 -1。
  *
@@ -186,22 +270,28 @@ export async function locatePidPage(token: string, tid: string, targetPid: numbe
   if (!session) {
     return -1;
   }
-  // 先请求末页：拿真实总页数（pagination.totalPages）与主题末楼 pid。
-  // 通过 getThread 取数（传空 blacklist/keywords 保持不过滤语义，skipImagePrefetch
-  // 跳过图片预热），JSON 被阻断为残缺响应时自动降级 HTML。每次请求带 15s 超时，
-  // 失败即整体返回 -1，由调用方按「无法定位」降级打开。
   try {
-    // 仅取数场景：不过滤（空黑名单/关键词）、无用户备注、跳过图片预热
-    const emptyNoteMap: Record<string, string> = {};
-    const lastResult: ThreadResult = await withTimeout<ThreadResult>(
-      getThread(token, tid, '', '', 'e', new Set(), [], emptyNoteMap, true), 15000);
-    if (!lastResult.ok) {
+    // 先请求末页：拿真实总页数与主题末楼 pid。每次请求带 15s 超时，失败即整体 -1。
+    const lastFetch: ThreadRawResult = await withTimeout<ThreadRawResult>(
+      fetchThreadRaw(token, tid, '', '', 'e'), 15000);
+    if (!lastFetch.raw) {
       return -1;
     }
-    const totalPages: number = lastResult.pagination.totalPages > 0
-      ? lastResult.pagination.totalPages : 1;
-    const lastPidOfThread: number = lastResult.posts.length > 0
-      ? lastResult.posts[lastResult.posts.length - 1].pid : -1;
+    const lastData = lastFetch.raw['data'] as Record<string, Object> | undefined;
+    const totalRows: number = Number(lastData?.['__ROWS'] ?? 0);
+    const rowsPerPage: number = Math.max(20, Number(lastData?.['__R__ROWS_PAGE'] ?? 0));
+    let totalPages: number = 1;
+    if (totalRows > 0) {
+      totalPages = Math.ceil(totalRows / rowsPerPage);
+    } else {
+      // __ROWS 缺失（异常响应）时按本页行数估算，与 parseThreadData 的降级口径一致
+      const lastRows = lastData?.['__R'] as Record<string, Object> | undefined;
+      const rowCount: number = lastRows ? Object.keys(lastRows).length : 0;
+      if (rowCount > 0) {
+        totalPages = Math.ceil(rowCount / rowsPerPage);
+      }
+    }
+    const lastPidOfThread: number = lastPidOfPage(lastFetch.raw);
     if (lastPidOfThread > 0 && targetPid > lastPidOfThread) {
       // 目标 pid 超出主题末楼：楼层不存在或已删除
       return -1;
@@ -213,12 +303,12 @@ export async function locatePidPage(token: string, tid: string, targetPid: numbe
     // hi 不收缩、lo<hi 恒成立，会死循环重复请求同一页。
     while (lo < hi) {
       const mid: number = Math.floor((lo + hi) / 2);
-      const result: ThreadResult = await withTimeout<ThreadResult>(
-        getThread(token, tid, '', '', String(mid), new Set(), [], emptyNoteMap, true), 15000);
-      if (!result.ok || result.posts.length === 0) {
+      const fetched: ThreadRawResult = await withTimeout<ThreadRawResult>(
+        fetchThreadRaw(token, tid, '', '', String(mid)), 15000);
+      if (!fetched.raw) {
         return -1;
       }
-      const lastPid: number = result.posts[result.posts.length - 1].pid;
+      const lastPid: number = lastPidOfPage(fetched.raw);
       if (lastPid <= 0) {
         // 防御分支：页内无有效楼层 pid（正常数据不可达）
         return -1;
@@ -245,12 +335,10 @@ export async function locatePidPage(token: string, tid: string, targetPid: numbe
  * @param blacklist - 黑名单 UID
  * @param keywords - 标题屏蔽关键词
  * @param noteMap - 用户备注表
- * @param skipImagePrefetch - true 时跳过图片尺寸头预热（仅取数的轻量场景，如 locatePidPage）
  */
 function fillThreadResult(raw: Record<string, Object>, result: ThreadResult,
   blacklist: Set<string>, keywords: string[] = [],
-  noteMap: Record<string, string> = {},
-  skipImagePrefetch: boolean = false): void {
+  noteMap: Record<string, string> = {}): void {
   const data: ThreadData = parseThreadData(raw, blacklist, keywords, noteMap);
   const dataObj: Record<string, Object> | undefined = raw?.['data'] as Record<string, Object> | undefined;
 
@@ -395,47 +483,9 @@ function fillThreadResult(raw: Record<string, Object>, result: ThreadResult,
   result.pagination.totalPages = data.pagination.totalPages;
   result.pagination.totalRows = data.pagination.totalRows;
 
-  if (!skipImagePrefetch) {
-    prefetchPostImages(result.posts);
-  }
+  prefetchPostImages(result.posts);
 
   result.ok = true;
-}
-
-/**
- * 通过 HTML 响应体获取帖子详情（JSON API 降级方案）
- * 当 __output=8 请求被 NGA 概率拒绝时使用
- */
-export async function getThreadHtml(token: string, tid: string, page: string,
-  blacklist: Set<string> = new Set(),
-  keywords: string[] = [],
-  noteMap: Record<string, string> = {}): Promise<ThreadResult> {
-  const result: ThreadResult = new ThreadResult();
-  const session = appStore.getSession(token);
-  if (!session) {
-    result.error = '未登录';
-    return result;
-  }
-
-  try {
-    if (!tid) {
-      result.error = '缺少 tid';
-      return result;
-    }
-
-    const params: Record<string, string> = {
-      'tid': tid,
-      'page': page || '1',
-    };
-
-    const html: string = await ngaClient.getHtmlText('/read.php', params, { uid: session.uid, cid: session.cid });
-    const rawObj: Object = await taskpool.execute(parseHtmlTask, html)
-    const raw: Record<string, Object> = rawObj as Record<string, Object>
-    fillThreadResult(raw, result, blacklist, keywords, noteMap);
-  } catch (e) {
-    result.error = (e as Error).message ?? '获取帖子详情失败(HTML降级)';
-  }
-  return result;
 }
 
 // ============== 发帖/回帖 ==============
