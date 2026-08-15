@@ -95,7 +95,7 @@ export default function valueUnitTest(): void {
 
 ### 4. 遵守 ArkTS 测试代码约束
 
-读取并遵守 `.claude/rules/ArkTS-syntax.md` 和项目根级规范。
+读取并遵守项目根 `AGENTS.md` 的「ArkTS 语法约束」章节和项目根级规范。
 
 - 使用显式类型和 `const`；禁止 `any`、`unknown`、忽略指令和确定性赋值断言。
 - 为新增类、成员、函数、枚举、类型和接口编写 JSDoc。

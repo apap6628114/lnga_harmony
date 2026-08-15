@@ -20,7 +20,7 @@ description: HarmonyOS 项目编译验证、模拟器状态检查与拉起、HAP
 执行前先 source 配置文件：
 
 ```bash
-source .claude/skills/harmonyos-build-deploy/config.sh
+source .dsh/skills/harmonyos-build-deploy/config.sh
 ```
 
 配置项说明（按需修改 `config.sh`）：
@@ -72,7 +72,7 @@ fi
 ### 检查 SDK 完整性
 
 ```bash
-source .claude/skills/harmonyos-build-deploy/config.sh
+source .dsh/skills/harmonyos-build-deploy/config.sh
 
 # 检查 sdk-pkg.json 中的 path 字段是否匹配实际目录
 if [ -f "$SDK_PKG_PATH" ]; then
@@ -110,7 +110,7 @@ hdc shell pidof ${BUNDLE_NAME}
 ## 步骤 1：构建 HAP
 
 ```bash
-source .claude/skills/harmonyos-build-deploy/config.sh
+source .dsh/skills/harmonyos-build-deploy/config.sh
 
 # 导出内存限制（避免 Java / Node.js 爆内存）
 export _JAVA_OPTIONS="${JAVA_OPTIONS}"
@@ -158,7 +158,7 @@ $env:NODE_OPTIONS = '--max-old-space-size=8192'
 ### 2.1 检查 → 启动
 
 ```bash
-source .claude/skills/harmonyos-build-deploy/config.sh
+source .dsh/skills/harmonyos-build-deploy/config.sh
 
 # 检查是否已有设备在线
 if hdc list targets | grep -qE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'; then
@@ -177,7 +177,7 @@ fi
 使用 `run_in_background: true` 启动模拟器：
 
 ```bash
-source .claude/skills/harmonyos-build-deploy/config.sh
+source .dsh/skills/harmonyos-build-deploy/config.sh
 "${EMULATOR}" -start ${EMULATOR_INSTANCE}
 ```
 
@@ -208,7 +208,7 @@ hdc shell "param get const.product.model"  # 返回 "emulator" 即系统就绪
 ## 步骤 3：安装 HAP
 
 ```bash
-source .claude/skills/harmonyos-build-deploy/config.sh
+source .dsh/skills/harmonyos-build-deploy/config.sh
 
 # 安装（-r 覆盖安装，已安装同版本也不会报错）
 hdc install -r "${HAP_PATH}"
@@ -224,7 +224,7 @@ hdc install -r "${HAP_PATH}"
 仅当用户明确要求启动、打开或运行应用时执行：
 
 ```bash
-source .claude/skills/harmonyos-build-deploy/config.sh
+source .dsh/skills/harmonyos-build-deploy/config.sh
 hdc shell aa start -a ${ABILITY_NAME} -b ${BUNDLE_NAME}
 ```
 

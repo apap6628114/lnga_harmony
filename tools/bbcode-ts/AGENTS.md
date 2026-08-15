@@ -67,23 +67,31 @@ HTML 降级通道：read.php 静态 HTML → parseHtmlToRawJson
 所有命令均从 `tools/bbcode-ts` 目录执行。正常调试 MUST 把登录 Cookie 持久化到已被 gitignore 的
 `.nga-cookie.txt`；`NGA_COOKIE` 只用于同一命令的一次性显式覆盖。Cookie MUST NOT 提交到仓库。
 
-### R2.1 第一步：通过 Chrome DevTools MCP 获取并持久化请求凭证
+### R2.1 第一步：优先复用持久化凭证，缺失或失效时才通过 chrome-devtools MCP 获取
 
-抓取脚本不会执行登录。Agent MUST 通过 `chrome-devtools` MCP 控制用户现有 Chrome 登录会话；
-MUST NOT 改用无登录态的网页搜索、普通 HTTP 抓取或要求用户把 Cookie 粘贴到聊天中。
+抓取前 MUST 先检查 `tools/bbcode-ts/.nga-cookie.txt`：
+
+- 文件存在且结构完整（单行纯 Cookie 值，同时含非空 `ngaPassportUid` 与 `ngaPassportCid`，
+  见 R2.1.4）时视为有效凭证，MAY 直接复用，MUST NOT 仅为例行流程重复打开 Chrome 获取。
+- 仅当文件不存在、结构不完整，或实际抓取返回未登录 / `error 15` / 权限错误等凭证失效信号时，
+  才 MUST 进入 R2.1.1–R2.1.4 的 chrome-devtools MCP 获取流程。
+
+chrome-devtools MCP（`mcp__chrome__*`）仅用于获取新凭证：抓取脚本不会执行登录，Agent MUST
+通过它控制用户现有 Chrome 登录会话；MUST NOT 改用无登录态的网页搜索、普通 HTTP 抓取或要求
+用户把 Cookie 粘贴到聊天中。
 
 #### R2.1.1 绑定已登录 Chrome 页面
 
-1. MUST 用 `list_pages` 找到现有的 `https://bbs.nga.cn/` 标签页并选择它；没有时才可用
-   `new_page` / `navigate_page` 打开 NGA。
-2. MUST 用 `take_snapshot` 确认页面已登录。若仍在登录页、出现验证码或需要用户输入密码/二次验证，
+1. MUST 用 `mcp__chrome__list_pages` 找到现有的 `https://bbs.nga.cn/` 标签页并选择它；没有时才可用
+   `mcp__chrome__new_page` / `mcp__chrome__navigate_page` 打开 NGA。
+2. MUST 用 `mcp__chrome__take_snapshot` 确认页面已登录。若仍在登录页、出现验证码或需要用户输入密码/二次验证，
    MUST 保留该 Chrome 标签页并请用户完成登录；Agent 不得伪造登录态。
-3. 登录跳转完成后 MUST 保持同一 Chrome DevTools MCP 会话和同一 `bbs.nga.cn` 页面；不得换成
+3. 登录跳转完成后 MUST 保持同一 chrome-devtools MCP 会话和同一 `bbs.nga.cn` 页面；不得换成
    `ngabbs.com`、其他浏览器或无登录态的新会话取 Cookie。
 
 #### R2.1.2 `document.cookie` 只作为初始候选
 
-Agent MAY 先用 `evaluate_script` 在 `bbs.nga.cn` 页面执行：
+Agent MAY 先用 `mcp__chrome__evaluate_script` 在 `bbs.nga.cn` 页面执行：
 
 ```js
 () => document.cookie
@@ -113,11 +121,11 @@ CID 尚未可靠取得：
 
 遇到上述情况 MUST 按以下顺序处理：
 
-1. 等待登录重定向完成，必要时用 `navigate_page` 重新进入目标帖子，再次执行 `evaluate_script`；
+1. 等待登录重定向完成，必要时用 `mcp__chrome__navigate_page` 重新进入目标帖子，再次执行 `mcp__chrome__evaluate_script`；
    SHOULD 像客户端 `LoginPage` 一样轮询，直到 UID 与 CID 同时出现，不能只看到 UID 就落盘。
-2. 用 `list_network_requests` 找到同一页面刚刚成功发往 `https://bbs.nga.cn/` 的 `read.php`
+2. 用 `mcp__chrome__list_network_requests` 找到同一页面刚刚成功发往 `https://bbs.nga.cn/` 的 `read.php`
    或 `nuke.php` 请求。
-3. 用 `get_network_request` 检查该成功请求实际携带的 `Cookie` 请求头；该请求头比
+3. 用 `mcp__chrome__get_network_request` 检查该成功请求实际携带的 `Cookie` 请求头；该请求头比
    `document.cookie` 更权威，因为它已经过 Chrome 的 Domain、Path、Secure 和可见性规则筛选。
 4. MUST 从实际请求头按精确键名提取 `ngaPassportCid`，原样保留 `=` 后到下一个 `;` 之前的值；
    MUST NOT `decodeURIComponent`、截短、转小写或拿 `ngaPassportUid` 代替。
@@ -126,7 +134,7 @@ CID 尚未可靠取得：
 
 #### R2.1.4 必须写入 `.nga-cookie.txt` 才算持久化完成
 
-Chrome DevTools MCP 取得的是浏览器当前内存状态。只在某一次 shell 中设置
+chrome-devtools MCP 取得的是浏览器当前内存状态。只在某一次 shell 中设置
 `$env:NGA_COOKIE` / `export NGA_COOKIE` 不能跨 Agent 工具调用可靠保留，因此正常调试流程 MUST
 把已核验的完整 Cookie 请求头值写入：
 
@@ -149,8 +157,11 @@ tools/bbcode-ts/.nga-cookie.txt
 
 #### R2.1.5 写入后必须实际验证
 
-MUST 在不显式设置 `NGA_COOKIE` 的新命令中运行一次 JSON 主通道，使脚本从
-`.nga-cookie.txt` 读取持久化凭证；成功标准见 R2.3：
+复用既有凭证的日常调试 MAY 跳过本节单独验证，直接以实际抓取命令的返回结果为准；只有文件缺失、
+结构不完整或返回凭证失效信号时，才按 R2.1 重新获取。
+
+每次新写入或更新 `.nga-cookie.txt` 后，MUST 在不显式设置 `NGA_COOKIE` 的新命令中运行一次
+JSON 主通道，使脚本从 `.nga-cookie.txt` 读取持久化凭证；成功标准见 R2.3：
 
 ```bash
 npm run inspect:json -- <tid> <page>
