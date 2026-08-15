@@ -17,6 +17,10 @@
 /tools/bbcode-ts/node_modules
 /tools/bbcode-ts/dist
 
-# NGA cookie �־û���fetch �ű���ȡ�����ύ��
+# tools/nga-data-fetch 依赖与凭证（通用抓取层）
+/tools/nga-data-fetch/node_modules
+/tools/nga-data-fetch/.nga-cookie.txt
+
+# NGA cookie 持久化文件（fetch 脚本读取，禁止提交）
 /tools/bbcode-ts/.nga-cookie.txt
 

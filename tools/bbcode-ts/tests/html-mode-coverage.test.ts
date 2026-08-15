@@ -51,7 +51,7 @@ const pairGaps: Record<string, PairGaps> = loadPairGaps()
 describe('HTML 模式 → JSON 覆盖验证', () => {
   it('成对样本存在（先运行 fetch-thread-pair.mjs 抓取）', { skip: pairNames.length === 0 },
     () => {
-      assert.ok(pairNames.length > 0, '无 html-pairs.lst 样本，跳过（抓取方法见 README）')
+      assert.ok(pairNames.length > 0, '无 html-pairs.lst 样本，跳过（抓取方法见 skill bbcode-ts）')
     })
 })
 

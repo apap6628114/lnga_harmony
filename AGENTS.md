@@ -27,7 +27,7 @@ eol 判断不可靠，`git ls-files --eol` 可能漏报）。规则：
 ## BBCode / HTML 模式解析器修改规则（TS 镜像真源）
 
 解析器、渲染器、`NgaDomains.ts`、html-thread 解析器、`Utils.ts` 的修改规则与完整流程见
-skill：**`bbcode-ts`**（加载后按其操作；完整规则在 `tools/bbcode-ts/AGENTS.md`）。
+skill：**`bbcode-ts`**（加载后按其操作；Rule 0–9 完整规则已并入 skill 正文）。
 
 常驻红线摘要（即使 skill 未触发也必须遵守）：
 
@@ -35,10 +35,22 @@ skill：**`bbcode-ts`**（加载后按其操作；完整规则在 `tools/bbcode-
   `entry/src/main/ets/` 下被镜像的文件 —— 下次 `npm run sync` 会机械覆盖
 - **动手前先自查**：`node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry`（项目根执行）。
   输出含目标 `.ets` → 必须走镜像流程；输出「0 修改」→ 可安全直接改 entry 侧文件
-- 标准门禁：改镜像 → `npm test` → `npm run sync` → `sync-to-ets.mjs --dry` 为 0 修改
+- 标准门禁（在 `tools/bbcode-ts` 下执行）：改镜像 → `npm test` → `npm run sync` → `sync-to-ets.mjs --dry` 为 0 修改
   → DevEco 编译 + Hypium（`entry/src/test/BBCodeUnit.test.ets`）最终门禁
 - 镜像代码必须遵守 ArkTS 子集（TS 能编译 ≠ ArkTS 能编译，`{}` 空字面量/`void` 表达式是硬错误）
 - 「官方网页怎么渲染，解析器就怎么解释」是最高对齐标准
+
+## NGA 真实数据抓取（通用层）
+
+抓取 NGA 真实数据、管理持久化登录凭证（校验/落盘/失效验证）见 skill：**`nga-data-fetch`**
+（工具在 `tools/nga-data-fetch/`，净化与解析语义仍由 `tools/bbcode-ts` 镜像提供）。
+
+常驻要点：
+
+- **抓取前 MUST 先过凭证门禁**：`node tools/nga-data-fetch/bin/nga-fetch.js verify`
+  （固定基准 `read.php?tid=44191387`，获取成功才算通过；失败按 skill 指引刷新后复验）
+- 凭证落盘：`node tools/nga-data-fetch/bin/nga-fetch.js save '<cookie>'`（项目根执行）；
+  帖子特定入口仍是 bbcode-ts 的 `npm run inspect:json` / `inspect:html`（在 `tools/bbcode-ts` 下执行，命令不变）
 
 ## 沉浸光感（Immersive Light）情报文档
 
