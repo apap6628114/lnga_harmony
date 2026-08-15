@@ -1251,6 +1251,21 @@ export struct TopicListPanel {
 
           Column() {
             Column() {
+              Text('搜索本版')
+                .fontSize(15)
+                .fontColor(AppColors.textPrimary)
+                .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+                .width('100%')
+                .onClick(() => {
+                  this.showMoreMenu = false
+                  routerStore.navigateSearch(this.boardFid, this.boardName, this.boardStid)
+                })
+            }
+            .width('100%')
+
+            Divider().width('100%').color(AppColors.separator)
+
+            Column() {
               Text('子版块显示')
                 .fontSize(15)
                 .fontColor(AppColors.textPrimary)

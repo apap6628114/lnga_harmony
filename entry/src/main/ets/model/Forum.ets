@@ -43,6 +43,20 @@ export interface BoardContent {
 }
 
 /**
+ * 版块搜索（forum.php?key=）返回的版块条目。
+ */
+export interface ForumSearchItem {
+  /** 普通版块 ID。 */
+  fid: string;
+  /** 专题版块 ID。 */
+  stid: string;
+  /** 版块名称。 */
+  name: string;
+  /** 版块说明。 */
+  info: string;
+}
+
+/**
  * 可导航的版块。
  */
 export interface Board {

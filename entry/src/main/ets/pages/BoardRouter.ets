@@ -1,4 +1,4 @@
-import { type BoardSlot } from '../store/RouterStore'
+import { routerStore, type BoardSlot } from '../store/RouterStore'
 import { TopicListPanel } from './TopicListPanel'
 import { SearchPanel } from './SearchPanel'
 
@@ -12,7 +12,15 @@ export struct BoardRouter {
       if (this.boardSlot) {
         Column() {
           if (this.boardSlot.type === 'search') {
-            SearchPanel()
+            SearchPanel({
+              boardFid: this.boardSlot.fid,
+              boardStid: this.boardSlot.stid,
+              boardName: this.boardSlot.name,
+              onExitBoardScope: (): void => {
+                // 版块内搜索一键切回全局搜索
+                routerStore.navigateSearch()
+              }
+            })
           } else {
             TopicListPanel({
               boardFid: this.boardSlot.fid,

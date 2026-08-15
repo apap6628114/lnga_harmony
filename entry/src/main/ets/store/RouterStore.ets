@@ -36,8 +36,16 @@ export class BoardSlot {
     this.searchpost = searchpost
   }
 
-  static search(): BoardSlot {
-    const b = new BoardSlot(0, '搜索')
+  /**
+   * 创建搜索面板路由槽位。
+   *
+   * @param fid - 限定搜索的版块 fid；0 表示全局搜索
+   * @param name - 限定搜索的版块名（用于 UI 提示）
+   * @param stid - 限定搜索的专题版块 stid；为空时按 fid 搜索
+   * @returns 搜索面板槽位
+   */
+  static search(fid: number = 0, name: string = '', stid: string = ''): BoardSlot {
+    const b = new BoardSlot(fid, name, stid)
     b.type = 'search'
     return b
   }
@@ -305,8 +313,15 @@ export class RouterStoreClass {
     this.activityStack = []
   }
 
-  navigateSearch(): void {
-    this.boardSlot = BoardSlot.search()
+  /**
+   * 导航到搜索面板。
+   *
+   * @param fid - 限定搜索的版块 fid；0（默认）为全局搜索
+   * @param name - 限定搜索的版块名
+   * @param stid - 限定搜索的专题版块 stid
+   */
+  navigateSearch(fid: number = 0, name: string = '', stid: string = ''): void {
+    this.boardSlot = BoardSlot.search(fid, name, stid)
     this.activityStack = []
   }
 

@@ -1,4 +1,46 @@
-import type { Category, CategorySub, BoardContent } from '../model/Forum';
+import type { Category, CategorySub, BoardContent, ForumSearchItem } from '../model/Forum';
+
+/**
+ * 解析版块搜索（forum.php?key=）响应为结构化条目。
+ *
+ * NGA compact JSON（__output=8）历史上存在两种形态：裸数组与
+ * `{"data": [...]}` 包装；此处两种均兼容，字段缺失一律兜底，
+ * 非法条目（无 name）直接过滤。
+ *
+ * @param raw - 版块搜索响应
+ * @returns 结构化版块条目列表
+ */
+export function parseForumSearch(raw: object | null): ForumSearchItem[] {
+  const result: ForumSearchItem[] = [];
+  if (!raw) return result;
+
+  let list: Object | undefined;
+  if (Array.isArray(raw)) {
+    list = raw;
+  } else {
+    const rawObj = raw as Record<string, Object>;
+    const data = rawObj['data'];
+    if (Array.isArray(data)) {
+      list = data;
+    } else {
+      return result;
+    }
+  }
+
+  const arr = list as Array<Object>;
+  for (let i = 0; i < arr.length; i++) {
+    const item = arr[i] as Record<string, Object>;
+    const name = String(item['name'] ?? '');
+    if (name.length === 0) continue;
+    result.push({
+      fid: String(item['fid'] ?? ''),
+      stid: String(item['stid'] ?? item['id'] ?? ''),
+      name: name,
+      info: String(item['info'] ?? ''),
+    });
+  }
+  return result;
+}
 
 export function parseForumCategories(raw: object | null): Category[] {
   const categories: Category[] = [];

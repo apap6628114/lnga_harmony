@@ -17,11 +17,12 @@ export class TitleScrollEffect {
    *
    * @param offsetY - 列表纵向绝对滚动偏移
    * @param statusBarHeight - 状态栏高度
+   * @param contentStartOffset - 自定义起始避让距离（默认 = statusBarHeight + NAV_BAR_H）
    * @returns 取值范围为 0 到 1 的联动进度
    */
-  static getProgress(offsetY: number, statusBarHeight: number): number {
-    const contentStartOffset: number = TitleScrollEffect.getContentStartOffset(statusBarHeight)
-    const overlapDistance: number = Math.max(offsetY + contentStartOffset, 0)
+  static getProgress(offsetY: number, statusBarHeight: number, contentStartOffset?: number): number {
+    const start: number = contentStartOffset ?? TitleScrollEffect.getContentStartOffset(statusBarHeight)
+    const overlapDistance: number = Math.max(offsetY + start, 0)
     return Math.min(overlapDistance / TITLE_SCROLL_EFFECT_DISTANCE, 1)
   }
 
@@ -54,15 +55,16 @@ export class TitleScrollEffect {
    *
    * @param viewportHeight - 滚动容器当前视口高度
    * @param statusBarHeight - 状态栏高度
+   * @param titleHeight - 自定义标题区高度（默认 = statusBarHeight + NAV_BAR_H）
    * @returns 渐变模糊强度与位置组成的停靠点
    */
-  static getBlurStops(viewportHeight: number, statusBarHeight: number): FractionStop[] {
-    const titleHeight: number = TitleScrollEffect.getContentStartOffset(statusBarHeight)
-    const minimumViewportHeight: number = titleHeight + TITLE_BLUR_FADE_DISTANCE
+  static getBlurStops(viewportHeight: number, statusBarHeight: number, titleHeight?: number): FractionStop[] {
+    const th: number = titleHeight ?? TitleScrollEffect.getContentStartOffset(statusBarHeight)
+    const minimumViewportHeight: number = th + TITLE_BLUR_FADE_DISTANCE
     const safeViewportHeight: number = Math.max(viewportHeight, minimumViewportHeight)
-    const titleEnd: number = Math.min(titleHeight / safeViewportHeight, 0.8)
+    const titleEnd: number = Math.min(th / safeViewportHeight, 0.8)
     const fadeEnd: number = Math.min(
-      (titleHeight + TITLE_BLUR_FADE_DISTANCE) / safeViewportHeight,
+      (th + TITLE_BLUR_FADE_DISTANCE) / safeViewportHeight,
       0.9
     )
     return [[1, 0], [1, titleEnd], [0, fadeEnd], [0, 1]]

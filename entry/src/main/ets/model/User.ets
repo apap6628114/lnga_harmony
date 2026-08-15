@@ -5,6 +5,18 @@ export interface User {
   avatarUrl: string;
 }
 
+/**
+ * 用户搜索（nuke.php ucp get，按 uid 或用户名）返回的用户条目。
+ */
+export interface SearchUserItem {
+  /** 用户 ID。 */
+  uid: string;
+  /** 用户名。 */
+  userName: string;
+  /** 头像地址（可为空，由 Avatar 组件兜底）。 */
+  avatarUrl: string;
+}
+
 export class ProfileData {
   uid: string = '';
   userName: string = '';

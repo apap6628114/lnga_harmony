@@ -316,9 +316,11 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean): Threa
  * @returns 分页信息
  */
 export function calcPagination(totalRows: number, rowsPerPage: number, currentPage: number): Pagination {
+  // rowsPerPage 缺失/异常时按 1 页兜底，避免除零产生 Infinity 页数
+  const safeRowsPerPage: number = rowsPerPage > 0 ? rowsPerPage : Math.max(1, totalRows)
   return {
     page: currentPage,
-    totalPages: Math.ceil(totalRows / rowsPerPage),
+    totalPages: Math.ceil(totalRows / safeRowsPerPage),
     totalRows,
   };
 }

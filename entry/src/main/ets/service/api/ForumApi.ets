@@ -4,7 +4,7 @@
 
 import { ngaClient } from '../NgaClient';
 import { appStore } from '../../store/AppStore';
-import { parseForumCategories } from '../../parser/ForumParser';
+import { parseForumCategories, parseForumSearch } from '../../parser/ForumParser';
 import { parseTopicList } from '../../parser/TopicParser';
 import { parseNgaError } from '../../parser/ErrorParser';
 import { ApiResult, CategoriesResult, TopicListResult, SearchForumResult } from '../../model/NgaApiResults';
@@ -45,7 +45,8 @@ export async function searchForum(token: string, key: string): Promise<SearchFor
   try {
     const params: Record<string, string> = { '__output': '8', 'key': key };
     // 走默认通道（https + 失败时按 DOMAINS 轮换备用域），与 getTopicList 一致
-    result.data = await ngaClient.get('/forum.php', params, { uid: session.uid, cid: session.cid });
+    const raw = await ngaClient.get('/forum.php', params, { uid: session.uid, cid: session.cid });
+    result.data = parseForumSearch(raw as object);
     result.ok = true;
   } catch (e) {
     logger.warn('搜索失败: %{public}s', formatError(e));

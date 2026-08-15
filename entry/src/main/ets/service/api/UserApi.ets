@@ -5,7 +5,7 @@
 import { ngaClient } from '../NgaClient';
 import { appStore } from '../../store/AppStore';
 import {
-  CurrentUserResult, UserProfileResult, UserActivityAnalysis, ForumStat,
+  CurrentUserResult, UserProfileResult, UserActivityAnalysis, ForumStat, SearchUserResult,
 } from '../../model/NgaApiResults';
 import { UserInfo } from '../../model/UserInfo';
 import { ProfileData, ReputationData, AdminForumsData } from '../../model/User';
@@ -52,6 +52,65 @@ export async function getCurrentUser(token: string): Promise<CurrentUserResult> 
     user.avatarUrl = session.avatarUrl;
     result.ok = true;
     result.user = user;
+  }
+  return result;
+}
+
+// ============== 用户搜索 ==============
+
+/**
+ * 按关键词搜索用户（对齐 MNGA get_remote_user：纯数字自动按 uid，否则按用户名）。
+ *
+ * @param token - 当前账号令牌
+ * @param key - 搜索关键词（uid 或用户名）
+ * @returns 用户搜索结果
+ */
+export async function searchUser(token: string, key: string): Promise<SearchUserResult> {
+  const result = new SearchUserResult();
+  const session = appStore.getSession(token);
+  if (!session) {
+    result.error = '未登录';
+    return result;
+  }
+
+  try {
+    const params: Record<string, string> = {
+      '__lib': 'ucp', '__act': 'get', 'lite': 'js', 'noprefix': '',
+    };
+    // 纯数字输入按 uid 查询（与 MNGA GlobalSearchModel 判别逻辑一致）
+    if (/^\d+$/.test(key)) {
+      params['uid'] = key;
+    } else {
+      params['username'] = key;
+    }
+    const raw = await ngaClient.get('/nuke.php', params, { uid: session.uid, cid: session.cid }) as Record<string, Object>;
+
+    const errorObj = raw?.['error'];
+    if (errorObj) {
+      // NGA 错误对象形如 {"0": "找不到用户"}；取不到字符串值时回退通用文案，
+      // 避免 String(undefined) 产生 "undefined" 提示
+      const errMsg = typeof errorObj === 'string' ? String(errorObj) :
+        (typeof (errorObj as Record<string, Object>)['0'] === 'string'
+          ? String((errorObj as Record<string, Object>)['0'])
+          : '搜索用户失败');
+      result.error = errMsg;
+      return result;
+    }
+
+    const rawInner = (raw?.['data'] ?? {}) as Record<string, Object>;
+    const d = (rawInner['0'] ?? rawInner) as Record<string, Object> | undefined;
+    const uid = String(d?.['uid'] ?? '');
+    if (d && uid.length > 0) {
+      result.data.push({
+        uid: uid,
+        userName: String(d['username'] ?? ''),
+        avatarUrl: String(d['avatar'] ?? ''),
+      });
+    }
+    result.ok = true;
+  } catch (e) {
+    logger.warn('搜索用户失败: %{public}s', formatError(e));
+    result.error = (e as Error).message ?? '搜索用户失败';
   }
   return result;
 }

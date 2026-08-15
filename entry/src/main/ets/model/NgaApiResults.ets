@@ -2,10 +2,11 @@
  * NGA API 业务层各接口的返回结果模型集合。
  * 集中承载登录、版块、帖子列表、通知、私信、用户资料、收藏、上传、签到等接口的 Result 类型。
  */
-import type { Category } from './Forum';
+import type { Category, ForumSearchItem } from './Forum';
 import type { TopicListInfo } from './Topic';
 import type { NgaNotification } from './Notification';
 import type { ProfileData } from './User';
+import type { SearchUserItem } from './User';
 import type { UserInfo } from './UserInfo';
 import type { FavoriteTopicFolder } from './Favorite';
 
@@ -118,10 +119,17 @@ export class CheckinResult extends ApiResult {
 }
 
 /**
- * 版块搜索结果（data 为服务端原始对象，结构不固定）。
+ * 版块搜索结果（结构化条目列表）。
  */
 export class SearchForumResult extends ApiResult {
-  data: object | null = null;
+  data: ForumSearchItem[] = [];
+}
+
+/**
+ * 用户搜索结果（结构化条目列表）。
+ */
+export class SearchUserResult extends ApiResult {
+  data: SearchUserItem[] = [];
 }
 
 /**
