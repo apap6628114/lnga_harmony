@@ -1,5 +1,5 @@
 import { http } from '@kit.NetworkKit';
-import { preprocessJson } from '../parser/NgaJsonSanitizer';
+import { preprocessJson, extractScriptStoreJson } from '../parser/NgaJsonSanitizer';
 import { ngaThrottler } from '../common/concurrency/Throttler';
 import { Logger, DOMAIN_NETWORK, formatError } from '../common/utils/Logger';
 import {
@@ -322,6 +322,19 @@ async function ngaRequest(path: string, method: http.RequestMethod,
   // GB18030 解码
   const rawText = decodeGb18030(response.body);
   logChunks('[NGA][RES] body:', rawText);
+
+  // 部分接口（如 follow_v2 系列，__output=3）成功时也返回 HTML 包裹的
+  // <script>window.script_muti_get_var_store={...}</script> 而非纯 JSON；
+  // 必须先于「HTML 错误页」判定识别该形态，否则会被误判为错误页。
+  const storeJson: string | null = extractScriptStoreJson(rawText);
+  if (storeJson !== null) {
+    const storeText = preprocessJson(storeJson);
+    try {
+      return JSON.parse(storeText) as Record<string, Object>;
+    } catch (storeParseError) {
+      // 提取成功但解析失败：落入后续 HTML/JSON 处理，保留原始错误信息
+    }
+  }
 
   // 处理 HTML 错误页
   const trimmed = rawText.trimStart();

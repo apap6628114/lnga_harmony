@@ -62,6 +62,8 @@ export type ScreenType =
   | 'filterKeywords'
   | 'settings'
   | 'browseHistory'
+  | 'followedActivity'
+  | 'followList'
   | 'topicList'
   | 'webview'
   | 'ttsSettings'
@@ -118,6 +120,8 @@ export class Screen {
   topicListSearchpost: string = ''
   /** 进入收藏夹选择模式时对应的 NGA 主题 ID。 */
   favoriteTopicId: string = ''
+  /** 关注/粉丝列表页的初始 Tab（FollowListTab）。 */
+  followListMode: number = 0
   webviewUrl: string = ''
 
   static webview(url: string): Screen {
@@ -197,6 +201,19 @@ export class Screen {
     return s
   }
 
+  static followedActivity(): Screen {
+    const s = new Screen()
+    s.type = 'followedActivity'
+    return s
+  }
+
+  static followList(mode: number = 0): Screen {
+    const s = new Screen()
+    s.type = 'followList'
+    s.followListMode = mode
+    return s
+  }
+
   static ttsSettings(): Screen {
     const s = new Screen()
     s.type = 'ttsSettings'
@@ -255,6 +272,8 @@ export class Screen {
       case 'filterKeywords': return '关键词屏蔽'
       case 'settings': return '设置'
       case 'browseHistory': return '浏览历史'
+      case 'followedActivity': return '关注动态'
+      case 'followList': return '我的关注'
       case 'topicList': return this.topicListName || '主题列表'
       case 'webview': return 'NGA网页版'
       case 'ttsSettings': return '语音朗读'

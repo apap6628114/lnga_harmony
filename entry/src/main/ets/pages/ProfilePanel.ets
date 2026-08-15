@@ -1,6 +1,9 @@
 import { appStore } from '../store/AppStore'
 import { routerStore, Screen } from '../store/RouterStore'
 import { checkin } from '../service/api/FavoriteApi'
+import { followUser } from '../service/api/FollowApi'
+import { ApiResult } from '../model/NgaApiResults'
+import { FollowListTab } from '../model/Follow'
 import { ProfileData, ReputationData } from '../model/User'
 import { AppColors, BreakpointType, ProfileActionIconColors } from '../common/constants/Constants'
 import { formatTime, fmtNum, formatMoney, escHtml } from '../common/utils/Utils'
@@ -28,6 +31,8 @@ class StatItem {
   label: string = ''
   value: string = ''
   visible: boolean = true
+  /** 点击行为（null 表示纯展示不可点击）。 */
+  action: (() => void) | null = null
 }
 
 @Component
@@ -42,6 +47,10 @@ export struct ProfilePanel {
   @StorageProp('unreadMessageCount') unreadMessages: number = 0
   @State checkinLoading: boolean = false
   @State checkinResult: string = ''
+  /** 当前登录用户是否已关注主页用户（来自 ucp.get 的 follow 字段）。 */
+  @State isFollowing: boolean = false
+  /** 关注/取消关注请求是否进行中（防重复提交）。 */
+  @State followLoading: boolean = false
   noteDialogController?: CustomDialogController
 
   private showNoteDialog(): void {
@@ -103,6 +112,7 @@ export struct ProfilePanel {
       if (cached.sign) preWarmBatch([cached.sign])
       this.isLoading = false
     }
+    this.syncFollowState()
     appStore.ensureProfile(this.uid)
   }
 
@@ -116,6 +126,7 @@ export struct ProfilePanel {
       return
     }
     this.profile = null
+    this.isFollowing = false
     this.titleScrollEffectProgress = 0
     this.isLoading = true
     this.hasError = false
@@ -127,6 +138,7 @@ export struct ProfilePanel {
       if (cached.sign) preWarmBatch([cached.sign])
       this.isLoading = false
     }
+    this.syncFollowState()
     appStore.ensureProfile(this.uid)
   }
 
@@ -143,6 +155,40 @@ export struct ProfilePanel {
       this.isLoading = false
       this.hasError = false
     }
+    this.syncFollowState()
+  }
+
+  /** 从当前资料同步关注状态（ucp.get 的 follow 字段，服务端条件返回）。 */
+  private syncFollowState(): void {
+    this.isFollowing = this.profile?.follow ?? false
+  }
+
+  /**
+   * 切换对当前主页用户的关注状态（乐观更新，失败回滚）。
+   */
+  private async toggleFollow(): Promise<void> {
+    if (this.followLoading || !this.profile) {
+      return
+    }
+    const target: boolean = !this.isFollowing
+    const previous: boolean = this.isFollowing
+    this.isFollowing = target
+    this.followLoading = true
+    try {
+      const result: ApiResult = await followUser(appStore.auth.token, this.profile.uid, target)
+      if (result.ok) {
+        this.profile.follow = target
+        appStore.showToast(target ? '已关注' : '已取消关注')
+        appStore.invalidateProfile(this.profile.uid)
+      } else {
+        this.isFollowing = previous
+        appStore.showToast(result.error || '操作失败')
+      }
+    } catch (e) {
+      this.isFollowing = previous
+      appStore.showToast('操作失败')
+    }
+    this.followLoading = false
   }
 
   private formatBadge(count: number): string {
@@ -162,9 +208,10 @@ export struct ProfilePanel {
 
   /**
    * 构造个人主页统计项数组（数据驱动 Grid ForEach）。
-   * 格式化规则与原 7 个硬编码 GridItem 逐字一致：
-   * posts/money/fame 走 fmtNum；regdate 走 formatTime 或兜底「未知」；
-   * group 兜底「普通会员」；followByNum 仅在 >0 时显示。
+   * 当前四项：posts/money/fame 走 fmtNum；regdate 走 formatTime 或兜底「未知」。
+   * 按产品需求移除的统计展示（其信息另有落点）：
+   * - 会员组：头像区已有 group 徽章（UID 旁）；
+   * - 被关注/关注：入口移至操作列表（"我的关注"进入关注/粉丝列表）。
    * 威望按官方口径展示 fame/10（fame 为 ×10 存储的威望，见 NGA js_ucp.js）。
    */
   private buildStatItems(): StatItem[] {
@@ -194,20 +241,6 @@ export struct ProfilePanel {
     s4.label = '注册日期'
     s4.value = p.regdate ? formatTime(Number(p.regdate)) : '未知'
     items.push(s4)
-
-    const s5: StatItem = new StatItem()
-    s5.iconRes = $r('app.media.icon_people')
-    s5.label = '会员组'
-    s5.value = p.group || '普通会员'
-    items.push(s5)
-
-    if (Number(p.followByNum) > 0) {
-      const s7: StatItem = new StatItem()
-      s7.iconRes = $r('app.media.icon_shield')
-      s7.label = '被关注'
-      s7.value = p.followByNum
-      items.push(s7)
-    }
 
     return items
   }
@@ -310,6 +343,11 @@ export struct ProfilePanel {
                   .width('100%')
                   .padding({ top: 9, bottom: 9 })
                 }
+                .onClick(() => {
+                  if (item.action) {
+                    item.action()
+                  }
+                })
               }, (item: StatItem) => item.label)
             }
             .columnsTemplate(this.getStatGridTemplate())
@@ -475,6 +513,20 @@ export struct ProfilePanel {
                   }
                 })
                 Divider().margin({ left: 60 }).color(AppColors.separator)
+                SettingRow({
+                  iconRes: $r('app.media.icon_people'), iconColor: ProfileActionIconColors.history, label: '我的关注',
+                  onAction: () => {
+                    routerStore.navigateActivity(Screen.followList(FollowListTab.FOLLOWED))
+                  }
+                })
+                Divider().margin({ left: 60 }).color(AppColors.separator)
+                SettingRow({
+                  iconRes: $r('app.media.icon_bell'), iconColor: ProfileActionIconColors.favorites, label: '关注动态',
+                  onAction: () => {
+                    routerStore.navigateActivity(Screen.followedActivity())
+                  }
+                })
+                Divider().margin({ left: 60 }).color(AppColors.separator)
 
                 // 签到行 - 内联，不使用 @Builder
                 Row() {
@@ -593,6 +645,17 @@ export struct ProfilePanel {
                   })
 
                 if (!this.isOwnProfile) {
+                  Button(this.isFollowing ? '已关注' : '关注')
+                    .fontSize(15)
+                    .fontColor(this.isFollowing ? AppColors.primary : AppColors.textPrimary)
+                    .backgroundColor(AppColors.bgTertiary)
+                    .borderRadius(12)
+                    .layoutWeight(1)
+                    .height(44)
+                    .margin({ left: 12 })
+                    .enabled(!this.followLoading)
+                    .onClick(() => { this.toggleFollow() })
+
                   Button(this.isProfileBlacklisted ? '取消屏蔽' : '加黑')
                     .fontSize(15)
                     .fontColor(AppColors.destructive)

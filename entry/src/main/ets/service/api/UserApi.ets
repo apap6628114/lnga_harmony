@@ -208,6 +208,7 @@ export async function getUserProfile(token: string, uid: string): Promise<UserPr
     profile.medal = hasMedal ? medalStr : '';
     profile.muteTime = effectiveMuteTs > 0 ? formatTimestampCST(effectiveMuteTs) : '';
     profile.followByNum = String(d['follow_by_num'] ?? '');
+    profile.follow = Number(d['follow'] ?? 0) === 1;
     profile.adminForums = adminList;
     profile.reputationEntryList = repList;
 

@@ -10,6 +10,8 @@ import { PageScope } from '../concurrency/PageScope'
 import { openImageViewer } from '../utils/LinkUtils'
 
 import { getUserActivityAnalysis } from '../../service/api/UserApi'
+import { followUser } from '../../service/api/FollowApi'
+import { ApiResult } from '../../model/NgaApiResults'
 import type { UserActivityAnalysis, ForumStat } from '../../model/NgaApiResults'
 import { getActiveAiValidationMessage } from '../../service/ai/ActiveAiService'
 import { normalizeMuteTimeDisplay } from '../../parser/MuteParser'
@@ -17,7 +19,7 @@ import { UIMaterialManager } from '../managers/UIMaterialManager'
 
 @Component
 export struct ProfileCardPopup {
-  @Prop targetUid: string = ''
+  @Prop @Watch('onTargetUidChange') targetUid: string = ''
   @Prop currentBreakpoint: string = 'sm'
   @State profile: ProfileData | null = null
   @State isLoading: boolean = true
@@ -27,6 +29,10 @@ export struct ProfileCardPopup {
   @StorageProp('blacklistVersion') @Watch('onBlacklistVersionChange') blacklistVersion: number = 0
   /** 当前资料卡用户是否已被屏蔽。 */
   @State isProfileBlacklisted: boolean = false
+  /** 当前登录用户是否已关注资料卡用户。 */
+  @State isFollowing: boolean = false
+  /** 关注/取消关注请求是否进行中（防重复提交）。 */
+  @State followLoading: boolean = false
   onClose: () => void = () => {}
   noteDialogController?: CustomDialogController
   @State isAnalyzing: boolean = false
@@ -136,6 +142,23 @@ export struct ProfileCardPopup {
       this.profile = cached
       this.isLoading = false
     }
+    this.syncFollowState()
+    appStore.ensureProfile(this.targetUid)
+  }
+
+  /** 浮层复用且目标用户变化时：重置状态并加载新用户资料。 */
+  private onTargetUidChange(): void {
+    this.profile = null
+    this.isLoading = true
+    this.hasError = false
+    this.isFollowing = false
+    this.onBlacklistVersionChange()
+    const cached = appStore.getCachedProfile(this.targetUid)
+    if (cached) {
+      this.profile = cached
+      this.isLoading = false
+    }
+    this.syncFollowState()
     appStore.ensureProfile(this.targetUid)
   }
 
@@ -151,6 +174,40 @@ export struct ProfileCardPopup {
       this.isLoading = false
       this.hasError = false
     }
+    this.syncFollowState()
+  }
+
+  /** 从当前资料同步关注状态（ucp.get 的 follow 字段，服务端条件返回）。 */
+  private syncFollowState(): void {
+    this.isFollowing = this.profile?.follow ?? false
+  }
+
+  /**
+   * 切换对资料卡用户的关注状态（乐观更新，失败回滚）。
+   */
+  private async toggleFollow(): Promise<void> {
+    if (this.followLoading || !this.profile) {
+      return
+    }
+    const target: boolean = !this.isFollowing
+    const previous: boolean = this.isFollowing
+    this.isFollowing = target
+    this.followLoading = true
+    try {
+      const result: ApiResult = await followUser(appStore.auth.token, this.profile.uid, target)
+      if (result.ok) {
+        this.profile.follow = target
+        appStore.showToast(target ? '已关注' : '已取消关注')
+        appStore.invalidateProfile(this.profile.uid)
+      } else {
+        this.isFollowing = previous
+        appStore.showToast(result.error || '操作失败')
+      }
+    } catch (e) {
+      this.isFollowing = previous
+      appStore.showToast('操作失败')
+    }
+    this.followLoading = false
   }
 
   private navigateProfile(uid: string): void {
@@ -341,6 +398,14 @@ export struct ProfileCardPopup {
           .padding({ top: 10, bottom: 10 })
           .onClick(() => { this.startAnalysis() })
         if (profile.uid !== appStore.auth.uid) {
+          Divider().vertical(true).height(16).alignSelf(ItemAlign.Center).color(AppColors.separator)
+          Text(this.isFollowing ? '已关注' : '关注')
+            .fontSize(12)
+            .fontColor(this.isFollowing ? AppColors.primary : AppColors.textPrimary)
+            .layoutWeight(1).textAlign(TextAlign.Center)
+            .padding({ top: 10, bottom: 10 })
+            .enabled(!this.followLoading)
+            .onClick(() => { this.toggleFollow() })
           Divider().vertical(true).height(16).alignSelf(ItemAlign.Center).color(AppColors.separator)
           Text(this.isProfileBlacklisted ? '取消屏蔽' : '屏蔽')
             .fontSize(12)

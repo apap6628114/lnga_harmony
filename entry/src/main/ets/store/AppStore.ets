@@ -210,6 +210,7 @@ class AppStoreClass {
 
   getCachedProfile(uid: string): ProfileData | null { return this.profileStore.getCachedProfile(uid) }
   ensureProfile(uid: string): void { this.profileStore.ensureProfile(uid) }
+  invalidateProfile(uid: string): void { this.profileStore.invalidateProfile(uid) }
 
   // ---------- Facade: Notifications ----------
 

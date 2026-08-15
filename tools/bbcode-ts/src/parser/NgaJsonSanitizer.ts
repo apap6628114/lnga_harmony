@@ -12,6 +12,28 @@
  * @param text NGA 返回的原始文本
  * @returns 可被 `JSON.parse` 接受的合法 JSON 字符串
  */
+/**
+ * 从 NGA 响应文本中提取 `window.script_muti_get_var_store=` 变量存储中的 JSON。
+ *
+ * 部分接口（如 `follow_v2` 系列，`__output=3`）即使成功也返回 HTML 包裹的
+ * `<script>window.script_muti_get_var_store={...}</script>` 而非纯 JSON，
+ * 需在「HTML 错误页」判定之前先识别该形态。
+ *
+ * 边界：JSON 字符串值内嵌 `</script>` 字面量会提前截断（概率极低，调用方已有
+ * JSON.parse 失败降级）；纯 JSON（无 HTML 包裹）与 HTML 错误页不会误匹配。
+ *
+ * @param text - NGA 返回的原始文本（GB18030 解码后）
+ * @returns 提取到的 JSON 字符串；未找到变量存储时返回 null
+ */
+export function extractScriptStoreJson(text: string): string | null {
+  const match: RegExpMatchArray | null =
+    text.match(/window\.script_muti_get_var_store\s*=\s*(\{[\s\S]*?\})\s*;?\s*<\/script>/)
+  if (match === null) {
+    return null
+  }
+  return match[1]
+}
+
 export function preprocessJson(text: string): string {
   let t = text;
   t = t.replace('window.script_muti_get_var_store=', '');

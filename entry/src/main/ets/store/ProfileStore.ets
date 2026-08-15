@@ -84,6 +84,18 @@ export class ProfileStore extends BaseStore<Object> {
     return null
   }
 
+  /**
+   * 使指定用户的资料缓存失效并持久化（关注状态变化后调用，
+   * 保证下次进入主页/资料卡时重新拉取最新 follow 状态）。
+   *
+   * @param uid - 目标用户 ID
+   */
+  invalidateProfile(uid: string): void {
+    this.cache.delete(uid)
+    this.persistProfiles()
+    bumpAppStorageVersion(KEY_PROFILE_VERSION)
+  }
+
   ensureProfile(uid: string): void {
     if (this.refreshingUids.has(uid)) return
     this.refreshingUids.add(uid)

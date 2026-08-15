@@ -35,6 +35,8 @@ export class ProfileData {
   medal: string = '';
   muteTime: string = '';
   followByNum: string = '';
+  /** 当前登录用户是否已关注该用户（ucp.get 条件返回 `follow: 1`，未关注时字段缺席）。 */
+  follow: boolean = false;
   adminForums: AdminForumsData[] = [];
   reputationEntryList: ReputationData[] = [];
 }

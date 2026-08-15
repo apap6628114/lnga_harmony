@@ -12,6 +12,8 @@ import { FilterKeywordsPanel } from './FilterKeywordsPanel'
 import { SettingsPanel } from './SettingsPanel'
 import { TtsSettingsPanel } from './TtsSettingsPanel'
 import { BrowseHistoryPanel } from './BrowseHistoryPanel'
+import { FollowedActivityPanel } from './FollowedActivityPanel'
+import { FollowListPanel } from './FollowListPanel'
 import { TopicListPanel } from './TopicListPanel'
 import { WebViewPanel } from './WebViewPanel'
 import { AiSettingsPanel } from './ai/AiSettingsPanel'
@@ -71,6 +73,10 @@ export struct ActivityRouter {
             })
           } else if (entry.screen.type === 'browseHistory') {
             BrowseHistoryPanel()
+          } else if (entry.screen.type === 'followedActivity') {
+            FollowedActivityPanel()
+          } else if (entry.screen.type === 'followList') {
+            FollowListPanel({ initialMode: entry.screen.followListMode })
           } else if (entry.screen.type === 'messages') {
             MessageListPanel({ composeToInit: entry.screen.composeTo })
           } else if (entry.screen.type === 'messageDetail') {
