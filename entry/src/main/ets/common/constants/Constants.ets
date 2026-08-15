@@ -143,7 +143,7 @@ export class SettingsIconColors {
 /**
  * 个人主页操作列表专用图标色板。
  *
- * 按消息、提醒、内容、记录、签到和设置六类语义建立稳定配色。
+ * 按消息、提醒、内容、记录、发言、签到和设置七类语义建立稳定配色。
  */
 export class ProfileActionIconColors {
   /** 私信入口的通信蓝色。 */
@@ -154,6 +154,10 @@ export class ProfileActionIconColors {
   static readonly favorites: string = '#D97706'
   /** 浏览历史的中性深灰色。 */
   static readonly history: string = '#475569'
+  /** 我的主题的发帖青色。 */
+  static readonly topics: string = '#0D9488'
+  /** 我的回帖的回复玫红。 */
+  static readonly replies: string = '#DB2777'
   /** 每日签到的成功绿色。 */
   static readonly checkin: string = '#16A34A'
   /** 设置入口的中心紫色。 */

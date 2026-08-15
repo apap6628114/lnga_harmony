@@ -248,12 +248,12 @@ export struct ProfilePanel {
             Column() {
               Column() {
                 Column() {
-                Avatar({ avatar: this.profile!.avatarUrl, uid: String(this.profile!.uid), name: this.profile!.userName, avatarSize: 80 })
+                Avatar({ avatar: this.profile!.avatarUrl, uid: String(this.profile!.uid), name: this.profile!.userName, avatarSize: 64 })
 
               Text(unescapeHtml(this.profile!.userName))
-                .fontSize(20)
+                .fontSize(18)
                 .fontWeight(FontWeight.Bold)
-                .margin({ top: 12 })
+                .margin({ top: 8 })
 
               Row() {
                 if (this.profile!.group) {
@@ -276,7 +276,7 @@ export struct ProfilePanel {
                   }.margin({ left: 8 })
                 }
               }
-              .margin({ top: 8 })
+              .margin({ top: 6 })
 
               if (this.profile!.title) {
                 Text(unescapeHtml(this.profile!.title))
@@ -300,7 +300,7 @@ export struct ProfilePanel {
               }
             }
             .alignItems(HorizontalAlign.Center)
-            .padding({ top: 24 })
+            .padding({ top: 16 })
 
             Grid() {
               ForEach(this.buildStatItems(), (item: StatItem) => {
@@ -308,21 +308,21 @@ export struct ProfilePanel {
                   Column() {
                     Row() {
                       Image(item.iconRes).width(16).height(16).fillColor(AppColors.textSecondary)
-                      Text(item.label).fontSize(12).fontColor(AppColors.textSecondary).margin({ left: 4 })
+                      Text(item.label).fontSize(11).fontColor(AppColors.textSecondary).margin({ left: 4 })
                     }
                     .alignItems(VerticalAlign.Center)
-                    Text(item.value).fontSize(15).fontWeight(FontWeight.Medium).fontColor(AppColors.textPrimary).margin({ top: 6 })
+                    Text(item.value).fontSize(14).fontWeight(FontWeight.Medium).fontColor(AppColors.textPrimary).margin({ top: 4 })
                   }
                   .alignItems(HorizontalAlign.Center)
                   .width('100%')
-                  .padding({ top: 12, bottom: 12 })
+                  .padding({ top: 9, bottom: 9 })
                 }
               }, (item: StatItem) => item.label)
             }
             .columnsTemplate(this.getStatGridTemplate())
             .columnsGap(8)
             .rowsGap(8)
-            .padding({ left: 16, right: 16, top: 8, bottom: 16 })
+            .padding({ left: 16, right: 16, top: 6, bottom: 12 })
             }
             .width('92%')
             .backgroundColor(AppColors.bgTertiary)
@@ -439,18 +439,16 @@ export struct ProfilePanel {
             if (this.isOwnProfile) {
               Column() {
                 SettingRow({
-                  iconRes: $r('app.media.profile_messages'), iconColor: ProfileActionIconColors.messages, label: '私信',
-                  badge: this.formatBadge(this.unreadMessages),
+                  iconRes: $r('app.media.profile_topics'), iconColor: ProfileActionIconColors.topics, label: '我的主题',
                   onAction: () => {
-                    routerStore.navigateActivity(Screen.messages())
+                    routerStore.navigateActivity(Screen.topicList(this.profile!.userName + '的主题', -1, this.profile!.uid))
                   }
                 })
                 Divider().margin({ left: 60 }).color(AppColors.separator)
                 SettingRow({
-                  iconRes: $r('app.media.profile_notifications'), iconColor: ProfileActionIconColors.notifications, label: '通知',
-                  badge: this.formatBadge(this.unreadNotifications),
+                  iconRes: $r('app.media.profile_replies'), iconColor: ProfileActionIconColors.replies, label: '我的回帖',
                   onAction: () => {
-                    routerStore.navigateActivity(Screen.notifications())
+                    routerStore.navigateActivity(Screen.topicList(this.profile!.userName + '的回帖', -1, this.profile!.uid, '', '1'))
                   }
                 })
                 Divider().margin({ left: 60 }).color(AppColors.separator)
@@ -465,6 +463,22 @@ export struct ProfilePanel {
                   iconRes: $r('app.media.profile_history'), iconColor: ProfileActionIconColors.history, label: '浏览历史',
                   onAction: () => {
                     routerStore.navigateActivity(Screen.browseHistory())
+                  }
+                })
+                Divider().margin({ left: 60 }).color(AppColors.separator)
+                SettingRow({
+                  iconRes: $r('app.media.profile_messages'), iconColor: ProfileActionIconColors.messages, label: '私信',
+                  badge: this.formatBadge(this.unreadMessages),
+                  onAction: () => {
+                    routerStore.navigateActivity(Screen.messages())
+                  }
+                })
+                Divider().margin({ left: 60 }).color(AppColors.separator)
+                SettingRow({
+                  iconRes: $r('app.media.profile_notifications'), iconColor: ProfileActionIconColors.notifications, label: '通知',
+                  badge: this.formatBadge(this.unreadNotifications),
+                  onAction: () => {
+                    routerStore.navigateActivity(Screen.notifications())
                   }
                 })
                 Divider().margin({ left: 60 }).color(AppColors.separator)
