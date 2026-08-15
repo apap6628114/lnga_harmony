@@ -4,6 +4,7 @@ import { floatingLayerStore, FloatingPage } from '../../store/FloatingLayerStore
 import { appStore } from '../../store/AppStore'
 import { resolveUidByUsername } from '../../service/api/UserApi'
 import { locatePidPage } from '../../service/api/ThreadApi'
+import { pidLocateProgress } from '../media/PidLocateProgress'
 import { KEY_USE_INTERNAL_WEBVIEW } from '../constants/AppStorageKeys'
 import { NGA_HOSTS } from '../constants/NgaDomains'
 
@@ -257,14 +258,25 @@ let linkLookupGeneration: number = 0
  */
 async function openThreadAfterPidLookup(tid: string, pid: string): Promise<void> {
   const generation: number = ++linkLookupGeneration
-  const page: number = await locatePidPage(appStore.auth.token, tid, parseInt(pid, 10))
+  // 接管全局定位指示器（与回帖列表入口共用，全局代际解决归属）
+  const progressGeneration: number = pidLocateProgress.begin()
+  const page: number = await locatePidPage(appStore.auth.token, tid, parseInt(pid, 10),
+    (done: number, total: number): void => {
+      // 过期查找的进度回调不得污染最新一次显示
+      if (generation !== linkLookupGeneration) {
+        return
+      }
+      pidLocateProgress.show(progressGeneration, done, total)
+    })
   if (generation !== linkLookupGeneration) {
-    // 已有更新的链接点击：丢弃过期结果
+    // 已有更新的链接点击：丢弃过期结果（指示器由最新一次调用接管）
     return
   }
+  pidLocateProgress.hide(progressGeneration)
   if (page > 0) {
     routerStore.navigateActivity(Screen.thread(tid, page, pid, ThreadSource.LINK))
   } else {
+    appStore.showToast('未能定位到该楼层，已打开帖子首页')
     routerStore.navigateActivity(Screen.thread(tid, 1, '', ThreadSource.LINK))
   }
 }

@@ -37,6 +37,7 @@ import {
 import { AuthScope } from '../store/AuthScope'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
+import { pidLocateProgress } from '../common/media/PidLocateProgress'
 
 const logger = new Logger(DOMAIN_UI, 'TopicListPanel')
 
@@ -98,6 +99,12 @@ export struct TopicListPanel {
    * 面板离开（aboutToDisappear）时也自增，使在途查找失效，防止过期跳转。
    */
   private pidLookupGeneration: number = 0
+
+  /**
+   * 最近一次发起的全局定位进度代际（pidLocateProgress.begin() 返回值），
+   * 用于面板离开/切版块时按归属隐藏指示器；-1 表示本面板未发起过。
+   */
+  private pidLocateGeneration: number = -1
 
   @State sortMode: string = 'latest'
   /** 热门模式的时间窗档位（day/week/month），模仿 MNGA 的 DAY/WEEK/MONTH。 */
@@ -217,6 +224,9 @@ export struct TopicListPanel {
     this.mgr.reset()
     // 使在途的 pid→页码预查找失效，避免面板离开后过期跳转
     this.pidLookupGeneration++
+    // 按归属隐藏全局定位指示（若已被其他入口接管则自动无效）
+    pidLocateProgress.hide(this.pidLocateGeneration)
+    this.pidLocateGeneration = -1
     // 排序模式缓存随面板生命周期释放（板块数据可能已变化）
     this.modeStates.clear()
   }
@@ -225,6 +235,10 @@ export struct TopicListPanel {
     this.mgr.reset()
     this.threadsDataSource.clear()
     this.hasError = false
+    // 切换版块使在途的 pid 预查找失效并收起全局定位指示
+    this.pidLookupGeneration++
+    pidLocateProgress.hide(this.pidLocateGeneration)
+    this.pidLocateGeneration = -1
     this.sortMode = 'latest'
     this.hotRange = 'day'
     this.sortSelected = [0]
@@ -294,14 +308,28 @@ export struct TopicListPanel {
    */
   private async openThreadAfterPidLookup(tid: string, pid: string): Promise<void> {
     const generation: number = ++this.pidLookupGeneration
-    const page: number = await locatePidPage(appStore.auth.token, tid, parseInt(pid, 10))
+    // 接管全局定位指示器：总步数由 locatePidPage 在末页请求后确定（1 + ⌈log₂总页数⌉）
+    const progressGeneration: number = pidLocateProgress.begin()
+    this.pidLocateGeneration = progressGeneration
+    const page: number = await locatePidPage(appStore.auth.token, tid, parseInt(pid, 10),
+      (done: number, total: number): void => {
+        // 过期查找的进度回调不得污染最新一次显示（本地代际 + 全局代际双校验）
+        if (generation !== this.pidLookupGeneration) {
+          return
+        }
+        pidLocateProgress.show(progressGeneration, done, total)
+      })
     if (generation !== this.pidLookupGeneration) {
-      // 已有更新的点击或面板已离开：丢弃过期结果
+      // 已有更新的点击或面板已离开：丢弃过期结果（指示器由最新一次调用接管）
       return
     }
+    pidLocateProgress.hide(progressGeneration)
+    this.pidLocateGeneration = -1
     if (page > 0) {
       routerStore.navigateActivity(Screen.thread(tid, page, pid, ThreadSource.TOPIC_LIST))
     } else {
+      // 定位失败（楼层已删除/请求异常）：打开帖子首页并告知
+      appStore.showToast('未能定位到该楼层，已打开帖子首页')
       routerStore.navigateActivity(Screen.thread(tid, 1, '', ThreadSource.TOPIC_LIST))
     }
   }

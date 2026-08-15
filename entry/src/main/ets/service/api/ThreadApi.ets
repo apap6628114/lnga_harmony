@@ -255,7 +255,11 @@ function prefetchPostImages(posts: PostInfo[]): void {
  * 超出主题末楼」（楼层不存在或已删除）的情形；主题内部的删除空洞无法在此
  * 拦截，由 ThreadPanel 页内未命中后的单帖兜底处理。
  *
- * 本方法保证不抛异常：任一页请求失败/超时/数据异常均返回 -1。
+ * 本方法保证不抛异常：任一页请求失败/超时/数据异常均返回 -1；进度回调的
+ * 异常被隔离记录，不影响查找结果。
+ *
+ * 进度回调：末页请求完成后即可确定总步数（1 + ⌈log₂总页数⌉，二分步数上界），
+ * 随后每完成一步回调一次，供 UI 展示「正在定位楼层… n/N」的可预期进度。
  *
  * 适用场景：入口仅携带 pid、没有页码线索（用户回帖列表、外部 pid 链接）时，
  * 在打开 Thread 之前先调用本方法换算页码，再以正确页码打开并定位。
@@ -263,9 +267,11 @@ function prefetchPostImages(posts: PostInfo[]): void {
  * @param token - 会话令牌
  * @param tid - 主题 ID
  * @param targetPid - 目标楼层 pid
+ * @param onProgress - 进度回调（done 已完成步数，total 总步数；total<=1 表示步数未知）
  * @returns 目标楼层所在页码；请求失败、楼层已删除或数据异常时返回 -1
  */
-export async function locatePidPage(token: string, tid: string, targetPid: number): Promise<number> {
+export async function locatePidPage(token: string, tid: string, targetPid: number,
+  onProgress?: (done: number, total: number) => void): Promise<number> {
   const session = appStore.getSession(token);
   if (!session) {
     return -1;
@@ -296,6 +302,16 @@ export async function locatePidPage(token: string, tid: string, targetPid: numbe
       // 目标 pid 超出主题末楼：楼层不存在或已删除
       return -1;
     }
+    // 总步数 = 末页 1 步 + 二分步数上界 ⌈log₂(totalPages)⌉，此后每步可精确上报
+    const totalSteps: number = 1 + Math.ceil(Math.log2(Math.max(1, totalPages)))
+    let doneSteps: number = 1
+    if (onProgress) {
+      try {
+        onProgress(doneSteps, totalSteps)
+      } catch (e) {
+        logger.warn('locatePidPage 进度回调异常: %{public}s', formatError(e))
+      }
+    }
     let lo: number = 1;
     let hi: number = Math.max(1, totalPages);
     // 「找第一个满足 lastPid >= target 的页」必须用下取整 mid：
@@ -303,6 +319,14 @@ export async function locatePidPage(token: string, tid: string, targetPid: numbe
     // hi 不收缩、lo<hi 恒成立，会死循环重复请求同一页。
     while (lo < hi) {
       const mid: number = Math.floor((lo + hi) / 2);
+      doneSteps++
+      if (onProgress) {
+        try {
+          onProgress(doneSteps, totalSteps)
+        } catch (e) {
+          logger.warn('locatePidPage 进度回调异常: %{public}s', formatError(e))
+        }
+      }
       const fetched: ThreadRawResult = await withTimeout<ThreadRawResult>(
         fetchThreadRaw(token, tid, '', '', String(mid)), 15000);
       if (!fetched.raw) {
