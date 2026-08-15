@@ -1,0 +1,27 @@
+# 统一文本文件行尾为 LF（对齐 OpenHarmony/ArkTS 官方工程规范）
+# - text=auto：git 自动识别文本/二进制，仅文本参与行尾转换
+# - eol=lf：无论提交方系统（Windows/macOS/Linux）一律以 LF 入库与检出，
+#   避免 Windows 检出 CRLF 导致工具链（如 bbcode-ts 快照比较）行尾误报
+* text=auto eol=lf
+
+# 二进制资源显式声明，防止误判为文本
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.bmp binary
+*.ico binary
+*.hap binary
+*.jar binary
+*.zip binary
+*.gz binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.mp3 binary
+*.mp4 binary
+*.wav binary
+*.aac binary
+*.flac binary

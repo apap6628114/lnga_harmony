@@ -1,0 +1,14 @@
+# EditorConfig：统一各编辑器/IDE（DevEco Studio 等）的编码与行尾
+# 对齐 OpenHarmony 官方工程规范（end_of_line = lf）+ 华为 ArkTS 编程规范（2 空格缩进）
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
