@@ -13,11 +13,10 @@
 **/language-server.log
 /java
 .zcode/
-AGENTS.md
 # tools/bbcode-ts æ„å»ºäº§ç‰©ä¸ä¾èµ–
 /tools/bbcode-ts/node_modules
 /tools/bbcode-ts/dist
 
-# NGA cookie ³Ö¾Ã»¯£¨fetch ½Å±¾¶ÁÈ¡£¬ÎğÌá½»£©
+# NGA cookie ï¿½Ö¾Ã»ï¿½ï¿½ï¿½fetch ï¿½Å±ï¿½ï¿½ï¿½È¡ï¿½ï¿½ï¿½ï¿½ï¿½á½»ï¿½ï¿½
 /tools/bbcode-ts/.nga-cookie.txt
 

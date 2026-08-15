@@ -36,6 +36,10 @@ jobs:
           node-version: "24.14.1"
           package-manager-cache: false
 
+      - name: Check line endings (LF enforced)
+        shell: bash
+        run: node scripts/check-eol.mjs
+
       - name: Setup Java
         uses: actions/setup-java@v5
         with:

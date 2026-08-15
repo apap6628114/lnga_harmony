@@ -15,6 +15,22 @@ NGA 论坛客户端，stage 模型，API 7.0.0(26)，单 entry 模块。
 - 调试构建：`hvigorw assembleHap --mode module -p module=entry@default -p buildMode=debug --no-daemon`
 - 发布构建：将 `buildMode` 改为 `release`；清理：`hvigorw clean`
 
+## 行尾纪律（LF 强制）
+
+仓库通过 `.gitattributes`（`* text=auto eol=lf`）与 `.editorconfig` 强制全部文本文件 LF：
+index/HEAD 恒为 LF；但 Windows 工具直接写盘可能产出 CRLF/混合行尾（git 对混合行尾文件的
+eol 判断不可靠，`git ls-files --eol` 可能漏报）。规则：
+
+- **禁止**用 PowerShell `Out-File` / `Set-Content` / `echo >` 重定向写仓库文件（Windows 默认
+  CRLF，且 5.1 版 Out-File 带 BOM）；写文件一律用 write/edit 工具或 Node `writeFileSync`（内容用 `\n`）
+- **禁止**用 `git checkout-index` / `git checkout -- .` 重写工作区（受 `core.autocrlf=true`
+  影响会写出 CRLF）；恢复工作区用 `git restore`
+- 修改文件后 `git status` 出现大面积"无内容差异的 M"时，先怀疑行尾/stat 缓存，用
+  `git add --renormalize` 刷新后再判断
+- 行尾自检：`node scripts/check-eol.mjs`（发现违规退出码 1）；修复：`node scripts/check-eol.mjs --fix`
+  后再 `git add` 复查
+- 字节级检测为准：CR 与 LF 并存即视为违规（无论 git 如何归类）
+
 ## 项目结构
 
 详见 `.wiki/入门指南.md` 及各模块 Wiki：页面模块、公共组件模块、状态管理层、服务层、数据模型、解析器模块、应用生命周期。

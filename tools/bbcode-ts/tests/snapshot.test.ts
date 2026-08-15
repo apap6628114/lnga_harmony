@@ -31,7 +31,9 @@ for (const name of sampleNames) {
       const content: string = loadSampleContent(name)
       const nodes: BBNode[] = parseBBCode(content)
       const current: string = JSON.stringify(nodeToJson(nodes), null, 1)
-      const baseline: string = readFileSync(SNAPSHOT_FILE, 'utf8').trim()
+      // 归一化基线行尾：Windows 环境可能生成 CRLF 快照（如
+      // tid47373567-lou20-anonymous-quote），与解析器输出的 LF 比较会误报。
+      const baseline: string = readFileSync(SNAPSHOT_FILE, 'utf8').trim().replace(/\r\n/g, '\n')
       assert.equal(current, baseline,
         '解析结果与快照基线不一致。若为预期变更（解析逻辑修复），请重新生成快照并审查 diff: npm run snapshot')
     })
