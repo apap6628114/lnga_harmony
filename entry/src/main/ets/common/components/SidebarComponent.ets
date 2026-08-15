@@ -43,9 +43,9 @@ export struct SidebarComponent {
         Text('搜索板块、主题...')
           .fontSize(12).fontColor(AppColors.textTertiary)
       }
-      .width('100%').height(36).padding({ left: 10, right: 10 })
+      .width('100%').height(36).padding({ left: 12, right: 12 })
       .backgroundColor(AppColors.bgSecondary).borderRadius(8)
-      .margin({ left: 8, right: 8, top: 8 })
+      .margin({ left: 12, right: 12, top: 8 })
       .alignItems(VerticalAlign.Center)
       .onClick(() => {
         routerStore.navigateSearch()

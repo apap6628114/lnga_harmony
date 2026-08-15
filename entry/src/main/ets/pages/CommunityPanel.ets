@@ -354,12 +354,12 @@ export struct CommunityPanel {
           })
 
           Row() {
-            Image($r('app.media.icon_search')).width(14).height(14).fillColor(AppColors.textTertiary).margin({ right: 4 })
-            Text('搜索').fontSize(11).fontColor(AppColors.textTertiary)
+            Image($r('app.media.icon_search')).width(14).height(14).fillColor(AppColors.textTertiary).margin({ right: 6 })
+            Text('搜索').fontSize(12).fontColor(AppColors.textTertiary)
           }
-          .width('100%').height(28).padding({ left: 6, right: 6 })
+          .width('100%').height(28).padding({ left: 10, right: 10 })
           .backgroundColor(AppColors.bgSecondary).borderRadius(8)
-          .margin({ left: 4, right: 4, top: 6, bottom: 6 })
+          .margin({ left: 12, right: 12, top: 6, bottom: 6 })
           .alignItems(VerticalAlign.Center)
           .onClick(() => {
             routerStore.navigateSearch()
