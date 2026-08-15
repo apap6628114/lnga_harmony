@@ -33,7 +33,7 @@ import { TtsMediaMetadata } from '../common/media/TtsAvSessionController'
 import { TtsPlayer } from '../common/media/TtsPlayer'
 import { shareThread, sharePost } from '../common/utils/ShareUtils'
 import { openImageViewer as sharedOpenImageViewer, handleForumLink } from '../common/utils/LinkUtils'
-import { ThreadPaginationManager } from '../common/managers/ThreadPaginationManager'
+import { ThreadPaginationManager, MergePageResult } from '../common/managers/ThreadPaginationManager'
 import type { ThreadInfo } from '../model/Thread'
 import { Logger, DOMAIN_UI, formatError } from '../common/utils/Logger'
 import { getActiveAiValidationMessage } from '../service/ai/ActiveAiService'
@@ -190,6 +190,16 @@ export struct ThreadPanel {
   /** 整页未命中目标 pid 后是否已发起单帖兜底请求，防止重复兜底。 */
   private singlePostFallback: boolean = false
 
+  /**
+   * 最近一次回复成功后静默刷新追加到窗口的新楼层 pid。
+   * 「前往查看」优先于 post.php 响应使用它——NGA 回复接口的响应不保证携带新楼层 pid，
+   * 而刷新后追加到窗口末尾的最后一个帖子必然是新回复楼层。
+   */
+  private lastRepliedPid: string = ''
+
+  /** 「前往查看」且无已知 pid 时，定位到服务端末页最后一个楼层。 */
+  private pendingTargetLastPost: boolean = false
+
   /** 单帖兜底前整页窗口的真实总页数（单帖视图 __ROWS=1 会把 totalPages 重置为 1）。 */
   private fallbackPrevTotalPages: number = 0
 
@@ -342,6 +352,8 @@ export struct ThreadPanel {
     this.singlePostFallback = false
     this.fallbackPrevTotalPages = 0
     this.fallbackPrevPage = 0
+    this.lastRepliedPid = ''
+    this.pendingTargetLastPost = false
     this.displayPage = initialPage
     this.isLoading = true
     this.isLoadingMore = false
@@ -472,6 +484,8 @@ export struct ThreadPanel {
     // 用户主动跳页不再携带路由进入时的目标楼层意图
     this.pendingTargetPid = ''
     this.singlePostFallback = false
+    // 一并清除「前往查看」的末页末项定位意图，防止在途退化 REPLACE 被本次跳页误消费
+    this.pendingTargetLastPost = false
     this.fallbackPrevTotalPages = 0
     this.fallbackPrevPage = 0
     this.loadPosts(boundedPage, ThreadLoadMode.REPLACE)
@@ -969,6 +983,7 @@ export struct ThreadPanel {
           'page-load stale mode=%{public}s tid=%{public}s requested=%{public}d capturedGen=%{public}d currentGen=%{public}d',
           this.getLoadModeName(mode), this.threadTid, targetPage, generation, this.mgr.getGeneration()
         )
+        this.pendingTargetLastPost = false
         return
       }
 
@@ -990,6 +1005,11 @@ export struct ThreadPanel {
         }
 
         if (mode === ThreadLoadMode.REPLACE) {
+          if (this.pendingTargetLastPost && result.posts.length > 0) {
+            // 无已知 pid 的「前往查看」：定位到服务端末页最后一个楼层（通常即刚回复的楼层）
+            this.pendingTargetPid = String(result.posts[result.posts.length - 1].pid)
+          }
+          this.pendingTargetLastPost = false
           this.mgr.replaceWith(result.posts, resolvedPage, result.pagination.totalPages)
           if (this.singlePostFallback && this.fallbackPrevTotalPages > 0) {
             // 单帖视图把 totalPages 重置为 1：恢复兜底前整页窗口的真实总页数，
@@ -1001,7 +1021,7 @@ export struct ThreadPanel {
           if (appStore.auth.isAuthenticated) {
             appStore.addBrowseHistoryFromThread(appStore.auth.uid, result, this.threadTid)
           }
-          this.prepareListNavigation(generation, resolvedPage, navPid)
+          this.prepareListNavigation(generation, resolvedPage, this.pendingTargetPid)
         } else if (mode === ThreadLoadMode.APPEND) {
           const previousEnd: number = this.mgr.loadedPageEnd
           const added: PostInfo[] = this.mgr.appendPosts(
@@ -1040,6 +1060,7 @@ export struct ThreadPanel {
           this.getLoadModeName(mode), this.threadTid, targetPage, generation, result.error || '加载失败'
         )
         if (mode === ThreadLoadMode.REPLACE) {
+          this.pendingTargetLastPost = false
           this.hasError = true
           this.errorMsg = result.error || '加载失败'
           this.postsDataSource.clear()
@@ -1054,9 +1075,11 @@ export struct ThreadPanel {
           this.getLoadModeName(mode), this.threadTid, targetPage, generation,
           this.mgr.getGeneration(), formatError(error)
         )
+        this.pendingTargetLastPost = false
         return
       }
       if (mode === ThreadLoadMode.REPLACE) {
+        this.pendingTargetLastPost = false
         this.hasError = true
         this.errorMsg = formatError(error) || '加载失败'
         this.postsDataSource.clear()
@@ -1336,7 +1359,8 @@ export struct ThreadPanel {
    * 发送回复/贴条。
    *
    * 发送失败时抛出错误，使编辑器保留内容与草稿（与发新主题流程一致）；
-   * 成功才由编辑器清除草稿并关闭。发送成功后的列表刷新失败不影响关闭。
+   * 成功才由编辑器清除草稿并关闭。发送成功后不重建窗口、不发生位移，
+   * 仅静默合并服务端最新数据；Toast 提供「前往查看」定位到新楼层。
    */
   private async handleReplySend(text: string, isAnony: boolean): Promise<void> {
     let result: PostReplyResult
@@ -1351,24 +1375,28 @@ export struct ThreadPanel {
       throw new Error(result.error || '操作失败')
     }
     const isComment: boolean = replyManager.type === ReplyType.COMMENT
-    appStore.showToast(isComment ? '贴条成功' : '回复成功')
-    try {
-      if (this.mgr.loadedPageEnd >= this.mgr.totalPages) {
-        this.pendingTargetPid = ''
-        this.singlePostFallback = false
-        await this.loadPosts(1, ThreadLoadMode.REPLACE)
-      }
-    } catch (e) {
-      // 发送已成功，刷新失败仅记录，不阻断编辑器关闭
-      logger.warn('回复成功后刷新列表失败: %{public}s', (e as Error).message)
+    const targetPost: PostInfo | null = replyManager.targetPost
+    // 定位目标：贴条定位到被贴楼层（postComment 响应不返回新 pid），回复定位到新楼层
+    const navPid: string = isComment ? String(targetPost?.pid ?? '') : result.pid
+    if ((navPid.length > 0 && navPid !== '0') || !isComment) {
+      // 回复（非贴条）即使响应未携带 pid，「前往查看」也能经静默刷新结果兜底定位
+      appStore.showToastAction(isComment ? '贴条成功' : '回复成功', '前往查看', () => {
+        this.goToRepliedPost(navPid)
+      })
+    } else {
+      // 贴条且目标楼层 pid 缺失（异常）：仅提示成功，不显示无效的「前往查看」
+      appStore.showToast(isComment ? '贴条成功' : '回复成功')
     }
+    // 静默刷新失败仅记录，不阻断编辑器关闭
+    this.silentRefreshAfterPost(replyManager.type, String(targetPost?.pid ?? ''))
   }
 
   /**
    * 发送编辑修改。
    *
    * 发送失败时抛出错误，使编辑器保留内容与草稿（与发新主题流程一致）；
-   * 成功才由编辑器清除草稿并关闭。发送成功后的列表刷新失败不影响关闭。
+   * 成功才由编辑器清除草稿并关闭。发送成功后静默合并被编辑楼层所在页，
+   * 不发生位移；Toast 提供「前往查看」定位到被编辑楼层。
    */
   private async handleEditSend(text: string, isAnony: boolean): Promise<void> {
     let result: PostReplyResult
@@ -1382,15 +1410,229 @@ export struct ThreadPanel {
       appStore.showToast(result.error || '编辑失败')
       throw new Error(result.error || '编辑失败')
     }
-    appStore.showToast('编辑成功')
-    try {
-      this.pendingTargetPid = ''
-      this.singlePostFallback = false
-      await this.loadPosts(1, ThreadLoadMode.REPLACE)
-    } catch (e) {
-      // 编辑已成功，刷新失败仅记录，不阻断编辑器关闭
-      logger.warn('编辑成功后刷新列表失败: %{public}s', (e as Error).message)
+    const targetPost: PostInfo | null = replyManager.targetPost
+    const editPid: string = String(targetPost?.pid ?? '')
+    if (editPid.length > 0) {
+      appStore.showToastAction('编辑成功', '前往查看', () => {
+        this.goToRepliedPost(editPid)
+      })
+    } else {
+      // 异常情况下无定位目标：仅提示成功
+      appStore.showToast('编辑成功')
     }
+    // 乐观更新：编辑成功后立即用编辑正文刷新本地楼层，不等静默刷新——刚提交后
+    // read.php/CDN 缓存可能未失效，静默刷新拿到的仍是旧内容，乐观更新保证用户
+    // 第一时间看到新正文。换行按 NGA content 约定转 <br/>，其余 BBCode 原样保留；
+    // 静默刷新结果到达后以服务端内容为准覆盖（本方法不改 pid/楼层位置）。
+    if (targetPost !== null) {
+      const optimisticIndex: number = this.mgr.findPostIndex(targetPost.pid)
+      if (optimisticIndex >= 0) {
+        const optimisticPost: PostInfo = this.mgr.posts[optimisticIndex]
+        optimisticPost.content = text.replace(/\n/g, '<br/>')
+        this.postsDataSource.updateAt(optimisticIndex, optimisticPost)
+      }
+    }
+    // 静默刷新失败仅记录，不阻断编辑器关闭
+    this.silentRefreshAfterPost(replyManager.type, editPid)
+  }
+
+  /**
+   * 回复/贴条/编辑成功后的静默刷新：不重建窗口、不卸载 List、不发生位移。
+   *
+   * 与 REPLACE 整页重建不同，本路径在同一分页代际内把服务端最新一页合并进
+   * 当前窗口（ThreadPaginationManager.mergePage），数据源只做原地更新与尾部
+   * 追加，LazyForEach 的索引 key 保持稳定，滚动位置自然不动。
+   *
+   * 刷新范围：
+   * - 回复（THREAD/FLOOR）：仅当窗口覆盖服务端末页时刷新末页；窗口停在中间页
+   *   时新楼层不在窗口内、数据无变化，不发起请求。
+   * - 贴条（COMMENT）/编辑（EDIT）：刷新被贴/被编辑楼层所在页（贴条挂在楼层
+   *   评论里、编辑改变楼层内容，只有该页数据变化）。
+   *
+   * 服务端总页数增长时（新回复把末页顶到下一页），继续串行合并新末页。
+   * 响应到达后校验请求代际，过期即丢弃（与 loadPosts 的 stale 检查一致）。
+   * 本方法不抛异常：所有失败仅记录日志，不影响回复成功流程。
+   *
+   * @param type - 提交类型（决定刷新范围）
+   * @param targetPostPid - 被贴条/被编辑楼层的 pid（仅 COMMENT/EDIT 使用）
+   */
+  private async silentRefreshAfterPost(type: ReplyType, targetPostPid: string): Promise<void> {
+    let refreshPage: number = 0
+    if (type === ReplyType.COMMENT || type === ReplyType.EDIT) {
+      if (targetPostPid.length === 0) {
+        return
+      }
+      const targetIndex: number = this.mgr.findPostIndex(parseInt(targetPostPid, 10))
+      if (targetIndex < 0) {
+        return
+      }
+      refreshPage = this.mgr.pageOfIndex[targetIndex]
+    } else if (this.mgr.loadedPageEnd >= this.mgr.totalPages) {
+      // 窗口覆盖服务端末页：新回复楼层落在末页（或服务端已翻到下一页）
+      refreshPage = this.mgr.loadedPageEnd
+    } else {
+      // 窗口停在中间页：新楼层不在窗口内，数据无变化
+      return
+    }
+
+    const generation: number = this.mgr.getGeneration()
+    let page: number = refreshPage
+    let attempts: number = 0
+    try {
+      while (attempts < 3) {
+        attempts++
+        let result: ThreadResult
+        try {
+          result = await this.fetchPostsPage(page, '', 15000, taskpool.Priority.HIGH, this.mgr.posts.slice())
+        } catch (e) {
+          logger.warn('回复后静默刷新请求失败: %{public}s', formatError(e))
+          return
+        }
+        if (generation !== this.mgr.getGeneration()) {
+          logger.warn(
+            '回复后静默刷新过期丢弃 gen=%{public}d current=%{public}d',
+            generation, this.mgr.getGeneration()
+          )
+          return
+        }
+        if (!result.ok) {
+          logger.warn('回复后静默刷新响应失败: %{public}s', result.error || '未知错误')
+          return
+        }
+        const resolvedPage: number = result.pagination.page > 0 ? result.pagination.page : page
+        const mergeResult: MergePageResult = this.mgr.mergePage(
+          result.posts, resolvedPage, result.pagination.totalPages
+        )
+        for (let i: number = 0; i < mergeResult.updatedIndices.length; i++) {
+          const idx: number = mergeResult.updatedIndices[i]
+          this.postsDataSource.updateAt(idx, this.mgr.posts[idx])
+        }
+        if (mergeResult.appendedPosts.length > 0) {
+          this.postsDataSource.appendAll(mergeResult.appendedPosts)
+          // 仅回复（THREAD/FLOOR）场景记录新楼层 pid 供「前往查看」兜底：
+          // 追加到窗口末尾的最后一项通常即刚回复的楼层（并发回复时可能是他人楼层，属近似）；
+          // EDIT/COMMENT 刷新的是目标楼层所在页，若该页恰为末页会把他人新回复一并追加，
+          // 此时不得污染 lastRepliedPid，否则后续回复的「前往查看」会定位到错误楼层。
+          if (type === ReplyType.THREAD || type === ReplyType.FLOOR) {
+            this.lastRepliedPid = String(mergeResult.appendedPosts[mergeResult.appendedPosts.length - 1].pid)
+          }
+        }
+        if (mergeResult.updatedIndices.length === 0 && mergeResult.appendedPosts.length === 0) {
+          // 合并无效果：请求页与服务端确认页错位（mergePage 拒绝提交，常见于 HTML 模式
+          // __PAGE 解析失败回退、只看楼主页码体系差异或服务端分页漂移），或服务端返回
+          // 的内容与窗口内已有内容相同（编辑刚提交后 read.php 缓存未失效）。此时 UI 不会
+          // 有可见变化，warn 便于运行时定位（对照「编辑后 UI 不刷新」报告）。
+          logger.warn(
+            'reply-silent-merge no-op type=%{public}s requested=%{public}d resolved=%{public}d ' +
+              'total=%{public}d window=%{public}d-%{public}d posts=%{public}d gen=%{public}d',
+            String(type), page, resolvedPage, this.mgr.totalPages,
+            this.mgr.loadedPageStart, this.mgr.loadedPageEnd, result.posts.length, generation
+          )
+        }
+        logger.info(
+          'reply-silent-merge tid=%{public}s page=%{public}d total=%{public}d updated=%{public}d ' +
+            'appended=%{public}d gen=%{public}d',
+          this.threadTid, resolvedPage, this.mgr.totalPages, mergeResult.updatedIndices.length,
+          mergeResult.appendedPosts.length, generation
+        )
+        if (this.mgr.totalPages <= page) {
+          break
+        }
+        // 贴条/编辑只刷新目标楼层所在页：合并该页后即结束，不把窗口逐页推进到
+        // 服务端末页（§5.1「贴条/编辑刷新目标楼层所在页」——目标楼层位置不随新回复
+        // 变化，继续请求 E+1/E+2 只会把无关楼层整页追加进窗口，造成无谓加载与位移）。
+        if (type === ReplyType.COMMENT || type === ReplyType.EDIT) {
+          break
+        }
+        // 服务端已翻页（仅回复场景）：逐页推进到下一相邻页继续合并（mergePage 只接受
+        // 窗口内页或相邻下一页，直接跳到最新总页数会跳过中间页导致新楼层漏合并）
+        const nextPage: number = Math.min(this.mgr.totalPages, this.mgr.loadedPageEnd + 1)
+        if (nextPage <= page) {
+          // 窗口未推进但总页数增长（异常）：放弃后续页，避免死循环
+          logger.warn(
+            '回复后静默刷新窗口未推进 page=%{public}d total=%{public}d end=%{public}d',
+            page, this.mgr.totalPages, this.mgr.loadedPageEnd
+          )
+          break
+        }
+        page = nextPage
+      }
+    } catch (e) {
+      // 合并/数据源通知阶段的意外异常：仅记录，不影响回复成功流程与编辑器关闭
+      logger.warn('回复后静默刷新合并失败: %{public}s', formatError(e))
+      return
+    }
+    // 窗口边界可能推进，恢复边缘协调与预取
+    this.triggerPrefetches()
+    this.scheduleReconcile(generation)
+  }
+
+  /**
+   * 「前往查看」：定位到回复/贴条/编辑的目标楼层。
+   *
+   * 目标 pid 解析链（按序取第一个非空值）：
+   * 1. 调用方传入的候选 pid（回复场景为 post.php 响应 pid，贴条/编辑为被贴/被编辑楼层 pid）；
+   * 2. 静默刷新后追加到窗口末尾的新楼层 pid（`lastRepliedPid`）；
+   * 3. 仍未知（刷新未完成/失败）时，加载服务端末页并定位其最后一个楼层——
+   *    新回复通常就是末页末尾，作为无 pid 信息时的最终退化。
+   *
+   * 窗口内命中直接页内居中滚动（零请求）；未命中（中间页回复、刷新期间窗口
+   * 变化、或被只看楼主过滤）时发起一次新的整页 REPLACE 定位事务——整页请求
+   * 不携带 pid（服务端带 pid 返回单帖视图，不能建立普通窗口），由
+   * applyListNavigation 在页内按 pid 定位，未命中再走一次单帖兜底。
+   *
+   * 回调可能晚于本面板销毁触发，因此入口先校验 List 挂载状态。
+   *
+   * @param candidatePid - 候选目标楼层 pid（可为空，见解析链）
+   */
+  private goToRepliedPost(candidatePid: string): void {
+    if (!this.listMounted) {
+      // 面板已销毁（Toast 是全局组件，闭包可能晚于页面生命周期触发）
+      logger.warn(
+        'goto-replied unmounted tid=%{public}s candidate=%{public}s last=%{public}s',
+        this.threadTid, candidatePid, this.lastRepliedPid
+      )
+      appStore.showToast('帖子页面已关闭')
+      return
+    }
+    let pid: string = candidatePid
+    if (pid.length === 0) {
+      pid = this.lastRepliedPid
+    }
+    // '0' 是异常的哨兵值（服务端 pid 不可能为 0），视为无 pid
+    if (pid === '0') {
+      pid = ''
+    }
+    logger.info(
+      'goto-replied tid=%{public}s candidate=%{public}s resolved=%{public}s gen=%{public}d ' +
+        'window=%{public}d-%{public}d posts=%{public}d authorOnly=%{public}s',
+      this.threadTid, candidatePid, pid, this.mgr.getGeneration(),
+      this.mgr.loadedPageStart, this.mgr.loadedPageEnd, this.mgr.posts.length, String(this.authorOnly)
+    )
+    if (pid.length > 0) {
+      if (this.mgr.findPostIndex(parseInt(pid, 10)) >= 0) {
+        this.scrollToPid(pid)
+        return
+      }
+      if (this.authorOnly) {
+        appStore.showToast('只看楼主模式下不可见')
+        return
+      }
+      // 用户显式的新定位意图（§5.1 约束的是「回复后刷新不得继承旧 pid」，此处是新意图）
+      this.pendingTargetPid = pid
+      this.singlePostFallback = false
+      this.loadPosts(Math.max(this.mgr.totalPages, 1), ThreadLoadMode.REPLACE)
+      return
+    }
+    if (this.authorOnly) {
+      appStore.showToast('只看楼主模式下不可见')
+      return
+    }
+    // 无已知 pid：加载服务端末页并定位其最后一个楼层
+    this.pendingTargetLastPost = true
+    this.pendingTargetPid = ''
+    this.singlePostFallback = false
+    this.loadPosts(Math.max(this.mgr.totalPages, 1), ThreadLoadMode.REPLACE)
   }
 
   /**
@@ -1852,6 +2094,7 @@ export struct ThreadPanel {
                   this.showMoreMenu = false
                   this.pendingTargetPid = ''
                   this.singlePostFallback = false
+                  this.pendingTargetLastPost = false
                   this.loadPosts(1, ThreadLoadMode.REPLACE)
                 })
             }
@@ -1902,6 +2145,9 @@ export struct ThreadPanel {
                   .onClick(() => {
                     setForceHtmlMode(!getForceHtmlMode())
                     this.showMoreMenu = false
+                    this.pendingTargetPid = ''
+                    this.singlePostFallback = false
+                    this.pendingTargetLastPost = false
                     this.loadPosts(1, ThreadLoadMode.REPLACE)
                   })
               }

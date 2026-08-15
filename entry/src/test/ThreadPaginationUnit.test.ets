@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@ohos/hypium'
-import { ThreadPaginationManager } from '../main/ets/common/managers/ThreadPaginationManager'
+import { ThreadPaginationManager, MergePageResult } from '../main/ets/common/managers/ThreadPaginationManager'
 import { PostInfo } from '../main/ets/model/PostInfo'
 
 /**
@@ -105,6 +105,158 @@ export default function threadPaginationUnitTest(): void {
       expect(manager.totalPages).assertEqual(8)
       manager.reset()
       expect(manager.getGeneration() === windowGeneration).assertFalse()
+    })
+
+    it('mergesWindowPageInPlaceWithoutAdvancingGeneration', 0, (): void => {
+      const manager: ThreadPaginationManager = new ThreadPaginationManager()
+      manager.replaceWith([createPost(50, 50)], 5, 8)
+      const windowGeneration: number = manager.getGeneration()
+
+      const fresh: PostInfo = createPost(50, 50)
+      fresh.content = 'updated'
+      const result = manager.mergePage([fresh], 5, 8)
+
+      expect(result.updatedIndices.length).assertEqual(1)
+      expect(result.updatedIndices[0]).assertEqual(0)
+      expect(result.appendedPosts.length).assertEqual(0)
+      expect(manager.posts[0].content).assertEqual('updated')
+      expect(manager.posts.length).assertEqual(1)
+      expect(manager.loadedPageStart).assertEqual(5)
+      expect(manager.loadedPageEnd).assertEqual(5)
+      expect(manager.getGeneration()).assertEqual(windowGeneration)
+    })
+
+    it('appendsNewFloorOnLastPageWhenTotalPagesUnchanged', 0, (): void => {
+      const manager: ThreadPaginationManager = new ThreadPaginationManager()
+      manager.replaceWith([createPost(50, 50)], 5, 5)
+
+      const result = manager.mergePage([createPost(50, 50), createPost(51, 51)], 5, 5)
+
+      expect(result.updatedIndices.length).assertEqual(1)
+      expect(result.updatedIndices[0]).assertEqual(0)
+      expect(result.appendedPosts.length).assertEqual(1)
+      expect(result.appendedPosts[0].pid).assertEqual(51)
+      expect(manager.posts.length).assertEqual(2)
+      expect(manager.posts[1].pid).assertEqual(51)
+      expect(manager.pageOfIndex[1]).assertEqual(5)
+      expect(manager.loadedPageStart).assertEqual(5)
+      expect(manager.loadedPageEnd).assertEqual(5)
+      expect(manager.totalPages).assertEqual(5)
+    })
+
+    it('appendsAdjacentNewPageWhenServerTotalPagesGrew', 0, (): void => {
+      const manager: ThreadPaginationManager = new ThreadPaginationManager()
+      manager.replaceWith([createPost(50, 50)], 5, 5)
+
+      const oldPage: MergePageResult = manager.mergePage([createPost(50, 50)], 5, 6)
+      expect(oldPage.appendedPosts.length).assertEqual(0)
+      expect(manager.totalPages).assertEqual(6)
+
+      const newPage: MergePageResult = manager.mergePage(
+        [createPost(60, 60), createPost(61, 61)], 6, 6)
+      expect(newPage.appendedPosts.length).assertEqual(2)
+      expect(manager.loadedPageEnd).assertEqual(6)
+      expect(manager.posts.length).assertEqual(3)
+      expect(manager.pageOfIndex[2]).assertEqual(6)
+
+      /**
+       * 同一新页重复提交按 pid 去重，只追加未见过的新帖。
+       */
+      const again: MergePageResult = manager.mergePage(
+        [createPost(60, 60), createPost(62, 62)], 6, 6)
+      expect(again.appendedPosts.length).assertEqual(1)
+      expect(again.appendedPosts[0].pid).assertEqual(62)
+      expect(manager.posts.length).assertEqual(4)
+    })
+
+    it('rejectsNonWindowOrNonAdjacentMergeAndOnlySyncsTotalPages', 0, (): void => {
+      const manager: ThreadPaginationManager = new ThreadPaginationManager()
+      manager.replaceWith([createPost(50, 50)], 5, 8)
+
+      const farPage: MergePageResult = manager.mergePage([createPost(80, 80)], 8, 8)
+      expect(farPage.updatedIndices.length).assertEqual(0)
+      expect(farPage.appendedPosts.length).assertEqual(0)
+      expect(manager.posts.length).assertEqual(1)
+      expect(manager.loadedPageEnd).assertEqual(5)
+      expect(manager.totalPages).assertEqual(8)
+    })
+
+    it('refusesNewPidOnMiddleWindowPageToKeepPageOrder', 0, (): void => {
+      const manager: ThreadPaginationManager = new ThreadPaginationManager()
+      manager.replaceWith([createPost(50, 50)], 5, 8)
+      manager.appendPosts([createPost(60, 60)], 6, 8)
+      expect(manager.loadedPageEnd).assertEqual(6)
+
+      /**
+       * 第 5 页是窗口内页而非服务端末页（totalPages=8 > 5）：异常新 pid 不得追加。
+       */
+      const result: MergePageResult = manager.mergePage(
+        [createPost(50, 50), createPost(55, 55)], 5, 8)
+      expect(result.updatedIndices.length).assertEqual(1)
+      expect(result.appendedPosts.length).assertEqual(0)
+      expect(manager.posts.length).assertEqual(2)
+    })
+
+    it('advancesWindowOnEmptyAdjacentPageMerge', 0, (): void => {
+      const manager: ThreadPaginationManager = new ThreadPaginationManager()
+      manager.replaceWith([createPost(50, 50)], 5, 5)
+
+      const result: MergePageResult = manager.mergePage([], 6, 6)
+
+      expect(result.appendedPosts.length).assertEqual(0)
+      expect(manager.loadedPageEnd).assertEqual(6)
+      expect(manager.totalPages).assertEqual(6)
+    })
+
+    it('refusesNewPidOnLastPageWhenServerTotalPagesGrew', 0, (): void => {
+      const manager: ThreadPaginationManager = new ThreadPaginationManager()
+      manager.replaceWith([createPost(50, 50)], 5, 5)
+
+      // 窗口末页 5 但服务端已翻到 6：第 5 页出现的新 pid 属异常（新楼层应在第 6 页），不得追加
+      const result: MergePageResult = manager.mergePage(
+        [createPost(50, 50), createPost(55, 55)], 5, 6)
+      expect(result.updatedIndices.length).assertEqual(1)
+      expect(result.appendedPosts.length).assertEqual(0)
+      expect(manager.posts.length).assertEqual(1)
+      expect(manager.totalPages).assertEqual(6)
+
+      // 随后相邻新页整页追加，新楼层到达窗口
+      const next: MergePageResult = manager.mergePage([createPost(60, 60)], 6, 6)
+      expect(next.appendedPosts.length).assertEqual(1)
+      expect(manager.loadedPageEnd).assertEqual(6)
+      expect(manager.posts.length).assertEqual(2)
+    })
+
+    it('mergeConsumesPrefetchAndKeepsPidSetInSync', 0, (): void => {
+      const manager: ThreadPaginationManager = new ThreadPaginationManager()
+      manager.replaceWith([createPost(50, 50)], 5, 5)
+      manager.setPrefetchedPage(6, [createPost(60, 60)], 6)
+      expect(manager.hasPrefetchedPage(6)).assertTrue()
+
+      // mergePage 提交相邻新页后清除该页预取缓存（与 appendPosts 语义一致）
+      manager.mergePage([createPost(60, 60)], 6, 6)
+      expect(manager.hasPrefetchedPage(6)).assertFalse()
+      expect(manager.posts.length).assertEqual(2)
+
+      // 相邻下一页携带同一 pid：loadedPidSet 已登记，追加被去重但窗口仍推进
+      const dup: PostInfo[] = manager.appendPosts([createPost(60, 60)], 7, 7)
+      expect(dup.length).assertEqual(0)
+      expect(manager.loadedPageEnd).assertEqual(7)
+      expect(manager.posts.length).assertEqual(2)
+    })
+
+    it('mergeLastPageAppendIsIdempotentByPid', 0, (): void => {
+      const manager: ThreadPaginationManager = new ThreadPaginationManager()
+      manager.replaceWith([createPost(50, 50)], 5, 5)
+      manager.mergePage([createPost(50, 50), createPost(51, 51)], 5, 5)
+      expect(manager.posts.length).assertEqual(2)
+
+      // 同一页再次合并：51 已登记，只原地更新不重复追加
+      const again: MergePageResult = manager.mergePage(
+        [createPost(50, 50), createPost(51, 51)], 5, 5)
+      expect(again.updatedIndices.length).assertEqual(2)
+      expect(again.appendedPosts.length).assertEqual(0)
+      expect(manager.posts.length).assertEqual(2)
     })
   })
 }

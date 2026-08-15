@@ -254,6 +254,67 @@ export class ThreadPaginationManager extends PaginationManager {
   }
 
   /**
+   * 用服务端一页的最新数据合并进当前窗口（回复/贴条/编辑成功后的静默刷新专用）。
+   *
+   * 与 REPLACE 不同：不 reset、不推进代际、不改变窗口起始，调用方因此必须
+   * 自行校验请求代际后再提交。与 APPEND/PREPEND 相同：只有窗口内页或相邻
+   * 下一页可以进入 posts，更远页只能等待预取缓存路径。
+   *
+   * 合并规则：
+   * - page ∈ [S, E]：逐项按 pid 比对——已存在则原地替换内容并记录索引；
+   *   未存在的新 pid 仅当该页是"当前窗口末页且服务端总页数未增长"时追加到
+   *   窗口末尾（新回复楼层落在末页末尾的场景），避免中间页异常新 pid 破坏页序。
+   * - page === E + 1：整页追加（按 pid 去重），窗口推进到 E + 1。
+   * - 其他页码：拒绝提交，仅同步 totalPages。
+   *
+   * totalPages 始终取 max(当前, 服务端, 窗口末页) 的稳定值。
+   *
+   * @param pagePosts - 服务端返回的一页帖子
+   * @param page - 服务端确认的页码
+   * @param totalPages - 服务端确认的总页数
+   * @returns 需数据源原地更新（updateAt）的索引与需追加（appendAll）的帖子
+   */
+  mergePage(pagePosts: PostInfo[], page: number, totalPages: number): MergePageResult {
+    const result: MergePageResult = new MergePageResult()
+    if (page < this.loadedPageStart || page > this.loadedPageEnd + 1) {
+      this.applyState(this.loadedPageEnd, Math.max(this.totalPages, totalPages, this.loadedPageEnd))
+      return result
+    }
+    if (page === this.loadedPageEnd + 1) {
+      // 服务端已翻页：整页追加相邻新页（新回复楼层所在页）
+      const added: PostInfo[] = this.collectNewPosts(pagePosts)
+      if (added.length > 0) {
+        const combinedPosts: PostInfo[] = this.posts.concat(added)
+        const combinedPages: number[] = this.pageOfIndex.concat(added.map((): number => page))
+        this.posts = combinedPosts
+        this.pageOfIndex = combinedPages
+      }
+      this.loadedPageEnd = page
+      // 该页若已在预取缓存中，提交后清除，与 appendPosts 的提交语义一致
+      this.deletePrefetched(page)
+      result.appendedPosts = added
+    } else {
+      // 窗口内页：按 pid 原地更新；末页且服务端未翻页时新 pid 追加到窗口末尾
+      const isLastPage: boolean = page === this.loadedPageEnd && totalPages <= page
+      for (let i: number = 0; i < pagePosts.length; i++) {
+        const fresh: PostInfo = pagePosts[i]
+        const idx: number = this.findPostIndex(fresh.pid)
+        if (idx >= 0) {
+          this.posts[idx] = fresh
+          result.updatedIndices.push(idx)
+        } else if (isLastPage) {
+          this.posts.push(fresh)
+          this.pageOfIndex.push(page)
+          this.loadedPidSet.add(fresh.pid)
+          result.appendedPosts.push(fresh)
+        }
+      }
+    }
+    this.applyState(this.loadedPageEnd, Math.max(this.totalPages, totalPages, this.loadedPageEnd))
+    return result
+  }
+
+  /**
    * 从页面结果中筛出尚未加载的帖子，并登记稳定标识。
    *
    * @param rawPosts - 页面原始帖子
@@ -284,4 +345,15 @@ export class ThreadPaginationManager extends PaginationManager {
     }
     return posts
   }
+}
+
+/**
+ * mergePage 的提交结果：需数据源原地更新（updateAt）的索引与需追加（appendAll）的帖子。
+ */
+export class MergePageResult {
+  /** 窗口内被替换内容的下标（与 pageOfIndex 语义一致，均为零基帖子索引）。 */
+  updatedIndices: number[] = []
+
+  /** 追加到窗口末尾的新帖子（末页新楼层或整页相邻新页）。 */
+  appendedPosts: PostInfo[] = []
 }
