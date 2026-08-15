@@ -508,6 +508,16 @@ export struct SettingsPanel {
               Divider().margin({ left: 60 }).color(AppColors.separator)
 
               SettingToggleRow({
+                iconRes: $r('app.media.settings_reading_progress'), iconColor: SettingsIconColors.readingProgress, label: '记录阅读进度',
+                isOn: appStore.settings.recordReadingProgress,
+                onChange: (v: boolean) => {
+                  appStore.settingsStore.setRecordReadingProgress(v)
+                }
+              })
+
+              Divider().margin({ left: 60 }).color(AppColors.separator)
+
+              SettingToggleRow({
                 iconRes: $r('app.media.settings_internal_browser'), iconColor: SettingsIconColors.internalBrowser, label: '内置网页浏览',
                 isOn: appStore.settings.useInternalWebView,
                 onChange: (v: boolean) => {

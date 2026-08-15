@@ -5,7 +5,7 @@ import { BusinessError } from '@kit.BasicServicesKit'
 import { taskpool } from '@kit.ArkTS'
 
 import { appStore } from '../store/AppStore'
-import { routerStore, Screen } from '../store/RouterStore'
+import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
 import { getThread, getForceHtmlMode, setForceHtmlMode } from '../service/api/ThreadApi'
 import { votePost } from '../service/api/FavoriteApi'
 import { getActiveDomain } from '../service/api/MiscApi'
@@ -40,6 +40,7 @@ import { getActiveAiValidationMessage } from '../service/ai/ActiveAiService'
 import { applyBlacklistStateToPosts } from '../common/utils/BlacklistUtils'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
+import { ReadingProgressEntry } from '../store/ReadingProgressStore'
 
 const logger = new Logger(DOMAIN_UI, 'ThreadPanel')
 
@@ -186,6 +187,25 @@ export struct ThreadPanel {
   /** onScrollIndex 最近上报的末个可见列表项下标，用于判断是否靠近底部。 */
   private lastScrollEnd: number = 0
 
+  /**
+   * onScrollIndex 最近上报的中心可见列表项下标。
+   * 阅读进度记录以中心楼层为锚点：还原时对该 pid 居中定位（scrollToPid），
+   * 记录与还原锚点同源对称，避免"记录视口顶部楼、还原时居中"导致锚点逐次上移。
+   */
+  private lastScrollCenter: number = 0
+
+  /**
+   * 阅读进度记录的延迟保存计时器。
+   * 滚动过程中节流记录（滚动停顿后落盘），离开页面时立即补记一次。
+   */
+  private progressRecordTimer: number = -1
+
+  /** 首次进入/切换帖子后是否仍在等待读取并恢复上次阅读进度。 */
+  private readingResumePending: boolean = false
+
+  /** 当前帖子的阅读进度恢复是否已经处理过（防止页面重新显示时重复恢复）。 */
+  private readingResumeHandled: boolean = false
+
   /** 尚未交给帖子接口定位的路由目标楼层。 */
   private pendingTargetPid: string = ''
 
@@ -328,9 +348,16 @@ export struct ThreadPanel {
     appStore.favoriteStore.ensureFolders()
     this.loadPersistedVotes()
     this.startHoldingHandMonitoring()
+    this.tryRestoreReadingProgress()
   }
 
   aboutToDisappear(): void {
+    // 先补记最终阅读位置（此时列表与滚动状态仍有效），再清理资源
+    this.recordReadingProgress()
+    clearTimeout(this.progressRecordTimer)
+    this.progressRecordTimer = -1
+    // 使在途的进度恢复读取失效：页面销毁后不得继续在已销毁组件上执行恢复定位
+    this.readingResumePending = false
     this.stopHoldingHandMonitoring()
     clearTimeout(this.loadingDelayTimer)
     this.loadingDelayTimer = -1
@@ -353,6 +380,12 @@ export struct ThreadPanel {
       this.hasInitiallyLoaded = true
       return
     }
+    // 切换帖子前补记旧帖的最终阅读位置（此时 mgr.posts 仍是旧帖数据）
+    this.recordReadingProgress()
+    clearTimeout(this.progressRecordTimer)
+    this.progressRecordTimer = -1
+    this.readingResumeHandled = false
+    this.readingResumePending = false
     const initialPage: number = Math.max(this.threadPage, 1)
     this.pendingTargetPid = this.threadPid
     this.singlePostFallback = false
@@ -371,6 +404,132 @@ export struct ThreadPanel {
     this.votedDownPids = new Set()
     this.loadPosts(initialPage, ThreadLoadMode.REPLACE)
     this.loadPersistedVotes()
+    this.tryRestoreReadingProgress()
+  }
+
+  // ============== 阅读进度记录与恢复 ==============
+
+  /**
+   * 阅读进度记录是否有效（开关开启、已登录且非单帖兜底视图）。
+   *
+   * @returns 是否可以记录
+   */
+  private shouldRecordProgress(): boolean {
+    return appStore.settings.recordReadingProgress &&
+      appStore.auth.uid.length > 0 &&
+      !this.singlePostFallback
+  }
+
+  /**
+   * 滚动过程中节流调度一次进度记录（停顿后落盘，避免高频写入）。
+   */
+  private scheduleProgressRecord(): void {
+    if (!this.shouldRecordProgress()) return
+    clearTimeout(this.progressRecordTimer)
+    this.progressRecordTimer = setTimeout((): void => {
+      this.progressRecordTimer = -1
+      this.recordReadingProgress()
+    }, 800)
+  }
+
+  /**
+   * 记录当前阅读位置：锚点取视口中心楼层（与还原的居中定位同源对称），
+   * 记录其页码与 pid（楼层级，不记录像素偏移）。
+   *
+   * tid 取锚点楼自身 tid：切换帖子（onThreadChanged）补记旧帖时，this.threadTid 已是新帖值，
+   * 而 mgr.posts 仍是旧帖数据，必须用楼层 tid 才能记到旧帖名下；HTML 模式 __CURRENT_TID
+   * 提取失败时楼层 tid 可能为 0，此时回退路由参数 this.threadTid 兜底。
+   */
+  private recordReadingProgress(): void {
+    if (!this.shouldRecordProgress()) return
+    const postCount: number = this.mgr.posts.length
+    if (postCount <= 0 || this.mgr.totalPages <= 0) return
+    const anchorIndex: number = Math.max(0, Math.min(this.lastScrollCenter, postCount - 1))
+    const entry = new ReadingProgressEntry()
+    const postTid: number = this.mgr.posts[anchorIndex].tid
+    entry.tid = postTid > 0 ? String(postTid) : this.threadTid
+    entry.page = this.mgr.getDisplayPage(anchorIndex)
+    entry.pid = this.mgr.posts[anchorIndex].pid
+    appStore.saveReadingProgress(appStore.auth.uid, entry)
+  }
+
+  /**
+   * 首次进入当前帖子时尝试恢复上次阅读进度。
+   *
+   * 仅在"继续阅读"语义下生效，避免与来源自带的楼层定位概念冲突：
+   * - 路由携带明确定位意图（目标 pid 或页码晚于第 1 页）时不恢复；
+   * - 来源带楼层定位概念（通知 / 链接 / 搜索）时不恢复——这些来源的
+   *   主楼哨兵 pid 会被 Screen.thread 归一为空串，仅靠路由参数无法识别，
+   *   必须按来源白名单排除（如链接 pid 查找失败退化打开首页、通知主楼）。
+   * 页面从 activity 栈重新显示不会重复恢复（readingResumeHandled 去重）。
+   */
+  private tryRestoreReadingProgress(): void {
+    if (this.readingResumeHandled || this.readingResumePending) return
+    if (this.threadTid.length === 0) return
+    if (!appStore.settings.recordReadingProgress || appStore.auth.uid.length === 0) return
+    if (this.threadPid.length > 0 || this.threadPage > 1) return
+    if (!this.isResumeAllowedSource()) return
+    this.readingResumeHandled = true
+    this.readingResumePending = true
+    this.resumeReadingProgress()
+  }
+
+  /**
+   * 是否允许恢复阅读进度：仅"继续阅读"语义的来源（主题列表、浏览历史、未标注默认入口）。
+   *
+   * @returns 来源是否允许恢复
+   */
+  private isResumeAllowedSource(): boolean {
+    return this.threadSource === ThreadSource.DEFAULT ||
+      this.threadSource === ThreadSource.TOPIC_LIST ||
+      this.threadSource === ThreadSource.BROWSE_HISTORY
+  }
+
+  /**
+   * 异步读取并校验阅读进度；读取期间可能已切换帖子或关闭开关，需逐一校验。
+   */
+  private async resumeReadingProgress(): Promise<void> {
+    const uid: string = appStore.auth.uid
+    const tid: string = this.threadTid
+    const entry: ReadingProgressEntry | null = await appStore.getReadingProgress(uid, tid)
+    if (!this.readingResumePending || tid !== this.threadTid) return
+    // 读取期间账号可能已登出或切换：进度按账号隔离，身份不一致时丢弃，避免跨账号恢复
+    if (appStore.auth.uid !== uid) return
+    if (!appStore.settings.recordReadingProgress) return
+    this.readingResumePending = false
+    if (entry === null || entry.pid < 0 || entry.page < 1) return
+    // 初始内容已提交且用户已经开始滚动阅读：不打断当前阅读
+    if (this.mgr.posts.length > 0 && this.lastScrollStart > 0) return
+    this.applyReadingResume(entry)
+  }
+
+  /**
+   * 执行阅读进度恢复：锚点已在当前窗口时页内直接定位（楼层居中），
+   * 否则按记录页码整页加载后经列表导航事务定位。
+   *
+   * @param entry - 阅读进度条目
+   */
+  private applyReadingResume(entry: ReadingProgressEntry): void {
+    logger.info(
+      'progress resume tid=%{public}s page=%{public}d pid=%{public}d gen=%{public}d',
+      this.threadTid, entry.page, entry.pid, this.mgr.getGeneration()
+    )
+    this.pendingTargetPid = String(entry.pid)
+    this.singlePostFallback = false
+    this.pendingTargetLastPost = false
+    this.fallbackPrevTotalPages = 0
+    this.fallbackPrevPage = 0
+    // 锚点楼层已在当前窗口且 List 已挂载：直接页内定位，不重新请求。
+    // 未挂载时 scrollToIndex 静默无效（THREAD_DESIGN §4.4），必须落入下方 REPLACE 事务
+    if (this.listMounted && this.mgr.posts.length > 0 && this.mgr.findPostIndex(entry.pid) >= 0) {
+      const positioned: boolean = this.scrollToPid(String(entry.pid))
+      if (positioned) {
+        appStore.showToast('已恢复上次阅读位置')
+        return
+      }
+    }
+    // 跨页恢复：REPLACE 会推进代际，使在途的初始加载请求作废，定位由列表导航事务完成
+    this.loadPosts(entry.page, ThreadLoadMode.REPLACE)
   }
 
   /**
@@ -959,6 +1118,7 @@ export struct ThreadPanel {
       this.hasError = false
       this.lastScrollStart = 0
       this.lastScrollEnd = 0
+      this.lastScrollCenter = 0
       this.titleScrollEffectProgress = 0
     } else if (mode === ThreadLoadMode.APPEND) {
       this.isLoadingMore = true
@@ -1908,29 +2068,33 @@ export struct ThreadPanel {
           )
         })
         .onScrollIndex((start: number, end: number, center: number): void => {
-          if (this.prependAnchorPending) {
+          if (this.prependAnchorPending || this.listNavigationPending) {
             if (logger.isVerbose()) {
               logger.verbose(
-                'scroll-index ignored prepend-anchor tid=%{public}s gen=%{public}d start=%{public}d ' +
-                  'end=%{public}d center=%{public}d anchorPid=%{public}d',
-                this.threadTid, this.mgr.getGeneration(), start, end, center, this.prependAnchorPid
+                'scroll-index ignored tid=%{public}s gen=%{public}d start=%{public}d ' +
+                  'end=%{public}d center=%{public}d navPending=%{public}s anchorPending=%{public}s',
+                this.threadTid, this.mgr.getGeneration(), start, end, center,
+                String(this.listNavigationPending), String(this.prependAnchorPending)
               )
             }
+            // 定位/前插事务期间不更新可见索引、不协调边缘加载、不记录阅读进度，
+            // 与 reconcile 的暂停语义保持一致（THREAD_DESIGN §5.2）
             return
           }
           this.lastScrollStart = start
           this.lastScrollEnd = end
+          this.lastScrollCenter = center
           this.displayPage = this.mgr.getDisplayPage(center)
           if (logger.isVerbose()) {
             logger.verbose(
               'scroll-index tid=%{public}s gen=%{public}d start=%{public}d end=%{public}d center=%{public}d ' +
-                'display=%{public}d window=%{public}d-%{public}d posts=%{public}d navPending=%{public}s',
+                'display=%{public}d window=%{public}d-%{public}d posts=%{public}d',
               this.threadTid, this.mgr.getGeneration(), start, end, center, this.displayPage,
-              this.mgr.loadedPageStart, this.mgr.loadedPageEnd, this.mgr.posts.length,
-              String(this.listNavigationPending)
+              this.mgr.loadedPageStart, this.mgr.loadedPageEnd, this.mgr.posts.length
             )
           }
           this.reconcile()
+          this.scheduleProgressRecord()
         })
         .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
       }

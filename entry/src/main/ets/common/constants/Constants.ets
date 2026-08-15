@@ -130,6 +130,8 @@ export class SettingsIconColors {
   static readonly threadNavigation: string = '#EA580C'
   /** 页面预加载的效率绿色。 */
   static readonly pagePrefetch: string = '#059669'
+  /** 记录阅读进度的书签天蓝色。 */
+  static readonly readingProgress: string = '#0EA5E9'
   /** 内置网页浏览的浏览器蓝色。 */
   static readonly internalBrowser: string = '#1D4ED8'
   /** 调试模式的终端石灰绿。 */

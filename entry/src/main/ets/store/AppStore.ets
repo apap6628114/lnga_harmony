@@ -9,6 +9,7 @@ import { NotificationStore } from './NotificationStore'
 import { VoteStore } from './VoteStore'
 import { HistoryStore } from './HistoryStore'
 import { FavoriteStore } from './FavoriteStore'
+import { ReadingProgressStore } from './ReadingProgressStore'
 import { floatingLayerStore } from './FloatingLayerStore'
 import { ToastManager } from '../common/feedback/ToastManager'
 
@@ -17,6 +18,7 @@ import type { Session } from './SessionRegistry'
 import { routerStore } from './RouterStore'
 import type { SettingsState } from './settings/SettingsState'
 import type { BrowseHistoryEntry } from './HistoryStore'
+import type { ReadingProgressEntry } from './ReadingProgressStore'
 import type { ToastState } from '../common/feedback/ToastManager'
 import type { ProfileData } from '../model/User'
 import type { ThreadResult } from '../model/ThreadResult'
@@ -55,6 +57,8 @@ class AppStoreClass {
   readonly historyStore: HistoryStore = new HistoryStore()
   /** NGA 主题收藏夹与收藏关系状态。 */
   readonly favoriteStore: FavoriteStore = new FavoriteStore()
+  /** 帖子阅读进度（按账号隔离，用于下次进入时恢复阅读位置）。 */
+  readonly readingProgressStore: ReadingProgressStore = new ReadingProgressStore()
   readonly toastManager: ToastManager = new ToastManager()
 
   // ============== Init & Lifecycle ==============
@@ -70,6 +74,7 @@ class AppStoreClass {
       // 子 Store 中不依赖 uid 的先初始化（同步赋值引用）
       await this.voteStore.init(this.store, this.writeQueue)
       await this.historyStore.init(this.store, this.writeQueue)
+      await this.readingProgressStore.init(this.store, this.writeQueue)
 
       // 认证 + 分类（部分依赖 uid）
       await this.authStore.init(this.store, this.writeQueue)
@@ -146,6 +151,7 @@ class AppStoreClass {
     this.notificationStore.reset()
     this.voteStore.reset()
     this.historyStore.reset()
+    this.readingProgressStore.reset()
     this.favoriteStore.reset()
     floatingLayerStore.clear()
     routerStore.reset()
@@ -276,6 +282,17 @@ class AppStoreClass {
   }
   removeBrowseHistory(uid: string, tid: string): Promise<void> { return this.historyStore.removeBrowseHistory(uid, tid) }
   clearBrowseHistory(uid: string): Promise<void> { return this.historyStore.clearBrowseHistory(uid) }
+
+  // ---------- Facade: Reading Progress ----------
+
+  /** 读取指定帖子的阅读进度（无记录返回 null）。 */
+  getReadingProgress(uid: string, tid: string): Promise<ReadingProgressEntry | null> {
+    return this.readingProgressStore.getProgress(uid, tid)
+  }
+  /** 写入（覆盖）指定帖子的阅读进度。 */
+  saveReadingProgress(uid: string, entry: ReadingProgressEntry): Promise<void> {
+    return this.readingProgressStore.setProgress(uid, entry)
+  }
 
   // ---------- Facade: Toast ----------
 

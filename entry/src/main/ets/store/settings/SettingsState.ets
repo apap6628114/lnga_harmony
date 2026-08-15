@@ -34,6 +34,8 @@ export class SettingsState {
   threadNavMode: string = ThreadNavMode.SEAMLESS
   /** 预加载页数（0=关闭，1~5=向前预加载 N 页） */
   prefetchPageCount: number = 3
+  /** 记录帖子阅读进度：开启后保存最近阅读位置，下次进入帖子时自动恢复 */
+  recordReadingProgress: boolean = true
   /** 视频默认是否静音（全局开关，false=有声） */
   videoMuted: boolean = false
   /** 没有可用 App Linking 应用时，是否在应用内 WebView 打开 URL */

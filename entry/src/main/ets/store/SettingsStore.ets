@@ -187,6 +187,8 @@ export class SettingsStore extends BaseStore<SettingsState> {
   // --- Reading ---
   setThreadNavMode(v: string): void { this.readingSettings.setThreadNavMode(v) }
   setPrefetchPageCount(v: number): void { this.readingSettings.setPrefetchPageCount(v) }
+  /** 设置是否记录帖子阅读进度（开启后下次进入自动恢复阅读位置） */
+  setRecordReadingProgress(enabled: boolean): void { this.readingSettings.setRecordReadingProgress(enabled) }
 
   // --- Notes ---
   addOrUpdateNote(userId: string, nickName: string, note: string): void {
