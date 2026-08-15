@@ -8,10 +8,11 @@ import { SegmentButton, SegmentButtonOptions, SegmentButtonItemTuple, SegmentBut
 import { motion } from '@kit.MultimodalAwarenessKit'
 import { BusinessError } from '@kit.BasicServicesKit'
 import { appStore } from '../store/AppStore'
-import { routerStore, Screen } from '../store/RouterStore'
+import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
 import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
 import { withTimeout } from '../common/utils/TimeoutUtils'
 import { getTopicList, createTopicListParams, setSubforumFilter } from '../service/api/ForumApi'
+import { locatePidPage } from '../service/api/ThreadApi'
 import type { TopicListParams } from '../service/api/ForumApi'
 import type { TopicListResult } from '../model/NgaApiResults'
 import { newTopicManager } from '../common/managers/NewTopicManager'
@@ -91,6 +92,12 @@ export struct TopicListPanel {
   @State errorMsg: string = ''
   @State mgr: TopicPaginationManager = new TopicPaginationManager()
   private threadsDataSource: ThreadDataSource = new ThreadDataSource()
+
+  /**
+   * pid→页码预查找的代际计数：每次发起查找自增，完成后校验未变化才跳转；
+   * 面板离开（aboutToDisappear）时也自增，使在途查找失效，防止过期跳转。
+   */
+  private pidLookupGeneration: number = 0
 
   @State sortMode: string = 'latest'
   /** 热门模式的时间窗档位（day/week/month），模仿 MNGA 的 DAY/WEEK/MONTH。 */
@@ -208,6 +215,8 @@ export struct TopicListPanel {
     this.stopHoldingHandMonitoring()
     // 推进分页代际，使未完成的分页/预取异步回调失效，避免回写已销毁页面
     this.mgr.reset()
+    // 使在途的 pid→页码预查找失效，避免面板离开后过期跳转
+    this.pidLookupGeneration++
     // 排序模式缓存随面板生命周期释放（板块数据可能已变化）
     this.modeStates.clear()
   }
@@ -270,6 +279,31 @@ export struct TopicListPanel {
   private canManageCurrentBoard(): boolean {
     return this.boardFid !== 0 && !this.isFavorites && !this.favor
       && !this.authorid && !this.searchKey && !this.author && !this.searchpost
+  }
+
+  /**
+   * 回帖列表条目点击：先完成 pid→页码数据查找，再打开帖子。
+   *
+   * 仅在 searchpost 列表携带真实楼层 pid 时走此路径（普通列表 pid 已归一为空，
+   * 见 TopicCardComponent.onClick）。查找失败（楼层已删除/请求异常）时退化为
+   * 不带定位意图地打开第 1 页。带代际防重入：连点多个帖子时只执行最新一次，
+   * 面板离开后在途查找作废，避免过期跳转。
+   *
+   * @param tid - 主题 ID
+   * @param pid - 目标楼层 pid（已归一，非 '0'）
+   */
+  private async openThreadAfterPidLookup(tid: string, pid: string): Promise<void> {
+    const generation: number = ++this.pidLookupGeneration
+    const page: number = await locatePidPage(appStore.auth.token, tid, parseInt(pid, 10))
+    if (generation !== this.pidLookupGeneration) {
+      // 已有更新的点击或面板已离开：丢弃过期结果
+      return
+    }
+    if (page > 0) {
+      routerStore.navigateActivity(Screen.thread(tid, page, pid, ThreadSource.TOPIC_LIST))
+    } else {
+      routerStore.navigateActivity(Screen.thread(tid, 1, '', ThreadSource.TOPIC_LIST))
+    }
   }
 
   /**
@@ -1066,12 +1100,17 @@ export struct TopicListPanel {
                   thread: thread as Record<string, Object>,
                   isFavorites: this.isFavorites || this.favor.length > 0,
                   onRemoveFav: (tid: number): void => { this.handleRemoveFav(tid) },
-                  onCardClick: (tid: string): void => {
+                  onCardClick: (tid: string, pid: string): void => {
                     if (tid) {
                       if (this.favor.length > 0) {
                         appStore.favoriteStore.recordTopicMembership(tid, this.favor, true)
                       }
-                      routerStore.navigateActivity(Screen.thread(tid))
+                      if (pid.length > 0) {
+                        // 回帖列表进入：先完成 pid→页码数据查找，再以正确页码打开帖子
+                        this.openThreadAfterPidLookup(tid, pid)
+                      } else {
+                        routerStore.navigateActivity(Screen.thread(tid, 1, '', ThreadSource.TOPIC_LIST))
+                      }
                     }
                   }
                 })
@@ -1407,7 +1446,7 @@ struct TopicCardComponent {
   /** 黑名单变更版本号。 */
   @StorageProp('blacklistVersion') blacklistVersion: number = 0
   onRemoveFav: (tid: number) => void = (_tid: number) => {}
-  onCardClick: (tid: string) => void = (_tid: string) => {}
+  onCardClick: (tid: string, pid: string) => void = (_tid: string, _pid: string) => {}
 
   /**
    * 判断当前主题作者是否已被屏蔽。
@@ -1498,7 +1537,10 @@ struct TopicCardComponent {
     }
     .width('100%').padding({ left: 16, right: 16, top: 16, bottom: 16 }).alignItems(HorizontalAlign.Start)
     .onClick(() => {
-      this.onCardClick(String(this.thread['tid'] ?? ''))
+      // 普通列表 pid 为 0（NGA 的"主楼/无楼层"哨兵值），在入口判断前就归一为空串，
+      // 避免误入 pid→页码预查找；searchpost 回帖列表携带真实楼层 pid
+      const rawPid: number = Number(this.thread['pid'] ?? 0)
+      this.onCardClick(String(this.thread['tid'] ?? ''), rawPid > 0 ? String(rawPid) : '')
     })
   }
 }

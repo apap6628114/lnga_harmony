@@ -280,7 +280,7 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean): Threa
     type: Number(raw['type'] ?? 0),
     topicMisc: String(raw['topic_misc'] ?? ''),
     page: 0,
-    pid: 0,
+    pid: Number(__P?.['pid'] ?? 0),
     position: 0,
     isAnonymity: isAnonymity,
     postDate: Number(raw['postdate'] ?? 0),

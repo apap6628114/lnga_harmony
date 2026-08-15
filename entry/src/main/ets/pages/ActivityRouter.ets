@@ -66,6 +66,7 @@ export struct ActivityRouter {
               threadTid: entry.screen.tid,
               threadPage: entry.screen.threadPage,
               threadPid: entry.screen.pid,
+              threadSource: entry.screen.threadSource,
               navEntryId: entry.id
             })
           } else if (entry.screen.type === 'browseHistory') {

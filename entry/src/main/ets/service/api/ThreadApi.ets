@@ -11,6 +11,7 @@ import { parseFromClient } from '../../parser/ClientParser';
 import { isUserMuted } from '../../parser/MuteParser';
 import { resolveAttachUrl } from '../../parser/_shared/AttachUrl';
 import { parseHtmlTask } from '../../parser/task/HtmlParseTask';
+import { withTimeout } from '../../common/utils/TimeoutUtils';
 import { taskpool } from '@kit.ArkTS';
 import { ImageLoadStrategy } from '../../common/constants/Constants';
 import { KEY_FORCE_HTML_MODE } from '../../common/constants/AppStorageKeys';
@@ -42,7 +43,8 @@ export async function getThread(token: string, tid: string, pid: string,
   authorid: string, page: string,
   blacklist: Set<string> = new Set(),
   keywords: string[] = [],
-  noteMap: Record<string, string> = {}): Promise<ThreadResult> {
+  noteMap: Record<string, string> = {},
+  skipImagePrefetch: boolean = false): Promise<ThreadResult> {
   const result = new ThreadResult();
   const session = appStore.getSession(token);
   if (!session) {
@@ -69,7 +71,7 @@ export async function getThread(token: string, tid: string, pid: string,
       const html: string = await ngaClient.getHtmlText('/read.php', htmlParams, { uid: session.uid, cid: session.cid });
       const rawObj: Object = await taskpool.execute(parseHtmlTask, html)
       const rawHtml: Record<string, Object> = rawObj as Record<string, Object>
-      fillThreadResult(rawHtml, result, blacklist, keywords, noteMap);
+      fillThreadResult(rawHtml, result, blacklist, keywords, noteMap, skipImagePrefetch);
     } else {
       // 优先尝试 JSON API (__output=8)；失败时降级 HTML 解析
       const ngaParams: Record<string, string> = {
@@ -90,7 +92,7 @@ export async function getThread(token: string, tid: string, pid: string,
         if (err) {
           jsonError = err;
         } else {
-          fillThreadResult(raw as Record<string, Object>, result, blacklist, keywords, noteMap);
+          fillThreadResult(raw as Record<string, Object>, result, blacklist, keywords, noteMap, skipImagePrefetch);
           jsonOk = true;
         }
       } catch (e) {
@@ -112,7 +114,7 @@ export async function getThread(token: string, tid: string, pid: string,
         const html: string = await ngaClient.getHtmlText('/read.php', fallbackParams, { uid: session.uid, cid: session.cid });
         const rawObj: Object = await taskpool.execute(parseHtmlTask, html)
         const rawHtml: Record<string, Object> = rawObj as Record<string, Object>
-        fillThreadResult(rawHtml, result, blacklist, keywords, noteMap);
+        fillThreadResult(rawHtml, result, blacklist, keywords, noteMap, skipImagePrefetch);
         if (result.posts.length === 0) {
           result.ok = false;
           result.error = jsonError || result.error || '无法加载该帖子';
@@ -156,11 +158,99 @@ function prefetchPostImages(posts: PostInfo[]): void {
 }
 
 /**
+ * 二分查找目标楼层 pid 所在页码。
+ *
+ * 纯数据行为：不预热（getThread 以 skipImagePrefetch 关闭）、不过滤、不注入，
+ * 不依赖任何渲染窗口状态。取数通道与 getThread 完全一致——JSON 主通道
+ * （read.php __output=8）优先，官方将 JSON 阻断为残缺响应（README Rule 2：
+ * Unterminated string / 意外 EOF / HTML 错误页）时自动降级 read.php HTML 解析
+ * （parseHtmlTask），保证定位在 JSON 通道异常时仍可用。利用 NGA 楼层 pid 在
+ * 主题内随楼号严格递增的性质（删除楼层只产生 pid 空洞、不破坏单调性）二分
+ * 定位。总页数自包含获取：先请求末页（page=e），其分页信息即真实总页数，
+ * 同时以主题末楼 pid 排除「目标 pid 超出主题末楼」（楼层不存在或已删除）的
+ * 情形；主题内部的删除空洞无法在此拦截，由 ThreadPanel 页内未命中后的
+ * 单帖兜底处理。
+ *
+ * 本方法保证不抛异常：任一页请求失败/超时/数据异常均返回 -1。
+ *
+ * 适用场景：入口仅携带 pid、没有页码线索（用户回帖列表、外部 pid 链接）时，
+ * 在打开 Thread 之前先调用本方法换算页码，再以正确页码打开并定位。
+ *
+ * @param token - 会话令牌
+ * @param tid - 主题 ID
+ * @param targetPid - 目标楼层 pid
+ * @returns 目标楼层所在页码；请求失败、楼层已删除或数据异常时返回 -1
+ */
+export async function locatePidPage(token: string, tid: string, targetPid: number): Promise<number> {
+  const session = appStore.getSession(token);
+  if (!session) {
+    return -1;
+  }
+  // 先请求末页：拿真实总页数（pagination.totalPages）与主题末楼 pid。
+  // 通过 getThread 取数（传空 blacklist/keywords 保持不过滤语义，skipImagePrefetch
+  // 跳过图片预热），JSON 被阻断为残缺响应时自动降级 HTML。每次请求带 15s 超时，
+  // 失败即整体返回 -1，由调用方按「无法定位」降级打开。
+  try {
+    // 仅取数场景：不过滤（空黑名单/关键词）、无用户备注、跳过图片预热
+    const emptyNoteMap: Record<string, string> = {};
+    const lastResult: ThreadResult = await withTimeout<ThreadResult>(
+      getThread(token, tid, '', '', 'e', new Set(), [], emptyNoteMap, true), 15000);
+    if (!lastResult.ok) {
+      return -1;
+    }
+    const totalPages: number = lastResult.pagination.totalPages > 0
+      ? lastResult.pagination.totalPages : 1;
+    const lastPidOfThread: number = lastResult.posts.length > 0
+      ? lastResult.posts[lastResult.posts.length - 1].pid : -1;
+    if (lastPidOfThread > 0 && targetPid > lastPidOfThread) {
+      // 目标 pid 超出主题末楼：楼层不存在或已删除
+      return -1;
+    }
+    let lo: number = 1;
+    let hi: number = Math.max(1, totalPages);
+    // 「找第一个满足 lastPid >= target 的页」必须用下取整 mid：
+    // 上取整时若判定走向 hi = mid 且 mid 恰等于 hi（如 lo=1,hi=2 → mid=2），
+    // hi 不收缩、lo<hi 恒成立，会死循环重复请求同一页。
+    while (lo < hi) {
+      const mid: number = Math.floor((lo + hi) / 2);
+      const result: ThreadResult = await withTimeout<ThreadResult>(
+        getThread(token, tid, '', '', String(mid), new Set(), [], emptyNoteMap, true), 15000);
+      if (!result.ok || result.posts.length === 0) {
+        return -1;
+      }
+      const lastPid: number = result.posts[result.posts.length - 1].pid;
+      if (lastPid <= 0) {
+        // 防御分支：页内无有效楼层 pid（正常数据不可达）
+        return -1;
+      }
+      if (lastPid < targetPid) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
+  } catch (e) {
+    logger.warn('locatePidPage 失败 tid=%{public}s targetPid=%{public}d error=%{public}s',
+      tid, targetPid, formatError(e));
+    return -1;
+  }
+}
+
+/**
  * 从 NGA 原始 JSON 填充 ThreadResult（JSON API 与 HTML 降级共享）
+ *
+ * @param raw - 原始响应对象
+ * @param result - 输出结果
+ * @param blacklist - 黑名单 UID
+ * @param keywords - 标题屏蔽关键词
+ * @param noteMap - 用户备注表
+ * @param skipImagePrefetch - true 时跳过图片尺寸头预热（仅取数的轻量场景，如 locatePidPage）
  */
 function fillThreadResult(raw: Record<string, Object>, result: ThreadResult,
   blacklist: Set<string>, keywords: string[] = [],
-  noteMap: Record<string, string> = {}): void {
+  noteMap: Record<string, string> = {},
+  skipImagePrefetch: boolean = false): void {
   const data: ThreadData = parseThreadData(raw, blacklist, keywords, noteMap);
   const dataObj: Record<string, Object> | undefined = raw?.['data'] as Record<string, Object> | undefined;
 
@@ -305,7 +395,9 @@ function fillThreadResult(raw: Record<string, Object>, result: ThreadResult,
   result.pagination.totalPages = data.pagination.totalPages;
   result.pagination.totalRows = data.pagination.totalRows;
 
-  prefetchPostImages(result.posts);
+  if (!skipImagePrefetch) {
+    prefetchPostImages(result.posts);
+  }
 
   result.ok = true;
 }

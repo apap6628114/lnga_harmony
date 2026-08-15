@@ -61,11 +61,32 @@ export type ScreenType =
   | 'fontSizeSettings'
   | 'favoriteFolders'
 
+/**
+ * 帖子路由来源。
+ *
+ * 显式标注打开帖子的入口（用户回帖列表 / 消息中心 / 链接），由入口在
+ * Screen.thread 时写入并透传到 ThreadPanel，当前用于运行态诊断日志
+ * （thread open ... source=...）；同时保留按来源限定定位行为的扩展点
+ * （如仅对无页码来源启用 pid→页码预查找），比从路由参数推断更精准。
+ */
+export enum ThreadSource {
+  /** 未标注来源（普通主题列表、收藏夹、浏览历史等，无 pid 定位需求）。 */
+  DEFAULT = '',
+  /** 用户回帖列表（searchpost）进入：仅 pid、页码未知。 */
+  TOPIC_LIST = 'topic-list',
+  /** 消息中心通知进入：携带服务端提示页码。 */
+  NOTIFICATION = 'notification',
+  /** 应用内/外部链接进入：可能携带页码或仅 pid。 */
+  LINK = 'link',
+}
+
 export class Screen {
   type: ScreenType = 'thread'
   tid: string = ''
   threadPage: number = 1
   pid: string = ''
+  /** 打开帖子的路由来源（ThreadSource）。 */
+  threadSource: string = ''
   uid: string = ''
   mid: string = ''
   messagePage: number = 1
@@ -86,12 +107,15 @@ export class Screen {
     return s
   }
 
-  static thread(tid: string, page: number = 1, pid: string = ''): Screen {
+  static thread(tid: string, page: number = 1, pid: string = '', source: string = ''): Screen {
     const s = new Screen()
     s.type = 'thread'
     s.tid = tid
     s.threadPage = page
-    s.pid = pid
+    // '0' 是 NGA 的"主楼/无楼层"哨兵值（主楼 pid 即为 0），统一归一为空串，
+    // 表示无楼层定位意图——ThreadPanel 无需再区分哨兵与真实 pid
+    s.pid = pid === '0' ? '' : pid
+    s.threadSource = source
     return s
   }
 

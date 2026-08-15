@@ -3,7 +3,7 @@
  */
 
 import { appStore } from '../store/AppStore'
-import { routerStore, Screen } from '../store/RouterStore'
+import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
 import type {
   MessageNotification,
   NotificationInfo,
@@ -215,7 +215,8 @@ export struct NotificationPanel {
         appStore.markNotificationSeen(notification.notificationId)
         this.syncFromStore()
         routerStore.navigateActivity(
-          Screen.thread(upvote.tid, this.resolvePage(upvote.page), this.normalizeTargetPid(upvote.pid))
+          Screen.thread(upvote.tid, this.resolvePage(upvote.page), this.normalizeTargetPid(upvote.pid),
+            ThreadSource.NOTIFICATION)
         )
       }
     } else {
@@ -224,7 +225,8 @@ export struct NotificationPanel {
         const targetPid: string = this.resolveReplyTargetPid(reply)
         appStore.markNotificationSeen(notification.notificationId)
         this.syncFromStore()
-        routerStore.navigateActivity(Screen.thread(reply.tid, this.resolvePage(reply.page), targetPid))
+        routerStore.navigateActivity(Screen.thread(reply.tid, this.resolvePage(reply.page), targetPid,
+          ThreadSource.NOTIFICATION))
       }
     }
   }

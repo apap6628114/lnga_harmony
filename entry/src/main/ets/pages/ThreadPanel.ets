@@ -111,6 +111,8 @@ export struct ThreadPanel {
   /** 路由请求的初始页码。 */
   @Prop threadPage: number = 1
   @Prop threadPid: string = ''
+  /** 打开帖子的路由来源（ThreadSource 枚举值），用于运行态诊断。 */
+  @Prop threadSource: string = ''
   @Prop @Watch('onScrollToPid') navEntryId: number = 0
   @State isLoading: boolean = true
   @State hasError: boolean = false
@@ -315,6 +317,10 @@ export struct ThreadPanel {
     this.pendingTargetPid = this.threadPid
     this.singlePostFallback = false
     this.displayPage = initialPage
+    logger.info(
+      'thread open tid=%{public}s page=%{public}d pid=%{public}s source=%{public}s',
+      this.threadTid, initialPage, this.threadPid, this.threadSource
+    )
     if (this.threadTid) {
       this.loadPosts(initialPage, ThreadLoadMode.REPLACE)
     }

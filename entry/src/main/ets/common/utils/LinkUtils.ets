@@ -1,8 +1,9 @@
 import { common, Context } from '@kit.AbilityKit'
-import { routerStore, Screen } from '../../store/RouterStore'
+import { routerStore, Screen, ThreadSource } from '../../store/RouterStore'
 import { floatingLayerStore, FloatingPage } from '../../store/FloatingLayerStore'
 import { appStore } from '../../store/AppStore'
 import { resolveUidByUsername } from '../../service/api/UserApi'
+import { locatePidPage } from '../../service/api/ThreadApi'
 import { KEY_USE_INTERNAL_WEBVIEW } from '../constants/AppStorageKeys'
 import { NGA_HOSTS } from '../constants/NgaDomains'
 
@@ -150,11 +151,10 @@ export function handleForumLink(
     // 应用内帖子链接 → 导航到帖子详情
     const params: Map<string, string> = parseQueryString(href.substring(href.indexOf('?') + 1))
     const tid: string = params.get('tid') || ''
-    const pageStr: string = params.get('page') || '1'
+    const rawPage: string = params.get('page') || ''
     const pid: string = params.get('pid') || ''
-    const page: number = parseInt(pageStr, 10) || 1
     if (tid.length > 0) {
-      routerStore.navigateActivity(Screen.thread(tid, page, pid))
+      openThreadLink(tid, rawPage, pid)
     }
   } else if (href.startsWith('#/profile?')) {
     // 应用内用户链接 → 弹窗资料卡：uid 直查；[username] 先按用户名解析 uid
@@ -189,10 +189,9 @@ export function handleForumLink(
         // NGA 帖子链接 → 应用内跳转
         const tid: string = params.get('tid') || ''
         if (tid.length > 0) {
-          const pageStr: string = params.get('page') || '1'
+          const rawPage: string = params.get('page') || ''
           const pid: string = params.get('pid') || ''
-          const page: number = parseInt(pageStr, 10) || 1
-          routerStore.navigateActivity(Screen.thread(tid, page, pid))
+          openThreadLink(tid, rawPage, pid)
           return
         }
       } else if (path === '/nuke.php' && params.get('func') === 'ucp') {
@@ -217,5 +216,55 @@ export function handleForumLink(
         openSystemLink(href, abilityContext)
       }
     }
+  }
+}
+
+/**
+ * 打开链接来源的帖子。
+ *
+ * 显式携带页码时直接打开；仅携带 pid（无 page 参数）时，先完成 pid→页码
+ * 数据查找（locatePidPage）再以正确页码打开——查找失败（楼层已删除/请求
+ * 异常）时退化为不带定位意图地打开第 1 页。打开时统一标注 LINK 来源。
+ *
+ * @param tid - 主题 ID
+ * @param rawPage - URL 中的页码参数（可能为空串）
+ * @param pid - 目标楼层 pid（可能为空串）
+ */
+function openThreadLink(tid: string, rawPage: string, pid: string): void {
+  const hasPage: boolean = rawPage.length > 0
+  const page: number = hasPage ? (parseInt(rawPage, 10) || 1) : 1
+  // '0' 是 NGA 的"主楼/无楼层"哨兵值（主楼 pid 即为 0），视为无定位意图，
+  // 不做无谓的 pid 预查找（Screen.thread 也会做同样归一）
+  const realPid: string = pid === '0' ? '' : pid
+  if (realPid.length > 0 && !hasPage) {
+    openThreadAfterPidLookup(tid, realPid)
+  } else {
+    routerStore.navigateActivity(Screen.thread(tid, page, realPid, ThreadSource.LINK))
+  }
+}
+
+/**
+ * pid→页码预查找的模块级代际计数：快速连点多个链接时，只执行最新一次查找的跳转，
+ * 避免后完成的旧查找覆盖新意图。
+ */
+let linkLookupGeneration: number = 0
+
+/**
+ * 仅携带 pid 的链接：先完成 pid→页码数据查找，再打开帖子。
+ *
+ * @param tid - 主题 ID
+ * @param pid - 目标楼层 pid
+ */
+async function openThreadAfterPidLookup(tid: string, pid: string): Promise<void> {
+  const generation: number = ++linkLookupGeneration
+  const page: number = await locatePidPage(appStore.auth.token, tid, parseInt(pid, 10))
+  if (generation !== linkLookupGeneration) {
+    // 已有更新的链接点击：丢弃过期结果
+    return
+  }
+  if (page > 0) {
+    routerStore.navigateActivity(Screen.thread(tid, page, pid, ThreadSource.LINK))
+  } else {
+    routerStore.navigateActivity(Screen.thread(tid, 1, '', ThreadSource.LINK))
   }
 }
