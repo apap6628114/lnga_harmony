@@ -6,26 +6,15 @@ import { MutedVideo } from '../media/MutedVideo'
 import { ImageSize, getCachedImageSize, setCachedImageSize } from '../media/ImageSizeUtil'
 import { fetchVideoSize, getCachedVideoSize } from '../media/VideoSizeUtil'
 import { shouldUsePassive } from '../utils/NetworkUtil'
-import {
-  ReadingFontRole,
-  ReadingLineHeightRole,
-  ReadingTypography
-} from '../typography/ReadingTypography'
 import { LengthMetrics } from '@kit.ArkUI'
 import {
   isInlineNode,
   isInlineRunsBlank,
-  calcScaleSize,
-  calcSubscriptSize,
-  calcSubscriptOffset,
-  calcSuperscriptSize,
-  calcSuperscriptOffset,
   applyInlineFormatTags,
   applyTextStyleDeclaration,
   cloneInlineTextStyle,
   extractTextStyleAlign,
   flattenInlineNodes,
-  InlineBaseline,
   InlineRun,
   InlineRunKind,
   InlineTextStyle,
@@ -38,6 +27,17 @@ import {
   QUOTE_BORDER_COLORS,
   QuoteSplit,
 } from './bbcode/BBCodeRenderContext'
+import {
+  inlineFontSize,
+  inlineLineHeight,
+  fallbackFontSize,
+  codeFontSize,
+  codeLineHeight,
+  inlineRunFontSize,
+  inlineRunBaselineOffset,
+  inlineEmotionSize,
+  inlineGroupLineHeight,
+} from './bbcode/BBCodeMetrics'
 import {
   buildTableLayout,
   TableLayout,
@@ -423,58 +423,6 @@ export struct BBCodeContentView {
     return runs
   }
 
-  /**
-   * 返回当前正文上下文的语义字号。
-   *
-   * @param ctx BBCode 渲染上下文
-   * @returns 正文或引用正文的实际字号
-   */
-  private inlineFontSize(ctx: RenderContext): number {
-    return calcScaleSize(ctx.inlineStyle.scalePercent, ctx.inQuote, this.contentFontSize)
-  }
-
-  /**
-   * 返回当前正文上下文的语义行高。
-   *
-   * @param ctx BBCode 渲染上下文
-   * @returns 正文或引用正文的实际行高
-   */
-  private inlineLineHeight(ctx: RenderContext): number {
-    const role: ReadingLineHeightRole =
-      ctx.inQuote ? ReadingLineHeightRole.QUOTE : ReadingLineHeightRole.CONTENT
-    return ReadingTypography.lineHeight(role, this.inlineFontSize(ctx))
-  }
-
-  /**
-   * 返回当前正文上下文中辅助文本的语义字号。
-   *
-   * @param ctx BBCode 渲染上下文
-   * @returns 辅助文本的实际字号
-   */
-  private fallbackFontSize(ctx: RenderContext): number {
-    return ReadingTypography.fontSize(ReadingFontRole.FALLBACK, this.inlineFontSize(ctx))
-  }
-
-  /**
-   * 返回当前正文上下文中代码块的语义字号。
-   *
-   * @param ctx BBCode 渲染上下文
-   * @returns 代码块的实际字号
-   */
-  private codeFontSize(ctx: RenderContext): number {
-    return ReadingTypography.fontSize(ReadingFontRole.CODE, this.inlineFontSize(ctx))
-  }
-
-  /**
-   * 返回当前正文上下文中代码块的语义行高。
-   *
-   * @param ctx BBCode 渲染上下文
-   * @returns 代码块的实际行高
-   */
-  private codeLineHeight(ctx: RenderContext): number {
-    return ReadingTypography.lineHeight(ReadingLineHeightRole.CODE, this.codeFontSize(ctx))
-  }
-
   /** 顶层节点的预计算渲染分组。 */
   private cachedGroups: NodeGroup[] = []
   /** 顶层渲染分组是否已准备完成。 */
@@ -496,10 +444,10 @@ export struct BBCodeContentView {
               this.RenderInlineRun(run, ctx)
             }, (run: InlineRun) => run.key)
           }
-          .fontSize(this.inlineFontSize(ctx))
+          .fontSize(inlineFontSize(ctx, this.contentFontSize))
           .fontColor(ctx.inQuote ? AppColors.textSecondary : AppColors.textPrimary)
           .fontStyle(ctx.inQuote ? FontStyle.Italic : FontStyle.Normal)
-          .lineHeight(this.inlineGroupLineHeight(this.getInlineRuns(group.nodes, ctx), ctx))
+          .lineHeight(inlineGroupLineHeight(this.getInlineRuns(group.nodes, ctx), ctx, this.contentFontSize))
           .width('100%')
           .textAlign(ctx.textAlign)
         }
@@ -520,15 +468,15 @@ export struct BBCodeContentView {
     if (run.kind === InlineRunKind.EMOTION) {
       if (getEmotionResource(run.emotionCat, run.emotionCode) !== null) {
         ImageSpan(getEmotionResource(run.emotionCat, run.emotionCode))
-          .width(this.inlineEmotionSize(run, ctx))
-          .height(this.inlineEmotionSize(run, ctx))
+          .width(inlineEmotionSize(run, ctx, this.contentFontSize))
+          .height(inlineEmotionSize(run, ctx, this.contentFontSize))
           .objectFit(ImageFit.Contain)
           .textBackgroundStyle(this.effectiveColorMode === 'dark' &&
             isEmotionCategoryNeedDarkBg(run.emotionCat)
             ? { color: Color.White } : { color: Color.Transparent })
       } else {
         Span(`[表情:${run.emotionCat}:${run.emotionCode}]`)
-          .fontSize(this.fallbackFontSize(ctx))
+          .fontSize(fallbackFontSize(ctx, this.contentFontSize))
           .fontColor(AppColors.textTertiary)
       }
     } else if (run.kind === InlineRunKind.LINK) {
@@ -538,8 +486,8 @@ export struct BBCodeContentView {
         .fontStyle(run.style.italic || ctx.inQuote ? FontStyle.Italic : FontStyle.Normal)
         .fontColor(AppColors.primary)
         .fontFamily(run.style.fontFamily)
-        .fontSize(this.inlineRunFontSize(run, ctx))
-        .baselineOffset(new LengthMetrics(this.inlineRunBaselineOffset(run, ctx)))
+        .fontSize(inlineRunFontSize(run, ctx, this.contentFontSize))
+        .baselineOffset(new LengthMetrics(inlineRunBaselineOffset(run, ctx, this.contentFontSize)))
         .decoration({
           type: run.style.strikethrough ? TextDecorationType.LineThrough : TextDecorationType.Underline,
           color: AppColors.primary
@@ -554,8 +502,8 @@ export struct BBCodeContentView {
         .fontColor(run.style.color.length > 0 ? run.style.color :
           (ctx.inQuote ? AppColors.textSecondary : AppColors.textPrimary))
         .fontFamily(run.style.fontFamily)
-        .fontSize(this.inlineRunFontSize(run, ctx))
-        .baselineOffset(new LengthMetrics(this.inlineRunBaselineOffset(run, ctx)))
+        .fontSize(inlineRunFontSize(run, ctx, this.contentFontSize))
+        .baselineOffset(new LengthMetrics(inlineRunBaselineOffset(run, ctx, this.contentFontSize)))
         .decoration({
           type: run.style.strikethrough ? TextDecorationType.LineThrough :
             run.style.underline ? TextDecorationType.Underline : TextDecorationType.None,
@@ -563,73 +511,6 @@ export struct BBCodeContentView {
             (ctx.inQuote ? AppColors.textSecondary : AppColors.textPrimary)
         })
     }
-  }
-
-  /**
-   * 返回 Run 在应用上下标前的继承字号。
-   *
-   * @param run 内联 Run
-   * @param ctx 渲染上下文
-   * @returns 基础字号
-   */
-  private inlineRunBaseFontSize(run: InlineRun, ctx: RenderContext): number {
-    return calcScaleSize(run.style.scalePercent, ctx.inQuote, this.contentFontSize)
-  }
-
-  /**
-   * 返回 Run 的最终字号。
-   *
-   * @param run 内联 Run
-   * @param ctx 渲染上下文
-   * @returns 最终字号
-   */
-  private inlineRunFontSize(run: InlineRun, ctx: RenderContext): number {
-    const baseSize: number = this.inlineRunBaseFontSize(run, ctx)
-    if (run.style.baseline === InlineBaseline.SUBSCRIPT) return calcSubscriptSize(baseSize)
-    if (run.style.baseline === InlineBaseline.SUPERSCRIPT) return calcSuperscriptSize(baseSize)
-    return baseSize
-  }
-
-  /**
-   * 返回 Run 的基线偏移。
-   *
-   * @param run 内联 Run
-   * @param ctx 渲染上下文
-   * @returns ArkUI 基线偏移
-   */
-  private inlineRunBaselineOffset(run: InlineRun, ctx: RenderContext): number {
-    const baseSize: number = this.inlineRunBaseFontSize(run, ctx)
-    if (run.style.baseline === InlineBaseline.SUBSCRIPT) return calcSubscriptOffset(baseSize)
-    if (run.style.baseline === InlineBaseline.SUPERSCRIPT) return calcSuperscriptOffset(baseSize)
-    return 0
-  }
-
-  /**
-   * 根据周围字号计算紧凑的行内表情尺寸。
-   *
-   * @param run 表情 Run
-   * @param ctx 渲染上下文
-   * @returns 表情边长
-   */
-  private inlineEmotionSize(run: InlineRun, ctx: RenderContext): number {
-    const factor: number = ctx.inQuote ? 1.8 : 2.4
-    return Math.min(50, Math.max(24, Math.round(this.inlineRunBaseFontSize(run, ctx) * factor)))
-  }
-
-  /**
-   * 根据当前行内组的最大字号计算安全行高，避免放大文字发生裁切或重叠。
-   *
-   * @param runs 当前行内节点组的扁平化结果
-   * @param ctx 渲染上下文
-   * @returns 行内组统一行高
-   */
-  private inlineGroupLineHeight(runs: InlineRun[], ctx: RenderContext): number {
-    let largestFontSize: number = this.inlineFontSize(ctx)
-    for (let i: number = 0; i < runs.length; i++) {
-      largestFontSize = Math.max(largestFontSize, this.inlineRunFontSize(runs[i], ctx))
-    }
-    const role: ReadingLineHeightRole = ctx.inQuote ? ReadingLineHeightRole.QUOTE : ReadingLineHeightRole.CONTENT
-    return ReadingTypography.lineHeight(role, largestFontSize)
   }
 
   /**
@@ -915,9 +796,9 @@ export struct BBCodeContentView {
         this.RenderQuoteHeader(node.children[0], ctx)
         if (this.isQuoteBlacklisted(node)) {
           Text('该用户已被屏蔽')
-            .fontSize(this.inlineFontSize(this.makeQuoteCtx(ctx)))
+            .fontSize(inlineFontSize(this.makeQuoteCtx(ctx), this.contentFontSize))
             .fontColor(AppColors.textTertiary)
-            .lineHeight(this.inlineLineHeight(this.makeQuoteCtx(ctx)))
+            .lineHeight(inlineLineHeight(this.makeQuoteCtx(ctx), this.contentFontSize))
             .width('100%')
             .textAlign(TextAlign.Center)
             .padding({ top: 8, bottom: 8 })
@@ -1188,10 +1069,10 @@ export struct BBCodeContentView {
   RenderCode(node: BBNode, ctx: RenderContext) {
     Scroll() {
       Text(node.text)
-        .fontSize(this.codeFontSize(ctx))
+        .fontSize(codeFontSize(ctx, this.contentFontSize))
         .fontColor(AppColors.textPrimary)
         .fontFamily('monospace')
-        .lineHeight(this.codeLineHeight(ctx))
+        .lineHeight(codeLineHeight(ctx, this.contentFontSize))
     }
     .width('100%')
     .scrollable(ScrollDirection.Horizontal)
@@ -1215,9 +1096,9 @@ export struct BBCodeContentView {
         if (child.type === BBNodeType.LIST_ITEM) {
           Row() {
             Text(this.listBullet(ctx.listDepth))
-              .fontSize(this.inlineFontSize(ctx))
+              .fontSize(inlineFontSize(ctx, this.contentFontSize))
               .fontColor(ctx.inQuote ? AppColors.textSecondary : AppColors.textPrimary)
-              .lineHeight(this.inlineLineHeight(ctx))
+              .lineHeight(inlineLineHeight(ctx, this.contentFontSize))
               .width(16)
               .textAlign(TextAlign.Start)
             if (child.children.length > 0) {
@@ -1228,10 +1109,10 @@ export struct BBCodeContentView {
               .alignItems(HorizontalAlign.Start)
             } else {
               Text(child.text)
-                .fontSize(this.inlineFontSize(ctx))
+                .fontSize(inlineFontSize(ctx, this.contentFontSize))
                 .fontColor(ctx.inQuote ? AppColors.textSecondary : AppColors.textPrimary)
                 .layoutWeight(1)
-                .lineHeight(this.inlineLineHeight(ctx))
+                .lineHeight(inlineLineHeight(ctx, this.contentFontSize))
             }
           }
           .width('100%')
@@ -1259,9 +1140,9 @@ export struct BBCodeContentView {
         this.RenderChildren(node.children, ctx)
       } else {
         Text(node.text)
-          .fontSize(this.inlineFontSize(ctx))
+          .fontSize(inlineFontSize(ctx, this.contentFontSize))
           .fontColor(AppColors.warnText)
-          .lineHeight(this.inlineLineHeight(ctx))
+          .lineHeight(inlineLineHeight(ctx, this.contentFontSize))
       }
     }
     .width('100%')

@@ -4,7 +4,8 @@
  */
 
 import { PostAuthResult, PostReplyResult, TopicCategoriesResult } from '../../model/ThreadResult'
-import { getPostAuth, getTopicCategories, postNewTopic, uploadAttachment } from '../../service/api/ThreadApi'
+import { getTopicCategories } from '../../service/api/ThreadApi'
+import { getPostAuth, postNewTopic, uploadAttachment } from '../../service/api/ThreadWriteApi'
 import type { UploadAttachmentResult } from '../../model/NgaApiResults'
 import { appStore } from '../../store/AppStore'
 import { Logger, DOMAIN_MANAGER } from '../utils/Logger'

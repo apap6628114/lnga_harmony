@@ -1,11 +1,8 @@
 import { http } from '@kit.NetworkKit';
-import { cryptoFramework } from '@kit.CryptoArchitectureKit';
-import { util } from '@kit.ArkTS';
 import { preprocessJson } from '../parser/NgaJsonSanitizer';
 import { ngaThrottler } from '../common/concurrency/Throttler';
 import { Logger, DOMAIN_NETWORK, formatError } from '../common/utils/Logger';
 import {
-  stringToUint8Array,
   uint8ArrayToBase64,
   decodeGb18030,
   buildEncodedBody,
@@ -14,7 +11,8 @@ import {
 } from '../common/utils/CodecUtils';
 import { extractHostname, buildUrl } from '../common/utils/UrlUtils';
 import { parseSessionCookies, normalizeCookieList } from '../common/CookieUtils';
-import { NGA_API_DOMAINS as DOMAINS, NGA_UPLOAD_URL } from '../common/constants/NgaDomains';
+import { NGA_API_DOMAINS as DOMAINS } from '../common/constants/NgaDomains';
+import { encryptPassword } from '../common/security/NgaRsaCipher';
 
 // ============== 类型定义 ==============
 
@@ -36,15 +34,6 @@ export interface LoginResultData {
 
 // ============== 常量 ==============
 
-const NGA_RSA_PUBLIC_KEY =
-  'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyKzZWDimCN1OCprqWUhF' +
-  'UPhcwxDE62/BFVP6LtQHJu+65dm4YNmDvzitmcfaXW9YbhXnd4oP7j+6vpcgJQ+p' +
-  '3ucySo1ZnqO0Bb2JKEtxpCmxe7IYXhFEkJqHpFYBTiAxQz2n2mX4JZy/ehBUSMjz' +
-  'gzd0NdG6Ai1C42oCzYltUOjNWZUNHn1nqpElSWHnUWqkdN8+5ISP/ZMKiQdFANkE' +
-  'qDGw3/34qyF+E/hVgrGF4/CcWNP/LJCdB6DYtx7VPlQZF0tP1s+q/++rC4rQ2wmV' +
-  'l2V8zGh1j7ojZbt62hVjy6byK1E/2XYo97ZtL4KDW7F5jJMvSDRFR7901UR8hCdf' +
-  '4wIDAQAB';
-
 let activeDomainIndex: number = 0;
 
 const logger = new Logger(DOMAIN_NETWORK, 'NgaClient');
@@ -55,50 +44,6 @@ const logger = new Logger(DOMAIN_NETWORK, 'NgaClient');
 // gbkPercentEncode/buildEncodedBody/buildMultipart/emptyStringRecord）
 // 已下沉至 common/utils/CodecUtils.ets。
 // URL 工具（extractHostname/buildUrl）已下沉至 common/utils/UrlUtils.ets。
-
-// ============== RSA 加密 ==============
-
-async function encryptPassword(password: string): Promise<string> {
-  // convertKey 需要 DER 编码的二进制数据，即 Base64 解码后的原始字节
-  const base64 = new util.Base64Helper();
-  const pubKeyData: cryptoFramework.DataBlob = {
-    data: base64.decodeSync(NGA_RSA_PUBLIC_KEY),
-  };
-
-  let keyGenerator: cryptoFramework.AsyKeyGenerator
-  try {
-    keyGenerator = cryptoFramework.createAsyKeyGenerator('RSA2048')
-  } catch (e) {
-    throw new Error('RSA密钥生成器创建失败')
-  }
-  let keyPair: cryptoFramework.KeyPair
-  try {
-    keyPair = await keyGenerator.convertKey(pubKeyData, null)
-  } catch (e) {
-    throw new Error('RSA密钥转换失败')
-  }
-  let cipher: cryptoFramework.Cipher
-  try {
-    cipher = cryptoFramework.createCipher('RSA2048|PKCS1')
-  } catch (e) {
-    throw new Error('RSA密码器创建失败')
-  }
-  try {
-    await cipher.init(cryptoFramework.CryptoMode.ENCRYPT_MODE, keyPair.pubKey, null);
-  } catch (e) {
-    throw new Error('RSA加密初始化失败');
-  }
-  const inputData: cryptoFramework.DataBlob = {
-    data: stringToUint8Array(password),
-  };
-  let output: cryptoFramework.DataBlob;
-  try {
-    output = await cipher.doFinal(inputData);
-  } catch (e) {
-    throw new Error('RSA加密失败');
-  }
-  return uint8ArrayToBase64(output.data);
-}
 
 // ============== HTTP 请求 ==============
 
@@ -632,104 +577,3 @@ const client: INgaClient = {
 };
 
 export const ngaClient: INgaClient = client;
-
-/**
- * 上传附件到 img8.nga.cn （Multipart + 二进制）
- * 对应 Java TopicPostModel.buildMultipartBody() + uploadFileInner()
- */
-export async function ngaUploadFile(
-  imageData: ArrayBuffer,
-  fileName: string,
-  auth: string,
-  fid: number,
-  cookies: Cookies
-): Promise<string> {
-  const url: string = NGA_UPLOAD_URL
-  const boundary: string = '----NGAFormBoundary' + Math.random().toString(36).slice(2, 12)
-  const encoder: util.TextEncoder = util.TextEncoder.create()
-
-  const textFields: string =
-    '--' + boundary + '\r\n' +
-    'Content-Disposition: form-data; name="attachment_file1_url_utf8_name"\r\n\r\n' + fileName + '\r\n' +
-    '--' + boundary + '\r\n' +
-    'Content-Disposition: form-data; name="fid"\r\n\r\n' + String(fid) + '\r\n' +
-    '--' + boundary + '\r\n' +
-    'Content-Disposition: form-data; name="auth"\r\n\r\n' + auth + '\r\n' +
-    '--' + boundary + '\r\n' +
-    'Content-Disposition: form-data; name="func"\r\n\r\nupload\r\n' +
-    '--' + boundary + '\r\n' +
-    'Content-Disposition: form-data; name="v2"\r\n\r\n1\r\n' +
-    '--' + boundary + '\r\n' +
-    'Content-Disposition: form-data; name="lite"\r\n\r\njs\r\n' +
-    '--' + boundary + '\r\n' +
-    'Content-Disposition: form-data; name="attachment_file1_auto_size"\r\n\r\n\r\n' +
-    '--' + boundary + '\r\n' +
-    'Content-Disposition: form-data; name="attachment_file1_watermark"\r\n\r\n\r\n' +
-    '--' + boundary + '\r\n' +
-    'Content-Disposition: form-data; name="attachment_file1_dscp"\r\n\r\n\r\n' +
-    '--' + boundary + '\r\n' +
-    'Content-Disposition: form-data; name="attachment_file1_img"\r\n\r\n1\r\n' +
-    '--' + boundary + '\r\n' +
-    // origin_domain 为服务端约定值（非连接域名），不随站点域切换修改
-    'Content-Disposition: form-data; name="origin_domain"\r\n\r\nbbs.ngacn.cc\r\n'
-
-  const fileHeader: string =
-    '--' + boundary + '\r\n' +
-    'Content-Disposition: form-data; name="attachment_file1"; filename="' + fileName + '"\r\n' +
-    'Content-Type: image/jpeg\r\n\r\n'
-  const fileFooter: string = '\r\n--' + boundary + '--\r\n'
-
-  const textBytes: Uint8Array = encoder.encodeInto(textFields)
-  const headerBytes: Uint8Array = encoder.encodeInto(fileHeader)
-  const footerBytes: Uint8Array = encoder.encodeInto(fileFooter)
-  const imageU8: Uint8Array = new Uint8Array(imageData)
-
-  const totalLength: number = textBytes.byteLength + headerBytes.byteLength + imageU8.byteLength + footerBytes.byteLength
-  const fullBody: Uint8Array = new Uint8Array(totalLength)
-  let pos: number = 0
-  fullBody.set(textBytes, pos)
-  pos += textBytes.byteLength
-  fullBody.set(headerBytes, pos)
-  pos += headerBytes.byteLength
-  fullBody.set(imageU8, pos)
-  pos += imageU8.byteLength
-  fullBody.set(footerBytes, pos)
-
-  const contentType: string = 'multipart/form-data; boundary=' + boundary
-  const headers: Record<string, string> = {
-    'Content-Type': contentType,
-    'User-Agent': 'NGA_WP_JW',
-    'X-User-Agent': 'Nga_Official',
-  }
-  if (cookies) {
-    headers['Cookie'] = 'ngaPassportUid=' + cookies.uid + '; ngaPassportCid=' + cookies.cid
-  }
-
-  logger.verbose('[NGA][UPLOAD] %{public}s size=%{public}s', url, String(imageData.byteLength))
-  return new Promise<string>((resolve, reject) => {
-    const httpRequest = http.createHttp()
-    httpRequest.request(url, {
-      method: http.RequestMethod.POST,
-      header: headers,
-      extraData: fullBody.buffer as ArrayBuffer,
-      expectDataType: http.HttpDataType.ARRAY_BUFFER,
-      readTimeout: 120000,
-      connectTimeout: 30000,
-    }, (err, resp) => {
-      httpRequest.destroy()
-      if (err) {
-        logger.verbose('[NGA][UPLOAD] fail: %{public}s', err.message)
-        reject(new Error('上传失败: ' + err.message))
-        return
-      }
-      const respText: string = decodeGb18030(resp.result as ArrayBuffer)
-      logger.verbose('[NGA][UPLOAD] resp %{public}s %{public}s', String(resp.responseCode), respText.slice(0, 200))
-      if (resp.responseCode !== 200) {
-        reject(new Error('上传HTTP ' + String(resp.responseCode)))
-        return
-      }
-      resolve(respText)
-    })
-  })
-}
-

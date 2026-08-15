@@ -15,9 +15,10 @@ import {
 } from './TtsAvPlayerRenderer'
 import { TtsAudioEnqueueResult } from './TtsWavFileWriter'
 import { ttsProgress } from './TtsProgress'
+import { splitText } from './TtsTextChunker'
+import { isVoiceNotDownloadedError, shouldReleaseEngineOnError } from './TtsErrorMessages'
 import { DOMAIN_MEDIA, formatError, Logger } from '../utils/Logger'
 
-const MAX_CHUNK_LEN: number = 10000
 const SYSTEM_SKIP_INTERVAL_MS: number = 15000
 /** 估算每字符 PCM 字节数：16kHz/16bit 单声道约 32000B/s，中文朗读约 5 字符/s（对语速设置不敏感，属估算固有误差）。 */
 const ESTIMATED_BYTES_PER_CHAR: number = 6400
@@ -41,89 +42,6 @@ enum TtsPlaybackPhase {
   PAUSED = 3,
   /** 当前媒体已自然播放完成，并保留可定位和重播能力。 */
   COMPLETED = 4
-}
-
-/**
- * 判断指定 UTF-16 编码单元是否为高位代理项。
- *
- * @param code UTF-16 编码单元。
- * @returns 是否为高位代理项。
- */
-function isHighSurrogate(code: number): boolean {
-  return code >= 0xD800 && code <= 0xDBFF
-}
-
-/**
- * 判断指定 UTF-16 编码单元是否为低位代理项。
- *
- * @param code UTF-16 编码单元。
- * @returns 是否为低位代理项。
- */
-function isLowSurrogate(code: number): boolean {
-  return code >= 0xDC00 && code <= 0xDFFF
-}
-
-/**
- * 避免在 Unicode 代理项中间切分文本。
- *
- * @param text 原始文本。
- * @param cutPosition 初始切分位置。
- * @returns 安全的切分位置。
- */
-function adjustSurrogateBoundary(text: string, cutPosition: number): number {
-  if (cutPosition <= 0 || cutPosition >= text.length) {
-    return cutPosition
-  }
-  const previousCode: number = text.charCodeAt(cutPosition - 1)
-  const nextCode: number = text.charCodeAt(cutPosition)
-  if (isHighSurrogate(previousCode) && isLowSurrogate(nextCode)) {
-    return cutPosition - 1
-  }
-  return cutPosition
-}
-
-/**
- * 判断字符是否适合作为 TTS 文本段落的结束位置。
- *
- * @param character 待判断字符。
- * @returns 是否为自然断句字符。
- */
-function isSentenceBoundary(character: string): boolean {
-  return character === '\n' || character === '。' || character === '！' ||
-    character === '？' || character === '；' || character === '，' ||
-    character === '.' || character === '!' || character === '?' ||
-    character === ';' || character === ','
-}
-
-/**
- * 按 TTS 单次请求上限和自然断句位置拆分文本。
- *
- * @param text 待朗读文本。
- * @returns 拆分后的文本段落。
- */
-function splitText(text: string): string[] {
-  if (text.length <= MAX_CHUNK_LEN) {
-    return [text]
-  }
-  const chunks: string[] = []
-  let start: number = 0
-  while (start < text.length) {
-    if (start + MAX_CHUNK_LEN >= text.length) {
-      chunks.push(text.substring(start))
-      break
-    }
-    let cutPosition: number = start + MAX_CHUNK_LEN
-    for (let index: number = cutPosition - 1; index > start; index--) {
-      if (isSentenceBoundary(text.charAt(index))) {
-        cutPosition = index + 1
-        break
-      }
-    }
-    cutPosition = adjustSurrogateBoundary(text, cutPosition)
-    chunks.push(text.substring(start, cutPosition))
-    start = cutPosition
-  }
-  return chunks
 }
 
 /**
@@ -437,7 +355,7 @@ class TtsPlaybackCoordinator {
         return
       }
       this.finishPlayback()
-      if (error.code === 1002300003 || error.code === 1002300005) {
+      if (isVoiceNotDownloadedError(error.code)) {
         appStore.showToast('音色未下载，请在设置中下载后使用')
       } else {
         appStore.showToast('语音引擎不可用')
@@ -767,7 +685,7 @@ class TtsPlaybackCoordinator {
       return
     }
     this.finishPlayback()
-    if (errorCode === 1002300007) {
+    if (shouldReleaseEngineOnError(errorCode)) {
       this.releaseEngine()
     }
     logger.error('TTS synthesis failed: %{public}d %{public}s', errorCode, errorMessage)

@@ -25,6 +25,13 @@ import {
 } from '../../model/AiConfig'
 import { PROVIDER_PRESETS } from '../../service/ai/AiModelPresets'
 import { testConnection } from '../../service/ai/ResponsesApiClient'
+import {
+  clampTemperature,
+  clampMaxTokens,
+  getPreset,
+  getModelPlaceholder,
+  getApiKeyPlaceholder
+} from '../../service/ai/AiConfigFormLogic'
 import type { ActionOption } from '../../common/dialogs/Dialogs'
 import type { AiTestResult } from '../../model/AiConfig'
 import type { AiProviderPreset } from '../../service/ai/AiModelPresets'
@@ -196,8 +203,8 @@ export struct AiSettingsPanel {
         this.editEndpointInput = DEFAULT_DEEPSEEK_ENDPOINT
         this.editApiKeyInput = profile.apiKey
         this.editModelInput = profile.modelName
-        this.editTemperatureInput = this.clampTemperature(profile.temperature)
-        this.editMaxTokensInput = this.clampMaxTokens(profile.maxTokens)
+        this.editTemperatureInput = clampTemperature(profile.temperature)
+        this.editMaxTokensInput = clampMaxTokens(profile.maxTokens)
         this.showAdvancedParams = false
       }
     }
@@ -271,8 +278,8 @@ export struct AiSettingsPanel {
     return this.editNameInput !== profile.name ||
       this.editApiKeyInput !== profile.apiKey ||
       this.editModelInput !== profile.modelName ||
-      this.editTemperatureInput !== this.clampTemperature(profile.temperature) ||
-      this.editMaxTokensInput !== this.clampMaxTokens(profile.maxTokens)
+      this.editTemperatureInput !== clampTemperature(profile.temperature) ||
+      this.editMaxTokensInput !== clampMaxTokens(profile.maxTokens)
   }
 
   /** 清空编辑表单缓存和异步结果。 */
@@ -313,28 +320,6 @@ export struct AiSettingsPanel {
     return appStore.settings.activeAiProfileId === id
   }
 
-  /**
-   * 将温度参数限制到可编辑范围并规范到一位小数。
-   *
-   * @param value - 待规范化的温度参数
-   * @returns 规范化后的温度参数
-   */
-  private clampTemperature(value: number): number {
-    const clamped: number = Math.max(MIN_AI_TEMPERATURE, Math.min(MAX_AI_TEMPERATURE, value))
-    return Math.round(clamped * 10) / 10
-  }
-
-  /**
-   * 将输出上限限制到可编辑范围并规范到整数。
-   *
-   * @param value - 待规范化的输出上限
-   * @returns 规范化后的输出上限
-   */
-  private clampMaxTokens(value: number): number {
-    const clamped: number = Math.max(MIN_AI_MAX_TOKENS, Math.min(MAX_AI_MAX_TOKENS, value))
-    return Math.round(clamped)
-  }
-
   /** 保存当前表单中的新建或编辑配置。 */
   saveProfile(): void {
     if (!this.editNameInput || this.editNameInput.trim().length === 0) {
@@ -350,8 +335,8 @@ export struct AiSettingsPanel {
     profile.name = this.editNameInput.trim()
     profile.endpoint = DEFAULT_DEEPSEEK_ENDPOINT
     profile.modelName = this.editModelInput.trim()
-    profile.temperature = this.clampTemperature(this.editTemperatureInput)
-    profile.maxTokens = this.clampMaxTokens(this.editMaxTokensInput)
+    profile.temperature = clampTemperature(this.editTemperatureInput)
+    profile.maxTokens = clampMaxTokens(this.editMaxTokensInput)
 
     if (this.expandedProfileId === NEW_ID) {
       profile.apiKey = this.editApiKeyInput.trim()
@@ -448,11 +433,7 @@ export struct AiSettingsPanel {
    * @returns 当前平台默认模型或通用提示
    */
   private getModelPlaceholder(): string {
-    const preset: AiProviderPreset | null = this.getPreset()
-    if (preset && preset.defaultModelName.length > 0) {
-      return preset.defaultModelName
-    }
-    return '请输入模型名称'
+    return getModelPlaceholder(this.getPreset())
   }
 
   /**
@@ -461,11 +442,7 @@ export struct AiSettingsPanel {
    * @returns DeepSeek 的 API Key 格式提示
    */
   private getApiKeyPlaceholder(): string {
-    const preset: AiProviderPreset | null = this.getPreset()
-    if (preset && preset.apiKeyPlaceholder.length > 0) {
-      return preset.apiKeyPlaceholder
-    }
-    return '请输入 API Key'
+    return getApiKeyPlaceholder(this.getPreset())
   }
 
   /**
@@ -474,10 +451,7 @@ export struct AiSettingsPanel {
    * @returns DeepSeek 预设，列表为空时返回 null
    */
   private getPreset(): AiProviderPreset | null {
-    if (PROVIDER_PRESETS.length > 0) {
-      return PROVIDER_PRESETS[0]
-    }
-    return null
+    return getPreset()
   }
 
   /**
@@ -1248,7 +1222,7 @@ export struct AiSettingsPanel {
               style: SliderStyle.InSet
             })
               .onChange((value: number, mode: SliderChangeMode): void => {
-                this.editTemperatureInput = this.clampTemperature(value)
+                this.editTemperatureInput = clampTemperature(value)
               })
               .layoutWeight(1)
               .height(40)
@@ -1281,7 +1255,7 @@ export struct AiSettingsPanel {
               style: SliderStyle.InSet
             })
               .onChange((value: number, mode: SliderChangeMode): void => {
-                this.editMaxTokensInput = this.clampMaxTokens(value)
+                this.editMaxTokensInput = clampMaxTokens(value)
               })
               .layoutWeight(1)
               .height(40)

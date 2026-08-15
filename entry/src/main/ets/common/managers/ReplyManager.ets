@@ -1,7 +1,6 @@
 import type { PostInfo } from '../../model/PostInfo'
 import { PostAuthResult, PostReplyResult } from '../../model/ThreadResult'
-import { getPostAuth, postReply, postComment } from '../../service/api/ThreadApi'
-import { uploadAttachment } from '../../service/api/ThreadApi'
+import { getPostAuth, postReply, postComment, uploadAttachment } from '../../service/api/ThreadWriteApi'
 import type { UploadAttachmentResult } from '../../model/NgaApiResults'
 import { appStore } from '../../store/AppStore'
 import { Logger, DOMAIN_MANAGER } from '../utils/Logger'

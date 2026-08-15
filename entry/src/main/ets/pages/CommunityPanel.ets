@@ -272,62 +272,6 @@ export struct CommunityPanel {
   }
 
   @Builder
-  MobileContent() {
-    Row() {
-      Image($r('app.media.icon_search'))
-        .width(16).height(16).fillColor(AppColors.textTertiary).margin({ right: 8 })
-      Text('搜索板块、主题...')
-        .fontSize(15).fontColor(AppColors.textTertiary)
-    }
-    .width('92%').height(40).padding({ left: 12, right: 12 })
-    .backgroundColor(AppColors.bgSecondary).borderRadius(10)
-    .margin({ top: 12, bottom: 12 }).alignItems(VerticalAlign.Center)
-    .onClick(() => {
-      routerStore.navigateSearch()
-    })
-
-    if (this.favoritesList.length > 0) {
-      this.FavoritesGrid()
-    }
-
-    if (this.isLoading) {
-      Column() {
-        LoadingProgress().width(24).height(24).color(AppColors.textTertiary)
-        Text('加载中...').fontSize(14).fontColor(AppColors.textTertiary).margin({ top: 12 })
-      }
-      .width('100%').height(200)
-      .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-    } else if (this.categories.length === 0) {
-      Column() {
-        Text(this.loadError.length > 0 ? this.loadError : '暂无板块')
-          .fontSize(14)
-          .fontColor(AppColors.textTertiary)
-          .textAlign(TextAlign.Center)
-        Button('重试')
-          .fontSize(13)
-          .fontColor(AppColors.primary)
-          .backgroundColor(Color.Transparent)
-          .margin({ top: 12 })
-          .onClick(() => {
-            this.retryCategories()
-          })
-      }
-      .width('100%').height(200)
-      .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-    } else {
-      List() {
-        LazyForEach(this.categoriesDataSource, (cat: Category) => {
-          ListItem() {
-            this.CategoryGrid(cat)
-          }
-        }, (cat: Category) => cat.id)
-      }
-      .width('100%')
-      .divider({ strokeWidth: 8, color: Color.Transparent })
-    }
-  }
-
-  @Builder
   MobileTwoPanelContent() {
     Row() {
       Scroll() {

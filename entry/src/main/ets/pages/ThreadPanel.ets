@@ -1,7 +1,5 @@
 import { display, LengthMetrics } from '@kit.ArkUI'
 import { common, Context } from '@kit.AbilityKit'
-import { motion } from '@kit.MultimodalAwarenessKit'
-import { BusinessError } from '@kit.BasicServicesKit'
 import { taskpool } from '@kit.ArkTS'
 
 import { appStore } from '../store/AppStore'
@@ -38,25 +36,19 @@ import type { ThreadInfo } from '../model/Thread'
 import { Logger, DOMAIN_UI, formatError } from '../common/utils/Logger'
 import { getActiveAiValidationMessage } from '../service/ai/ActiveAiService'
 import { applyBlacklistStateToPosts } from '../common/utils/BlacklistUtils'
+import { injectQuoteContent } from '../common/utils/QuoteInjection'
+import { HoldingHandMonitor, HoldingHandStatus } from '../common/managers/HoldingHandMonitor'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
+import {
+  PAGE_PICKER_ELLIPSIS,
+  PAGE_PICKER_MAX_DIRECT,
+  buildPageArray,
+  parsePageInput
+} from '../common/utils/PagePicker'
 import { ReadingProgressEntry } from '../store/ReadingProgressStore'
 
 const logger = new Logger(DOMAIN_UI, 'ThreadPanel')
-
-/** 设备握持状态。 */
-enum HoldingHandStatus {
-  /** 未检测到握持。 */
-  NOT_HELD = 0,
-  /** 左手握持。 */
-  LEFT_HAND_HELD = 1,
-  /** 右手握持。 */
-  RIGHT_HAND_HELD = 2,
-  /** 双手握持。 */
-  BOTH_HANDS_HELD = 3,
-  /** 无法识别的握持状态。 */
-  UNKNOWN_STATUS = 16
-}
 
 /** 帖子页面结果写入连续窗口的方式。 */
 enum ThreadLoadMode {
@@ -77,15 +69,6 @@ enum PageNavigationSource {
 }
 
 const PAGE_LOAD_AHEAD_ITEMS: number = 3
-
-/** 页码选择器省略号占位哨兵（0 不是合法页码）。 */
-const PAGE_PICKER_ELLIPSIS: number = 0
-
-/** 页码选择器直接展示全部页码的总页数上限；超过后改用省略号分页。 */
-const PAGE_PICKER_MAX_DIRECT: number = 7
-
-/** 省略号分页时当前页两侧各展示的页码数（首尾页除外）。 */
-const PAGE_PICKER_WINDOW_RADIUS: number = 2
 
 /** 带请求页码的预取结果。 */
 class FetchPageResult {
@@ -275,7 +258,15 @@ export struct ThreadPanel {
   @State loadingContentOpacity: number = 0
   private loadingDelayTimer: number = -1
 
-  private holdingCallback: Callback<HoldingHandStatus> = (data: HoldingHandStatus): void => {
+  private holdingMonitor: HoldingHandMonitor = new HoldingHandMonitor()
+
+  /**
+   * 握持状态变化回调：首次检测直接生效，后续变化带 300ms 动画过渡，
+   * 状态持久化由 {@link HoldingHandMonitor} 完成。
+   *
+   * @param data - 新的握持状态
+   */
+  private onHoldingChanged(data: HoldingHandStatus): void {
     if (this.holdingDetected) {
       this.getUIContext()?.animateTo({ duration: 300, curve: Curve.EaseInOut }, (): void => {
         this.holdingStatus = data
@@ -284,26 +275,16 @@ export struct ThreadPanel {
       this.holdingStatus = data
       this.holdingDetected = true
     }
-    if (appStore.settings.holdingHand !== data) {
-      appStore.settingsStore.setHoldingHand(data)
-    }
   }
 
   private startHoldingHandMonitoring(): void {
-    if (!appStore.settings.smartGrip) return
-    try {
-      motion.on('holdingHandChanged', this.holdingCallback)
-    } catch (err) {
-      logger.error('startHolding fail: %{public}d', (err as BusinessError).code)
-    }
+    this.holdingMonitor.start((data: HoldingHandStatus): void => {
+      this.onHoldingChanged(data)
+    })
   }
 
   private stopHoldingHandMonitoring(): void {
-    try {
-      motion.off('holdingHandChanged', this.holdingCallback)
-    } catch (err) {
-      logger.error('stopHolding fail: %{public}d', (err as BusinessError).code)
-    }
+    this.holdingMonitor.stop()
   }
 
   private showProfileCard(uid: string, screenX: number, screenY: number): void {
@@ -981,38 +962,12 @@ export struct ThreadPanel {
   /**
    * 构造页码选择器的数据源。
    *
-   * 总页数不超过 {@link PAGE_PICKER_MAX_DIRECT} 时返回全部页码；
-   * 否则返回有界的省略号分页条目：首尾页 + 当前页两侧
-   * {@link PAGE_PICKER_WINDOW_RADIUS} 页，缺口用 {@link PAGE_PICKER_ELLIPSIS}（0）占位，
-   * 保证渲染的页码按钮数量恒定有界，避免上千页时一次性创建大量组件造成卡顿。
+   * 纯逻辑已下沉至 {@link buildPageArray}，本方法仅转发当前页选择器状态。
    *
    * @returns 页码与省略号哨兵组成的条目数组
    */
   private buildPageArray(): number[] {
-    const total: number = this.pagePickerTotalPages
-    const cur: number = this.pagePickerCurrentPage
-    if (total <= PAGE_PICKER_MAX_DIRECT) {
-      const arr: number[] = []
-      for (let i: number = 1; i <= total; i++) {
-        arr.push(i)
-      }
-      return arr
-    }
-    const arr: number[] = []
-    arr.push(1)
-    const start: number = Math.max(2, cur - PAGE_PICKER_WINDOW_RADIUS)
-    const end: number = Math.min(total - 1, cur + PAGE_PICKER_WINDOW_RADIUS)
-    if (start > 2) {
-      arr.push(PAGE_PICKER_ELLIPSIS)
-    }
-    for (let i: number = start; i <= end; i++) {
-      arr.push(i)
-    }
-    if (end < total - 1) {
-      arr.push(PAGE_PICKER_ELLIPSIS)
-    }
-    arr.push(total)
-    return arr
+    return buildPageArray(this.pagePickerTotalPages, this.pagePickerCurrentPage)
   }
 
   /**
@@ -1027,12 +982,12 @@ export struct ThreadPanel {
       appStore.showToast('请输入页码')
       return
     }
-    const parsed: number = Number(raw)
-    if (isNaN(parsed) || parsed < 1 || parsed > this.pagePickerTotalPages) {
+    const parsed: number = parsePageInput(raw, this.pagePickerTotalPages)
+    if (parsed < 0) {
       appStore.showToast('页码应在 1~' + this.pagePickerTotalPages + ' 之间')
       return
     }
-    const target: number = Math.floor(parsed)
+    const target: number = parsed
     if (this.pagePickerOnSelect) {
       this.pagePickerOnSelect(target)
     }
@@ -1282,83 +1237,13 @@ export struct ThreadPanel {
   /**
    * 为快速回复和被截断的引用补全原楼层内容。
    *
+   * 纯逻辑已下沉至 {@link injectQuoteContent}，本方法仅转发当前窗口数据。
+   *
    * @param posts - 需要处理的页面帖子
    * @param prevPosts - 替换前的帖子，用于查找跨页引用
    */
   private processPostsQuoteInjection(posts: PostInfo[], prevPosts?: PostInfo[]): void {
-    const origByPid: Map<number, string> = new Map()
-    /** 收集楼层与贴条的原始正文。 */
-    const collectToMap = (arr: PostInfo[]): void => {
-      for (const p of arr) {
-        origByPid.set(p.pid, p.content)
-        if (p.comments) {
-          for (const c of p.comments) {
-            origByPid.set(c.pid, c.content)
-          }
-        }
-      }
-    }
-    collectToMap(posts)
-    collectToMap(this.mgr.posts)
-    if (prevPosts) {
-      collectToMap(prevPosts)
-    }
-    /** 为快速回复格式注入被引用楼层的正文。 */
-    const injectReplyQuote = (target: PostInfo): void => {
-      if (target.content.startsWith('[quote]')) return
-      const headerRegex: RegExp = /\[b\]Reply to \[pid=(\d+),(\d+),(\d+)\]Reply\[\/pid\] Post by \[uid=(\d+)\](.*?)\[\/uid\] \(([^)]+)\)/i
-      const headerMatch: RegExpMatchArray | null = target.content.match(headerRegex)
-      if (!headerMatch) return
-      const refPid: number = parseInt(headerMatch[1], 10)
-      const rawContent: string | undefined = origByPid.get(refPid)
-      if (!rawContent) return
-      let cleaned: string = rawContent
-        .replace(/\[b\]Reply to \[pid=.*?\[\/pid\]\s*\[\/b\]/s, '')
-        .replace(/\[pid=.*?Reply\[\/pid\]\s*\[b\]Post by.*?\(.*?\):\[\/b\]/s, '')
-        .replace(/\[quote\]/g, '')
-        .replace(/\[\/quote\]/g, '')
-        .replace(/<br\s*\/?>/gi, '')
-        .trim()
-      if (cleaned.length === 0) return
-      const closeBIdx: number = target.content.indexOf('[/b]')
-      const replyText: string = closeBIdx >= 0 ? target.content.substring(closeBIdx + 4) : ''
-      target.content = `[quote][pid=${headerMatch[1]},${headerMatch[2]},${headerMatch[3]}]Reply[/pid] [b]Post by [uid=${headerMatch[4]}]${headerMatch[5]}[/uid] (${headerMatch[6]}):[/b]\n${cleaned}[/quote]\n<br/><br/>${replyText}`
-    }
-    /** 用已加载的完整原文修复服务端截断的引用正文。 */
-    const fixTruncatedQuote = (target: PostInfo): void => {
-      if (!target.content.startsWith('[quote]')) return
-      const pidInQuote: RegExpMatchArray | null = target.content.match(/\[pid=(\d+),(\d+),(\d+)\]/)
-      if (!pidInQuote) return
-      const refPid: number = parseInt(pidInQuote[1], 10)
-      const fullContent: string | undefined = origByPid.get(refPid)
-      if (!fullContent) return
-      const afterQuote: number = target.content.indexOf('[quote]') + 7
-      const headerEnd: number = target.content.indexOf('[/b]', afterQuote)
-      const quoteEnd: number = target.content.indexOf('[/quote]', afterQuote)
-      if (headerEnd < 0 || quoteEnd < 0) return
-      const existingBody: string = target.content.substring(headerEnd + 4, quoteEnd)
-        .replace(/<br\s*\/?>/gi, '').trim()
-      let cleanedFull: string = fullContent
-        .replace(/\[b\]Reply to \[pid=.*?\[\/pid\]\s*\[\/b\]/s, '')
-        .replace(/\[pid=.*?Reply\[\/pid\]\s*\[b\]Post by.*?\(.*?\):\[\/b\]/s, '')
-        .replace(/\[quote\]/g, '').replace(/\[\/quote\]/g, '')
-        .replace(/<br\s*\/?>/gi, '')
-        .trim()
-      if (cleanedFull.length === 0) return
-      if (existingBody === cleanedFull) return
-      if (!cleanedFull.startsWith(existingBody)) return
-      target.content = target.content.substring(0, headerEnd + 4) + '\n' + cleanedFull + target.content.substring(quoteEnd)
-    }
-    for (const p of posts) {
-      injectReplyQuote(p)
-      fixTruncatedQuote(p)
-      if (p.comments) {
-        for (const c of p.comments) {
-          injectReplyQuote(c)
-          fixTruncatedQuote(c)
-        }
-      }
-    }
+    injectQuoteContent(posts, this.mgr.posts, prevPosts)
   }
 
   /**

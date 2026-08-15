@@ -5,8 +5,6 @@
  */
 
 import { SegmentButton, SegmentButtonOptions, SegmentButtonItemTuple, SegmentButtonTextItem } from '@kit.ArkUI'
-import { motion } from '@kit.MultimodalAwarenessKit'
-import { BusinessError } from '@kit.BasicServicesKit'
 import { appStore } from '../store/AppStore'
 import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
 import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
@@ -38,16 +36,15 @@ import { AuthScope } from '../store/AuthScope'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 import { pidLocateProgress } from '../common/media/PidLocateProgress'
+import { HoldingHandMonitor, HoldingHandStatus } from '../common/managers/HoldingHandMonitor'
+import {
+  getHotFetchPages,
+  getHotWindowSeconds,
+  currentModeKey,
+  canManageCurrentBoard
+} from '../common/utils/TopicListUtils'
 
 const logger = new Logger(DOMAIN_UI, 'TopicListPanel')
-
-enum HoldingHandStatus {
-  NOT_HELD = 0,
-  LEFT_HAND_HELD = 1,
-  RIGHT_HAND_HELD = 2,
-  BOTH_HANDS_HELD = 3,
-  UNKNOWN_STATUS = 16
-}
 
 /** 预加载页面临时结果 — startPrefetch 内部收集用 */
 class PrefetchPageResult {
@@ -175,7 +172,15 @@ export struct TopicListPanel {
 
   private twentyFourCache: object[] = []
 
-  private holdingCallback: Callback<HoldingHandStatus> = (data: HoldingHandStatus): void => {
+  private holdingMonitor: HoldingHandMonitor = new HoldingHandMonitor()
+
+  /**
+   * 握持状态变化回调：首次检测直接生效，后续变化带 300ms 动画过渡，
+   * 状态持久化由 {@link HoldingHandMonitor} 完成。
+   *
+   * @param data - 新的握持状态
+   */
+  private onHoldingChanged(data: HoldingHandStatus): void {
     if (this.holdingDetected) {
       this.getUIContext()?.animateTo({ duration: 300, curve: Curve.EaseInOut }, (): void => {
         this.holdingStatus = data
@@ -184,26 +189,16 @@ export struct TopicListPanel {
       this.holdingStatus = data
       this.holdingDetected = true
     }
-    if (appStore.settings.holdingHand !== data) {
-      appStore.settingsStore.setHoldingHand(data)
-    }
   }
 
   private startHoldingHandMonitoring(): void {
-    if (!appStore.settings.smartGrip) return
-    try {
-      motion.on('holdingHandChanged', this.holdingCallback)
-    } catch (err) {
-      logger.error('startHolding fail: %{public}d', (err as BusinessError).code)
-    }
+    this.holdingMonitor.start((data: HoldingHandStatus): void => {
+      this.onHoldingChanged(data)
+    })
   }
 
   private stopHoldingHandMonitoring(): void {
-    try {
-      motion.off('holdingHandChanged', this.holdingCallback)
-    } catch (err) {
-      logger.error('stopHolding fail: %{public}d', (err as BusinessError).code)
-    }
+    this.holdingMonitor.stop()
   }
 
   aboutToAppear(): void {
@@ -288,11 +283,13 @@ export struct TopicListPanel {
   /**
    * 判断当前页面是否对应一个可管理的普通版块。
    *
+   * 纯逻辑已下沉至 {@link canManageCurrentBoard}，本方法仅转发组件 props。
+   *
    * @returns 是否允许管理当前版块
    */
   private canManageCurrentBoard(): boolean {
-    return this.boardFid !== 0 && !this.isFavorites && !this.favor
-      && !this.authorid && !this.searchKey && !this.author && !this.searchpost
+    return canManageCurrentBoard(this.boardFid, this.isFavorites, this.favor,
+      this.authorid, this.searchKey, this.author, this.searchpost)
   }
 
   /**
@@ -775,13 +772,12 @@ export struct TopicListPanel {
   /**
    * 当前排序模式的状态缓存键（热门模式按时间窗细分，模仿 MNGA 的独立数据源隔离）。
    *
+   * 纯逻辑已下沉至 {@link currentModeKey}，本方法仅转发组件状态。
+   *
    * @returns 模式键
    */
   private currentModeKey(): string {
-    if (this.sortMode === 'hot') {
-      return `hot:${this.hotRange}`
-    }
-    return this.sortMode
+    return currentModeKey(this.sortMode, this.hotRange)
   }
 
   /**
@@ -907,31 +903,23 @@ export struct TopicListPanel {
   /**
    * 热门模式的并发拉取页数（按时间窗调整，模仿 MNGA 的大窗口下限保护）。
    *
+   * 纯逻辑已下沉至 {@link getHotFetchPages}，本方法仅转发时间窗状态。
+   *
    * @returns 并发页数
    */
   private getHotFetchPages(): number {
-    if (this.hotRange === 'week') {
-      return 8
-    }
-    if (this.hotRange === 'month') {
-      return 10
-    }
-    return 5
+    return getHotFetchPages(this.hotRange)
   }
 
   /**
    * 热门模式的过滤时间窗（秒），以服务端 curTime 为基准。
    *
+   * 纯逻辑已下沉至 {@link getHotWindowSeconds}，本方法仅转发时间窗状态。
+   *
    * @returns 时间窗秒数
    */
   private getHotWindowSeconds(): number {
-    if (this.hotRange === 'week') {
-      return 7 * 24 * 60 * 60
-    }
-    if (this.hotRange === 'month') {
-      return 30 * 24 * 60 * 60
-    }
-    return 24 * 60 * 60
+    return getHotWindowSeconds(this.hotRange)
   }
 
   /**
