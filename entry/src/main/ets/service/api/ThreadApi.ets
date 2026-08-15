@@ -373,6 +373,7 @@ function fillThreadResult(raw: Record<string, Object>, result: ThreadResult,
     post.content = row.content;
     post.vote = row.vote;
     post.postdate = row.postdate;
+    post.postdatetimestamp = row.postdatetimestamp;
     const memberid: number = Number(userInfo?.['memberid'] ?? 0);
     const rvrc: number = Number(userInfo?.['rvrc'] ?? 0);
     post.level = String(Math.max(0, rvrc));

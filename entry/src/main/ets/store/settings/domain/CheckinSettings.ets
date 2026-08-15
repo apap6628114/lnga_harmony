@@ -1,4 +1,5 @@
 import { checkin } from '../../../service/api/FavoriteApi'
+import { formatTodayCST } from '../../../common/utils/Utils'
 import { AuthScope } from '../../AuthScope'
 import { SettingsContext } from '../SettingsContext'
 import { SettingsState } from '../SettingsState'
@@ -25,8 +26,8 @@ export class CheckinSettings {
     if (!this.ctx.auth!.isAuthenticated || !this.ctx.state.autoCheckin) {
       return false
     }
-    const d: Date = new Date()
-    const today: string = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    // 按 NGA 服务器日（东八区）去重，与 formatTimestampCST 展示口径一致
+    const today: string = formatTodayCST()
     if (this.ctx.state.lastCheckinDate === today) {
       return false
     }

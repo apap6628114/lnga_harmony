@@ -10,7 +10,7 @@ import {
 import { UserInfo } from '../../model/UserInfo';
 import { ProfileData, ReputationData, AdminForumsData } from '../../model/User';
 import { resolveEffectiveMuteTs } from '../../parser/MuteParser';
-import { formatTimestampCST } from '../../common/utils/Utils';
+import { formatTime, formatTimestampCST } from '../../common/utils/Utils';
 import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger';
 
 const logger = new Logger(DOMAIN_SERVICE, 'UserApi')
@@ -214,18 +214,10 @@ export async function getUserActivityAnalysis(token: string, uid: string): Promi
   const extractHour = (ts: number): void => {
     if (ts <= 0) return;
     const d = new Date(ts > 1e12 ? ts : ts * 1000);
-    const h = d.getHours();
+    // 统计口径与展示一致：NGA 服务器时间（东八区）
+    const cst = new Date(d.getTime() + d.getTimezoneOffset() * 60000 + 8 * 3600000);
+    const h = cst.getHours();
     if (h >= 0 && h < 24) result.hourDistribution[h]++;
-  };
-
-  const fmtDT = (ts: number): string => {
-    if (ts <= 0) return '';
-    const d = new Date(ts > 1e12 ? ts : ts * 1000);
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    const hour = String(d.getHours()).padStart(2, '0');
-    const min = String(d.getMinutes()).padStart(2, '0');
-    return `${month}-${day} ${hour}:${min}`;
   };
 
   const extractForumName = (raw: Record<string, Object>): string => {
@@ -252,7 +244,7 @@ export async function getUserActivityAnalysis(token: string, uid: string): Promi
         if (!entry['tid'] || entryAuthorId === 0) continue;
         if (subject.includes('帖子发布或回复时间超过限制') || subject.includes('帐号权限不足')) continue;
         result.topicCount++;
-        result.topicSubjects.push(subject + ' (' + fmtDT(Number(entry['postdate'] ?? 0)) + ')');
+        result.topicSubjects.push(subject + ' (' + formatTime(Number(entry['postdate'] ?? 0)) + ')');
         addToForum(extractForumName(entry), true);
         extractHour(Number(entry['postdate'] ?? 0));
       }
@@ -284,7 +276,7 @@ export async function getUserActivityAnalysis(token: string, uid: string): Promi
           rc = rc.replace(/\s+/g, ' ').trim();
           if (rc.length > 0) {
             const replyTs = Number(pData?.['postdate'] ?? 0);
-            result.replySnippets.push('回复于《' + subject + '》(' + fmtDT(replyTs) + '): ' + rc.slice(0, 200));
+            result.replySnippets.push('回复于《' + subject + '》(' + formatTime(replyTs) + '): ' + rc.slice(0, 200));
           }
         }
         const replyTs = Number(pData?.['postdate'] ?? 0);

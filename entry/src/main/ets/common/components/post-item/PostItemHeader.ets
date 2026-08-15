@@ -1,5 +1,4 @@
 import { AppColors } from '../../constants/Constants'
-import { formatTime } from '../../utils/Utils'
 import { Avatar } from '../Avatar'
 import { AnonymousName } from '../AnonymousName'
 import { PostInfo } from '../../../model/PostInfo'
@@ -8,7 +7,8 @@ import { appStore } from '../../../store/AppStore'
 /**
  * 帖子 Header 行子组件。
  *
- * 负责渲染帖子顶部的头像、作者名、备注、楼主标记、用户组、发帖时间、楼层号。
+ * 负责渲染帖子顶部的头像、作者名、备注、楼主标记、用户组、楼层号。
+ * 发帖时间与编辑时间由 PostItem 在用户信息区与正文之间统一展示。
  * 点击 Header 区域（非匿名时）会回调 onProfileClick，传入点击的屏幕坐标，
  * 供父组件弹出用户资料浮层。
  */
@@ -43,7 +43,6 @@ export struct PostItemHeader {
             if (this.post.memberGroup && this.post.memberGroup.length > 0) {
               Text(this.post.memberGroup).fontSize(11).fontColor(AppColors.textTertiary)
             }
-            Text(formatTime(Number(this.post.postdate))).fontSize(11).fontColor(AppColors.textTertiary).margin({ left: 6 })
           }
         }.alignItems(HorizontalAlign.Start).margin({ left: 8 }).layoutWeight(1)
       }.layoutWeight(1)

@@ -279,14 +279,18 @@ npm run inspect:html -- 47373567 2 20 23 34
 
 ### R4.2 修改规则
 
-1. 解析器、渲染器、HTML 降级解析器、`NgaJsonSanitizer` 或 `NgaDomains` 的修改 MUST 先改
-   `tools/bbcode-ts/src/`。
+0. **动手前自查**：计划修改 `entry/src/main/ets/` 下任何文件前，MUST 先运行
+   `node scripts/sync-to-ets.mjs --dry`（或项目根 `node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry`）。
+   输出「修改 N 个文件」中包含目标 `.ets` → 该文件在镜像清单内，必须改真源 `src/` 再 sync；
+   输出「0 修改」→ 可安全直接改 entry 侧文件。
+1. 解析器、渲染器、HTML 降级解析器、`NgaJsonSanitizer`、`NgaDomains` 或 `common/utils/Utils.ts`
+   的修改 MUST 先改 `tools/bbcode-ts/src/`。
 2. MUST NOT 直接修改 `entry/src/main/ets/` 下对应的镜像文件；下次同步会覆盖这些改动。
 3. `scripts/`、`tests/`、`samples/` 只属于 Node 验证工具，不会同步到客户端。
 4. 镜像代码 MUST 同时通过 TypeScript strict 与 ArkTS 子集约束；“tsc 通过”不代表
    “DevEco 可编译”。
 5. `npm run sync` 只做 `.ts` → `.ets` 扩展名替换和字节级复制，MUST NOT 被期待做语法转换。
-6. 同步后 SHOULD 执行 `node scripts/sync-to-ets.mjs --dry`，结果必须为 0 修改、0 新增。
+6. 同步后 MUST 执行 `node scripts/sync-to-ets.mjs --dry`，结果必须为 0 修改、0 新增。
 
 ## Rule 5：修复必须保持解析与渲染契约
 

@@ -90,7 +90,7 @@ export struct PostItem {
             .margin({ top: 16 }).width('100%').textAlign(TextAlign.Center).padding({ top: 20, bottom: 20 })
         } else {
           Row() {
-            Text(this.post.postdate).fontSize(11).fontColor(AppColors.textTertiary)
+            Text(this.post.postdatetimestamp > 0 ? formatTimestampCST(this.post.postdatetimestamp) : this.post.postdate).fontSize(11).fontColor(AppColors.textTertiary)
             if (this.post.alterinfo && this.post.alterinfo.length > 0) {
               Text(this.getEditTimeDisplay()).fontSize(11).fontColor(AppColors.textTertiary)
             }

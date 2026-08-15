@@ -28,6 +28,12 @@ export function formatTimestampCST(ts: number): string {
   return `${y}-${M}-${D} ${h}:${m}`
 }
 
+/**
+ * 相对/绝对时间展示（统一口径）：
+ * - 60 秒内「刚刚」，其后依次为 N分钟前 / N小时前 / N天前（相对差值与本地时区无关）；
+ * - 超过 30 天显示绝对日期，一律按 NGA 服务器时间（东八区）计算，与
+ *   formatTimestampCST 口径一致、补零风格一致（当年 "MM-DD HH:mm"，跨年 "YYYY-MM-DD"）。
+ */
 export function formatTime(ts: number | string): string {
   if (!ts) return ''
   const numTs = typeof ts === 'string' ? Number(ts) : ts
@@ -39,11 +45,26 @@ export function formatTime(ts: number | string): string {
   if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`
   if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`
   if (diff < 2592000000) return `${Math.floor(diff / 86400000)}天前`
-  const isThisYear = d.getFullYear() === new Date().getFullYear()
+  const cst: Date = new Date(d.getTime() + d.getTimezoneOffset() * 60000 + 8 * 3600000)
+  const nowCst: Date = new Date(Date.now() + new Date().getTimezoneOffset() * 60000 + 8 * 3600000)
+  const isThisYear: boolean = cst.getFullYear() === nowCst.getFullYear()
   if (isThisYear) {
-    return `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    return `${String(cst.getMonth() + 1).padStart(2, '0')}-${String(cst.getDate()).padStart(2, '0')} ${String(cst.getHours()).padStart(2, '0')}:${String(cst.getMinutes()).padStart(2, '0')}`
   }
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getDate()}`
+  return `${cst.getFullYear()}-${String(cst.getMonth() + 1).padStart(2, '0')}-${String(cst.getDate()).padStart(2, '0')}`
+}
+
+/**
+ * 今天日期（东八区，NGA 服务器日），格式 "YYYY-MM-DD"。
+ * 用于签到等按服务器日去重的逻辑；与 formatTimestampCST 同为服务器时间口径。
+ */
+export function formatTodayCST(): string {
+  const now: Date = new Date()
+  const cst: Date = new Date(now.getTime() + now.getTimezoneOffset() * 60000 + 8 * 3600000)
+  const y: number = cst.getFullYear()
+  const M: string = String(cst.getMonth() + 1).padStart(2, '0')
+  const D: string = String(cst.getDate()).padStart(2, '0')
+  return `${y}-${M}-${D}`
 }
 
 export function fmtNum(n: string | number): string {

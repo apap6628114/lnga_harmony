@@ -34,6 +34,8 @@ export class PostInfo {
   /** 投票帖原始 vote 字符串（`~` 分隔键值对，仅主楼有值），经 VoteParser 解码渲染 */
   vote: string = '';
   postdate: string = '';
+  /** 发帖时间戳（UNIX 秒），用于本地格式化；postdate 仅作服务端字符串兜底 */
+  postdatetimestamp: number = 0;
   level: string = '';
   yz: string = '';
   avatar: string = '';
