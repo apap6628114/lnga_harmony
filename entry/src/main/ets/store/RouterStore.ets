@@ -64,20 +64,32 @@ export type ScreenType =
 /**
  * 帖子路由来源。
  *
- * 显式标注打开帖子的入口（用户回帖列表 / 消息中心 / 链接），由入口在
- * Screen.thread 时写入并透传到 ThreadPanel，当前用于运行态诊断日志
- * （thread open ... source=...）；同时保留按来源限定定位行为的扩展点
- * （如仅对无页码来源启用 pid→页码预查找），比从路由参数推断更精准。
+ * 显式标注打开帖子的入口，由入口在 Screen.thread 时写入并透传到 ThreadPanel，
+ * 当前用于运行态诊断日志（thread open ... source=...）；同时保留按来源限定
+ * 定位行为的扩展点（如仅对无页码来源启用 pid→页码预查找），比从路由参数
+ * 推断更精准。
+ *
+ * 完整标注映射（全工程 Screen.thread 调用点，缺标即 DEFAULT）：
+ * - TOPIC_LIST：主题列表面板（普通版块/收藏夹/用户主题/热门聚合/用户回帖
+ *   searchpost，含发帖成功跳转）
+ * - NOTIFICATION：消息中心（支持或反对 / 回复提醒）
+ * - LINK：应用内/外部帖子链接（read.php / #/thread，带页码或仅 pid）
+ * - SEARCH：搜索面板搜索结果
+ * - BROWSE_HISTORY：浏览历史
  */
 export enum ThreadSource {
-  /** 未标注来源（普通主题列表、收藏夹、浏览历史等，无 pid 定位需求）。 */
+  /** 未标注来源（无 pid 定位需求的默认入口）。 */
   DEFAULT = '',
-  /** 用户回帖列表（searchpost）进入：仅 pid、页码未知。 */
+  /** 主题列表面板（含用户回帖列表 searchpost）：可能仅 pid、页码未知。 */
   TOPIC_LIST = 'topic-list',
   /** 消息中心通知进入：携带服务端提示页码。 */
   NOTIFICATION = 'notification',
   /** 应用内/外部链接进入：可能携带页码或仅 pid。 */
   LINK = 'link',
+  /** 搜索面板搜索结果进入。 */
+  SEARCH = 'search',
+  /** 浏览历史进入。 */
+  BROWSE_HISTORY = 'browse-history',
 }
 
 export class Screen {

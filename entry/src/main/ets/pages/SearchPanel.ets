@@ -3,7 +3,7 @@
  */
 
 import { appStore } from '../store/AppStore'
-import { routerStore, Screen } from '../store/RouterStore'
+import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
 import { getTopicList, createTopicListParams, searchForum } from '../service/api/ForumApi'
 import type { TopicListParams } from '../service/api/ForumApi'
 import type { TopicListResult, SearchForumResult } from '../model/NgaApiResults'
@@ -433,7 +433,7 @@ export struct SearchPanel {
     .onClick(() => {
       const tid = String(thread['tid'] ?? '')
       if (tid) {
-        routerStore.navigateActivity(Screen.thread(tid))
+        routerStore.navigateActivity(Screen.thread(tid, 1, '', ThreadSource.SEARCH))
       }
     })
   }

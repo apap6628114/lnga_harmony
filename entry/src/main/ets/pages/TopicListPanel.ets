@@ -346,7 +346,8 @@ export struct TopicListPanel {
     appStore.showToast('发帖成功')
     this.loadTopics(1)
     if (result.tid > 0) {
-      routerStore.navigateActivity(Screen.thread(String(result.tid)))
+      // 发帖成功跳转到新帖（无 pid 定位意图），来源归主题列表面板
+      routerStore.navigateActivity(Screen.thread(String(result.tid), 1, '', ThreadSource.TOPIC_LIST))
     }
   }
 

@@ -3,7 +3,7 @@ import { formatTime } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { appStore } from '../store/AppStore'
 import { BrowseHistoryEntry } from '../store/HistoryStore'
-import { routerStore, Screen } from '../store/RouterStore'
+import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
 import { floatingLayerStore } from '../store/FloatingLayerStore'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { HistoryItemDataSource } from '../common/datasource/LazyDataSource'
@@ -155,7 +155,8 @@ export struct BrowseHistoryPanel {
                 }
                 .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 }).alignItems(VerticalAlign.Center)
                 .onClick(() => {
-                  routerStore.navigateActivity(Screen.thread((itemObj as BrowseHistoryEntry).tid))
+                  routerStore.navigateActivity(
+                    Screen.thread((itemObj as BrowseHistoryEntry).tid, 1, '', ThreadSource.BROWSE_HISTORY))
                 })
               }
             }, (itemObj: object) => (itemObj as BrowseHistoryEntry).tid)
