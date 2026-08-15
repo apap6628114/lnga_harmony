@@ -1420,6 +1420,18 @@ export struct ThreadPanel {
       // 异常情况下无定位目标：仅提示成功
       appStore.showToast('编辑成功')
     }
+    // 乐观更新：编辑成功后立即用编辑正文刷新本地楼层，不等静默刷新——刚提交后
+    // read.php/CDN 缓存可能未失效，静默刷新拿到的仍是旧内容，乐观更新保证用户
+    // 第一时间看到新正文。换行按 NGA content 约定转 <br/>，其余 BBCode 原样保留；
+    // 静默刷新结果到达后以服务端内容为准覆盖（本方法不改 pid/楼层位置）。
+    if (targetPost !== null) {
+      const optimisticIndex: number = this.mgr.findPostIndex(targetPost.pid)
+      if (optimisticIndex >= 0) {
+        const optimisticPost: PostInfo = this.mgr.posts[optimisticIndex]
+        optimisticPost.content = text.replace(/\n/g, '<br/>')
+        this.postsDataSource.updateAt(optimisticIndex, optimisticPost)
+      }
+    }
     // 静默刷新失败仅记录，不阻断编辑器关闭
     this.silentRefreshAfterPost(replyManager.type, editPid)
   }
@@ -1505,6 +1517,18 @@ export struct ThreadPanel {
             this.lastRepliedPid = String(mergeResult.appendedPosts[mergeResult.appendedPosts.length - 1].pid)
           }
         }
+        if (mergeResult.updatedIndices.length === 0 && mergeResult.appendedPosts.length === 0) {
+          // 合并无效果：请求页与服务端确认页错位（mergePage 拒绝提交，常见于 HTML 模式
+          // __PAGE 解析失败回退、只看楼主页码体系差异或服务端分页漂移），或服务端返回
+          // 的内容与窗口内已有内容相同（编辑刚提交后 read.php 缓存未失效）。此时 UI 不会
+          // 有可见变化，warn 便于运行时定位（对照「编辑后 UI 不刷新」报告）。
+          logger.warn(
+            'reply-silent-merge no-op type=%{public}s requested=%{public}d resolved=%{public}d ' +
+              'total=%{public}d window=%{public}d-%{public}d posts=%{public}d gen=%{public}d',
+            String(type), page, resolvedPage, this.mgr.totalPages,
+            this.mgr.loadedPageStart, this.mgr.loadedPageEnd, result.posts.length, generation
+          )
+        }
         logger.info(
           'reply-silent-merge tid=%{public}s page=%{public}d total=%{public}d updated=%{public}d ' +
             'appended=%{public}d gen=%{public}d',
@@ -1514,8 +1538,14 @@ export struct ThreadPanel {
         if (this.mgr.totalPages <= page) {
           break
         }
-        // 服务端已翻页：逐页推进到下一相邻页继续合并（mergePage 只接受窗口内页或相邻
-        // 下一页，直接跳到最新总页数会跳过中间页导致新楼层漏合并）
+        // 贴条/编辑只刷新目标楼层所在页：合并该页后即结束，不把窗口逐页推进到
+        // 服务端末页（§5.1「贴条/编辑刷新目标楼层所在页」——目标楼层位置不随新回复
+        // 变化，继续请求 E+1/E+2 只会把无关楼层整页追加进窗口，造成无谓加载与位移）。
+        if (type === ReplyType.COMMENT || type === ReplyType.EDIT) {
+          break
+        }
+        // 服务端已翻页（仅回复场景）：逐页推进到下一相邻页继续合并（mergePage 只接受
+        // 窗口内页或相邻下一页，直接跳到最新总页数会跳过中间页导致新楼层漏合并）
         const nextPage: number = Math.min(this.mgr.totalPages, this.mgr.loadedPageEnd + 1)
         if (nextPage <= page) {
           // 窗口未推进但总页数增长（异常）：放弃后续页，避免死循环
