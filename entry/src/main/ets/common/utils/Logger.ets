@@ -11,7 +11,7 @@ export const LOG_ENABLED: boolean = true;
 
 /**
  * 调试日志开关。
- * - true：同时输出 verbose 级别的高频调试日志（网络请求、图片预取等）
+ * - true：同时输出 verbose 级别的高频调试日志（网络请求、图片加载等）
  * - false（默认）：仅输出 info/warn/error
  *
  * 调试时临时改为 true 即可查看网络请求详情，无需改动其他代码。
@@ -38,7 +38,7 @@ export const DOMAIN_SERVICE: number = 0x0004;
 /** 0x0005 — 解析器：parser（BBCode、HTML、JSON） */
 export const DOMAIN_PARSER: number = 0x0005;
 
-/** 0x0006 — 媒体：ImageSizeUtil、AudioPlayer、TtsPlayer、MutedVideo */
+/** 0x0006 — 媒体：AudioPlayer、TtsPlayer、MutedVideo、VideoSizeUtil */
 export const DOMAIN_MEDIA: number = 0x0006;
 
 /** 0x0007 — 基础设施：PreferencesStore、SerialQueue */
@@ -171,7 +171,7 @@ export class Logger {
 
   /**
    * verbose 级别日志（受 LOG_ENABLED 和 VERBOSE 双重控制）。
-   * 用于高频调试信息：网络请求详情、图片预取、上传流程等。
+   * 用于高频调试信息：网络请求详情、图片加载、上传流程等。
    * 映射到 `hilog.debug`，默认关闭，调试时设置 `VERBOSE = true` 即可启用。
    *
    * 注意：如果参数需要昂贵计算（如序列化大对象），请先用 `isVerbose()` 守卫：

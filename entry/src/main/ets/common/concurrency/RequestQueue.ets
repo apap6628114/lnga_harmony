@@ -6,11 +6,11 @@
  * 释放槽位并唤醒队首等待者。
  *
  * 与 {@link Throttler}（令牌桶，按 domain 分桶 + 最小时间间隔限流）职责不同：
- * RequestQueue 用于固定并发探测（如图片/视频尺寸预取），无 domain 维度、无时间间隔约束。
+ * RequestQueue 用于固定并发探测（如视频尺寸预取），无 domain 维度、无时间间隔约束。
  *
  * 注意：本队列**只做固定并发调度，不做请求去重**。对同一目标重复 schedule 会得到
  * 多个独立执行；若需要去重（如同一 URL 的尺寸探测只发一次），必须由调用方自行用
- * pending Map 在入队前拦截（参见 ImageSizeUtil / VideoSizeUtil）。
+ * pending Map 在入队前拦截（参见 VideoSizeUtil）。
  */
 export class RequestQueue {
   /** 并发上限 */

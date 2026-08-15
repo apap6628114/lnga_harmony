@@ -31,7 +31,6 @@ export class SettingsState {
   ttsVolume: number = 1.0
   ttsPitch: number = 1.0
   imageLoadStrategy: string = ImageLoadStrategy.ALWAYS
-  enableImageSizePrefetch: boolean = true
   threadNavMode: string = ThreadNavMode.SEAMLESS
   /** 预加载页数（0=关闭，1~5=向前预加载 N 页） */
   prefetchPageCount: number = 3

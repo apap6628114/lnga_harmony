@@ -455,7 +455,7 @@ export struct SettingsPanel {
             .borderRadius(12)
             .margin({ top: 12 })
 
-            // ---- Block 3A: 显示签名 / 图片加载模式 / 预热图片尺寸 ----
+            // ---- Block 3A: 显示签名 / 图片加载模式 ----
             Column() {
               SettingToggleRow({
                 iconRes: $r('app.media.settings_signature'), iconColor: SettingsIconColors.signature, label: '显示签名',
@@ -474,28 +474,6 @@ export struct SettingsPanel {
                   this.showImageStrategyPicker()
                 }
               })
-
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              Row() {
-                Stack() {
-                  Image($r('app.media.settings_image_prefetch')).width(17).height(17).fillColor(AppColors.white)
-                }
-                .width(29).height(29).borderRadius(6).backgroundColor(SettingsIconColors.imagePrefetch).margin({ right: 12 })
-
-                Column() {
-                  Text('预热图片尺寸').fontSize(17).width('100%')
-                  Text('关闭后不再提前获取图片尺寸信息').fontSize(12).fontColor(AppColors.textSecondary).width('100%')
-                }
-                .layoutWeight(1)
-                .alignItems(HorizontalAlign.Start)
-
-                Toggle({ type: ToggleType.Switch, isOn: appStore.settings.enableImageSizePrefetch })
-                  .onChange((v: boolean) => {
-                    appStore.settingsStore.setEnableImageSizePrefetch(v)
-                  })
-              }
-              .width('100%').height(52).padding({ left: 16, right: 16 }).alignItems(VerticalAlign.Center)
 
               Divider().margin({ left: 60 }).color(AppColors.separator)
 

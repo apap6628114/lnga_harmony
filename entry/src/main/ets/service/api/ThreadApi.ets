@@ -1,6 +1,6 @@
 /**
  * NGA 帖子 API - 帖子详情、回帖、评论、附件上传
- * 含 HTML 强制模式调试开关、JSON/HTML 双通道解析与图片预热。
+ * 含 HTML 强制模式调试开关与 JSON/HTML 双通道解析。
  */
 
 import { ngaClient, ngaUploadFile } from '../NgaClient';
@@ -13,10 +13,7 @@ import { resolveAttachUrl } from '../../parser/_shared/AttachUrl';
 import { parseHtmlTask } from '../../parser/task/HtmlParseTask';
 import { withTimeout } from '../../common/utils/TimeoutUtils';
 import { taskpool } from '@kit.ArkTS';
-import { ImageLoadStrategy } from '../../common/constants/Constants';
 import { KEY_FORCE_HTML_MODE } from '../../common/constants/AppStorageKeys';
-import { fetchImageSize } from '../../common/media/ImageSizeUtil';
-import { isWifiConnected } from '../../common/utils/NetworkUtil';
 import type { ThreadData, ThreadRowInfo, Attachment, ThreadInfo } from '../../model/Thread';
 import { PostInfo, PostAttachInfo } from '../../model/PostInfo';
 import { ThreadResult, ThreadPaging, PostAuthResult, PostReplyResult, TopicCategoriesResult } from '../../model/ThreadResult';
@@ -88,7 +85,7 @@ function lastPidOfPage(raw: Record<string, Object>): number {
  * 双通道取数原语：read.php JSON 优先，残缺/错误时降级 HTML，返回同形状原始对象。
  *
  * 这是 getThread（渲染整页）与 locatePidPage（仅取 pid 序列）共享的底层取数：
- * 不解析、不过滤、不预热、不触碰渲染状态。JSON 被官方阻断为残缺响应
+ * 不解析、不过滤、不触碰渲染状态。JSON 被官方阻断为残缺响应
  * （README Rule 2：Unterminated string / 意外 EOF / HTML 错误页）或返回业务
  * 错误时，自动降级 read.php HTML 解析（parseHtmlTask）。本函数保证不抛异常：
  * 双通道均失败时返回 raw=null。
@@ -171,7 +168,7 @@ async function fetchThreadRaw(token: string, tid: string, pid: string,
  * 获取帖子详情（JSON 主通道优先，残缺/错误时自动降级 HTML 解析）。
  *
  * 双通道取数由 fetchThreadRaw 完成，本函数负责解析（fillThreadResult）与
- * 过滤/预热，是 ThreadPanel 渲染整页的唯一取数入口。
+ * 过滤，是 ThreadPanel 渲染整页的唯一取数入口。
  */
 export async function getThread(token: string, tid: string, pid: string,
   authorid: string, page: string,
@@ -215,40 +212,11 @@ export async function getThread(token: string, tid: string, pid: string,
 }
 
 /**
- * 在帖子数据就绪后，提前预热所有图片的尺寸头
- */
-function prefetchPostImages(posts: PostInfo[]): void {
-  if (!appStore.settings.enableImageSizePrefetch) {
-    return
-  }
-  let strategy: string = appStore.settings.imageLoadStrategy
-  if (strategy === ImageLoadStrategy.MANUAL) {
-    return
-  }
-  if (strategy === ImageLoadStrategy.WIFI_ONLY && !isWifiConnected()) {
-    return
-  }
-  for (let i = 0; i < posts.length; i++) {
-    const post: PostInfo = posts[i]
-    if (post.isInBlackList || appStore.settingsStore.isBlacklisted(String(post.authorid))) {
-      continue
-    }
-    const attachs: PostAttachInfo[] = post.attachs
-    for (let j = 0; j < attachs.length; j++) {
-      const url: string = attachs[j].attachurl
-      if (url && url.length > 0) {
-        fetchImageSize(url)
-      }
-    }
-  }
-}
-
-/**
  * 二分查找目标楼层 pid 所在页码。
  *
  * 纯数据行为：经由双通道取数原语 fetchThreadRaw（JSON 主通道优先，被官方
  * 阻断为残缺响应时自动降级 HTML），只读原始 __R 的页末 pid 与 __ROWS 分页
- * 信息，不解析、不过滤、不预热、不依赖渲染状态。利用 NGA 楼层 pid 在主题内
+ * 信息，不解析、不过滤、不依赖渲染状态。利用 NGA 楼层 pid 在主题内
  * 随楼号严格递增的性质（删除楼层只产生 pid 空洞、不破坏单调性）二分定位。
  * 总页数自包含获取：先请求末页（page=e），以 __ROWS/__R__ROWS_PAGE 按
  * parseThreadData 同款公式换算真实总页数，同时以主题末楼 pid 排除「目标 pid
@@ -506,8 +474,6 @@ function fillThreadResult(raw: Record<string, Object>, result: ThreadResult,
   result.pagination.page = data.pagination.page;
   result.pagination.totalPages = data.pagination.totalPages;
   result.pagination.totalRows = data.pagination.totalRows;
-
-  prefetchPostImages(result.posts);
 
   result.ok = true;
 }

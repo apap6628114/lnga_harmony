@@ -3,9 +3,9 @@ import { AppColors, ImageLoadStrategy } from '../constants/Constants'
 import { getEmotionResource, isEmotionCategoryNeedDarkBg } from '../media/EmotionResources'
 import { AudioPlayer } from '../media/AudioPlayer'
 import { MutedVideo } from '../media/MutedVideo'
-import { ImageSize, fetchImageSize, getCachedImageSize } from '../media/ImageSizeUtil'
+import { ImageSize, getCachedImageSize, setCachedImageSize } from '../media/ImageSizeUtil'
 import { fetchVideoSize, getCachedVideoSize } from '../media/VideoSizeUtil'
-import { isWifiConnected, shouldUsePassive } from '../utils/NetworkUtil'
+import { shouldUsePassive } from '../utils/NetworkUtil'
 import {
   ReadingFontRole,
   ReadingLineHeightRole,
@@ -104,8 +104,6 @@ export struct BBCodeContentView {
   @StorageProp('networkChangeVersion') networkChangeVersion: number = 0
   /** 图片加载策略。 */
   @StorageProp('imageLoadStrategy') imageLoadStrategy: string = ImageLoadStrategy.ALWAYS
-  /** 是否允许预取图片尺寸。 */
-  @StorageProp('enableImageSizePrefetch') enableImageSizePrefetch: boolean = true
   /** 用户设置的正文基础字号。 */
   @StorageProp('contentFontSize') contentFontSize: number = 15
   /** 黑名单变更版本号。 */
@@ -122,45 +120,21 @@ export struct BBCodeContentView {
   /** 按节点组与继承样式缓存的内联渲染结果。 */
   private inlineRunCache: Map<number, InlineRunCacheEntry> = new Map<number, InlineRunCacheEntry>()
 
-  /** 初始化节点分组并恢复或预取媒体尺寸。 */
+  /** 初始化节点分组并恢复已缓存的媒体尺寸（零网络请求）。 */
   aboutToAppear(): void {
     this.inlineRunCache.clear()
     this.cachedGroups = this.splitIntoGroups(this.nodes)
     this.groupsReady = true
     this.allImageUrls = this.getImageUrls()
+    /* 仅从缓存恢复已有尺寸：图片尺寸由 onImageLoaded 在加载完成后回填，
+       不再预取（预热每图多一次 Range 请求，请求数翻倍易触发服务端节流）。 */
     const urls: string[] = this.allImageUrls
-    const strategy: string = this.imageLoadStrategy
-    const skipSizePrefetch: boolean = !this.enableImageSizePrefetch || strategy === ImageLoadStrategy.MANUAL || (strategy === ImageLoadStrategy.WIFI_ONLY && !isWifiConnected())
-    if (!skipSizePrefetch) {
-      for (let i = 0; i < urls.length; i++) {
-        const url: string = urls[i]
-        const cached: ImageSize | null = getCachedImageSize(url)
-        if (cached) {
-          this.imageSizes.set(url, cached)
-          this.releasedImages.add(url)
-        }
-      }
-      for (let i = 0; i < urls.length; i++) {
-        const url: string = urls[i]
-        if (!this.imageSizes.has(url)) {
-          fetchImageSize(url).then((size: ImageSize | null) => {
-            if (size) {
-              this.setImageSize(url, size)
-            } else {
-              this.markImageFailed(url)
-            }
-          })
-        }
-      }
-    } else {
-      /* 被动模式：仅从缓存恢复已有尺寸，零网络请求。 */
-      for (let i = 0; i < urls.length; i++) {
-        const url: string = urls[i]
-        const cached: ImageSize | null = getCachedImageSize(url)
-        if (cached) {
-          this.imageSizes.set(url, cached)
-          this.releasedImages.add(url)
-        }
+    for (let i = 0; i < urls.length; i++) {
+      const url: string = urls[i]
+      const cached: ImageSize | null = getCachedImageSize(url)
+      if (cached) {
+        this.imageSizes.set(url, cached)
+        this.releasedImages.add(url)
       }
     }
 
@@ -189,17 +163,6 @@ export struct BBCodeContentView {
    */
   private onBlacklistVersionChange(): void {
     this.allImageUrls = this.getImageUrls()
-  }
-
-  /**
-   * 写入图片尺寸并解除其占位约束。
-   *
-   * @param url 图片地址
-   * @param size 图片尺寸
-   */
-  private setImageSize(url: string, size: ImageSize): void {
-    this.imageSizes.set(url, size)
-    this.releasedImages.add(url)
   }
 
   /**
@@ -239,6 +202,8 @@ export struct BBCodeContentView {
         size.height = imgHeight
         this.imageSizes.set(src, size)
         this.releasedImages.add(src)
+        /* 回填进程级缓存：同会话内再次渲染该图片时直接复用，零额外请求 */
+        setCachedImageSize(src, size)
       }
     }
   }

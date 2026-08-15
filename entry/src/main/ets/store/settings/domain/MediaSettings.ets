@@ -3,7 +3,6 @@ import { SettingsState } from '../SettingsState'
 import {
   KEY_IMAGE_LOAD_STRATEGY,
   KEY_NETWORK_CHANGE_VERSION,
-  KEY_ENABLE_IMAGE_SIZE_PREFETCH,
   KEY_VIDEO_MUTED,
 } from '../../../common/constants/AppStorageKeys'
 import { bumpAppStorageVersion } from '../../../common/utils/AppStorageVersion'
@@ -11,7 +10,7 @@ import { bumpAppStorageVersion } from '../../../common/utils/AppStorageVersion'
 /**
  * 媒体设置域子 store。
  *
- * 承载图片加载策略 / 图片尺寸预取 / 视频静音 / TTS（人声语速音量音调）字段及其 setter。
+ * 承载图片加载策略 / 视频静音 / TTS（人声语速音量音调）字段及其 setter。
  */
 export class MediaSettings {
   private ctx: SettingsContext
@@ -24,12 +23,6 @@ export class MediaSettings {
     this.ctx.state.imageLoadStrategy = v
     AppStorage.setOrCreate(KEY_IMAGE_LOAD_STRATEGY, v)
     bumpAppStorageVersion(KEY_NETWORK_CHANGE_VERSION)
-    this.ctx.persist()
-  }
-
-  setEnableImageSizePrefetch(enabled: boolean): void {
-    this.ctx.state.enableImageSizePrefetch = enabled
-    AppStorage.setOrCreate(KEY_ENABLE_IMAGE_SIZE_PREFETCH, enabled)
     this.ctx.persist()
   }
 
@@ -64,9 +57,6 @@ export class MediaSettings {
   load(saved: SettingsState): void {
     if (saved.imageLoadStrategy !== undefined) {
       this.ctx.state.imageLoadStrategy = saved.imageLoadStrategy
-    }
-    if (saved.enableImageSizePrefetch !== undefined) {
-      this.ctx.state.enableImageSizePrefetch = saved.enableImageSizePrefetch
     }
     if (saved.videoMuted !== undefined) this.ctx.state.videoMuted = saved.videoMuted
     if (saved.ttsPerson !== undefined) this.ctx.state.ttsPerson = saved.ttsPerson

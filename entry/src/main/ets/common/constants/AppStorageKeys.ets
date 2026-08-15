@@ -25,9 +25,6 @@ export const KEY_EFFECTIVE_COLOR_MODE: string = 'effectiveColorMode'
 /** 图片加载策略（参见 ImageLoadStrategy） */
 export const KEY_IMAGE_LOAD_STRATEGY: string = 'imageLoadStrategy'
 
-/** 是否启用图片尺寸预取 */
-export const KEY_ENABLE_IMAGE_SIZE_PREFETCH: string = 'enableImageSizePrefetch'
-
 /** 视频是否默认静音 */
 export const KEY_VIDEO_MUTED: string = 'videoMuted'
 
