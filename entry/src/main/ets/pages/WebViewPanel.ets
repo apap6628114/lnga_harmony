@@ -132,8 +132,28 @@ export struct WebViewPanel {
    * 返回值 true=已拦截（WebView 不应加载），false=继续加载。
    */
   private handleUrlIntercept(targetUrl: string): boolean {
+    // ─── 非 HTTP(S) 协议 ───
+    // WebView 原生可处理的内部协议（about:、data:）继续放行
     if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
-      return false
+      if (targetUrl.startsWith('about:') || targetUrl.startsWith('data:')) {
+        return false
+      }
+      // intent:// 是 Android 专属的 App 唤起格式（如新浪财经加载后自动触发的
+      // scheme=sinafinance;package=cn.com.sina.finance），鸿蒙系统无法解析，直接拦截，
+      // 避免页面异常跳转并破坏历史栈（内置网页的前进/后退失效）。
+      if (targetUrl.startsWith('intent:')) {
+        return true
+      }
+      // 其它自定义 scheme（weixin:// 等）：拦截后用系统隐式匹配拉起已安装的鸿蒙原生
+      // 应用，找不到匹配应用时静默留在原页面，不交给 WebView 加载（避免白屏）。
+      const schemeContext: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext
+      try {
+        schemeContext.openLink(targetUrl, { hideFailureTipDialog: true }).catch((): void => {})
+      } catch (e) {
+        logger.error('[WebViewPanel] open scheme link failed: %{public}s', formatError(e))
+      }
+      return true
     }
 
     if (targetUrl === this.internalFallbackUrl) {
