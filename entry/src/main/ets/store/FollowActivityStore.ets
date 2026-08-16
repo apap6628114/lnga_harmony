@@ -2,6 +2,8 @@ import { fetchFollowedActivity } from '../service/api/FollowApi'
 import { BaseStore } from './BaseStore'
 import { PreferencesStore } from '../common/infra/PreferencesStore'
 import { SerialQueue } from '../common/infra/SerialQueue'
+import { PollingController } from '../common/concurrency/PollingController'
+import { CacheEnvelopeStore } from '../common/infra/CacheEnvelopeStore'
 import {
   KEY_ACTIVITY_VERSION,
   KEY_UNREAD_ACTIVITY_COUNT
@@ -38,28 +40,16 @@ const ACTIVITY_POLL_INTERVAL: number = 60 * 1000
 const logger: Logger = new Logger(DOMAIN_STORE, 'FollowActivityStore')
 
 /**
- * 关注动态缓存信封。
- */
-class FollowActivityCacheEnvelope {
-  /** 缓存结构版本。 */
-  schemaVersion: number = ACTIVITY_CACHE_SCHEMA_VERSION
-  /** 缓存所属用户 ID。 */
-  uid: string = ''
-  /** 动态列表。 */
-  items: FollowedActivity[] = []
-  /** 最近更新时间。 */
-  updatedAt: number = 0
-}
-
-/**
  * 关注动态缓存、本地已读状态与红点管理。
  *
- * 机制与 NotificationStore 对齐：
- * - 定时抓取：前台 60s 轮询
+ * 机制与 NotificationStore 对齐（共用同一套骨架）：
+ * - 定时抓取：前台 60s 轮询（PollingController 调度）
  * - 条件抓取：非强制刷新受 30s 最小成功间隔约束，并发调用复用同一请求
- * - 缓存：按账号隔离的偏好持久化信封（schemaVersion=2），仅保存 displayActivities
- *   前 200 条窗口快照；分页追加的后续页仅内存持有
+ *   （runGuardedRefresh 统一协调）
+ * - 缓存：按账号隔离的偏好持久化信封（CacheEnvelopeStore，schemaVersion=2），
+ *   仅保存 displayActivities 前 200 条窗口快照；分页追加的后续页仅内存持有
  * - 红点：unreadActivityCount 写入 AppStorage，供入口角标/徽章展示
+ * - 有效性：请求回写前做 generation/uid/token 四重校验（BaseStore.isRequestCurrent）
  *
  * 方案 C 数据流（displayActivities 为内存唯一真源）：
  * - displayActivities：首屏缓存 + 分页追加的全量内存列表（上限 10000），排序为
@@ -85,14 +75,22 @@ export class FollowActivityStore extends BaseStore<Object> {
   private totalPages: number = 0
   /** 分页加载进行中（store 内并发防护）。 */
   private loadingMore: boolean = false
-  /** 上一次成功刷新时间。 */
-  private lastSuccessfulQueryTime: number = 0
-  /** 当前正在执行的刷新任务。 */
-  private refreshPromise: Promise<boolean> | null = null
-  /** 前台轮询定时器。 */
-  private pollingTimer: number = -1
-  /** 是否允许继续调度前台轮询。 */
-  private pollingEnabled: boolean = false
+  /** 前台轮询调度器（start 立即刷新一次 + 定时重复，普通刷新自带节流与并发复用）。 */
+  private pollingController!: PollingController
+  /** 按账号隔离的缓存信封工具（校验 / 加载 / 落盘统一封装）。 */
+  private cacheEnvelope!: CacheEnvelopeStore<FollowedActivity>
+
+  constructor() {
+    super()
+    this.pollingController = new PollingController(ACTIVITY_POLL_INTERVAL, (): void => {
+      this.refreshActivities(false)
+    })
+    this.cacheEnvelope = new CacheEnvelopeStore<FollowedActivity>(
+      ACTIVITY_CACHE_SCHEMA_VERSION,
+      'cached_activities',
+      (value: Object): boolean => isValidCachedActivity(value)
+    )
+  }
 
   /**
    * 注入持久化、写队列和认证依赖并加载当前账号缓存。
@@ -109,8 +107,7 @@ export class FollowActivityStore extends BaseStore<Object> {
     this.loadedPages = 1
     this.totalPages = 0
     this.loadingMore = false
-    this.lastSuccessfulQueryTime = 0
-    this.refreshPromise = null
+    this.clearRefreshState()
     if (auth.uid) {
       await this.loadCachedActivities()
     } else {
@@ -129,8 +126,6 @@ export class FollowActivityStore extends BaseStore<Object> {
     this.totalPages = 0
     this.loadingMore = false
     this.unreadActivityCount = 0
-    this.lastSuccessfulQueryTime = 0
-    this.refreshPromise = null
     AppStorage.setOrCreate(KEY_UNREAD_ACTIVITY_COUNT, 0)
     bumpAppStorageVersion(KEY_ACTIVITY_VERSION)
     super.reset()
@@ -144,40 +139,14 @@ export class FollowActivityStore extends BaseStore<Object> {
       this.stopPolling()
       return
     }
-    if (this.pollingEnabled) {
-      return
-    }
-    this.pollingEnabled = true
-    this.refreshActivities(false)
-    this.scheduleNextPoll()
+    this.pollingController.start()
   }
 
   /**
    * 停止前台动态轮询。
    */
   stopPolling(): void {
-    this.pollingEnabled = false
-    if (this.pollingTimer >= 0) {
-      clearTimeout(this.pollingTimer)
-      this.pollingTimer = -1
-    }
-  }
-
-  /**
-   * 调度下一次前台动态刷新。
-   */
-  private scheduleNextPoll(): void {
-    if (!this.pollingEnabled || this.pollingTimer >= 0) {
-      return
-    }
-    this.pollingTimer = setTimeout((): void => {
-      this.pollingTimer = -1
-      if (!this.pollingEnabled) {
-        return
-      }
-      this.refreshActivities(false)
-      this.scheduleNextPoll()
-    }, ACTIVITY_POLL_INTERVAL)
+    this.pollingController.stop()
   }
 
   /**
@@ -186,30 +155,9 @@ export class FollowActivityStore extends BaseStore<Object> {
    * @param force - 是否忽略成功刷新间隔
    */
   async refreshActivities(force: boolean = false): Promise<boolean> {
-    if (!this.auth || !this.auth.isAuthenticated || !this.auth.uid) {
-      return false
-    }
-    if (this.refreshPromise) {
-      return await this.refreshPromise
-    }
-
-    const now: number = Date.now()
-    if (!force && now - this.lastSuccessfulQueryTime < ACTIVITY_REFRESH_DELAY) {
-      return true
-    }
-
-    const requestGeneration: number = this.generationGuard.current()
-    const requestUid: string = this.auth.uid
-    const requestToken: string = this.auth.token
-    const task: Promise<boolean> = this.performRefresh(requestGeneration, requestUid, requestToken)
-    this.refreshPromise = task
-    try {
-      return await task
-    } finally {
-      if (this.refreshPromise === task) {
-        this.refreshPromise = null
-      }
-    }
+    return this.runGuardedRefresh(force, ACTIVITY_REFRESH_DELAY,
+      (generation: number, uid: string, token: string): Promise<boolean> =>
+        this.performRefresh(generation, uid, token))
   }
 
   /**
@@ -234,7 +182,6 @@ export class FollowActivityStore extends BaseStore<Object> {
         return false
       }
 
-      this.lastSuccessfulQueryTime = Date.now()
       if (result.pages > 0) {
         this.totalPages = result.pages
       }
@@ -337,25 +284,6 @@ export class FollowActivityStore extends BaseStore<Object> {
   }
 
   /**
-   * 判断异步请求是否仍属于当前账号和当前 Store 生命周期。
-   *
-   * @param requestGeneration - 请求发起时的 Store generation
-   * @param requestUid - 请求发起时的用户 ID
-   * @param requestToken - 请求发起时的认证 token
-   * @returns 请求是否仍可回写
-   */
-  private isRequestCurrent(
-    requestGeneration: number,
-    requestUid: string,
-    requestToken: string
-  ): boolean {
-    return this.isCurrent(requestGeneration) &&
-      this.auth.uid === requestUid &&
-      this.auth.token === requestToken &&
-      this.auth.isAuthenticated
-  }
-
-  /**
    * 获取当前动态内存真源的只读数组快照（数组副本、元素与真源同引用）。
    *
    * @returns 动态数组快照
@@ -428,21 +356,12 @@ export class FollowActivityStore extends BaseStore<Object> {
   }
 
   /**
-   * 返回当前账号的动态缓存键。
-   *
-   * @returns 动态缓存键
-   */
-  private activitiesKey(): string {
-    return `cached_activities_${this.auth.uid}`
-  }
-
-  /**
    * 加载动态缓存；旧格式或非法缓存直接覆盖为空。
    * 启动时无分页：displayActivities 以缓存窗口为起点，loadedPages=1、totalPages=0。
    */
   private async loadCachedActivities(): Promise<void> {
-    const saved: Object | null = await this.store.getJSON<Object>(this.activitiesKey())
-    if (!this.isValidCacheEnvelope(saved)) {
+    const items: FollowedActivity[] | null = await this.cacheEnvelope.load(this.store, this.auth.uid)
+    if (items === null) {
       this.cachedActivities = []
       this.displayActivities = []
       this.loadedPages = 1
@@ -452,71 +371,11 @@ export class FollowActivityStore extends BaseStore<Object> {
       return
     }
 
-    const savedRecord: Record<string, Object> = saved as Record<string, Object>
-    this.cachedActivities = (savedRecord['items'] as FollowedActivity[]).slice()
+    this.cachedActivities = items
     this.displayActivities = this.cachedActivities.slice()
     this.loadedPages = 1
     this.totalPages = 0
     this.publishUnreadOnly()
-  }
-
-  /**
-   * 判断缓存是否严格符合当前结构版本和账号。
-   *
-   * @param saved - 本地缓存对象
-   * @returns 是否为有效缓存
-   */
-  private isValidCacheEnvelope(saved: Object | null): boolean {
-    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
-      return false
-    }
-    const record: Record<string, Object> = saved as Record<string, Object>
-    if (Number(record['schemaVersion'] ?? 0) !== ACTIVITY_CACHE_SCHEMA_VERSION) {
-      return false
-    }
-    if (String(record['uid'] ?? '') !== this.auth.uid) {
-      return false
-    }
-    const rawItems: Object | undefined = record['items']
-    if (!Array.isArray(rawItems)) {
-      return false
-    }
-    const items: Object[] = rawItems as Object[]
-    for (let index: number = 0; index < items.length; index++) {
-      if (!this.isValidCachedActivity(items[index])) {
-        return false
-      }
-    }
-    return true
-  }
-
-  /**
-   * 判断单条缓存动态是否具有必要字段。
-   *
-   * @param value - 缓存动态对象
-   * @returns 是否有效
-   */
-  private isValidCachedActivity(value: Object): boolean {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      return false
-    }
-    const record: Record<string, Object> = value as Record<string, Object>
-    // 全字段类型校验：subject 等展示字段非 string 会在 unescapeHtml 崩溃，
-    // 启动时宁可丢弃整条缓存也不能带病运行
-    return typeof record['id'] === 'string' &&
-      String(record['id']).length > 0 &&
-      typeof record['type'] === 'number' &&
-      typeof record['actorUid'] === 'string' &&
-      typeof record['actorName'] === 'string' &&
-      typeof record['tid'] === 'string' &&
-      typeof record['pid'] === 'string' &&
-      typeof record['fid'] === 'string' &&
-      typeof record['subject'] === 'string' &&
-      typeof record['timestamp'] === 'number' &&
-      typeof record['replyTarget'] === 'string' &&
-      typeof record['favorTableId'] === 'string' &&
-      typeof record['summary'] === 'string' &&
-      typeof record['seen'] === 'boolean'
   }
 
   /**
@@ -537,21 +396,38 @@ export class FollowActivityStore extends BaseStore<Object> {
   }
 
   /**
-   * 将当前缓存窗口快照写入当前账号缓存键。
+   * 将当前缓存窗口快照写入当前账号缓存键（委托缓存信封工具落盘）。
    */
   private persistCachedActivities(): void {
-    if (!this.auth.uid) {
-      return
-    }
-    const keySnapshot: string = this.activitiesKey()
-    const envelope: FollowActivityCacheEnvelope = new FollowActivityCacheEnvelope()
-    envelope.uid = this.auth.uid
-    envelope.items = this.cachedActivities.slice()
-    envelope.updatedAt = Date.now()
-    const serializedSnapshot: string = JSON.stringify(envelope)
-    this.writeQueue.enqueue(async (): Promise<void> => {
-      await this.store.putString(keySnapshot, serializedSnapshot, false)
-      this.store.scheduleFlush()
-    })
+    this.cacheEnvelope.persist(this.auth.uid, this.cachedActivities, this.store, this.writeQueue)
   }
+}
+
+/**
+ * 判断单条缓存动态是否具有必要字段。
+ *
+ * @param value - 缓存动态对象
+ * @returns 是否有效
+ */
+function isValidCachedActivity(value: Object): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+  const record: Record<string, Object> = value as Record<string, Object>
+  // 全字段类型校验：subject 等展示字段非 string 会在 unescapeHtml 崩溃，
+  // 启动时宁可丢弃整条缓存也不能带病运行
+  return typeof record['id'] === 'string' &&
+    String(record['id']).length > 0 &&
+    typeof record['type'] === 'number' &&
+    typeof record['actorUid'] === 'string' &&
+    typeof record['actorName'] === 'string' &&
+    typeof record['tid'] === 'string' &&
+    typeof record['pid'] === 'string' &&
+    typeof record['fid'] === 'string' &&
+    typeof record['subject'] === 'string' &&
+    typeof record['timestamp'] === 'number' &&
+    typeof record['replyTarget'] === 'string' &&
+    typeof record['favorTableId'] === 'string' &&
+    typeof record['summary'] === 'string' &&
+    typeof record['seen'] === 'boolean'
 }

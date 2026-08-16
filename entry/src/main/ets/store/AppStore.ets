@@ -28,7 +28,21 @@ import type { FollowedActivity } from '../model/Follow'
 import type { Category } from '../model/Forum'
 
 import { Logger, DOMAIN_APP, formatError } from '../common/utils/Logger'
-import { shouldEnableNotificationPolling } from '../common/utils/NotificationPolicy'
+import { shouldEnablePolling } from '../common/concurrency/PollingController'
+
+/**
+ * 前台轮询参与者（注册表项）：一对启停回调。
+ * 由 AppStore 统一登记社交类 Store 的前台轮询启停。
+ */
+class PollingParticipant {
+  readonly start: () => void
+  readonly stop: () => void
+
+  constructor(start: () => void, stop: () => void) {
+    this.start = start
+    this.stop = stop
+  }
+}
 
 const logger = new Logger(DOMAIN_APP, 'AppStore')
 
@@ -48,6 +62,21 @@ class AppStoreClass {
   private initializationFinished: boolean = false
   /** Ability 当前是否处于前台。 */
   private foregroundActive: boolean = false
+  /** 前台轮询参与者注册表（新增轮询 Store 时在此登记即可统一启停）。 */
+  private pollingParticipants: PollingParticipant[] = []
+
+  constructor() {
+    this.pollingParticipants = [
+      new PollingParticipant(
+        (): void => { this.notificationStore.startPolling() },
+        (): void => { this.notificationStore.stopPolling() }
+      ),
+      new PollingParticipant(
+        (): void => { this.followActivityStore.startPolling() },
+        (): void => { this.followActivityStore.stopPolling() }
+      )
+    ]
+  }
 
   // ---------- Sub Stores ----------
   readonly authStore: AuthStore = new AuthStore()
@@ -70,8 +99,7 @@ class AppStoreClass {
   async init(context: Context): Promise<void> {
     this.initialized = false
     this.initializationFinished = false
-    this.notificationStore.stopPolling()
-    this.followActivityStore.stopPolling()
+    this.stopAllPolling()
     try {
       this.context = context
       await this.store.init(context, 'nga_app_store')
@@ -91,7 +119,7 @@ class AppStoreClass {
       }
       this.settingsStore.applyCurrentTheme()
       this.initialized = true
-      this.reconcileNotificationPolling()
+      this.reconcilePolling()
 
       logger.info('AppStore initialized')
     } catch (e) {
@@ -133,19 +161,17 @@ class AppStoreClass {
   }
 
   async setAuth(token: string, uid: string, nickName: string, avatarUrl: string): Promise<void> {
-    this.notificationStore.stopPolling()
-    this.followActivityStore.stopPolling()
+    this.stopAllPolling()
     const uidChanged = await this.authStore.setAuth(token, uid, nickName, avatarUrl)
     if (uidChanged) {
       await this.loadUserData()
       this.settingsStore.applyCurrentTheme()
     }
-    this.reconcileNotificationPolling()
+    this.reconcilePolling()
   }
 
   clearAuth(): void {
-    this.notificationStore.stopPolling()
-    this.followActivityStore.stopPolling()
+    this.stopAllPolling()
     // ⚠️ 以下顺序有严格依赖：cancel/reset 必须在 authStore.clearAuth() 之前，
     // 否则后者 enqueue 的 persistAuth 写入任务会被取消。
     // 先取消队列中所有待执行的任务（如已入队的 history/vote 旧 uid 写入）
@@ -165,7 +191,7 @@ class AppStoreClass {
     floatingLayerStore.clear()
     routerStore.reset()
     // 与 setAuth 对称：退出后统一协调轮询状态（此时未认证 → 停止轮询，幂等无害）
-    this.reconcileNotificationPolling()
+    this.reconcilePolling()
   }
 
   createSession(uid: string, cid: string, nickName: string, avatarUrl: string): Promise<string> {
@@ -240,29 +266,41 @@ class AppStoreClass {
     return this.notificationStore.refreshNotifications(force)
   }
   /**
-   * 更新 Ability 前台状态并统一协调通知轮询。
+   * 更新 Ability 前台状态并统一协调社交轮询（消息 / 动态）。
    *
    * @param active - Ability 是否处于前台
    */
-  setNotificationForegroundActive(active: boolean): void {
+  setForegroundActive(active: boolean): void {
     this.foregroundActive = active
-    this.reconcileNotificationPolling()
+    this.reconcilePolling()
   }
   /**
-   * 根据初始化、认证与前台状态启动或停止通知与关注动态轮询。
+   * 根据初始化、认证与前台状态启动或停止全部前台轮询参与者。
    */
-  private reconcileNotificationPolling(): void {
-    if (shouldEnableNotificationPolling(
+  private reconcilePolling(): void {
+    if (shouldEnablePolling(
       this.foregroundActive,
       this.initialized,
       this.auth.isAuthenticated
     )) {
-      this.notificationStore.startPolling()
-      this.followActivityStore.startPolling()
+      this.startAllPolling()
       return
     }
-    this.notificationStore.stopPolling()
-    this.followActivityStore.stopPolling()
+    this.stopAllPolling()
+  }
+
+  /** 启动全部前台轮询参与者（幂等：各 Store 内部有启动守卫）。 */
+  private startAllPolling(): void {
+    for (let index: number = 0; index < this.pollingParticipants.length; index++) {
+      this.pollingParticipants[index].start()
+    }
+  }
+
+  /** 停止全部前台轮询参与者（幂等）。 */
+  private stopAllPolling(): void {
+    for (let index: number = 0; index < this.pollingParticipants.length; index++) {
+      this.pollingParticipants[index].stop()
+    }
   }
   getCachedNotifications(): NgaNotification[] { return this.notificationStore.getCachedNotifications() }
   /** 将指定通知标记为已查看。 */

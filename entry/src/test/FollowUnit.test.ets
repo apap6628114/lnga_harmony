@@ -3,7 +3,40 @@ import {
   parseFollowedUsers,
   parseFollowedActivity,
 } from '../main/ets/parser/FollowParser'
-import { FollowedActivityType } from '../main/ets/model/Follow'
+import {
+  appendDedupe,
+  countUnseenActivities,
+  markActivitiesSeenByIds,
+  markAllActivitiesSeen,
+  mergeActivities
+} from '../main/ets/common/utils/FollowActivityPolicy'
+import { FollowedActivity, FollowedActivityType } from '../main/ets/model/Follow'
+
+/**
+ * 创建关注动态测试数据。
+ *
+ * @param id - 动态 ID
+ * @param timestamp - 行为时间戳
+ * @param seen - 是否已读
+ * @returns 关注动态
+ */
+function createActivity(id: string, timestamp: number, seen: boolean): FollowedActivity {
+  const activity: FollowedActivity = new FollowedActivity()
+  activity.id = id
+  activity.type = FollowedActivityType.POST_TOPIC
+  activity.actorUid = '42'
+  activity.actorName = 'tester'
+  activity.tid = '999'
+  activity.pid = '0'
+  activity.fid = '1'
+  activity.subject = 'topic'
+  activity.timestamp = timestamp
+  activity.replyTarget = ''
+  activity.favorTableId = ''
+  activity.summary = ''
+  activity.seen = seen
+  return activity
+}
 
 /**
  * 关注系统解析器单元测试。
@@ -124,6 +157,80 @@ export default function followUnitTest(): void {
       expect(result.activities[0].type).assertEqual(FollowedActivityType.POST_REPLY)
       expect(result.activities[0].pid).assertEqual('3')
       expect(result.activities[0].summary).assertEqual('hello &amp; world')
+    })
+  })
+
+  describe('followActivityPolicy', (): void => {
+    it('mergesActivitiesWithSeenPreservedAndStableOrder', 0, (): void => {
+      const existing: FollowedActivity[] = [createActivity('a', 100, true)]
+      const incoming: FollowedActivity[] = [
+        createActivity('b', 200, false),
+        createActivity('a', 100, false)
+      ]
+      const merged: FollowedActivity[] = mergeActivities(existing, incoming, 200)
+      expect(merged.length).assertEqual(2)
+      expect(merged[0].id).assertEqual('b')
+      expect(merged[0].seen).assertFalse()
+      expect(merged[1].id).assertEqual('a')
+      expect(merged[1].seen).assertTrue()
+    })
+
+    it('keepsActivityOrderStableWithinSameTimestamp', 0, (): void => {
+      const incoming: FollowedActivity[] = [
+        createActivity('z', 100, false),
+        createActivity('a', 100, false)
+      ]
+      const merged: FollowedActivity[] = mergeActivities([], incoming, 200)
+      expect(merged.length).assertEqual(2)
+      expect(merged[0].id).assertEqual('z')
+      expect(merged[1].id).assertEqual('a')
+    })
+
+    it('appendsDedupeInOrderWithoutResorting', 0, (): void => {
+      const existing: FollowedActivity[] = [
+        createActivity('a', 300, false),
+        createActivity('b', 200, false)
+      ]
+      const incoming: FollowedActivity[] = [
+        createActivity('b', 200, false),
+        createActivity('c', 100, false)
+      ]
+      const appended: FollowedActivity[] = appendDedupe(existing, incoming)
+      expect(appended.length).assertEqual(3)
+      expect(appended[0].id).assertEqual('a')
+      expect(appended[1].id).assertEqual('b')
+      expect(appended[2].id).assertEqual('c')
+    })
+
+    it('marksActivitiesSeenByIdsOnly', 0, (): void => {
+      const activities: FollowedActivity[] = [
+        createActivity('a', 100, false),
+        createActivity('b', 200, false)
+      ]
+      const ids: Set<string> = new Set<string>()
+      ids.add('a')
+      const changed: boolean = markActivitiesSeenByIds(activities, ids)
+      expect(changed).assertTrue()
+      expect(activities[0].seen).assertTrue()
+      expect(activities[1].seen).assertFalse()
+      expect(countUnseenActivities(activities)).assertEqual(1)
+    })
+
+    it('marksAllActivitiesSeen', 0, (): void => {
+      const activities: FollowedActivity[] = [
+        createActivity('a', 100, false),
+        createActivity('b', 200, true)
+      ]
+      const changed: boolean = markAllActivitiesSeen(activities)
+      expect(changed).assertTrue()
+      expect(countUnseenActivities(activities)).assertEqual(0)
+    })
+
+    it('countsNewIncomingActivitiesAsUnseen', 0, (): void => {
+      const existing: FollowedActivity[] = [createActivity('a', 100, true)]
+      const incoming: FollowedActivity[] = [createActivity('b', 200, false)]
+      const merged: FollowedActivity[] = mergeActivities(existing, incoming, 200)
+      expect(countUnseenActivities(merged)).assertEqual(1)
     })
   })
 }

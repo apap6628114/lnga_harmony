@@ -1,20 +1,5 @@
 import type { NgaNotification } from '../../model/Notification'
-
-/**
- * 判断通知轮询是否满足前台运行条件。
- *
- * @param foregroundActive - Ability 是否处于前台
- * @param initialized - AppStore 是否初始化完成
- * @param authenticated - 当前账号是否已认证
- * @returns 是否应启用通知轮询
- */
-export function shouldEnableNotificationPolling(
-  foregroundActive: boolean,
-  initialized: boolean,
-  authenticated: boolean
-): boolean {
-  return foregroundActive && initialized && authenticated
-}
+import { UnseenListAccessors, UnseenListPolicy } from './UnseenListPolicy'
 
 /**
  * 判断通知类型是否属于私信。
@@ -25,6 +10,30 @@ export function shouldEnableNotificationPolling(
 export function isMessageNotificationType(type: number): boolean {
   return type === 10 || type === 11
 }
+
+/**
+ * 通知列表访问器：id 为 notificationId；时间取 timeStamp 数值（NaN 兜底为 0）；
+ * 无排序第二键（返回固定空串，退化为纯时间排序）。
+ */
+const notificationAccessors: UnseenListAccessors<NgaNotification> =
+  new UnseenListAccessors<NgaNotification>(
+    (item: NgaNotification): string => item.notificationId,
+    (item: NgaNotification): boolean => item.seen,
+    (item: NgaNotification, seen: boolean): void => {
+      item.seen = seen
+    },
+    (item: NgaNotification): number => {
+      const raw: number = Number(item.timeStamp)
+      return Number.isFinite(raw) ? raw : 0
+    },
+    (): string => ''
+  )
+
+/**
+ * 通知列表策略实例（合并去重 / 已读维护 / 未读计数）。
+ */
+const notificationPolicy: UnseenListPolicy<NgaNotification> =
+  new UnseenListPolicy<NgaNotification>(notificationAccessors)
 
 /**
  * 合并通知列表，重复通知保留原有本地查看状态。
@@ -39,28 +48,7 @@ export function mergeNotifications(
   incoming: NgaNotification[],
   maxCount: number
 ): NgaNotification[] {
-  const mergedById: Map<string, NgaNotification> = new Map<string, NgaNotification>()
-  for (let index: number = 0; index < existing.length; index++) {
-    const notification: NgaNotification = existing[index]
-    mergedById.set(notification.notificationId, notification)
-  }
-
-  for (let index: number = 0; index < incoming.length; index++) {
-    const notification: NgaNotification = incoming[index]
-    const previous: NgaNotification | undefined = mergedById.get(notification.notificationId)
-    notification.seen = previous ? previous.seen : false
-    mergedById.set(notification.notificationId, notification)
-  }
-
-  const merged: NgaNotification[] = Array.from(mergedById.values())
-  merged.sort((left: NgaNotification, right: NgaNotification): number => {
-    const leftTime: number = Number(left.timeStamp)
-    const rightTime: number = Number(right.timeStamp)
-    const safeLeftTime: number = Number.isFinite(leftTime) ? leftTime : 0
-    const safeRightTime: number = Number.isFinite(rightTime) ? rightTime : 0
-    return safeRightTime - safeLeftTime
-  })
-  return merged.length > maxCount ? merged.slice(0, maxCount) : merged
+  return notificationPolicy.merge(existing, incoming, maxCount)
 }
 
 /**
@@ -74,17 +62,7 @@ export function markNotificationSeen(
   notifications: NgaNotification[],
   notificationId: string
 ): boolean {
-  for (let index: number = 0; index < notifications.length; index++) {
-    const notification: NgaNotification = notifications[index]
-    if (notification.notificationId === notificationId) {
-      if (notification.seen) {
-        return false
-      }
-      notification.seen = true
-      return true
-    }
-  }
-  return false
+  return notificationPolicy.markSeenById(notifications, notificationId)
 }
 
 /**
@@ -94,14 +72,7 @@ export function markNotificationSeen(
  * @returns 是否发生状态变化
  */
 export function markAllNotificationsSeen(notifications: NgaNotification[]): boolean {
-  let changed: boolean = false
-  for (let index: number = 0; index < notifications.length; index++) {
-    if (!notifications[index].seen) {
-      notifications[index].seen = true
-      changed = true
-    }
-  }
-  return changed
+  return notificationPolicy.markAllSeen(notifications)
 }
 
 /**
@@ -111,15 +82,8 @@ export function markAllNotificationsSeen(notifications: NgaNotification[]): bool
  * @returns 是否发生状态变化
  */
 export function markMessageNotificationsSeen(notifications: NgaNotification[]): boolean {
-  let changed: boolean = false
-  for (let index: number = 0; index < notifications.length; index++) {
-    const notification: NgaNotification = notifications[index]
-    if (!notification.seen && isMessageNotificationType(notification.type)) {
-      notification.seen = true
-      changed = true
-    }
-  }
-  return changed
+  return notificationPolicy.markSeenWhere(notifications,
+    (item: NgaNotification): boolean => isMessageNotificationType(item.type))
 }
 
 /**
@@ -129,13 +93,7 @@ export function markMessageNotificationsSeen(notifications: NgaNotification[]): 
  * @returns 未查看通知数量
  */
 export function countUnseenNotifications(notifications: NgaNotification[]): number {
-  let count: number = 0
-  for (let index: number = 0; index < notifications.length; index++) {
-    if (!notifications[index].seen) {
-      count++
-    }
-  }
-  return count
+  return notificationPolicy.countUnseen(notifications)
 }
 
 /**
@@ -145,12 +103,6 @@ export function countUnseenNotifications(notifications: NgaNotification[]): numb
  * @returns 未查看私信通知数量
  */
 export function countUnseenMessageNotifications(notifications: NgaNotification[]): number {
-  let count: number = 0
-  for (let index: number = 0; index < notifications.length; index++) {
-    const notification: NgaNotification = notifications[index]
-    if (!notification.seen && isMessageNotificationType(notification.type)) {
-      count++
-    }
-  }
-  return count
+  return notificationPolicy.countUnseenWhere(notifications,
+    (item: NgaNotification): boolean => isMessageNotificationType(item.type))
 }

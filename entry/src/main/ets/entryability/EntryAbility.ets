@@ -63,7 +63,7 @@ export default class EntryAbility extends UIAbility {
 
   /** 销毁 Ability 并释放全局服务。 */
   onDestroy(): void {
-    appStore.setNotificationForegroundActive(false)
+    appStore.setForegroundActive(false)
     TtsPlayer.shutdown()
     logger.info( '%{public}s', 'Ability onDestroy');
   }
@@ -117,7 +117,7 @@ export default class EntryAbility extends UIAbility {
 
   /** 应用进入前台时恢复前台服务。 */
   onForeground(): void {
-    appStore.setNotificationForegroundActive(true)
+    appStore.setForegroundActive(true)
     if (appStore.isInitialized) {
       appStore.autoCheckinIfNeeded();
     }
@@ -126,7 +126,7 @@ export default class EntryAbility extends UIAbility {
 
   /** 应用进入后台时持久化当前状态。 */
   onBackground(): void {
-    appStore.setNotificationForegroundActive(false)
+    appStore.setForegroundActive(false)
     appStore.flushAll();
     logger.info( '%{public}s', 'Ability onBackground');
   }

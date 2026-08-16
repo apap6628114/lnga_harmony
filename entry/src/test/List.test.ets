@@ -10,6 +10,8 @@ import voteUnitTest from './VoteUnit.test';
 import muteUnitTest from './MuteUnit.test';
 import followUnitTest from './FollowUnit.test';
 import sanitizerUnitTest from './SanitizerUnit.test';
+import guardedRefreshUnitTest from './GuardedRefreshUnit.test';
+import cacheEnvelopeUnitTest from './CacheEnvelopeUnit.test';
 
 /**
  * 注册全部本地单元测试。
@@ -27,4 +29,6 @@ export default function testsuite(): void {
   muteUnitTest();
   followUnitTest();
   sanitizerUnitTest();
+  guardedRefreshUnitTest();
+  cacheEnvelopeUnitTest();
 }

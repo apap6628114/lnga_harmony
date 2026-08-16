@@ -5,9 +5,9 @@ import {
   markAllNotificationsSeen,
   markMessageNotificationsSeen,
   markNotificationSeen,
-  mergeNotifications,
-  shouldEnableNotificationPolling
+  mergeNotifications
 } from '../main/ets/common/utils/NotificationPolicy'
+import { shouldEnablePolling } from '../main/ets/common/concurrency/PollingController'
 import type {
   MessageNotification,
   NgaNotification,
@@ -147,10 +147,10 @@ export default function notificationUnitTest(): void {
     })
 
     it('enablesPollingOnlyForAuthenticatedForegroundApp', 0, (): void => {
-      expect(shouldEnableNotificationPolling(true, true, true)).assertTrue()
-      expect(shouldEnableNotificationPolling(false, true, true)).assertFalse()
-      expect(shouldEnableNotificationPolling(true, false, true)).assertFalse()
-      expect(shouldEnableNotificationPolling(true, true, false)).assertFalse()
+      expect(shouldEnablePolling(true, true, true)).assertTrue()
+      expect(shouldEnablePolling(false, true, true)).assertFalse()
+      expect(shouldEnablePolling(true, false, true)).assertFalse()
+      expect(shouldEnablePolling(true, true, false)).assertFalse()
     })
   })
 
