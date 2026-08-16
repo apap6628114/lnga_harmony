@@ -207,6 +207,7 @@ export async function getUserProfile(token: string, uid: string): Promise<UserPr
     profile.ipLoc = String(d['ipLoc'] ?? '');
     profile.medal = hasMedal ? medalStr : '';
     profile.muteTime = effectiveMuteTs > 0 ? formatTimestampCST(effectiveMuteTs) : '';
+    profile.followNum = String(d['follow_num'] ?? '');
     profile.followByNum = String(d['follow_by_num'] ?? '');
     profile.follow = Number(d['follow'] ?? 0) === 1;
     profile.adminForums = adminList;

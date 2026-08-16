@@ -477,6 +477,9 @@ export struct ProfileCardPopup {
       if (profile.ipLoc) {
         this.DetailRow('IP属地', profile.ipLoc)
       }
+      if (profile.followNum && Number(profile.followNum) > 0) {
+        this.DetailRow('关注', profile.followNum)
+      }
       if (profile.followByNum && Number(profile.followByNum) > 0) {
         this.DetailRow('被关注', profile.followByNum)
       }

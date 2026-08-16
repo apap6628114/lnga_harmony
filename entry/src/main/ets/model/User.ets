@@ -34,8 +34,11 @@ export class ProfileData {
   ipLoc: string = '';
   medal: string = '';
   muteTime: string = '';
+  /** 我关注的人数（ucp.get 返回 `follow_num`）。 */
+  followNum: string = '';
+  /** 关注我的人数（ucp.get 返回 `follow_by_num`）。 */
   followByNum: string = '';
-  /** 当前登录用户是否已关注该用户（ucp.get 条件返回 `follow: 1`，未关注时字段缺席）。 */
+  /** 当前登录用户是否已关注该用户（ucp.get 返回 `follow: 1` 已关注 / `follow: 0` 未关注；抓自己时该字段缺席）。 */
   follow: boolean = false;
   adminForums: AdminForumsData[] = [];
   reputationEntryList: ReputationData[] = [];
