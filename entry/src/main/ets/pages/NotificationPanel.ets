@@ -308,17 +308,23 @@ export struct NotificationPanel {
   /**
    * 将单条动态标记为已读（点开帖子即已读，与消息规则一致）。
    *
+   * store 与页面数据源可能持有不同引用：轮询合并会用 incoming 新对象替换
+   * displayActivities 中同 id 条目，而无新增时不 bump 版本（页面快照保持旧引用
+   * 以保护滚动）。因此除委托 store 外，还需对命中行强制置 seen 再 updateAt，
+   * 保证行立即呈现已读（不能依赖「store 已改同一引用」的假设）。
+   *
    * @param id - 动态 id
    */
   private markActivitySeen(id: string): void {
     const ids: Set<string> = new Set<string>()
     ids.add(id)
     appStore.markActivitiesSeen(ids)
-    // 行内元素与 displayActivities 同引用，store 已把 seen 置 true；
-    // 此处对命中行无条件 updateAt 发局部刷新信号（不依赖 seen 前后判断，避免漏刷新）
     for (let index: number = 0; index < this.activitiesDataSource.totalCount(); index++) {
       const item: FollowedActivity = this.activitiesDataSource.getData(index)
       if (item !== undefined && item !== null && item.id === id) {
+        if (!item.seen) {
+          item.seen = true
+        }
         this.activitiesDataSource.updateAt(index, item)
         return
       }
@@ -366,10 +372,18 @@ export struct NotificationPanel {
       }
     }
     appStore.markAllActivitiesSeen()
-    // 对收集的下标无条件 updateAt 发局部刷新信号（元素 seen 已被 store 改掉）
+    // 对收集的下标强制置 seen 再 updateAt：store 与页面数据源可能引用不一致
+    // （轮询合并会替换 displayActivities 中的对象而页面快照保持旧引用），
+    // 不能依赖「元素 seen 已被 store 改掉」的假设
     for (let index: number = 0; index < unreadIndexes.length; index++) {
       const rowIndex: number = unreadIndexes[index]
-      this.activitiesDataSource.updateAt(rowIndex, this.activitiesDataSource.getData(rowIndex))
+      const item: FollowedActivity = this.activitiesDataSource.getData(rowIndex)
+      if (item !== undefined && item !== null) {
+        if (!item.seen) {
+          item.seen = true
+        }
+        this.activitiesDataSource.updateAt(rowIndex, item)
+      }
     }
     // 触发 @State 引用变化，让 hasCurrentTabUnread() 重算（标题栏按钮颜色更新）
     this.activities = this.activities.slice()
@@ -822,7 +836,7 @@ export struct NotificationPanel {
                   // 行背景透明，露出 Stack 的 bg（与帖子列表 TopicCard 的透明策略一致）
                   .onClick(() => { this.openActivity(activity) })
                 }
-              }, (activity: FollowedActivity) => activity.id)
+              }, (activity: FollowedActivity) => `${activity.id}_${activity.seen}`)
 
               ListItem() {
                 Row() {
