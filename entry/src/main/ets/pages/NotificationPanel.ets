@@ -83,6 +83,10 @@ export struct NotificationPanel {
   @StorageProp('notificationVersion') @Watch('onNotificationVersionChange') notificationVersion: number = 0
   /** 动态 Store 的页面刷新信号（仅数据合并时触发）。 */
   @StorageProp('activityVersion') @Watch('onActivityVersionChange') activityVersion: number = 0
+  /** 消息 Tab 未读数量（以括号文本拼入按钮文案，0 不显示）。 */
+  @StorageProp('unreadNotiCount') @Watch('onUnreadCountChange') unreadNotiCount: number = 0
+  /** 动态 Tab 未读数量（以括号文本拼入按钮文案，0 不显示）。 */
+  @StorageProp('unreadActivityCount') @Watch('onUnreadCountChange') unreadActivityCount: number = 0
   private notificationsDataSource: NotificationDataSource = new NotificationDataSource()
   private activitiesDataSource: FollowedActivityDataSource = new FollowedActivityDataSource()
   private scroller: Scroller = new Scroller()
@@ -107,6 +111,7 @@ export struct NotificationPanel {
     const initialTab: number = this.initialTab === TAB_ACTIVITIES ? TAB_ACTIVITIES : TAB_MESSAGES
     this.activeTab = initialTab
     this.tabSelected = [initialTab]
+    this.rebuildTabOptions()
     this.syncNotificationsFromStore()
     this.syncActivitiesFromStore()
     if (initialTab === TAB_ACTIVITIES) {
@@ -391,6 +396,58 @@ export struct NotificationPanel {
         this.scroller.scrollEdge(Edge.Top)
       }
     }, 0)
+  }
+
+  /**
+   * 未读数变化时重建筛选条文案（消息(9) / 动态(99+) 形式）。
+   */
+  private onUnreadCountChange(): void {
+    this.rebuildTabOptions()
+  }
+
+  /**
+   * 重建筛选条分段按钮文案：未读数以括号文本拼入按钮文本，未读为 0 时不带后缀。
+   */
+  private rebuildTabOptions(): void {
+    this.tabOptions = SegmentButtonOptions.capsule({
+      buttons: [
+        { text: this.badgeLabel('消息', this.unreadNotiCount) },
+        { text: this.badgeLabel('动态', this.unreadActivityCount) }
+      ] as SegmentButtonItemTuple,
+      multiply: false,
+      fontColor: AppColors.textSecondary,
+      selectedFontColor: AppColors.primary,
+      fontSize: 13,
+      selectedFontSize: 13,
+      fontWeight: FontWeight.Normal,
+      selectedFontWeight: FontWeight.Bold,
+      backgroundColor: AppColors.bgSecondary,
+      selectedBackgroundColor: AppColors.primaryLight,
+    })
+  }
+
+  /**
+   * 生成带未读后缀的 Tab 文案。
+   *
+   * @param base - 基础文案
+   * @param count - 未读数
+   * @returns 未读大于 0 时为 `${base}(数量)`，否则为 base 本身
+   */
+  private badgeLabel(base: string, count: number): string {
+    return count > 0 ? `${base}(${this.formatBadgeCount(count)})` : base
+  }
+
+  /**
+   * 将未读数格式化为 Tab 文案后缀（0 隐藏、超过 99 显示 99+）。
+   *
+   * @param count - 未读数
+   * @returns 角标文本
+   */
+  private formatBadgeCount(count: number): string {
+    if (count <= 0) {
+      return ''
+    }
+    return count > 99 ? '99+' : String(count)
   }
 
   /**
