@@ -61,6 +61,8 @@ export class FollowedActivity {
   favorTableId: string = ''
   /** 服务端生成的摘要文本（对象形态条目才可能携带）。 */
   summary: string = ''
+  /** 本地已读状态（服务端无未读概念，点开对应帖子即标记已读）。 */
+  seen: boolean = false
 }
 
 /**

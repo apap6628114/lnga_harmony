@@ -62,7 +62,6 @@ export type ScreenType =
   | 'filterKeywords'
   | 'settings'
   | 'browseHistory'
-  | 'followedActivity'
   | 'followList'
   | 'topicList'
   | 'webview'
@@ -113,6 +112,8 @@ export class Screen {
   mid: string = ''
   messagePage: number = 1
   composeTo: string = ''
+  /** 通知页初始筛选 Tab（0=消息，1=动态）。 */
+  notificationsInitialTab: number = 0
   topicListName: string = ''
   topicListFid: number = 0
   topicListAuthorid: string = ''
@@ -165,9 +166,10 @@ export class Screen {
     return s
   }
 
-  static notifications(): Screen {
+  static notifications(initialTab: number = 0): Screen {
     const s = new Screen()
     s.type = 'notifications'
+    s.notificationsInitialTab = initialTab
     return s
   }
 
@@ -198,12 +200,6 @@ export class Screen {
   static browseHistory(): Screen {
     const s = new Screen()
     s.type = 'browseHistory'
-    return s
-  }
-
-  static followedActivity(): Screen {
-    const s = new Screen()
-    s.type = 'followedActivity'
     return s
   }
 
@@ -272,7 +268,6 @@ export class Screen {
       case 'filterKeywords': return '关键词屏蔽'
       case 'settings': return '设置'
       case 'browseHistory': return '浏览历史'
-      case 'followedActivity': return '关注动态'
       case 'followList': return '我的关注'
       case 'topicList': return this.topicListName || '主题列表'
       case 'webview': return 'NGA网页版'

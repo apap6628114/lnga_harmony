@@ -6,6 +6,7 @@
 
 import { SegmentButton, SegmentButtonOptions, SegmentButtonItemTuple } from '@kit.ArkUI'
 import { appStore } from '../store/AppStore'
+import { routerStore, Screen } from '../store/RouterStore'
 import { fetchFollowedUsers, fetchFollowers, followUser } from '../service/api/FollowApi'
 import { ApiResult } from '../model/NgaApiResults'
 import type { FollowedUserListResult } from '../model/Follow'
@@ -391,7 +392,14 @@ export struct FollowListPanel {
 
       PanelNavBar({
         title: '我的关注',
-        scrollEffectProgress: this.titleScrollEffectProgress
+        scrollEffectProgress: this.titleScrollEffectProgress,
+        // 「关注动态」直达入口：铃铛跳通知页动态 tab（Screen.notifications(1)），
+        // 与帖子列表标题栏铃铛（进通知页消息 tab）的图标语言一致
+        secondaryRightIcon: $r('app.media.icon_bell'),
+        secondaryRightIconAccessibilityText: '关注动态',
+        onSecondaryRightClick: (): void => {
+          routerStore.navigateActivity(Screen.notifications(1))
+        }
       })
         .width('100%').position({ x: 0, y: 0 })
     }

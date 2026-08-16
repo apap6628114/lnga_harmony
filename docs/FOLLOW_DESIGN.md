@@ -315,3 +315,45 @@ Result 类：`FollowedUserListResult extends ApiResult { data: FollowedUser[] }`
 **MNGA 参考（外部仓库 `C:\Users\ll\Desktop\MNGA`）**：
 
 - 分支 `origin/bz/enormous-pike`：`logic/service/src/activity.rs`、`app/Shared/Views/FollowedActivityListView.swift`、`docs/nga-follow_v2-get_push_list.md`
+
+---
+
+## 8. 关注动态缓存、红点与通知页迁移（nga_oh 落地补充）
+
+本节记录关注动态从"打开才拉取的独立页"升级为"轮询 + 条件抓取 + 缓存 + 红点，并入通知页双筛选"的落地设计（2026-02 实施，编译门禁通过）。
+
+### 8.1 数据层：FollowActivityStore（对齐 NotificationStore）
+
+| 机制 | 参数 | 说明 |
+| --- | --- | --- |
+| 定时抓取 | 前台 60s 轮询（`ACTIVITY_POLL_INTERVAL`） | 与通知轮询同启同停（`AppStore.reconcileNotificationPolling`） |
+| 条件抓取 | 非强制刷新 30s 最小成功间隔（`ACTIVITY_REFRESH_DELAY`） | `refreshActivities(force)` 并发复用同一 Promise |
+| 持久化缓存 | 信封 `FollowActivityCacheEnvelope`（schemaVersion=2 / uid / items / updatedAt） | PreferencesStore 按 `cached_activities_{uid}` 隔离；**仅为 `displayActivities` 前 200 条窗口快照** |
+| 内存真源 | `displayActivities`（上限 10000） | 首屏缓存 + 分页追加的全量列表；排序 timestamp 倒序 + **id 稳定第二键**（同秒条目不抖动） |
+| 分页状态 | `loadedPages` / `totalPages` / `loadingMore` 收进 Store | 首屏=1；`totalPages`=0 表示未知/未确认 |
+| 红点 | `unreadActivityCount` → AppStorage | 入口角标/徽章消费 |
+| 版本信号 | `activityVersion` | 仅数据合并/分页追加时 bump，驱动列表增量刷新 |
+
+**方案 C 数据流**（2026-02 实施，分页死锁/空洞修复）：
+
+- `displayActivities` 是内存唯一真源，生命周期：`init`/`loadCachedActivities` 时以缓存窗口为起点（无分页）→ 轮询/首屏 `performRefresh`（page=1）用 `mergeActivities` 合并（新 id 未读、旧 id 保留 seen、去重、10000 截断）→ `loadMoreActivities` 用 `appendDedupe` 按分页顺序尾部追加（不重排）；
+- `cachedActivities` 恒为 `displayActivities.slice(0, 200)`：每次成功的刷新/分页/已读操作都同步窗口并落盘（字段回填/截断也持久化，内存与磁盘一致）；
+- 版本信号分工：**数据合并或分页追加 bump `activityVersion`**（面板增量同步：头部新增 `prependAll`、分页尾部追加 `appendAll`、其余 `replaceAll`，均按 id 序列比较，避免 LazyForEach 整体重建打断滚动）；**已读变化只更新未读数不 bump**（入口红点即时归零，列表行内 `updateAt` 局部刷新）；
+- `loadMoreActivities`：store 内并发防护（`loadingMore`）+ 总页数边界 + 账号代际校验（`generationGuard`/uid/token 三重，与 `isRequestCurrent` 一致），失败静默返回 false，滚动到底部可再次触发；
+- 已读操作（`markSeenByIds`/`markAllSeen`）作用于 `displayActivities`，面板快照元素与真源同引用，`updateAt` 无条件发局部刷新信号。
+
+已读语义（服务端 get_push_list 无未读字段，全部本地判定）：
+
+- 本地无记录的动态 id 一律视为**未读**（首次拉取的历史动态同样未读，红点/圆点如实反映「尚未点开」状态）；
+- **已读规则与消息一致**：点开动态对应的帖子即标记该条已读（`markActivitySeen`）；右上角「全部已读」作用于**当前选中 Tab 的系统**（消息 tab = 通知中心全部已读；动态 tab = 动态全部已读）；
+- 版本信号分工：**数据合并 bump `activityVersion`**（面板增量同步，无新数据不重建列表，避免打断滚动）；**已读变化只更新未读数不 bump**（入口红点即时归零，列表行内 `updateAt` 局部刷新）。
+
+分页：分页状态与行为全部收进 Store（`loadMoreActivities`），后续页仅内存持有（`appendDedupe` 尾部追加进 `displayActivities`），不进缓存；持久化缓存恒为 `displayActivities` 前 200 条窗口。
+
+### 8.2 UI 层：通知页双筛选
+
+- `NotificationPanel` 升级为「通知」页：`PanelNavBar`（返回 + 标题"通知"）+ 原生 `SegmentButton` 筛选项（消息/动态）作为**列表首元素**，随内容滚动穿越标题区（`contentStartOffset` + `linearGradientBlur` + `scrollEffectProgress`，与帖子 UI 排序条同范式）；
+- **消息 tab**：通知中心数据（回复/私信/点赞提醒），沿用点击已读 / 全部已读规则；
+- **动态 tab**：关注动态流，动态行样式 = 未读圆点 + 类型图标（发主题/回帖/收藏）+ 两行布局（标题+时间 / **行为者·动作**），对齐通知中心行形态；
+- 路由：`Screen.notifications(initialTab)`（0=消息 1=动态）；`FollowedActivityPanel` 与 `Screen.followedActivity` 移除；通知页仅由帖子 UI 铃铛进入；
+- 入口红点：帖子 UI 铃铛角标 = 通知未读 + 动态未读（合并）；我的主页入口调整：删除「通知」「关注动态」行，「我的关注」提升至「我的回帖」之下（2026-02 用户决策）。

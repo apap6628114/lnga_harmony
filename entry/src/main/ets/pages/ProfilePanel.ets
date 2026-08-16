@@ -41,8 +41,6 @@ export struct ProfilePanel {
   @State hasError: boolean = false
   @State errorMsg: string = ''
   @State profile: ProfileData | null = null
-  /** 当前账号的未查看通知数量。 */
-  @StorageProp('unreadNotiCount') unreadNotifications: number = 0
   /** 当前账号的未查看私信通知数量。 */
   @StorageProp('unreadMessageCount') unreadMessages: number = 0
   @State checkinLoading: boolean = false
@@ -484,6 +482,13 @@ export struct ProfilePanel {
                 })
                 Divider().margin({ left: 60 }).color(AppColors.separator)
                 SettingRow({
+                  iconRes: $r('app.media.icon_people'), iconColor: ProfileActionIconColors.history, label: '我的关注',
+                  onAction: () => {
+                    routerStore.navigateActivity(Screen.followList(FollowListTab.FOLLOWED))
+                  }
+                })
+                Divider().margin({ left: 60 }).color(AppColors.separator)
+                SettingRow({
                   iconRes: $r('app.media.profile_favorites'), iconColor: ProfileActionIconColors.favorites, label: '收藏主题',
                   onAction: () => {
                     routerStore.navigateActivity(Screen.favoriteFolders())
@@ -502,28 +507,6 @@ export struct ProfilePanel {
                   badge: this.formatBadge(this.unreadMessages),
                   onAction: () => {
                     routerStore.navigateActivity(Screen.messages())
-                  }
-                })
-                Divider().margin({ left: 60 }).color(AppColors.separator)
-                SettingRow({
-                  iconRes: $r('app.media.profile_notifications'), iconColor: ProfileActionIconColors.notifications, label: '通知',
-                  badge: this.formatBadge(this.unreadNotifications),
-                  onAction: () => {
-                    routerStore.navigateActivity(Screen.notifications())
-                  }
-                })
-                Divider().margin({ left: 60 }).color(AppColors.separator)
-                SettingRow({
-                  iconRes: $r('app.media.icon_people'), iconColor: ProfileActionIconColors.history, label: '我的关注',
-                  onAction: () => {
-                    routerStore.navigateActivity(Screen.followList(FollowListTab.FOLLOWED))
-                  }
-                })
-                Divider().margin({ left: 60 }).color(AppColors.separator)
-                SettingRow({
-                  iconRes: $r('app.media.icon_bell'), iconColor: ProfileActionIconColors.favorites, label: '关注动态',
-                  onAction: () => {
-                    routerStore.navigateActivity(Screen.followedActivity())
                   }
                 })
                 Divider().margin({ left: 60 }).color(AppColors.separator)

@@ -6,6 +6,7 @@ import { SettingsStore } from './SettingsStore'
 import { CategoryStore } from './CategoryStore'
 import { ProfileStore } from './ProfileStore'
 import { NotificationStore } from './NotificationStore'
+import { FollowActivityStore } from './FollowActivityStore'
 import { VoteStore } from './VoteStore'
 import { HistoryStore } from './HistoryStore'
 import { FavoriteStore } from './FavoriteStore'
@@ -23,6 +24,7 @@ import type { ToastState } from '../common/feedback/ToastManager'
 import type { ProfileData } from '../model/User'
 import type { ThreadResult } from '../model/ThreadResult'
 import type { NgaNotification } from '../model/Notification'
+import type { FollowedActivity } from '../model/Follow'
 import type { Category } from '../model/Forum'
 
 import { Logger, DOMAIN_APP, formatError } from '../common/utils/Logger'
@@ -53,6 +55,8 @@ class AppStoreClass {
   readonly categoryStore: CategoryStore = new CategoryStore()
   readonly profileStore: ProfileStore = new ProfileStore()
   readonly notificationStore: NotificationStore = new NotificationStore()
+  /** 关注动态缓存、已读与红点管理（机制与通知系统对齐）。 */
+  readonly followActivityStore: FollowActivityStore = new FollowActivityStore()
   readonly voteStore: VoteStore = new VoteStore()
   readonly historyStore: HistoryStore = new HistoryStore()
   /** NGA 主题收藏夹与收藏关系状态。 */
@@ -67,6 +71,7 @@ class AppStoreClass {
     this.initialized = false
     this.initializationFinished = false
     this.notificationStore.stopPolling()
+    this.followActivityStore.stopPolling()
     try {
       this.context = context
       await this.store.init(context, 'nga_app_store')
@@ -111,6 +116,7 @@ class AppStoreClass {
     await this.settingsStore.init(this.store, this.writeQueue, this.authStore.state, this.context)
     await this.profileStore.init(this.store, this.writeQueue, this.authStore.state)
     await this.notificationStore.init(this.store, this.writeQueue, this.authStore.state)
+    await this.followActivityStore.init(this.store, this.writeQueue, this.authStore.state)
     await this.favoriteStore.init(this.store, this.writeQueue, this.authStore.state)
   }
 
@@ -128,6 +134,7 @@ class AppStoreClass {
 
   async setAuth(token: string, uid: string, nickName: string, avatarUrl: string): Promise<void> {
     this.notificationStore.stopPolling()
+    this.followActivityStore.stopPolling()
     const uidChanged = await this.authStore.setAuth(token, uid, nickName, avatarUrl)
     if (uidChanged) {
       await this.loadUserData()
@@ -138,6 +145,7 @@ class AppStoreClass {
 
   clearAuth(): void {
     this.notificationStore.stopPolling()
+    this.followActivityStore.stopPolling()
     // ⚠️ 以下顺序有严格依赖：cancel/reset 必须在 authStore.clearAuth() 之前，
     // 否则后者 enqueue 的 persistAuth 写入任务会被取消。
     // 先取消队列中所有待执行的任务（如已入队的 history/vote 旧 uid 写入）
@@ -149,12 +157,15 @@ class AppStoreClass {
     this.categoryStore.reset()
     this.profileStore.reset()
     this.notificationStore.reset()
+    this.followActivityStore.reset()
     this.voteStore.reset()
     this.historyStore.reset()
     this.readingProgressStore.reset()
     this.favoriteStore.reset()
     floatingLayerStore.clear()
     routerStore.reset()
+    // 与 setAuth 对称：退出后统一协调轮询状态（此时未认证 → 停止轮询，幂等无害）
+    this.reconcileNotificationPolling()
   }
 
   createSession(uid: string, cid: string, nickName: string, avatarUrl: string): Promise<string> {
@@ -238,7 +249,7 @@ class AppStoreClass {
     this.reconcileNotificationPolling()
   }
   /**
-   * 根据初始化、认证与前台状态启动或停止通知轮询。
+   * 根据初始化、认证与前台状态启动或停止通知与关注动态轮询。
    */
   private reconcileNotificationPolling(): void {
     if (shouldEnableNotificationPolling(
@@ -247,9 +258,11 @@ class AppStoreClass {
       this.auth.isAuthenticated
     )) {
       this.notificationStore.startPolling()
+      this.followActivityStore.startPolling()
       return
     }
     this.notificationStore.stopPolling()
+    this.followActivityStore.stopPolling()
   }
   getCachedNotifications(): NgaNotification[] { return this.notificationStore.getCachedNotifications() }
   /** 将指定通知标记为已查看。 */
@@ -258,6 +271,50 @@ class AppStoreClass {
   markAllNotificationsSeen(): void { this.notificationStore.markAllSeen() }
   /** 将私信通知标记为已查看。 */
   markMessageNotificationsSeen(): void { this.notificationStore.markMessagesSeen() }
+
+  // ---------- Facade: Follow Activities ----------
+
+  /** 返回未读关注动态数量。 */
+  get unreadActivityCount(): number {
+    return this.followActivityStore.unreadActivityCount
+  }
+
+  /** 刷新关注动态并返回请求是否成功。 */
+  refreshActivities(force: boolean = false): Promise<boolean> {
+    return this.followActivityStore.refreshActivities(force)
+  }
+  /** 返回关注动态内存真源的只读数组快照（displayActivities 全量，含分页追加）。 */
+  getDisplayActivities(): FollowedActivity[] {
+    return this.followActivityStore.getDisplayActivities()
+  }
+  /** 返回关注动态缓存的只读数组快照（持久化窗口，兼容既有调用）。 */
+  getCachedActivities(): FollowedActivity[] {
+    return this.followActivityStore.getCachedActivities()
+  }
+  /** 加载关注动态下一页（store 内并发防护与账号代际校验）。 */
+  loadMoreActivities(): Promise<boolean> {
+    return this.followActivityStore.loadMoreActivities()
+  }
+  /** 返回关注动态服务端总页数（0=未知/未确认）。 */
+  getActivityTotalPages(): number {
+    return this.followActivityStore.getTotalPages()
+  }
+  /** 返回关注动态已加载页数（首屏=1）。 */
+  getActivityLoadedPages(): number {
+    return this.followActivityStore.getLoadedPages()
+  }
+  /** 返回关注动态分页是否加载中。 */
+  getActivityLoadingMore(): boolean {
+    return this.followActivityStore.isLoadingMoreState()
+  }
+  /** 将指定 id 集合的动态标记为已读（点开帖子即已读）。 */
+  markActivitiesSeen(ids: Set<string>): void {
+    this.followActivityStore.markSeenByIds(ids)
+  }
+  /** 将所有动态标记为已读。 */
+  markAllActivitiesSeen(): void {
+    this.followActivityStore.markAllSeen()
+  }
 
   // ---------- Facade: Vote ----------
 

@@ -37,8 +37,14 @@ export const KEY_UNREAD_NOTI_COUNT: string = 'unreadNotiCount'
 /** 未读私信通知数 */
 export const KEY_UNREAD_MESSAGE_COUNT: string = 'unreadMessageCount'
 
+/** 未读关注动态数 */
+export const KEY_UNREAD_ACTIVITY_COUNT: string = 'unreadActivityCount'
+
 /** 通知缓存版本号（变更时 +1 触发页面刷新） */
 export const KEY_NOTIFICATION_VERSION: string = 'notificationVersion'
+
+/** 关注动态缓存版本号（数据变化时 +1 触发页面刷新） */
+export const KEY_ACTIVITY_VERSION: string = 'activityVersion'
 
 /** 浏览历史版本号（变更时 +1 触发 @Watch） */
 export const KEY_BROWSE_HISTORY_VERSION: string = 'browseHistoryVersion'

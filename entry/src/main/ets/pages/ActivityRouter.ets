@@ -12,7 +12,6 @@ import { FilterKeywordsPanel } from './FilterKeywordsPanel'
 import { SettingsPanel } from './SettingsPanel'
 import { TtsSettingsPanel } from './TtsSettingsPanel'
 import { BrowseHistoryPanel } from './BrowseHistoryPanel'
-import { FollowedActivityPanel } from './FollowedActivityPanel'
 import { FollowListPanel } from './FollowListPanel'
 import { TopicListPanel } from './TopicListPanel'
 import { WebViewPanel } from './WebViewPanel'
@@ -73,8 +72,6 @@ export struct ActivityRouter {
             })
           } else if (entry.screen.type === 'browseHistory') {
             BrowseHistoryPanel()
-          } else if (entry.screen.type === 'followedActivity') {
-            FollowedActivityPanel()
           } else if (entry.screen.type === 'followList') {
             FollowListPanel({ initialMode: entry.screen.followListMode })
           } else if (entry.screen.type === 'messages') {
@@ -82,7 +79,7 @@ export struct ActivityRouter {
           } else if (entry.screen.type === 'messageDetail') {
             MessageDetailPanel({ mid: entry.screen.mid })
           } else if (entry.screen.type === 'notifications') {
-            NotificationPanel()
+            NotificationPanel({ initialTab: entry.screen.notificationsInitialTab })
           } else if (entry.screen.type === 'blacklist') {
             BlacklistPanel()
           } else if (entry.screen.type === 'notes') {
