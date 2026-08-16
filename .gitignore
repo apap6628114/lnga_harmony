@@ -24,3 +24,4 @@
 # NGA cookie 持久化文件（fetch 脚本读取，禁止提交）
 /tools/bbcode-ts/.nga-cookie.txt
 
+/tools/nga-data-fetch/out/
