@@ -261,20 +261,29 @@ export class ThreadPaginationManager extends PaginationManager {
    * 下一页可以进入 posts，更远页只能等待预取缓存路径。
    *
    * 合并规则：
-   * - page ∈ [S, E]：逐项按 pid 比对——已存在则原地替换内容并记录索引；
-   *   未存在的新 pid 仅当该页是"当前窗口末页且服务端总页数未增长"时追加到
-   *   窗口末尾（新回复楼层落在末页末尾的场景），避免中间页异常新 pid 破坏页序。
+   * - page ∈ [S, E]：逐项按 pid 比对——已存在则替换内容并记录索引；内容变化
+   *   时递增渲染版本号 uiRev（驱动 LazyForEach 键值变化重建该楼层），内容相同
+   *   时保持 uiRev 不变（键值稳定、组件复用、无可见重建）。未存在的新 pid 仅当
+   *   该页是"当前窗口末页且服务端总页数未增长"时追加到窗口末尾（新回复楼层落在
+   *   末页末尾的场景），避免中间页异常新 pid 破坏页序。
    * - page === E + 1：整页追加（按 pid 去重），窗口推进到 E + 1。
    * - 其他页码：拒绝提交，仅同步 totalPages。
+   *
+   * protectedContent 用于编辑场景的旧缓存保护：值为「pid → 用户刚提交的新正文」。
+   * 窗口内页更新时，若服务端返回的内容与该映射不符（read.php/CDN 缓存未失效、
+   * 仍是编辑前旧正文），则跳过该楼层的覆盖，保留本地乐观更新结果，防止 UI 回退。
+   * 传入 undefined 时不启用保护（回复/贴条场景）。
    *
    * totalPages 始终取 max(当前, 服务端, 窗口末页) 的稳定值。
    *
    * @param pagePosts - 服务端返回的一页帖子
    * @param page - 服务端确认的页码
    * @param totalPages - 服务端确认的总页数
+   * @param protectedContent - 编辑场景待保护楼层的新正文映射（可选）
    * @returns 需数据源原地更新（updateAt）的索引与需追加（appendAll）的帖子
    */
-  mergePage(pagePosts: PostInfo[], page: number, totalPages: number): MergePageResult {
+  mergePage(pagePosts: PostInfo[], page: number, totalPages: number,
+    protectedContent?: Map<number, string>): MergePageResult {
     const result: MergePageResult = new MergePageResult()
     if (page < this.loadedPageStart || page > this.loadedPageEnd + 1) {
       this.applyState(this.loadedPageEnd, Math.max(this.totalPages, totalPages, this.loadedPageEnd))
@@ -300,6 +309,18 @@ export class ThreadPaginationManager extends PaginationManager {
         const fresh: PostInfo = pagePosts[i]
         const idx: number = this.findPostIndex(fresh.pid)
         if (idx >= 0) {
+          if (protectedContent !== undefined) {
+            const guard: string | undefined = protectedContent.get(fresh.pid)
+            if (guard !== undefined && fresh.content !== guard) {
+              // 服务端返回的并非刚提交的新正文（read.php 缓存未失效）：
+              // 保留本地乐观更新结果，不覆盖、不记录、不推进版本号
+              continue
+            }
+          }
+          const current: PostInfo = this.posts[idx]
+          // 内容变化才递增 uiRev 触发 LazyForEach 键值变化重建；内容相同仅替换
+          // 对象并保持 uiRev（updatedIndices 语义不变，但键值稳定则组件不重建）
+          fresh.uiRev = current.content === fresh.content ? current.uiRev : current.uiRev + 1
           this.posts[idx] = fresh
           result.updatedIndices.push(idx)
         } else if (isLastPage) {

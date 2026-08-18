@@ -26,6 +26,12 @@ export class PostAttachInfo {
 export class PostInfo {
   tid: number = 0;
   pid: number = 0;
+  /**
+   * 本地渲染版本号（非服务端字段）：楼层内容更新时递增。
+   * 驱动 LazyForEach 键值变化以重建该楼层——LazyForEach 的 onDataChange
+   * 仅在键值变化时刷新组件，而键值含 pid 不含内容，故内容变化必须借 uiRev 表达。
+   */
+  uiRev: number = 0;
   lou: number = 0;
   authorid: number = 0;
   author: string = '';

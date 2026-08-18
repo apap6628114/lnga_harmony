@@ -258,5 +258,57 @@ export default function threadPaginationUnitTest(): void {
       expect(again.appendedPosts.length).assertEqual(0)
       expect(manager.posts.length).assertEqual(2)
     })
+
+    it('bumpsUiRevOnContentChangeToDriveKeyRefresh', 0, (): void => {
+      const manager: ThreadPaginationManager = new ThreadPaginationManager()
+      manager.replaceWith([createPost(50, 50)], 5, 8)
+      expect(manager.posts[0].uiRev).assertEqual(0)
+
+      // 内容变化：uiRev 递增（LazyForEach 键值 pid_0 -> pid_1，触发该楼层重建刷新）
+      const fresh: PostInfo = createPost(50, 50)
+      fresh.content = 'updated'
+      const result: MergePageResult = manager.mergePage([fresh], 5, 8)
+      expect(result.updatedIndices.length).assertEqual(1)
+      expect(manager.posts[0].content).assertEqual('updated')
+      expect(manager.posts[0].uiRev).assertEqual(1)
+
+      // 内容相同：替换对象但 uiRev 保持不变（键值稳定、组件复用、无冗余重建）
+      const same: PostInfo = createPost(50, 50)
+      same.content = 'updated'
+      const again: MergePageResult = manager.mergePage([same], 5, 8)
+      expect(again.updatedIndices.length).assertEqual(1)
+      expect(manager.posts[0].content).assertEqual('updated')
+      expect(manager.posts[0].uiRev).assertEqual(1)
+    })
+
+    it('skipsStaleCacheOverwriteWhenProtectedContentMismatches', 0, (): void => {
+      const manager: ThreadPaginationManager = new ThreadPaginationManager()
+      manager.replaceWith([createPost(50, 50)], 5, 8)
+
+      // 模拟乐观更新：用户编辑提交新正文
+      manager.posts[0].content = 'new text after edit'
+      manager.posts[0].uiRev++
+
+      // 静默刷新返回 read.php 旧缓存（仍是编辑前旧正文），且与保护值不一致 → 跳过覆盖
+      const stale: PostInfo = createPost(50, 50)
+      stale.content = 'old cached text'
+      const protectedContent: Map<number, string> = new Map<number, string>()
+      protectedContent.set(50, 'new text after edit')
+      const result: MergePageResult = manager.mergePage([stale], 5, 8, protectedContent)
+
+      expect(result.updatedIndices.length).assertEqual(0)
+      expect(manager.posts[0].content).assertEqual('new text after edit')
+      expect(manager.posts[0].uiRev).assertEqual(1)
+
+      // 缓存失效后服务端返回新正文（与保护值一致）→ 正常覆盖确认；
+      // 内容一致则 uiRev 不变，无冗余重建
+      const confirmed: PostInfo = createPost(50, 50)
+      confirmed.content = 'new text after edit'
+      const confirmedResult: MergePageResult = manager.mergePage(
+        [confirmed], 5, 8, protectedContent)
+      expect(confirmedResult.updatedIndices.length).assertEqual(1)
+      expect(manager.posts[0].content).assertEqual('new text after edit')
+      expect(manager.posts[0].uiRev).assertEqual(1)
+    })
   })
 }

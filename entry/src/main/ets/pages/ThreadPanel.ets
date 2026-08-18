@@ -80,6 +80,22 @@ class FetchPageResult {
 }
 
 /**
+ * 编辑提交快照：记录编辑前后正文，供静默刷新区分「服务端确认的新内容」与
+ * 「read.php/CDN 未失效的旧缓存」——旧缓存返回时跳过覆盖，防止乐观更新的
+ * 新正文被回退成旧内容。
+ */
+class EditSnapshot {
+  /** 被编辑楼层 pid。 */
+  pid: number = 0
+
+  /** 编辑前正文（服务端旧内容，用于识别未失效的缓存）。 */
+  oldContent: string = ''
+
+  /** 编辑后提交的正文（乐观更新写入的内容）。 */
+  newContent: string = ''
+}
+
+/**
  * 帖子详情面板。
  *
  * 修改滚动、分页或标题栏布局前必须先阅读 `docs/THREAD_DESIGN.md`。
@@ -204,6 +220,9 @@ export struct ThreadPanel {
 
   /** 「前往查看」且无已知 pid 时，定位到服务端末页最后一个楼层。 */
   private pendingTargetLastPost: boolean = false
+
+  /** 最近一次成功编辑的快照，用于防止静默刷新用旧缓存覆盖乐观更新正文。 */
+  private lastEditSnapshot: EditSnapshot | null = null
 
   /** 单帖兜底前整页窗口的真实总页数（单帖视图 __ROWS=1 会把 totalPages 重置为 1）。 */
   private fallbackPrevTotalPages: number = 0
@@ -1463,6 +1482,14 @@ export struct ThreadPanel {
     }
     const targetPost: PostInfo | null = replyManager.targetPost
     const editPid: string = String(targetPost?.pid ?? '')
+    // 记录编辑快照（须在乐观更新改写 content 之前读取旧正文）：静默刷新若返回
+    // read.php 旧缓存（内容与编辑前一致）则跳过覆盖，防止新正文被回退成旧内容
+    if (targetPost !== null) {
+      this.lastEditSnapshot = new EditSnapshot()
+      this.lastEditSnapshot.pid = targetPost.pid
+      this.lastEditSnapshot.oldContent = targetPost.content
+      this.lastEditSnapshot.newContent = text.replace(/\n/g, '<br/>')
+    }
     if (editPid.length > 0) {
       appStore.showToastAction('编辑成功', '前往查看', () => {
         this.goToRepliedPost(editPid)
@@ -1475,10 +1502,12 @@ export struct ThreadPanel {
     // read.php/CDN 缓存可能未失效，静默刷新拿到的仍是旧内容，乐观更新保证用户
     // 第一时间看到新正文。换行按 NGA content 约定转 <br/>，其余 BBCode 原样保留；
     // 静默刷新结果到达后以服务端内容为准覆盖（本方法不改 pid/楼层位置）。
+    // uiRev 递增使 LazyForEach 键值（pid + uiRev）变化，触发该楼层组件重建刷新。
     if (targetPost !== null) {
       const optimisticIndex: number = this.mgr.findPostIndex(targetPost.pid)
       if (optimisticIndex >= 0) {
         const optimisticPost: PostInfo = this.mgr.posts[optimisticIndex]
+        optimisticPost.uiRev++
         optimisticPost.content = text.replace(/\n/g, '<br/>')
         this.postsDataSource.updateAt(optimisticIndex, optimisticPost)
       }
@@ -1551,8 +1580,16 @@ export struct ThreadPanel {
           return
         }
         const resolvedPage: number = result.pagination.page > 0 ? result.pagination.page : page
+        // 编辑场景：read.php/CDN 缓存可能未失效，返回的仍是编辑前旧正文。
+        // 构造保护映射（pid → 刚提交的新正文），mergePage 见非新正文则跳过覆盖，
+        // 保留乐观更新结果；缓存失效返回新正文时与保护值一致，正常覆盖确认。
+        let protectedContent: Map<number, string> | undefined = undefined
+        if (type === ReplyType.EDIT && this.lastEditSnapshot !== null) {
+          protectedContent = new Map<number, string>()
+          protectedContent.set(this.lastEditSnapshot.pid, this.lastEditSnapshot.newContent)
+        }
         const mergeResult: MergePageResult = this.mgr.mergePage(
-          result.posts, resolvedPage, result.pagination.totalPages
+          result.posts, resolvedPage, result.pagination.totalPages, protectedContent
         )
         for (let i: number = 0; i < mergeResult.updatedIndices.length; i++) {
           const idx: number = mergeResult.updatedIndices[i]
@@ -1894,7 +1931,7 @@ export struct ThreadPanel {
                 isOwnPost: appStore.auth.isAuthenticated && String(post.authorid) === appStore.auth.uid,
               })
             }
-          }, (post: PostInfo) => String(post.pid))
+          }, (post: PostInfo) => String(post.pid) + '_' + String(post.uiRev))
           ListItem() {
             Column() {
               Row() {
