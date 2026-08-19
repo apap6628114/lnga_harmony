@@ -74,6 +74,10 @@ export class CategoriesResult extends ApiResult {
  */
 export class TopicListResult extends ApiResult {
   data: TopicListInfo | null = null;
+  /** 是否经由 HTML 降级通道取数（JSON 主通道失败时）。 */
+  viaHtml: boolean = false;
+  /** JSON 主通道失败原因（降级诊断用）。 */
+  jsonError: string = '';
 }
 
 /**

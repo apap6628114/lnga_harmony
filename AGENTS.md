@@ -31,7 +31,8 @@ skill：**`bbcode-ts`**（加载后按其操作；Rule 0–9 完整规则已并�
 
 常驻红线摘要（即使 skill 未触发也必须遵守）：
 
-- `tools/bbcode-ts/src/` 是**唯一真源**（当前 31 个镜像文件）；**禁止直接修改**
+- `tools/bbcode-ts/src/` 是**唯一真源**（当前 34 个镜像文件，含 `parser/nga/html-topiclist/`
+  主题列表降级解析器）；**禁止直接修改**
   `entry/src/main/ets/` 下被镜像的文件 —— 下次 `npm run sync` 会机械覆盖
 - **动手前先自查**：`node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry`（项目根执行）。
   输出含目标 `.ets` → 必须走镜像流程；输出「0 修改」→ 可安全直接改 entry 侧文件
@@ -50,7 +51,9 @@ skill：**`bbcode-ts`**（加载后按其操作；Rule 0–9 完整规则已并�
 - **抓取前 MUST 先过凭证门禁**：`node tools/nga-data-fetch/bin/nga-fetch.js verify`
   （固定基准 `read.php?tid=44191387`，获取成功才算通过；失败按 skill 指引刷新后复验）
 - 凭证落盘：`node tools/nga-data-fetch/bin/nga-fetch.js save '<cookie>'`（项目根执行）；
-  帖子特定入口仍是 bbcode-ts 的 `npm run inspect:json` / `inspect:html`（在 `tools/bbcode-ts` 下执行，命令不变）
+  帖子特定入口仍是 bbcode-ts 的 `npm run inspect:json` / `inspect:html`，用户发帖/回帖记录
+  成对样本用 `node tools/bbcode-ts/scripts/fetch-topic-pair.mjs <uid> [reply] [page]`
+  （均在 `tools/bbcode-ts` 下执行，命令不变）
 
 ## 沉浸光感（Immersive Light）情报文档
 

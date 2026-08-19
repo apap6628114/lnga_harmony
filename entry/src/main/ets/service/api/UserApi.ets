@@ -2,7 +2,7 @@
  * NGA 用户 API - 当前用户、用户资料、用户成分分析
  */
 
-import { ngaClient } from '../NgaClient';
+import { ngaClient, Cookies } from '../NgaClient';
 import { appStore } from '../../store/AppStore';
 import {
   CurrentUserResult, UserProfileResult, UserActivityAnalysis, ForumStat, SearchUserResult,
@@ -10,6 +10,9 @@ import {
 import { UserInfo } from '../../model/UserInfo';
 import { ProfileData, ReputationData, AdminForumsData } from '../../model/User';
 import { resolveEffectiveMuteTs } from '../../parser/MuteParser';
+import { parseNgaError } from '../../parser/ErrorParser';
+import { parseTopicListHtmlTask } from '../../parser/task/TopicListHtmlParseTask';
+import { taskpool } from '@kit.ArkTS';
 import { formatTime, formatTimestampCST } from '../../common/utils/Utils';
 import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger';
 
@@ -252,6 +255,64 @@ export async function resolveUidByUsername(token: string, username: string): Pro
 
 // ============== 用户成分分析 ==============
 
+/**
+ * 抓取指定用户的发帖/回帖记录主题表（__T）。
+ *
+ * JSON 主通道（thread.php?lite=js&authorid=）优先；失败时降级抓取
+ * thread.php 静态 HTML 并经 parseTopicListHtmlTask 还原为同形状 __T。
+ *
+ * @param token 会话令牌
+ * @param uid 目标用户 id
+ * @param searchpost true=回帖记录（searchpost=1），false=发帖记录
+ * @returns __T 主题表；双通道均失败时返回 null
+ */
+async function fetchUserTopicT(token: string, uid: string, searchpost: boolean): Promise<Record<string, Object> | null> {
+  const session = appStore.getSession(token);
+  if (!session) {
+    return null;
+  }
+  const cookies: Cookies = { uid: session.uid, cid: session.cid };
+  // JSON 主通道
+  let jsonError: string = '';
+  try {
+    const params: Record<string, string> = { 'page': '1', 'lite': 'js', 'noprefix': '', 'authorid': uid };
+    if (searchpost) params['searchpost'] = '1';
+    const raw = await ngaClient.get('/thread.php', params, cookies) as Record<string, Object>;
+    const err = parseNgaError(raw);
+    if (err) {
+      jsonError = err;
+    } else {
+      const t = (raw['data'] as Record<string, Object> | undefined)?.['__T'] as Record<string, Object> | undefined;
+      if (t) {
+        return t;
+      }
+      jsonError = '响应缺少 __T';
+    }
+  } catch (e) {
+    jsonError = (e as Error).message ?? 'JSON 请求异常';
+    logger.warn('[NGA][REQ] 用户成分分析 JSON 抓取失败，尝试 HTML 降级: %{public}s', jsonError);
+  }
+  // HTML 降级（thread.php 静态页 topicArg 元数据 → 同形状 __T）
+  try {
+    const htmlParams: Record<string, string> = { 'page': '1', 'authorid': uid };
+    if (searchpost) htmlParams['searchpost'] = '1';
+    const html: string = await ngaClient.getHtmlText('/thread.php', htmlParams, cookies);
+    const rawObj: Object = await taskpool.execute(parseTopicListHtmlTask, html);
+    const dataObj = (rawObj as Record<string, Object>)?.['data'] as Record<string, Object> | undefined;
+    const t = dataObj?.['__T'] as Record<string, Object> | undefined;
+    if (t) {
+      // 调试模式：JSON 主通道失败、HTML 降级成功时弹出提示，便于观察请求通道
+      if (appStore.settings.debugMode) {
+        appStore.showToast('JSON 接口失败，已降级为 HTML 模式：' + jsonError)
+      }
+      return t;
+    }
+  } catch (e) {
+    logger.warn('[NGA][REQ] 用户成分分析 HTML 降级失败: %{public}s', formatError(e));
+  }
+  return null;
+}
+
 export async function getUserActivityAnalysis(token: string, uid: string): Promise<UserActivityAnalysis | null> {
   const result = new UserActivityAnalysis();
   const hourDist: number[] = [];
@@ -288,14 +349,12 @@ export async function getUserActivityAnalysis(token: string, uid: string): Promi
   };
 
   const session = appStore.getSession(token);
-  if (!session) return null;
+  if (!session) {
+    return null;
+  }
 
   try {
-    const topicParams: Record<string, string> = {
-      'page': '1', 'lite': 'js', 'noprefix': '', 'authorid': uid,
-    };
-    const topicRaw = await ngaClient.get('/thread.php', topicParams, { uid: session.uid, cid: session.cid }) as Record<string, Object>;
-    const tData = (topicRaw['data'] as Record<string, Object> | undefined)?.['__T'] as Record<string, Object> | undefined;
+    const tData: Record<string, Object> | null = await fetchUserTopicT(token, uid, false);
     if (tData) {
       const tKeys = Object.keys(tData);
       for (let i = 0; i < tKeys.length; i++) {
@@ -311,11 +370,7 @@ export async function getUserActivityAnalysis(token: string, uid: string): Promi
       }
     }
 
-    const replyParams: Record<string, string> = {
-      'page': '1', 'lite': 'js', 'noprefix': '', 'authorid': uid, 'searchpost': '1',
-    };
-    const replyRaw = await ngaClient.get('/thread.php', replyParams, { uid: session.uid, cid: session.cid }) as Record<string, Object>;
-    const rData = (replyRaw['data'] as Record<string, Object> | undefined)?.['__T'] as Record<string, Object> | undefined;
+    const rData: Record<string, Object> | null = await fetchUserTopicT(token, uid, true);
     if (rData) {
       const rKeys = Object.keys(rData);
       for (let i = 0; i < rKeys.length; i++) {
@@ -354,6 +409,13 @@ export async function getUserActivityAnalysis(token: string, uid: string): Promi
     }
     fList.sort((a, b) => (b.topicCount + b.replyCount) - (a.topicCount + a.replyCount));
     result.forumList = fList;
+
+    // 调试模式：双通道均失败时弹出提示（单段失败在 fetchUserTopicT 内已提示降级）
+    if ((!tData || !rData) && appStore.settings.debugMode) {
+      const failedSeg: string = (!tData ? '发帖记录' : '') +
+        (!tData && !rData ? '、' : '') + (!rData ? '回帖记录' : '');
+      appStore.showToast('用户成分分析加载失败（' + failedSeg + '的 JSON 与 HTML 均失败）')
+    }
 
     return result;
   } catch (e) {

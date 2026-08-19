@@ -7,6 +7,8 @@ import { appStore } from '../../store/AppStore';
 import { parseForumCategories, parseForumSearch } from '../../parser/ForumParser';
 import { parseTopicList } from '../../parser/TopicParser';
 import { parseNgaError } from '../../parser/ErrorParser';
+import { parseTopicListHtmlTask } from '../../parser/task/TopicListHtmlParseTask';
+import { taskpool } from '@kit.ArkTS';
 import { ApiResult, CategoriesResult, TopicListResult, SearchForumResult } from '../../model/NgaApiResults';
 import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger';
 
@@ -79,6 +81,50 @@ export function createTopicListParams(): TopicListParams {
   };
 }
 
+/**
+ * 构建 thread.php 主题列表查询参数（JSON 主通道与 HTML 降级通道共用同一语义）。
+ *
+ * 差异仅在通道标志：JSON 通道需 `lite=js&noprefix`（script store 包裹），
+ * HTML 降级走静态页（topicArg.add 元数据），其余筛选/排序参数完全一致。
+ *
+ * @param params 页面层主题列表参数
+ * @param forJson true=JSON 通道（lite=js+noprefix），false=HTML 降级（静态页）
+ * @returns thread.php 查询参数
+ */
+function buildThreadQuery(params: TopicListParams, forJson: boolean): Record<string, string> {
+  const query: Record<string, string> = {
+    'page': params.page || '1',
+  };
+  if (forJson) {
+    query['lite'] = 'js';
+    query['noprefix'] = '';
+  }
+
+  if (params.authorid) query['authorid'] = params.authorid;
+  if (params.searchpost) query['searchpost'] = params.searchpost;
+  if (params.favor) query['favor'] = params.favor;
+  if (params.content) query['content'] = params.content;
+
+  if (params.author) {
+    query['author'] = params.author;
+  } else {
+    if (params.stid) query['stid'] = params.stid;
+    else if (params.fid && params.fid !== '-1') query['fid'] = params.fid;
+    if (params.key) query['key'] = params.key;
+    if (params.fidgroup) query['fidgroup'] = params.fidgroup;
+  }
+
+  if (params.recommend) {
+    query['recommend'] = params.recommend;
+    query['order_by'] = 'postdatedesc';
+    query['user'] = '1';
+  } else if (params.orderBy) {
+    // 与 recommend 互斥（TopicListPanel 侧不会同时设置），避免 order_by 被覆盖后残留 user 参数
+    query['order_by'] = params.orderBy;
+  }
+  return query;
+}
+
 export async function getTopicList(token: string, params: TopicListParams,
   blacklist: Set<string> = new Set(),
   keywords: string[] = []): Promise<TopicListResult> {
@@ -89,50 +135,55 @@ export async function getTopicList(token: string, params: TopicListParams,
     return result;
   }
 
+  let jsonError: string = '';
   try {
-    const ngaParams: Record<string, string> = {
-      'page': params.page || '1',
-      'lite': 'js',
-      'noprefix': '',
-    };
-
-    if (params.authorid) ngaParams['authorid'] = params.authorid;
-    if (params.searchpost) ngaParams['searchpost'] = params.searchpost;
-    if (params.favor) ngaParams['favor'] = params.favor;
-    if (params.content) ngaParams['content'] = params.content;
-
-    if (params.author) {
-      ngaParams['author'] = params.author;
-    } else {
-      if (params.stid) ngaParams['stid'] = params.stid;
-      else if (params.fid && params.fid !== '-1') ngaParams['fid'] = params.fid;
-      if (params.key) ngaParams['key'] = params.key;
-      if (params.fidgroup) ngaParams['fidgroup'] = params.fidgroup;
-    }
-
-    if (params.recommend) {
-      ngaParams['recommend'] = params.recommend;
-      ngaParams['order_by'] = 'postdatedesc';
-      ngaParams['user'] = '1';
-    } else if (params.orderBy) {
-      // 与 recommend 互斥（TopicListPanel 侧不会同时设置），避免 order_by 被覆盖后残留 user 参数
-      ngaParams['order_by'] = params.orderBy;
-    }
-
+    const ngaParams: Record<string, string> = buildThreadQuery(params, true);
     const raw = await ngaClient.get('/thread.php', ngaParams, { uid: session.uid, cid: session.cid }) as Record<string, Object>;
     const error = parseNgaError(raw);
     if (error) {
-      result.error = error;
+      jsonError = error;
+    } else {
+      const dataObj = raw?.['data'] as Record<string, Object> | undefined;
+      const page = Number(dataObj?.['__PAGE'] ?? params.page ?? 1);
+      result.data = parseTopicList(raw, blacklist, keywords, page);
+      result.ok = true;
       return result;
     }
-
-    const dataObj = raw?.['data'] as Record<string, Object> | undefined;
-    const page = Number(dataObj?.['__PAGE'] ?? params.page ?? 1);
-    result.data = parseTopicList(raw, blacklist, keywords, page);
-    result.ok = true;
   } catch (e) {
-    logger.warn('获取主题列表失败: %{public}s', formatError(e));
-    result.error = (e as Error).message ?? '获取主题列表失败';
+    jsonError = (e as Error).message ?? '获取主题列表失败';
+    logger.warn('[NGA][REQ] 主题列表 JSON 请求失败，尝试 HTML 降级: %{public}s', jsonError);
+  }
+
+  // HTML 降级：thread.php 静态页（topicArg.add 元数据）→ 与 JSON 同形状 → 复用 parseTopicList
+  try {
+    const htmlParams: Record<string, string> = buildThreadQuery(params, false);
+    const html: string = await ngaClient.getHtmlText('/thread.php', htmlParams,
+      { uid: session.uid, cid: session.cid });
+    const rawObj: Object = await taskpool.execute(parseTopicListHtmlTask, html);
+    const dataObj = (rawObj as Record<string, Object>)?.['data'] as Record<string, Object> | undefined;
+    const page = Number(dataObj?.['__PAGE'] ?? params.page ?? 1);
+    result.data = parseTopicList(rawObj, blacklist, keywords, page);
+    result.ok = true;
+    result.viaHtml = true;
+    result.jsonError = jsonError;
+    // 调试模式：JSON 主通道失败降级为 HTML 解析时弹出提示，便于观察请求通道
+    if (result.viaHtml && result.jsonError.length > 0 && appStore.settings.debugMode) {
+      appStore.showToast('JSON 接口失败，已降级为 HTML 模式：' + result.jsonError)
+    }
+    // 降级通道解析不到任何条目时判定失败（JSON 主通道保持原语义）
+    if (result.data?.threadPageList.length === 0) {
+      result.ok = false;
+      result.error = jsonError || '无法加载主题列表';
+      if (appStore.settings.debugMode) {
+        appStore.showToast('主题列表加载失败（JSON 与 HTML 均失败）：' + result.error)
+      }
+    }
+  } catch (e) {
+    logger.warn('[NGA][REQ] 主题列表 HTML 降级失败: %{public}s', formatError(e));
+    result.error = jsonError || ((e as Error).message ?? '获取主题列表失败');
+    if (appStore.settings.debugMode) {
+      appStore.showToast('主题列表加载失败（JSON 与 HTML 均失败）：' + result.error)
+    }
   }
   return result;
 }

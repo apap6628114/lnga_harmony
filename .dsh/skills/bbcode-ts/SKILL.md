@@ -1,6 +1,6 @@
 ---
 name: bbcode-ts
-description: NGA 解析链路 TS 镜像验证与回写。处理 BBCode 解析/渲染、HTML 降级解析（read.php 静态 HTML → JSON 同形状）、NgaJsonSanitizer、NgaDomains、Utils 工具函数、解析相关样本/快照/官方差分，需要抓取帖子内容诊断异常，或执行 Node 镜像门禁（npm test / sync / compare:html-json）并同步回 .ets 时使用。允许在 tools/bbcode-ts 下运行 Node 构建、测试与抓取脚本；禁止直接修改被镜像的 entry/src/main/ets 文件，禁止将 Node 测试结果等同于 ArkTS 最终门禁（DevEco 编译见 harmonyos-build-deploy，Hypium 见 harmonyos-test）。
+description: NGA 解析链路 TS 镜像验证与回写。处理 BBCode 解析/渲染、HTML 降级解析（read.php 静态 HTML 与 thread.php 主题列表/用户发帖回帖静态页 → JSON 同形状）、NgaJsonSanitizer、NgaDomains、Utils 工具函数、解析相关样本/快照/官方差分，需要抓取帖子或主题列表内容诊断异常，或执行 Node 镜像门禁（npm test / sync / compare:html-json）并同步回 .ets 时使用。允许在 tools/bbcode-ts 下运行 Node 构建、测试与抓取脚本；禁止直接修改被镜像的 entry/src/main/ets 文件，禁止将 Node 测试结果等同于 ArkTS 最终门禁（DevEco 编译见 harmonyos-build-deploy，Hypium 见 harmonyos-test）。
 ---
 
 # NGA 解析链路镜像验证（tools/bbcode-ts）
@@ -13,9 +13,9 @@ BBCode 解析、HTML 降级恢复，并在 Node 门禁通过后把 ArkTS 子集�
 | 能做 | 不能做 |
 |---|---|
 | 在 `tools/bbcode-ts` 下运行 Node 构建/测试/抓取/差分/同步 | 直接修改 `entry/src/main/ets/` 下被镜像的文件（会被下次 sync 覆盖） |
-| 抓取真实帖子（JSON 优先、HTML 降级）固化为样本 | 无真实输入时猜标签语义、伪造样本 |
+| 抓取真实帖子/主题列表（JSON 优先、HTML 降级）固化为样本 | 无真实输入时猜标签语义、伪造样本 |
 | 修改 `src/` 真源并完成 Node 门禁后 `npm run sync` | 把 Node 测试通过等同于 ArkTS 可编译（需 DevEco + Hypium 最终门禁） |
-| 维护样本、快照、官方差分、HTML 成对覆盖 | 用更新快照掩盖未知回归 |
+| 维护样本、快照、官方差分、HTML 成对/主题列表对覆盖 | 用更新快照掩盖未知回归 |
 
 最终门禁分工：DevEco 编译见 skill `harmonyos-build-deploy`；Hypium Local Test 见 skill `harmonyos-test`。
 抓取真实数据（凭证/请求/解码）见 skill `nga-data-fetch`（本工程脚本对其薄封装）。
@@ -64,6 +64,25 @@ HTML 降级通道：read.php 静态 HTML → parseHtmlToRawJson
 3. `KEY_FORCE_HTML_MODE` 只用于显式调试，MUST NOT 被描述为正常默认路径。
 4. 仅有 `pid`、没有 `tid` 的客户端场景当前直接走 HTML，这是现有特例，不改变 `tid` 帖子
    “JSON 优先”的总规则。
+
+#### R1.1b 主题列表/用户发帖回帖记录 MUST 先走 JSON（thread.php）
+
+主题列表（`ForumApi.getTopicList`，含「我的主题/我的回帖」）与用户成分分析
+（`UserApi.getUserActivityAnalysis`）共用同一通道语义：
+
+1. MUST 首先请求 `thread.php?lite=js&noprefix&[authorid=<uid>][&searchpost=1]`，
+   响应为 `window.script_muti_get_var_store={JSON}` 包裹的 `{data:{__T,...}}`。
+2. JSON 请求、净化、解析或 NGA 业务检查失败后，MAY 降级抓取 `thread.php` 静态 HTML，
+   经 `parseHtmlTopicListToRawJson`（镜像真源 `src/parser/nga/html-topiclist/`）
+   还原为同形状 `{data:{__T,...}}`，直接复用 `parseTopicList`。
+3. 页面静态 HTML 数据源是每行后的 `commonui.topicArg.add(...)` 元数据脚本
+   （21 形参位：fid/tid/pid/quoteTid/quoteFrom/postdate/lastpost/replies/type/topicMisc），
+   DOM 仅承载标题/作者/版块等展示字段；降级解析以 topicArg 参数为准、DOM 为辅。
+4. 已知缺口（不伪造）：`__P.postdate`（回复发布时间，静态页无）、占位条目
+   （subject 含「超过限制/帐号权限不足」）的 tid/fid/__P.tid/__P.pid/__P.type
+   为服务端占位符；`__ROWS` 按 `__PAGE` 总页数×每页行数估计。
+5. 客户端调试模式（`appStore.settings.debugMode`）下，降级成功或双通道均失败会
+   弹 Toast 提示（与 `ThreadApi.getThread` 行为一致）。
 
 #### R1.2 不同事实必须使用不同基准
 
@@ -207,12 +226,14 @@ npm run inspect:html -- 47373567 2 20 23 34
 
 #### R4.1 真源边界
 
-下列 31 个 `.ts` 文件属于镜像真源，`npm run sync` 会按相对路径机械覆盖为 `.ets`：
+下列 34 个 `.ts` 文件属于镜像真源，`npm run sync` 会按相对路径机械覆盖为 `.ets`：
 
 - `src/parser/bbcode/`：BBCode 词法、块级、内联和 handler；
 - `src/parser/_shared/`：HTML 实体和附件 URL；
 - `src/parser/AnonymousParser.ts`、`src/parser/NgaJsonSanitizer.ts`；
-- `src/parser/nga/html-thread/`：HTML 降级解析器；
+- `src/parser/nga/html-thread/`：帖子 HTML 降级解析器（read.php → JSON 同形状）；
+- `src/parser/nga/html-topiclist/`：主题列表 HTML 降级解析器（thread.php 静态页
+  `topicArg.add` 元数据 → JSON 同形状，含用户发帖/回帖记录，见 Rule 1.1b）；
 - `src/model/BBCodeNode.ts`；
 - `src/common/components/bbcode/`：Run 格式化和表格布局；
 - `src/common/typography/`、`src/common/constants/`、`src/common/utils/Utils.ts`。
@@ -386,10 +407,11 @@ npm test
 
 ```text
 tools/bbcode-ts/
-  src/                          # 31 个 TS 镜像真源
+  src/                          # 34 个 TS 镜像真源
     parser/bbcode/              # BBCode 解析
     parser/_shared/             # 实体、附件 URL
-    parser/nga/html-thread/     # HTML 降级 → JSON 同形状
+    parser/nga/html-thread/     # 帖子 HTML 降级 → JSON 同形状
+    parser/nga/html-topiclist/  # 主题列表 HTML 降级（topicArg.add → JSON 同形状）
     parser/NgaJsonSanitizer.ts  # JSON 非标准输入净化
     parser/AnonymousParser.ts   # 匿名名解码
     model/BBCodeNode.ts         # 语义树节点
@@ -397,8 +419,8 @@ tools/bbcode-ts/
     common/typography/          # 排版常量
     common/constants/           # NGA 域名常量
     common/utils/Utils.ts       # 纯文本提取等
-  tests/                        # 不变量、快照、官方差分、HTML 覆盖
-  samples/                      # 真实正文、快照、官方 Run、JSON/HTML 对
+  tests/                        # 不变量、快照、官方差分、HTML 覆盖、主题列表覆盖
+  samples/                      # 真实正文、快照、官方 Run、JSON/HTML 对、主题列表对
   scripts/                      # 抓取、报告、快照、同步工具
 ```
 
@@ -408,6 +430,7 @@ npm run build
 npm run inspect:json -- <tid> [page] [输出文件名] [lou]
 npm run inspect:html -- <tid> [page] [lou ...]
 node scripts/fetch-thread-pair.mjs <tid> [page]
+node scripts/fetch-topic-pair.mjs <uid> [reply] [page]   # 用户发帖/回帖记录成对抓取
 npm run compare:html-json
 npm run compare:official
 npm run snapshot

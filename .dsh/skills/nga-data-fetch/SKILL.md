@@ -93,6 +93,7 @@ npm run build        # 生成 dist（本工具 require 其净化器/域名常量
 | 需要做的事 | 走哪里 |
 |---|---|
 | 抓取帖子（楼层提取/样本登记/成对抓取） | bbcode-ts npm scripts（`inspect:json` / `inspect:html` / `fetch-thread-pair`），内部调用本工具 |
+| 抓取用户发帖/回帖记录成对样本（JSON+HTML） | bbcode-ts `scripts/fetch-topic-pair.mjs <uid> [reply] [page]`，内部调用本工具 |
 | 修改解析器/净化器/HTML 降级（镜像真源） | **bbcode-ts** skill（改 `tools/bbcode-ts/src/` → 门禁 → sync） |
 | 修改抓取层/凭证逻辑、抓取任意接口 | 本 skill |
 | 完整调查分流（JSON 优先、降级条件） | bbcode-ts skill（Rule 2） |
