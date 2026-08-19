@@ -358,7 +358,9 @@ export struct FollowListPanel {
         .width('100%').layoutWeight(1)
         .scrollBar(BarState.Off)
         .divider({ strokeWidth: 0.5, color: AppColors.separator })
-        .lanes(new BreakpointType(1, 2, 2).getValue(this.currentBreakpoint), 12)
+        // 恒 1 列：筛选条（SegmentButton）是列表第一个 ListItem，多列布局会与第一个用户行并排，
+        // 且 ListItem 无跨列能力；与帖子列表/通知面板（同为筛选区+列表）保持一致的单列布局
+        .lanes(new BreakpointType(1, 1, 1).getValue(this.currentBreakpoint), 12)
         .edgeEffect(EdgeEffect.Spring)
         .cachedCount(3)
         .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
