@@ -1819,22 +1819,9 @@ export struct ThreadPanel {
       Column() {
 
       if (this.isLoading) {
-        Column() {
-          Column() {
-            LoadingStateView()
-          }.opacity(this.loadingContentOpacity)
-        }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-          .padding({ top: NAV_BAR_H + this.statusBarHeight })
-        .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+        this.LoadingState()
       } else if (this.hasError) {
-        Column() {
-          ErrorStateView({
-            msg: this.errorMsg,
-            onRetry: (): Promise<void> => this.loadPosts(this.lastReplacePage, ThreadLoadMode.REPLACE)
-          })
-        }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-          .padding({ top: NAV_BAR_H + this.statusBarHeight })
-        .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+        this.ErrorState()
       } else {
         List({ scroller: this.scroller }) {
           LazyForEach(this.postsDataSource, (post: PostInfo) => {
@@ -1932,18 +1919,7 @@ export struct ThreadPanel {
               })
             }
           }, (post: PostInfo) => String(post.pid) + '_' + String(post.uiRev))
-          ListItem() {
-            Column() {
-              Row() {
-                if (this.isLoadingMore) {
-                  LoadingProgress().width(16).height(16).color(AppColors.textTertiary)
-                  Text('加载更多...').fontSize(13).fontColor(AppColors.textTertiary).margin({ left: 8 })
-                } else if (this.mgr.loadedPageEnd >= this.mgr.totalPages && this.mgr.posts.length > 0) {
-                  Text('已加载全部回复').fontSize(13).fontColor(AppColors.textTertiary)
-                }
-              }.width('100%').justifyContent(FlexAlign.Center)
-            }.width('100%').height(NAV_BAR_H).justifyContent(FlexAlign.Center)
-          }
+          this.LoadMoreFooter()
         }
         .width('100%').layoutWeight(1)
         .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
@@ -2033,301 +2009,374 @@ export struct ThreadPanel {
       })
         .width('100%').position({ x: 0, y: 0 })
 
-      Row() {
-        if (this.mgr.totalPages > 1) {
-          Row() {
-            if (this.mgr.totalPages === 2) {
-              Stack() {
-                Text('1').fontSize(14)
-                  .fontColor(this.displayPage === 1
-                    ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
-                  .fontWeight(this.displayPage === 1 ? FontWeight.Bold : FontWeight.Regular)
-                if (this.displayPage === 1) {
-                  Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
-                    .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
-                }
-              }.width(24).height(28)
-                .onClick(() => this.navigateToPage(1, PageNavigationSource.PAGER_BUTTON))
-              Divider().vertical(true).height(16).color(AppColors.dividerStrong)
-              Stack() {
-                Text('2').fontSize(14)
-                  .fontColor(this.displayPage === 2
-                    ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
-                  .fontWeight(this.displayPage === 2 ? FontWeight.Bold : FontWeight.Regular)
-                if (this.displayPage === 2) {
-                  Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
-                    .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
-                }
-              }.width(24).height(28)
-                .onClick(() => this.navigateToPage(2, PageNavigationSource.PAGER_BUTTON))
-            } else if (this.displayPage === 1) {
-              Stack() {
-                Text('1').fontSize(14).fontColor(UIMaterialManager.adaptiveForeground).fontWeight(FontWeight.Bold)
-                Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
-                  .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
-              }.width(24).height(28)
-                .onClick(() => this.navigateToPage(1, PageNavigationSource.PAGER_BUTTON))
-              Divider().vertical(true).height(16).color(AppColors.dividerStrong)
-              Stack() {
-                Text('2').fontSize(14).fontColor(UIMaterialManager.adaptiveSecondaryForeground).fontWeight(FontWeight.Regular)
-              }.width(24).height(28)
-                .onClick(() => this.navigateToPage(2, PageNavigationSource.PAGER_BUTTON))
-            } else if (this.displayPage === this.mgr.totalPages) {
-              Stack() {
-                Text(String(this.mgr.totalPages - 1)).fontSize(14)
-                  .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-                  .fontWeight(FontWeight.Regular)
-              }.width(24).height(28)
-                .onClick(() => this.navigateToPage(
-                  this.mgr.totalPages - 1, PageNavigationSource.PAGER_BUTTON
-                ))
-              Divider().vertical(true).height(16).color(AppColors.dividerStrong)
-              Stack() {
-                Text(String(this.mgr.totalPages)).fontSize(14).fontColor(UIMaterialManager.adaptiveForeground)
-                  .fontWeight(FontWeight.Bold)
-                Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
-                  .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
-              }.width(24).height(28)
-                .onClick(() => this.navigateToPage(this.mgr.totalPages, PageNavigationSource.PAGER_BUTTON))
-            } else {
-              Stack() {
-                Text(String(this.displayPage - 1)).fontSize(14)
-                  .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-                  .fontWeight(FontWeight.Regular)
-              }.width(24).height(28)
-                .onClick(() => this.navigateToPage(this.displayPage - 1, PageNavigationSource.PAGER_BUTTON))
-              Divider().vertical(true).height(16).color(AppColors.dividerStrong)
-              Stack() {
-                Text(String(this.displayPage)).fontSize(14).fontColor(UIMaterialManager.adaptiveForeground)
-                  .fontWeight(FontWeight.Bold)
-                Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
-                  .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
-              }.width(24).height(28)
-                .onClick(() => this.navigateToPage(this.displayPage, PageNavigationSource.PAGER_BUTTON))
-              Divider().vertical(true).height(16).color(AppColors.dividerStrong)
-              Stack() {
-                Text(String(this.displayPage + 1)).fontSize(14)
-                  .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-                  .fontWeight(FontWeight.Regular)
-              }.width(24).height(28)
-                .onClick(() => this.navigateToPage(this.displayPage + 1, PageNavigationSource.PAGER_BUTTON))
-            }
-            if (this.mgr.totalPages > 2) {
-              Divider().vertical(true).height(16).color(AppColors.dividerStrong)
-              Text('到').fontSize(13).fontColor(UIMaterialManager.adaptiveForeground)
-                .padding({ left: 4, right: 2 })
-                .onClick(() => {
-                  this.pagePickerCurrentPage = this.displayPage
-                  this.pagePickerTotalPages = this.mgr.totalPages
-                  this.pagePickerInput = ''
-                  this.pagePickerOnSelect = (page: number): void => {
-                    if (page !== this.displayPage) {
-                      this.navigateToPage(page, PageNavigationSource.PAGE_PICKER)
-                    }
-                  }
-                  this.showPagePicker = true
-                })
-            }
-          }
-          .padding({ left: 8, right: 8, top: 0, bottom: 0 })
-          .height(40).alignItems(VerticalAlign.Center)
-          .backgroundColor(Color.Transparent).borderRadius(20)
-          .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
-          .systemMaterial(UIMaterialManager.fabMaterial)
-          .margin({ right: 8 })
-        }
-
-        Stack() {
-          Image($r('app.media.icon_reply'))
-            .width(20).height(20).fillColor(UIMaterialManager.adaptiveForeground)
-        }
-        .width(40).height(40).borderRadius(20)
-        .backgroundColor(Color.Transparent)
-        .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
-        .systemMaterial(UIMaterialManager.fabMaterial)
-        .onClick(() => {
-          replyManager.startThreadReply(Number(this.threadTid), this.threadFid)
-          floatingLayerStore.replyDialogTitle = replyManager.dialogTitle
-          floatingLayerStore.editMode = false
-          floatingLayerStore.replyOnSend = (text: string, isAnony: boolean): Promise<void> => {
-            return this.handleReplySend(text, isAnony)
-          }
-          floatingLayerStore.push(FloatingPage.REPLY_DIALOG)
-        })
-      }
-      .width('100%').padding({ left: 16, right: 16, bottom: 16 + this.navBarHeight }).alignItems(VerticalAlign.Center)
-      .justifyContent(this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? FlexAlign.Start : FlexAlign.End)
+      this.BottomBar()
 
       if (this.showMoreMenu) {
-        Stack() {
-          Column() {}.width('100%').height('100%').onClick(() => { this.showMoreMenu = false })
-
-          Column() {
-            Column() {
-              Text(this.getFavoriteMenuLabel()).fontSize(15)
-                .fontColor(AppColors.textPrimary)
-                .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-                .width('100%')
-                .onClick(() => {
-                  this.openFavoriteFolders()
-                })
-            }
-            .width('100%')
-
-            Divider().width('100%').color(AppColors.separator)
-
-            Column() {
-              Text('只看楼主').fontSize(15)
-                .fontColor(this.authorOnly ? AppColors.primary : AppColors.textPrimary)
-                .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-                .width('100%')
-                .onClick(() => {
-                  this.authorOnly = !this.authorOnly
-                  this.showMoreMenu = false
-                  this.pendingTargetPid = ''
-                  this.singlePostFallback = false
-                  this.pendingTargetLastPost = false
-                  this.loadPosts(1, ThreadLoadMode.REPLACE)
-                })
-            }
-            .width('100%')
-
-            Divider().width('100%').color(AppColors.separator)
-
-            Column() {
-              Text('从网页打开').fontSize(15)
-                .fontColor(AppColors.textPrimary)
-                .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-                .width('100%')
-                .onClick(() => {
-                  this.showMoreMenu = false
-                  const baseUrl: string = getActiveDomain()
-                  const threadUrl: string = baseUrl + '/read.php?tid=' + this.threadTid
-                  routerStore.navigateActivity(Screen.webview(threadUrl))
-                })
-            }
-            .width('100%')
-
-            Divider().width('100%').color(AppColors.separator)
-
-            Column() {
-              Text('分享帖子').fontSize(15)
-                .fontColor(AppColors.textPrimary)
-                .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-                .width('100%')
-                .onClick(() => {
-                  this.showMoreMenu = false
-                  let hostCtx: Context | undefined = this.getUIContext().getHostContext()
-                  if (hostCtx !== undefined) {
-                    let ctx: Context = hostCtx
-                    shareThread(ctx, Number(this.threadTid), this.threadSubject)
-                  }
-                })
-            }
-            .width('100%')
-
-            if (this.debugMode) {
-              Divider().width('100%').color(AppColors.separator)
-
-              Column() {
-                Text(this.getHtmlModeMenuLabel()).fontSize(15)
-                  .fontColor(getForceHtmlMode() ? AppColors.primary : AppColors.textPrimary)
-                  .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-                  .width('100%')
-                  .onClick(() => {
-                    setForceHtmlMode(!getForceHtmlMode())
-                    this.showMoreMenu = false
-                    this.pendingTargetPid = ''
-                    this.singlePostFallback = false
-                    this.pendingTargetLastPost = false
-                    this.loadPosts(1, ThreadLoadMode.REPLACE)
-                  })
-              }
-              .width('100%')
-            }
-          }
-          .width(150)
-          .backgroundColor(Color.Transparent)
-          .borderRadius(10)
-          .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
-          .systemMaterial(UIMaterialManager.surfaceMaterial)
-          .position({ top: this.statusBarHeight + NAV_BAR_H + 6, right: 16 })
-        }
-        .width('100%').height('100%')
-        .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
+        this.MoreMenu()
       }
 
       if (this.showPagePicker) {
-        Stack() {
-          Column().width('100%').height('100%').onClick(() => { this.showPagePicker = false })
-          Column() {
-            Text('选择页面').fontSize(14).fontColor(AppColors.textPrimary).fontWeight(FontWeight.Bold)
-              .padding({ top: 12, bottom: 8 }).width('100%').textAlign(TextAlign.Center)
-            Divider().color(AppColors.separator)
-            Scroll() {
-              Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start, alignItems: ItemAlign.Start }) {
-                ForEach(this.buildPageArray(), (p: number) => {
-                  if (p === PAGE_PICKER_ELLIPSIS) {
-                    Text('…').fontSize(15)
-                      .fontColor(AppColors.textSecondary)
-                      .width(40).height(40).textAlign(TextAlign.Center)
-                  } else {
-                    Text(String(p)).fontSize(15)
-                      .fontColor(p === this.pagePickerCurrentPage ? AppColors.primary : AppColors.textPrimary)
-                      .fontWeight(p === this.pagePickerCurrentPage ? FontWeight.Bold : FontWeight.Regular)
-                      .width(40).height(40).textAlign(TextAlign.Center).borderRadius(20)
-                      .border({
-                        width: p === this.pagePickerCurrentPage ? 1.5 : 0,
-                        color: AppColors.primary
-                      })
-                      .backgroundColor(Color.Transparent)
-                      .onClick(() => {
-                        if (this.pagePickerOnSelect) {
-                          this.pagePickerOnSelect(p)
-                        }
-                        this.showPagePicker = false
-                      })
-                  }
-                }, (p: number) => String(p))
-              }.width('100%')
-            }.width('100%')
-              .height(this.pagePickerTotalPages > PAGE_PICKER_MAX_DIRECT ? 84 : 120)
-              .align(Alignment.TopStart)
-            if (this.pagePickerTotalPages > PAGE_PICKER_MAX_DIRECT) {
-              Divider().color(AppColors.separator)
-              Row() {
-                TextInput({ text: this.pagePickerInput, placeholder: '输入页码' })
-                  .type(InputType.Number)
-                  .fontSize(14).backgroundColor(Color.Transparent)
-                  .fontColor(UIMaterialManager.inputForeground)
-                  .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
-                  .caretColor(UIMaterialManager.inputForeground)
-                  .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-                  .onChange((value: string) => { this.pagePickerInput = value })
-                  .onSubmit(() => { this.jumpToPageByInput() })
-                  .height(32).layoutWeight(1)
-                Text('跳转').fontSize(14).fontColor(AppColors.primary).fontWeight(FontWeight.Medium)
-                  .height(32).padding({ left: 10 })
-                  .onClick(() => { this.jumpToPageByInput() })
-              }.width('100%').padding({ top: 8 }).alignItems(VerticalAlign.Center)
-            }
-          }
-          .width(220).height(180).padding({ left: 10, right: 10, bottom: 8 })
-          .backgroundColor(Color.Transparent).borderRadius(12)
-          .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
-          .systemMaterial(UIMaterialManager.surfaceMaterial)
-          .position(
-            this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD
-              ? { bottom: 64 + this.navBarHeight, left: 16 }
-              : { bottom: 64 + this.navBarHeight, right: 16 }
-          )
-        }
-        .width('100%').height('100%')
-        .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
+        this.PagePicker()
       }
 
     }
     .width('100%').height('100%').backgroundColor(AppColors.bg).alignContent(Alignment.BottomEnd)
     .id('threadPanelRoot')
+  }
+
+  /**
+   * 更多菜单浮层（原 build() 内联块，纯结构搬移，行为不变）。
+   */
+  @Builder
+  MoreMenu() {
+    Stack() {
+      Column() {}.width('100%').height('100%').onClick(() => { this.showMoreMenu = false })
+
+      Column() {
+        Column() {
+          Text(this.getFavoriteMenuLabel()).fontSize(15)
+            .fontColor(AppColors.textPrimary)
+            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+            .width('100%')
+            .onClick(() => {
+              this.openFavoriteFolders()
+            })
+        }
+        .width('100%')
+
+        Divider().width('100%').color(AppColors.separator)
+
+        Column() {
+          Text('只看楼主').fontSize(15)
+            .fontColor(this.authorOnly ? AppColors.primary : AppColors.textPrimary)
+            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+            .width('100%')
+            .onClick(() => {
+              this.authorOnly = !this.authorOnly
+              this.showMoreMenu = false
+              this.pendingTargetPid = ''
+              this.singlePostFallback = false
+              this.pendingTargetLastPost = false
+              this.loadPosts(1, ThreadLoadMode.REPLACE)
+            })
+        }
+        .width('100%')
+
+        Divider().width('100%').color(AppColors.separator)
+
+        Column() {
+          Text('从网页打开').fontSize(15)
+            .fontColor(AppColors.textPrimary)
+            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+            .width('100%')
+            .onClick(() => {
+              this.showMoreMenu = false
+              const baseUrl: string = getActiveDomain()
+              const threadUrl: string = baseUrl + '/read.php?tid=' + this.threadTid
+              routerStore.navigateActivity(Screen.webview(threadUrl))
+            })
+        }
+        .width('100%')
+
+        Divider().width('100%').color(AppColors.separator)
+
+        Column() {
+          Text('分享帖子').fontSize(15)
+            .fontColor(AppColors.textPrimary)
+            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+            .width('100%')
+            .onClick(() => {
+              this.showMoreMenu = false
+              let hostCtx: Context | undefined = this.getUIContext().getHostContext()
+              if (hostCtx !== undefined) {
+                let ctx: Context = hostCtx
+                shareThread(ctx, Number(this.threadTid), this.threadSubject)
+              }
+            })
+        }
+        .width('100%')
+
+        if (this.debugMode) {
+          Divider().width('100%').color(AppColors.separator)
+
+          Column() {
+            Text(this.getHtmlModeMenuLabel()).fontSize(15)
+              .fontColor(getForceHtmlMode() ? AppColors.primary : AppColors.textPrimary)
+              .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+              .width('100%')
+              .onClick(() => {
+                setForceHtmlMode(!getForceHtmlMode())
+                this.showMoreMenu = false
+                this.pendingTargetPid = ''
+                this.singlePostFallback = false
+                this.pendingTargetLastPost = false
+                this.loadPosts(1, ThreadLoadMode.REPLACE)
+              })
+          }
+          .width('100%')
+        }
+      }
+      .width(150)
+      .backgroundColor(Color.Transparent)
+      .borderRadius(10)
+      .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
+      .systemMaterial(UIMaterialManager.surfaceMaterial)
+      .position({ top: this.statusBarHeight + NAV_BAR_H + 6, right: 16 })
+    }
+    .width('100%').height('100%')
+    .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
+  }
+
+  /**
+   * 页码选择器浮层（原 build() 内联块，纯结构搬移，行为不变）。
+   */
+  @Builder
+  PagePicker() {
+    Stack() {
+      Column().width('100%').height('100%').onClick(() => { this.showPagePicker = false })
+      Column() {
+        Text('选择页面').fontSize(14).fontColor(AppColors.textPrimary).fontWeight(FontWeight.Bold)
+          .padding({ top: 12, bottom: 8 }).width('100%').textAlign(TextAlign.Center)
+        Divider().color(AppColors.separator)
+        Scroll() {
+          Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start, alignItems: ItemAlign.Start }) {
+            ForEach(this.buildPageArray(), (p: number) => {
+              if (p === PAGE_PICKER_ELLIPSIS) {
+                Text('…').fontSize(15)
+                  .fontColor(AppColors.textSecondary)
+                  .width(40).height(40).textAlign(TextAlign.Center)
+              } else {
+                Text(String(p)).fontSize(15)
+                  .fontColor(p === this.pagePickerCurrentPage ? AppColors.primary : AppColors.textPrimary)
+                  .fontWeight(p === this.pagePickerCurrentPage ? FontWeight.Bold : FontWeight.Regular)
+                  .width(40).height(40).textAlign(TextAlign.Center).borderRadius(20)
+                  .border({
+                    width: p === this.pagePickerCurrentPage ? 1.5 : 0,
+                    color: AppColors.primary
+                  })
+                  .backgroundColor(Color.Transparent)
+                  .onClick(() => {
+                    if (this.pagePickerOnSelect) {
+                      this.pagePickerOnSelect(p)
+                    }
+                    this.showPagePicker = false
+                  })
+              }
+            }, (p: number) => String(p))
+          }.width('100%')
+        }.width('100%')
+          .height(this.pagePickerTotalPages > PAGE_PICKER_MAX_DIRECT ? 84 : 120)
+          .align(Alignment.TopStart)
+        if (this.pagePickerTotalPages > PAGE_PICKER_MAX_DIRECT) {
+          Divider().color(AppColors.separator)
+          Row() {
+            TextInput({ text: this.pagePickerInput, placeholder: '输入页码' })
+              .type(InputType.Number)
+              .fontSize(14).backgroundColor(Color.Transparent)
+              .fontColor(UIMaterialManager.inputForeground)
+              .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+              .caretColor(UIMaterialManager.inputForeground)
+              .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+              .onChange((value: string) => { this.pagePickerInput = value })
+              .onSubmit(() => { this.jumpToPageByInput() })
+              .height(32).layoutWeight(1)
+            Text('跳转').fontSize(14).fontColor(AppColors.primary).fontWeight(FontWeight.Medium)
+              .height(32).padding({ left: 10 })
+              .onClick(() => { this.jumpToPageByInput() })
+          }.width('100%').padding({ top: 8 }).alignItems(VerticalAlign.Center)
+        }
+      }
+      .width(220).height(180).padding({ left: 10, right: 10, bottom: 8 })
+      .backgroundColor(Color.Transparent).borderRadius(12)
+      .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
+      .systemMaterial(UIMaterialManager.surfaceMaterial)
+      .position(
+        this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD
+          ? { bottom: 64 + this.navBarHeight, left: 16 }
+          : { bottom: 64 + this.navBarHeight, right: 16 }
+      )
+    }
+    .width('100%').height('100%')
+    .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
+  }
+
+  /**
+   * 底部分页条与回复按钮浮层（原 build() 内联块，纯结构搬移，行为不变）。
+   */
+  @Builder
+  BottomBar() {
+    Row() {
+      if (this.mgr.totalPages > 1) {
+        Row() {
+          if (this.mgr.totalPages === 2) {
+            Stack() {
+              Text('1').fontSize(14)
+                .fontColor(this.displayPage === 1
+                  ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
+                .fontWeight(this.displayPage === 1 ? FontWeight.Bold : FontWeight.Regular)
+              if (this.displayPage === 1) {
+                Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
+                  .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
+              }
+            }.width(24).height(28)
+              .onClick(() => this.navigateToPage(1, PageNavigationSource.PAGER_BUTTON))
+            Divider().vertical(true).height(16).color(AppColors.dividerStrong)
+            Stack() {
+              Text('2').fontSize(14)
+                .fontColor(this.displayPage === 2
+                  ? UIMaterialManager.adaptiveForeground : UIMaterialManager.adaptiveSecondaryForeground)
+                .fontWeight(this.displayPage === 2 ? FontWeight.Bold : FontWeight.Regular)
+              if (this.displayPage === 2) {
+                Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
+                  .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
+              }
+            }.width(24).height(28)
+              .onClick(() => this.navigateToPage(2, PageNavigationSource.PAGER_BUTTON))
+          } else if (this.displayPage === 1) {
+            Stack() {
+              Text('1').fontSize(14).fontColor(UIMaterialManager.adaptiveForeground).fontWeight(FontWeight.Bold)
+              Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
+                .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
+            }.width(24).height(28)
+              .onClick(() => this.navigateToPage(1, PageNavigationSource.PAGER_BUTTON))
+            Divider().vertical(true).height(16).color(AppColors.dividerStrong)
+            Stack() {
+              Text('2').fontSize(14).fontColor(UIMaterialManager.adaptiveSecondaryForeground).fontWeight(FontWeight.Regular)
+            }.width(24).height(28)
+              .onClick(() => this.navigateToPage(2, PageNavigationSource.PAGER_BUTTON))
+          } else if (this.displayPage === this.mgr.totalPages) {
+            Stack() {
+              Text(String(this.mgr.totalPages - 1)).fontSize(14)
+                .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+                .fontWeight(FontWeight.Regular)
+            }.width(24).height(28)
+              .onClick(() => this.navigateToPage(
+                this.mgr.totalPages - 1, PageNavigationSource.PAGER_BUTTON
+              ))
+            Divider().vertical(true).height(16).color(AppColors.dividerStrong)
+            Stack() {
+              Text(String(this.mgr.totalPages)).fontSize(14).fontColor(UIMaterialManager.adaptiveForeground)
+                .fontWeight(FontWeight.Bold)
+              Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
+                .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
+            }.width(24).height(28)
+              .onClick(() => this.navigateToPage(this.mgr.totalPages, PageNavigationSource.PAGER_BUTTON))
+          } else {
+            Stack() {
+              Text(String(this.displayPage - 1)).fontSize(14)
+                .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+                .fontWeight(FontWeight.Regular)
+            }.width(24).height(28)
+              .onClick(() => this.navigateToPage(this.displayPage - 1, PageNavigationSource.PAGER_BUTTON))
+            Divider().vertical(true).height(16).color(AppColors.dividerStrong)
+            Stack() {
+              Text(String(this.displayPage)).fontSize(14).fontColor(UIMaterialManager.adaptiveForeground)
+                .fontWeight(FontWeight.Bold)
+              Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
+                .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
+            }.width(24).height(28)
+              .onClick(() => this.navigateToPage(this.displayPage, PageNavigationSource.PAGER_BUTTON))
+            Divider().vertical(true).height(16).color(AppColors.dividerStrong)
+            Stack() {
+              Text(String(this.displayPage + 1)).fontSize(14)
+                .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+                .fontWeight(FontWeight.Regular)
+            }.width(24).height(28)
+              .onClick(() => this.navigateToPage(this.displayPage + 1, PageNavigationSource.PAGER_BUTTON))
+          }
+          if (this.mgr.totalPages > 2) {
+            Divider().vertical(true).height(16).color(AppColors.dividerStrong)
+            Text('到').fontSize(13).fontColor(UIMaterialManager.adaptiveForeground)
+              .padding({ left: 4, right: 2 })
+              .onClick(() => {
+                this.pagePickerCurrentPage = this.displayPage
+                this.pagePickerTotalPages = this.mgr.totalPages
+                this.pagePickerInput = ''
+                this.pagePickerOnSelect = (page: number): void => {
+                  if (page !== this.displayPage) {
+                    this.navigateToPage(page, PageNavigationSource.PAGE_PICKER)
+                  }
+                }
+                this.showPagePicker = true
+              })
+          }
+        }
+        .padding({ left: 8, right: 8, top: 0, bottom: 0 })
+        .height(40).alignItems(VerticalAlign.Center)
+        .backgroundColor(Color.Transparent).borderRadius(20)
+        .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
+        .systemMaterial(UIMaterialManager.fabMaterial)
+        .margin({ right: 8 })
+      }
+
+      Stack() {
+        Image($r('app.media.icon_reply'))
+          .width(20).height(20).fillColor(UIMaterialManager.adaptiveForeground)
+      }
+      .width(40).height(40).borderRadius(20)
+      .backgroundColor(Color.Transparent)
+      .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
+      .systemMaterial(UIMaterialManager.fabMaterial)
+      .onClick(() => {
+        replyManager.startThreadReply(Number(this.threadTid), this.threadFid)
+        floatingLayerStore.replyDialogTitle = replyManager.dialogTitle
+        floatingLayerStore.editMode = false
+        floatingLayerStore.replyOnSend = (text: string, isAnony: boolean): Promise<void> => {
+          return this.handleReplySend(text, isAnony)
+        }
+        floatingLayerStore.push(FloatingPage.REPLY_DIALOG)
+      })
+    }
+    .width('100%').padding({ left: 16, right: 16, bottom: 16 + this.navBarHeight }).alignItems(VerticalAlign.Center)
+    .justifyContent(this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? FlexAlign.Start : FlexAlign.End)
+  }
+
+
+  /**
+   * 加载中状态视图（原 build() 内联块，纯结构搬移，行为不变）。
+   */
+  @Builder
+  LoadingState() {
+    Column() {
+      Column() {
+        LoadingStateView()
+      }.opacity(this.loadingContentOpacity)
+    }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+      .padding({ top: NAV_BAR_H + this.statusBarHeight })
+    .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+  }
+
+  /**
+   * 加载失败状态视图（原 build() 内联块，纯结构搬移，行为不变）。
+   */
+  @Builder
+  ErrorState() {
+    Column() {
+      ErrorStateView({
+        msg: this.errorMsg,
+        onRetry: (): Promise<void> => this.loadPosts(this.lastReplacePage, ThreadLoadMode.REPLACE)
+      })
+    }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+      .padding({ top: NAV_BAR_H + this.statusBarHeight })
+    .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+  }
+
+  /**
+   * 列表尾部加载/完成状态项（原 build() 内联块，纯结构搬移，行为不变）。
+   */
+  @Builder
+  LoadMoreFooter() {
+    ListItem() {
+      Column() {
+        Row() {
+          if (this.isLoadingMore) {
+            LoadingProgress().width(16).height(16).color(AppColors.textTertiary)
+            Text('加载更多...').fontSize(13).fontColor(AppColors.textTertiary).margin({ left: 8 })
+          } else if (this.mgr.loadedPageEnd >= this.mgr.totalPages && this.mgr.posts.length > 0) {
+            Text('已加载全部回复').fontSize(13).fontColor(AppColors.textTertiary)
+          }
+        }.width('100%').justifyContent(FlexAlign.Center)
+      }.width('100%').height(NAV_BAR_H).justifyContent(FlexAlign.Center)
+    }
   }
 }
