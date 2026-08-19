@@ -1204,21 +1204,32 @@ export struct TopicListPanel {
       })
         .width('100%').position({ x: 0, y: 0 })
 
-      Row({ space: 12 }) {
-        if (this.canManageCurrentBoard()) {
-          Stack() {
-            Image($r('app.media.icon_compose'))
-              .width(22).height(22)
-              .fillColor(UIMaterialManager.adaptiveForeground)
-          }
-          .width(44).height(44).borderRadius(22)
-          .backgroundColor(Color.Transparent)
-          .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
-          .systemMaterial(UIMaterialManager.fabMaterial)
-          .onClick(() => this.openNewTopic())
-        }
+      this.FloatingActions()
+
+      if (this.showMoreMenu && this.canManageCurrentBoard()) {
+        this.MoreMenu()
+      }
+
+      if (this.showHotRangeMenu) {
+        this.HotRangeMenu()
+      }
+
+      if (this.showSubBoardFilterPanel && this.canManageCurrentBoard()) {
+        this.SubBoardFilterPanel()
+      }
+    }
+    .width('100%').height('100%').backgroundColor(AppColors.bg).alignContent(Alignment.BottomEnd)
+  }
+
+  /**
+   * FloatingActions（原 build() 内联块，纯结构搬移，行为不变）。
+   */
+  @Builder
+  FloatingActions() {
+    Row({ space: 12 }) {
+      if (this.canManageCurrentBoard()) {
         Stack() {
-          Image($r('app.media.icon_refresh'))
+          Image($r('app.media.icon_compose'))
             .width(22).height(22)
             .fillColor(UIMaterialManager.adaptiveForeground)
         }
@@ -1226,249 +1237,270 @@ export struct TopicListPanel {
         .backgroundColor(Color.Transparent)
         .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
         .systemMaterial(UIMaterialManager.fabMaterial)
-        .onClick(() => this.loadTopics(1))
-      }.width('100%').justifyContent(this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? FlexAlign.Start : FlexAlign.End)
-      .padding({ left: this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? 16 : 0, right: this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? 0 : 16, bottom: 16 + this.navBarHeight })
-
-      if (this.showMoreMenu && this.canManageCurrentBoard()) {
-        Stack() {
-          Column() {
-          }
-          .width('100%').height('100%')
-          .onClick(() => {
-            this.showMoreMenu = false
-          })
-
-          Column() {
-            Column() {
-              Text('搜索本版')
-                .fontSize(15)
-                .fontColor(AppColors.textPrimary)
-                .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-                .width('100%')
-                .onClick(() => {
-                  this.showMoreMenu = false
-                  routerStore.navigateSearch(this.boardFid, this.boardName, this.boardStid)
-                })
-            }
-            .width('100%')
-
-            Divider().width('100%').color(AppColors.separator)
-
-            Column() {
-              Text('子版块显示')
-                .fontSize(15)
-                .fontColor(AppColors.textPrimary)
-                .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-                .width('100%')
-                .onClick(() => {
-                  this.openSubBoardFilterPanel()
-                })
-            }
-            .width('100%')
-
-            Divider().width('100%').color(AppColors.separator)
-
-            Column() {
-              Text(this.isCurrentBoardFavorite() ? '取消收藏板块' : '收藏板块')
-                .fontSize(15)
-                .fontColor(AppColors.textPrimary)
-                .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-                .width('100%')
-                .onClick(() => {
-                  this.toggleCurrentBoardFavorite()
-                  this.showMoreMenu = false
-                })
-            }
-            .width('100%')
-          }
-          .width(170)
-          .backgroundColor(Color.Transparent)
-          .borderRadius(10)
-          .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
-          .systemMaterial(UIMaterialManager.surfaceMaterial)
-          .position({ top: this.statusBarHeight + 50, right: 12 })
-        }
-        .width('100%').height('100%')
-        .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
+        .onClick(() => this.openNewTopic())
       }
+      Stack() {
+        Image($r('app.media.icon_refresh'))
+          .width(22).height(22)
+          .fillColor(UIMaterialManager.adaptiveForeground)
+      }
+      .width(44).height(44).borderRadius(22)
+      .backgroundColor(Color.Transparent)
+      .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
+      .systemMaterial(UIMaterialManager.fabMaterial)
+      .onClick(() => this.loadTopics(1))
+    }.width('100%').justifyContent(this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? FlexAlign.Start : FlexAlign.End)
+    .padding({ left: this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? 16 : 0, right: this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? 0 : 16, bottom: 16 + this.navBarHeight })
+  }
 
-      if (this.showHotRangeMenu) {
-        Stack() {
+  /**
+   * MoreMenu（原 build() 内联块，纯结构搬移，行为不变）。
+   */
+  @Builder
+  MoreMenu() {
+    Stack() {
+      Column() {
+      }
+      .width('100%').height('100%')
+      .onClick(() => {
+        this.showMoreMenu = false
+      })
+
+      Column() {
+        Column() {
+          Text('搜索本版')
+            .fontSize(15)
+            .fontColor(AppColors.textPrimary)
+            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+            .width('100%')
+            .onClick(() => {
+              this.showMoreMenu = false
+              routerStore.navigateSearch(this.boardFid, this.boardName, this.boardStid)
+            })
+        }
+        .width('100%')
+
+        Divider().width('100%').color(AppColors.separator)
+
+        Column() {
+          Text('子版块显示')
+            .fontSize(15)
+            .fontColor(AppColors.textPrimary)
+            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+            .width('100%')
+            .onClick(() => {
+              this.openSubBoardFilterPanel()
+            })
+        }
+        .width('100%')
+
+        Divider().width('100%').color(AppColors.separator)
+
+        Column() {
+          Text(this.isCurrentBoardFavorite() ? '取消收藏板块' : '收藏板块')
+            .fontSize(15)
+            .fontColor(AppColors.textPrimary)
+            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+            .width('100%')
+            .onClick(() => {
+              this.toggleCurrentBoardFavorite()
+              this.showMoreMenu = false
+            })
+        }
+        .width('100%')
+      }
+      .width(170)
+      .backgroundColor(Color.Transparent)
+      .borderRadius(10)
+      .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
+      .systemMaterial(UIMaterialManager.surfaceMaterial)
+      .position({ top: this.statusBarHeight + 50, right: 12 })
+    }
+    .width('100%').height('100%')
+    .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
+  }
+
+  /**
+   * HotRangeMenu（原 build() 内联块，纯结构搬移，行为不变）。
+   */
+  @Builder
+  HotRangeMenu() {
+    Stack() {
+      Column() {
+      }
+      .width('100%').height('100%')
+      .onClick(() => {
+        this.showHotRangeMenu = false
+      })
+
+      Column() {
+        ForEach(HOT_RANGES, (range: SortMode, index: number) => {
           Column() {
+            Row() {
+              Text(range.label)
+                .fontSize(15)
+                .fontColor(AppColors.textPrimary)
+                .layoutWeight(1)
+              if (this.hotRange === range.key) {
+                Image($r('app.media.icon_check'))
+                  .width(16).height(16)
+                  .fillColor(AppColors.primary)
+              }
+            }
+            .width('100%')
+            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+            .onClick(() => {
+              this.handleHotRangeSelect(range.key)
+            })
+
+            if (index < HOT_RANGES.length - 1) {
+              Divider().width('100%').color(AppColors.separator)
+            }
           }
-          .width('100%').height('100%')
-          .onClick(() => {
-            this.showHotRangeMenu = false
-          })
+          .width('100%')
+        }, (range: SortMode) => {
+          return range.key
+        })
+      }
+      .width(150)
+      .backgroundColor(Color.Transparent)
+      .borderRadius(10)
+      .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
+      .systemMaterial(UIMaterialManager.surfaceMaterial)
+      .position({ top: this.sortBarBottomY + 6, right: '4%' })
+    }
+    .width('100%').height('100%')
+    .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
+  }
 
+  /**
+   * SubBoardFilterPanel（原 build() 内联块，纯结构搬移，行为不变）。
+   */
+  @Builder
+  SubBoardFilterPanel() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column() {
+      }
+      .width('100%').height('100%')
+      .backgroundColor(AppColors.overlay)
+      .onClick(() => {
+        if (this.updatingSubBoardFilterId.length === 0) {
+          this.showSubBoardFilterPanel = false
+        }
+      })
+
+      Column() {
+        Row() {
           Column() {
-            ForEach(HOT_RANGES, (range: SortMode, index: number) => {
-              Column() {
-                Row() {
-                  Text(range.label)
+            Text('子版块显示')
+              .fontSize(17)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(AppColors.textPrimary)
+              .width('100%')
+            Text() {
+              Span('关闭即屏蔽，开关会同步到 ')
+              Span('NGA 账号').fontWeight(FontWeight.Medium)
+              Span('，并刷新当前父版块的帖子列表')
+            }
+            .fontSize(12)
+            .fontColor(AppColors.textSecondary)
+            .lineHeight(16)
+            .width('100%')
+            .margin({ top: 3 })
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+
+          Text('关闭')
+            .fontSize(14)
+            .fontColor(AppColors.primary)
+            .padding({ left: 12, top: 8, bottom: 8 })
+            .onClick(() => {
+              if (this.updatingSubBoardFilterId.length === 0) {
+                this.showSubBoardFilterPanel = false
+              }
+            })
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 14, bottom: 10 })
+        .alignItems(VerticalAlign.Center)
+
+        Divider().width('100%').color(AppColors.separator)
+
+        List() {
+          ForEach(this.subBoards, (subBoard: SubBoard) => {
+            ListItem() {
+              Row() {
+                BoardIcon({ url: subBoard.boardHead, iconSize: 36, iconRadius: 8 })
+                  .opacity(subBoard.checked ? 1 : 0.45)
+
+                Column() {
+                  Text(unescapeHtml(subBoard.name))
                     .fontSize(15)
-                    .fontColor(AppColors.textPrimary)
-                    .layoutWeight(1)
-                  if (this.hotRange === range.key) {
-                    Image($r('app.media.icon_check'))
-                      .width(16).height(16)
-                      .fillColor(AppColors.primary)
+                    .fontColor(subBoard.checked ? AppColors.textPrimary : AppColors.textTertiary)
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .width('100%')
+                  if (subBoard.checked && subBoard.description.length > 0) {
+                    Text(unescapeHtml(subBoard.description))
+                      .fontSize(12)
+                      .fontColor(AppColors.textTertiary)
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                      .width('100%')
+                      .margin({ top: 2 })
+                  }
+                  if (!subBoard.checked) {
+                    Text('已屏蔽')
+                      .fontSize(12)
+                      .fontColor(AppColors.textSecondary)
+                      .width('100%')
+                      .margin({ top: 2 })
                   }
                 }
-                .width('100%')
-                .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-                .onClick(() => {
-                  this.handleHotRangeSelect(range.key)
-                })
+                .layoutWeight(1)
+                .alignItems(HorizontalAlign.Start)
+                .margin({ left: 10, right: 10 })
 
-                if (index < HOT_RANGES.length - 1) {
-                  Divider().width('100%').color(AppColors.separator)
+                if (this.updatingSubBoardFilterId === subBoard.filterId) {
+                  LoadingProgress().width(22).height(22).color(AppColors.primary)
+                } else {
+                  Toggle({
+                    type: ToggleType.Switch,
+                    isOn: subBoard.filterable ? subBoard.checked : true
+                  })
+                    .enabled(subBoard.filterable && subBoard.filterId.length > 0
+                      && this.updatingSubBoardFilterId.length === 0)
+                    .onChange((show: boolean): void => {
+                      this.handleSubBoardFilterChange(subBoard, show)
+                    })
                 }
               }
               .width('100%')
-            }, (range: SortMode) => {
-              return range.key
-            })
-          }
-          .width(150)
-          .backgroundColor(Color.Transparent)
-          .borderRadius(10)
-          .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
-          .systemMaterial(UIMaterialManager.surfaceMaterial)
-          .position({ top: this.sortBarBottomY + 6, right: '4%' })
-        }
-        .width('100%').height('100%')
-        .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
-      }
-
-      if (this.showSubBoardFilterPanel && this.canManageCurrentBoard()) {
-        Stack({ alignContent: Alignment.Center }) {
-          Column() {
-          }
-          .width('100%').height('100%')
-          .backgroundColor(AppColors.overlay)
-          .onClick(() => {
-            if (this.updatingSubBoardFilterId.length === 0) {
-              this.showSubBoardFilterPanel = false
+              .height(58)
+              .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+              .alignItems(VerticalAlign.Center)
             }
+          }, (subBoard: SubBoard) => {
+            const stableId: string = subBoard.filterId.length > 0
+              ? subBoard.filterId : `${subBoard.fid}:${subBoard.stid}:${subBoard.name}`
+            return `${stableId}:${subBoard.checked ? 'shown' : 'blocked'}`
           })
-
-          Column() {
-            Row() {
-              Column() {
-                Text('子版块显示')
-                  .fontSize(17)
-                  .fontWeight(FontWeight.Bold)
-                  .fontColor(AppColors.textPrimary)
-                  .width('100%')
-                Text() {
-                  Span('关闭即屏蔽，开关会同步到 ')
-                  Span('NGA 账号').fontWeight(FontWeight.Medium)
-                  Span('，并刷新当前父版块的帖子列表')
-                }
-                .fontSize(12)
-                .fontColor(AppColors.textSecondary)
-                .lineHeight(16)
-                .width('100%')
-                .margin({ top: 3 })
-              }
-              .layoutWeight(1)
-              .alignItems(HorizontalAlign.Start)
-
-              Text('关闭')
-                .fontSize(14)
-                .fontColor(AppColors.primary)
-                .padding({ left: 12, top: 8, bottom: 8 })
-                .onClick(() => {
-                  if (this.updatingSubBoardFilterId.length === 0) {
-                    this.showSubBoardFilterPanel = false
-                  }
-                })
-            }
-            .width('100%')
-            .padding({ left: 16, right: 16, top: 14, bottom: 10 })
-            .alignItems(VerticalAlign.Center)
-
-            Divider().width('100%').color(AppColors.separator)
-
-            List() {
-              ForEach(this.subBoards, (subBoard: SubBoard) => {
-                ListItem() {
-                  Row() {
-                    BoardIcon({ url: subBoard.boardHead, iconSize: 36, iconRadius: 8 })
-                      .opacity(subBoard.checked ? 1 : 0.45)
-
-                    Column() {
-                      Text(unescapeHtml(subBoard.name))
-                        .fontSize(15)
-                        .fontColor(subBoard.checked ? AppColors.textPrimary : AppColors.textTertiary)
-                        .maxLines(1)
-                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-                        .width('100%')
-                      if (subBoard.checked && subBoard.description.length > 0) {
-                        Text(unescapeHtml(subBoard.description))
-                          .fontSize(12)
-                          .fontColor(AppColors.textTertiary)
-                          .maxLines(1)
-                          .textOverflow({ overflow: TextOverflow.Ellipsis })
-                          .width('100%')
-                          .margin({ top: 2 })
-                      }
-                      if (!subBoard.checked) {
-                        Text('已屏蔽')
-                          .fontSize(12)
-                          .fontColor(AppColors.textSecondary)
-                          .width('100%')
-                          .margin({ top: 2 })
-                      }
-                    }
-                    .layoutWeight(1)
-                    .alignItems(HorizontalAlign.Start)
-                    .margin({ left: 10, right: 10 })
-
-                    if (this.updatingSubBoardFilterId === subBoard.filterId) {
-                      LoadingProgress().width(22).height(22).color(AppColors.primary)
-                    } else {
-                      Toggle({
-                        type: ToggleType.Switch,
-                        isOn: subBoard.filterable ? subBoard.checked : true
-                      })
-                        .enabled(subBoard.filterable && subBoard.filterId.length > 0
-                          && this.updatingSubBoardFilterId.length === 0)
-                        .onChange((show: boolean): void => {
-                          this.handleSubBoardFilterChange(subBoard, show)
-                        })
-                    }
-                  }
-                  .width('100%')
-                  .height(58)
-                  .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-                  .alignItems(VerticalAlign.Center)
-                }
-              }, (subBoard: SubBoard) => {
-                const stableId: string = subBoard.filterId.length > 0
-                  ? subBoard.filterId : `${subBoard.fid}:${subBoard.stid}:${subBoard.name}`
-                return `${stableId}:${subBoard.checked ? 'shown' : 'blocked'}`
-              })
-            }
-            .width('100%')
-            .layoutWeight(1)
-            .divider({ strokeWidth: 0.5, color: AppColors.separator, startMargin: 60 })
-            .scrollBar(BarState.Auto)
-          }
-          .width('88%')
-          .height('70%')
-          .backgroundColor(Color.Transparent)
-          .borderRadius(16)
-          .shadow({ radius: 24, color: AppColors.shadow, offsetY: 6 })
-          .systemMaterial(UIMaterialManager.surfaceMaterial)
         }
-        .width('100%').height('100%')
-        .transition(TransitionEffect.OPACITY.animation({ duration: 180 }))
+        .width('100%')
+        .layoutWeight(1)
+        .divider({ strokeWidth: 0.5, color: AppColors.separator, startMargin: 60 })
+        .scrollBar(BarState.Auto)
       }
+      .width('88%')
+      .height('70%')
+      .backgroundColor(Color.Transparent)
+      .borderRadius(16)
+      .shadow({ radius: 24, color: AppColors.shadow, offsetY: 6 })
+      .systemMaterial(UIMaterialManager.surfaceMaterial)
     }
-    .width('100%').height('100%').backgroundColor(AppColors.bg).alignContent(Alignment.BottomEnd)
+    .width('100%').height('100%')
+    .transition(TransitionEffect.OPACITY.animation({ duration: 180 }))
   }
 }
 
