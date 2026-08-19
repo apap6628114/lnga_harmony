@@ -39,7 +39,7 @@ export function setForceHtmlMode(v: boolean): void {
 /**
  * 双通道取数结果：原始同形状数据 + 通道信息。
  */
-interface ThreadRawResult {
+export interface ThreadRawResult {
   /** 与 JSON 同形状的原始数据（JSON 响应或 HTML 解析结果）；双通道均失败时为 null。 */
   raw: Record<string, Object> | null
   /** 是否经由 HTML 通道（强制 HTML / pid-only 特例 / JSON 失败降级）。 */
@@ -97,7 +97,7 @@ function lastPidOfPage(raw: Record<string, Object>): number {
  * @param page - 页码（'e' 表示末页）
  * @returns 取数结果
  */
-async function fetchThreadRaw(token: string, tid: string, pid: string,
+export async function fetchThreadRaw(token: string, tid: string, pid: string,
   authorid: string, page: string): Promise<ThreadRawResult> {
   const session = appStore.getSession(token);
   if (!session) {
@@ -328,7 +328,7 @@ export async function locatePidPage(token: string, tid: string, targetPid: numbe
  * @param keywords - 标题屏蔽关键词
  * @param noteMap - 用户备注表
  */
-function fillThreadResult(raw: Record<string, Object>, result: ThreadResult,
+export function fillThreadResult(raw: Record<string, Object>, result: ThreadResult,
   blacklist: Set<string>, keywords: string[] = [],
   noteMap: Record<string, string> = {}): void {
   const data: ThreadData = parseThreadData(raw, blacklist, keywords, noteMap);

@@ -24,6 +24,7 @@ import { FloatingLayerComponent } from '../common/components/FloatingLayerCompon
 import { EmptyHint } from '../common/components/EmptyHint'
 import { ToastComponent } from '../common/components/Toast'
 import { TtsProgressIndicator } from '../common/components/TtsProgressIndicator'
+import { SavedThreadProgressIndicator } from '../common/components/SavedThreadProgressIndicator'
 import { PidLocateIndicator } from '../common/components/PidLocateIndicator'
 import { Logger, DOMAIN_UI } from '../common/utils/Logger'
 import { enableKeepScreenOn, disableKeepScreenOn } from '../common/managers/ScreenOnManager'
@@ -129,6 +130,7 @@ struct MainPage {
       FloatingLayerComponent({ currentBreakpoint: this.currentBreakpoint })
       ToastComponent()
       TtsProgressIndicator()
+      SavedThreadProgressIndicator()
       PidLocateIndicator()
     }
     .width('100%').height('100%')

@@ -82,6 +82,9 @@ export const KEY_DEBUG_MODE: string = 'nga_debugMode'
 /** 内置网页浏览：true 时没有可用 App Linking 应用的 URL 在应用内 WebView 打开 */
 export const KEY_USE_INTERNAL_WEBVIEW: string = 'useInternalWebView'
 
+/** 保存帖子版本号（保存/删除/导入时 +1 触发 @Watch） */
+export const KEY_SAVED_THREAD_VERSION: string = 'savedThreadVersion'
+
 /** 帖子内容字体大小（vp），默认为 15 */
 export const KEY_CONTENT_FONT_SIZE: string = 'contentFontSize'
 

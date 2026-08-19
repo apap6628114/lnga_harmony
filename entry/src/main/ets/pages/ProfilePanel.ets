@@ -491,7 +491,7 @@ export struct ProfilePanel {
                 SettingRow({
                   iconRes: $r('app.media.profile_favorites'), iconColor: ProfileActionIconColors.favorites, label: '收藏主题',
                   onAction: () => {
-                    routerStore.navigateActivity(Screen.favoriteFolders())
+                    routerStore.navigateActivity(Screen.favoriteSaved())
                   }
                 })
                 Divider().margin({ left: 60 }).color(AppColors.separator)

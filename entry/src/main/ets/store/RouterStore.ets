@@ -69,6 +69,7 @@ export type ScreenType =
   | 'aiSettings'
   | 'fontSizeSettings'
   | 'favoriteFolders'
+  | 'favoriteSaved'
 
 /**
  * 帖子路由来源。
@@ -85,6 +86,7 @@ export type ScreenType =
  * - LINK：应用内/外部帖子链接（read.php / #/thread，带页码或仅 pid）
  * - SEARCH：搜索面板搜索结果
  * - BROWSE_HISTORY：浏览历史
+ * - SAVED：保存的帖子离线存档（数据源分流为本地存档读取）
  */
 export enum ThreadSource {
   /** 未标注来源（无 pid 定位需求的默认入口）。 */
@@ -99,6 +101,8 @@ export enum ThreadSource {
   SEARCH = 'search',
   /** 浏览历史进入。 */
   BROWSE_HISTORY = 'browse-history',
+  /** 保存的帖子离线存档进入：ThreadPanel 从本地存档读取数据而非请求服务器。 */
+  SAVED = 'saved',
 }
 
 export class Screen {
@@ -241,6 +245,17 @@ export class Screen {
     return s
   }
 
+  /**
+   * 创建「收藏与保存」融合面板路由（在线收藏 / 离线保存双 Tab）。
+   *
+   * @returns 收藏与保存页面路由
+   */
+  static favoriteSaved(): Screen {
+    const s = new Screen()
+    s.type = 'favoriteSaved'
+    return s
+  }
+
   static topicList(
     name: string, fid: number = 0,
     authorid: string = '', favor: string = '',
@@ -275,6 +290,7 @@ export class Screen {
       case 'aiSettings': return 'AI 配置'
       case 'fontSizeSettings': return '字体大小'
       case 'favoriteFolders': return this.favoriteTopicId.length > 0 ? '收藏到…' : '收藏主题'
+      case 'favoriteSaved': return '收藏与保存'
       default: return ''
     }
   }

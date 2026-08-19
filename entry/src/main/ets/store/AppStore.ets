@@ -10,6 +10,7 @@ import { FollowActivityStore } from './FollowActivityStore'
 import { VoteStore } from './VoteStore'
 import { HistoryStore } from './HistoryStore'
 import { FavoriteStore } from './FavoriteStore'
+import { SavedThreadStore } from './SavedThreadStore'
 import { ReadingProgressStore } from './ReadingProgressStore'
 import { floatingLayerStore } from './FloatingLayerStore'
 import { ToastManager } from '../common/feedback/ToastManager'
@@ -90,6 +91,8 @@ class AppStoreClass {
   readonly historyStore: HistoryStore = new HistoryStore()
   /** NGA 主题收藏夹与收藏关系状态。 */
   readonly favoriteStore: FavoriteStore = new FavoriteStore()
+  /** 保存的帖子离线存档（文件系统持久化，不按账号区分）。 */
+  readonly savedThreadStore: SavedThreadStore = new SavedThreadStore()
   /** 帖子阅读进度（按账号隔离，用于下次进入时恢复阅读位置）。 */
   readonly readingProgressStore: ReadingProgressStore = new ReadingProgressStore()
   readonly toastManager: ToastManager = new ToastManager()
@@ -103,6 +106,9 @@ class AppStoreClass {
     try {
       this.context = context
       await this.store.init(context, 'nga_app_store')
+
+      // 存档与登录态无关，随应用启动即初始化（不按账号区分）
+      await this.savedThreadStore.init(context)
 
       // 子 Store 中不依赖 uid 的先初始化（同步赋值引用）
       await this.voteStore.init(this.store, this.writeQueue)

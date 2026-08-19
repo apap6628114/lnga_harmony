@@ -30,6 +30,8 @@ import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { TtsMediaMetadata } from '../common/media/TtsAvSessionController'
 import { TtsPlayer } from '../common/media/TtsPlayer'
 import { shareThread, sharePost } from '../common/utils/ShareUtils'
+import { SaveThreadDialog } from '../common/dialogs/SaveThreadDialogs'
+import { savedThreadService, SaveThreadOutcome, getSavedThreadResult } from '../service/SavedThreadService'
 import { openImageViewer as sharedOpenImageViewer, handleForumLink } from '../common/utils/LinkUtils'
 import { ThreadPaginationManager, MergePageResult } from '../common/managers/ThreadPaginationManager'
 import type { ThreadInfo } from '../model/Thread'
@@ -143,6 +145,8 @@ export struct ThreadPanel {
   @StorageProp('nga_debugMode') debugMode: boolean = false
   @State showMoreMenu: boolean = false
   @State showPagePicker: boolean = false
+  /** 保存帖子对话框控制器（更多菜单「保存帖子」入口）。 */
+  private saveDialogController?: CustomDialogController
   private pagePickerTotalPages: number = 0
   private pagePickerCurrentPage: number = 0
   private pagePickerOnSelect: ((page: number) => void) | null = null
@@ -373,6 +377,7 @@ export struct ThreadPanel {
     this.prependAnchorOffset = 0
     this.prependAnchorScheduled = false
     this.mgr.reset()
+    this.saveDialogController = undefined
   }
 
   private onThreadChanged(): void {
@@ -410,14 +415,18 @@ export struct ThreadPanel {
   // ============== 阅读进度记录与恢复 ==============
 
   /**
-   * 阅读进度记录是否有效（开关开启、已登录且非单帖兜底视图）。
+   * 阅读进度记录是否有效（开关开启、已登录、非单帖兜底视图且非离线存档模式）。
+   *
+   * 离线存档模式（ThreadSource.SAVED）不享受进度保存：本地快照与在线阅读
+   * 位置语义不同，恢复/记录都会造成误导。
    *
    * @returns 是否可以记录
    */
   private shouldRecordProgress(): boolean {
     return appStore.settings.recordReadingProgress &&
       appStore.auth.uid.length > 0 &&
-      !this.singlePostFallback
+      !this.singlePostFallback &&
+      !this.isSavedSource()
   }
 
   /**
@@ -589,6 +598,10 @@ export struct ThreadPanel {
     if (this.blacklistVersion >= 0 &&
       appStore.settingsStore.isBlacklisted(this.threadAuthorId)) {
       return '该用户已被屏蔽'
+    }
+    // 离线存档来源：标题前加 [离线] 前缀提醒（替代悬浮提示，不遮挡内容）
+    if (this.isSavedSource()) {
+      return '[离线] ' + this.threadSubject
     }
     return this.threadSubject
   }
@@ -1032,12 +1045,20 @@ export struct ThreadPanel {
   ): Promise<ThreadResult> {
     const noteMap: Record<string, string> = appStore.settingsStore.getNoteMap()
     const isNegativeAuthor: boolean = this.authorOnly && this.threadAuthorId !== '' && Number(this.threadAuthorId) <= 0
-    const result: ThreadResult = await withTimeout<ThreadResult>(getThread(
-      appStore.auth.token, this.threadTid, requestPid,
-      this.authorOnly && !isNegativeAuthor ? this.threadAuthorId : '', String(targetPage),
-      appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords(),
-      noteMap
-    ), timeoutMs)
+    // 来源分流：保存的帖子离线存档从本地同形状 JSON 读取并解释，与在线走同一条渲染管线；
+    // 其余来源保持服务器请求模式。
+    const result: ThreadResult = this.threadSource === ThreadSource.SAVED
+      ? await withTimeout<ThreadResult>(getSavedThreadResult(
+        this.threadTid, targetPage,
+        appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords(),
+        noteMap, this.authorOnly ? this.threadAuthorId : ''
+      ), timeoutMs)
+      : await withTimeout<ThreadResult>(getThread(
+        appStore.auth.token, this.threadTid, requestPid,
+        this.authorOnly && !isNegativeAuthor ? this.threadAuthorId : '', String(targetPage),
+        appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords(),
+        noteMap
+      ), timeoutMs)
     if (!result.ok) {
       return result
     }
@@ -1158,7 +1179,9 @@ export struct ThreadPanel {
           }
           this.postsDataSource.replaceAll(result.posts)
           this.displayPage = resolvedPage
-          if (appStore.auth.isAuthenticated) {
+          // 离线存档模式不写入浏览历史：历史条目后续会以在线通道打开，
+          // 对已删除的存档帖子会形成永远加载失败的死链
+          if (appStore.auth.isAuthenticated && !this.isSavedSource()) {
             appStore.addBrowseHistoryFromThread(appStore.auth.uid, result, this.threadTid)
           }
           this.prepareListNavigation(generation, resolvedPage, this.pendingTargetPid)
@@ -1537,6 +1560,11 @@ export struct ThreadPanel {
    * @param targetPostPid - 被贴条/被编辑楼层的 pid（仅 COMMENT/EDIT 使用）
    */
   private async silentRefreshAfterPost(type: ReplyType, targetPostPid: string): Promise<void> {
+    // 离线存档模式：新楼层不在本地存档内，静默刷新无意义且每次多走两轮
+    // 存档 REPLACE/merge（新 pid 必然未命中），直接短路。
+    if (this.isSavedSource()) {
+      return
+    }
     let refreshPage: number = 0
     if (type === ReplyType.COMMENT || type === ReplyType.EDIT) {
       if (targetPostPid.length === 0) {
@@ -1674,6 +1702,12 @@ export struct ThreadPanel {
    * @param candidatePid - 候选目标楼层 pid（可为空，见解析链）
    */
   private goToRepliedPost(candidatePid: string): void {
+    if (this.isSavedSource()) {
+      // 离线存档不含回复后的新楼层，直接提示，避免误导性的
+      // 「该楼层不存在或已删除」单帖兜底
+      appStore.showToast('离线存档不包含新楼层')
+      return
+    }
     if (!this.listMounted) {
       // 面板已销毁（Toast 是全局组件，闭包可能晚于页面生命周期触发）
       logger.warn(
@@ -1732,6 +1766,54 @@ export struct ThreadPanel {
     }
     this.showMoreMenu = false
     routerStore.navigateActivity(Screen.favoriteFolders(this.threadTid))
+  }
+
+  /**
+   * 是否由「保存的帖子」离线存档来源打开：本地存档模式下隐藏与在线
+   * 收藏/保存冲突的功能入口（收藏到…、离线保存帖子）。
+   *
+   * @returns 是否离线存档来源
+   */
+  private isSavedSource(): boolean {
+    return this.threadSource === ThreadSource.SAVED
+  }
+
+  /**
+   * 打开「保存帖子」对话框（选择保存的页范围）。
+   */
+  private openSaveThreadDialog(): void {
+    if (this.threadTid.length === 0) {
+      return
+    }
+    this.showMoreMenu = false
+    this.saveDialogController = new CustomDialogController({
+      builder: SaveThreadDialog({
+        tid: this.threadTid,
+        initialSubject: this.threadSubject,
+        onSave: (tid: string, startPage: number, endPage: number): void => {
+          this.startSaveThread(tid, startPage, endPage)
+        }
+      }),
+      autoCancel: true,
+      customStyle: true,
+      alignment: DialogAlignment.Center
+    })
+    this.saveDialogController?.open()
+  }
+
+  /**
+   * 启动后台保存任务；结果以 Toast 提示（进度由全局指示组件展示）。
+   */
+  private startSaveThread(tid: string, startPage: number, endPage: number): void {
+    savedThreadService.saveThread(tid, startPage, endPage).then((outcome: SaveThreadOutcome): void => {
+      if (outcome.ok) {
+        appStore.showToast('已保存：' + outcome.message)
+      } else if (outcome.cancelled) {
+        appStore.showToast('已取消保存')
+      } else {
+        appStore.showToast('保存失败：' + outcome.message)
+      }
+    })
   }
 
   private async handleVote(post: PostInfo, value: number): Promise<void> {
@@ -1805,6 +1887,11 @@ export struct ThreadPanel {
             this.mgr.loadedPageStart, this.mgr.loadedPageEnd
           )
           this.scrollToPid(linkPid)
+          return
+        }
+        // 离线存档模式：引用目标不在已保存的窗口内，不跳出离线上下文在线打开
+        if (this.isSavedSource()) {
+          appStore.showToast('该楼层未包含在存档中')
           return
         }
       }
@@ -2033,18 +2120,51 @@ export struct ThreadPanel {
       Column() {}.width('100%').height('100%').onClick(() => { this.showMoreMenu = false })
 
       Column() {
-        Column() {
-          Text(this.getFavoriteMenuLabel()).fontSize(15)
-            .fontColor(AppColors.textPrimary)
-            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-            .width('100%')
-            .onClick(() => {
-              this.openFavoriteFolders()
-            })
-        }
-        .width('100%')
+        if (this.isSavedSource()) {
+          Column() {
+            Text('在线模式打开').fontSize(15)
+              .fontColor(AppColors.textPrimary)
+              .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+              .width('100%')
+              .onClick(() => {
+                this.showMoreMenu = false
+                // 不预检帖子是否失效：直接以在线模式打开（栈顶帖子条目自动替换），
+                // 帖子若已删除由在线加载的错误态呈现
+                routerStore.navigateActivity(Screen.thread(this.threadTid))
+              })
+          }
+          .width('100%')
 
-        Divider().width('100%').color(AppColors.separator)
+          Divider().width('100%').color(AppColors.separator)
+        }
+
+        if (!this.isSavedSource()) {
+          Column() {
+            Text(this.getFavoriteMenuLabel()).fontSize(15)
+              .fontColor(AppColors.textPrimary)
+              .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+              .width('100%')
+              .onClick(() => {
+                this.openFavoriteFolders()
+              })
+          }
+          .width('100%')
+
+          Divider().width('100%').color(AppColors.separator)
+
+          Column() {
+            Text('离线保存帖子').fontSize(15)
+              .fontColor(AppColors.textPrimary)
+              .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+              .width('100%')
+              .onClick(() => {
+                this.openSaveThreadDialog()
+              })
+          }
+          .width('100%')
+
+          Divider().width('100%').color(AppColors.separator)
+        }
 
         Column() {
           Text('只看楼主').fontSize(15)
