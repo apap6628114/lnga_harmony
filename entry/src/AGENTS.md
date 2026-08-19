@@ -100,14 +100,50 @@
 
 
 
+# 鸿蒙 API 权威数据查询（AI 写码强制门禁）
 
+**背景**：AI 训练数据中的鸿蒙 API 知识滞后，且常与本地 SDK 不一致（本工程
+API 26.0.0 / HarmonyOS 26.0.0 Beta2）。凡涉及系统 API 的代码，一律以**本地 SDK
+声明文件**为准；**禁止仅凭记忆写 API 调用**——记忆只用于提出候选，必须经声明
+文件验证后才能落码。
+
+## 权威数据源（按优先级）
+
+1. **本地 SDK 声明文件**（最高权威：与工程 API 级别完全一致，离线可用）
+   - SDK 根：`$env:DEVECO_SDK_HOME/default`
+     （默认 `C:\Program Files\Huawei\DevEco Studio\sdk\default`）
+   - `openharmony\ets\api\@ohos.*.d.ts`（约 559 个 API 模块声明）
+   - `openharmony\ets\kits\@kit.*.d.ts`（Kit 汇总入口；新代码优先 `@kit.*` 导入）
+   - `openharmony\ets\component\*.d.ts`（ArkUI 系统组件与属性声明）
+   - `openharmony\ets\arkts\*.d.ets`（ArkTS 语言扩展，如 `@arkts.collections`）
+   - `hms\ets\api\@hms.*.d.ts` 与 `hms\ets\kits\@kit.*.d.ts`（华为专有 API；
+     openharmony 组件中查不到时再查这里）
+2. **官方文档镜像**：skill **`harmonyos-docs`** 两步检索（API 参考 / 开发指南 / 最佳实践）
+   - ⚠️ 该 skill 文档为 **API 23** 版本，滞后于本工程 API 26；签名、枚举、
+     可用性与本地声明冲突时，**一律以本地 SDK 声明为准**
+
+## 必须查询的时机（MUST）
+
+- 写/改任何引用 `@ohos.*`、`@kit.*`、`@hms.*`、`@arkts.*` 的代码之前（含 import 行）
+- 使用 ArkUI 系统组件或系统属性之前（自定义组件除外）
+- 参数、返回值、枚举取值不确定时
+- 编译/语言服务报错涉及系统 API（找不到模块、属性不存在、参数类型不匹配）时
+- 涉及权限声明（`module.json5` 的 `requestPermissions`）与 API 对应关系时
+- 需要判断某 API 在 API 26 是否可用、已废弃或被替换时
+
+## 查询方法（高效定位，禁止盲读大文件）
+
+- 模块 → 文件：`api\@ohos.<模块>.*`（如 `@ohos.net.http` → `api\@ohos.net.http.d.ts`）
+- 符号定位：用 grep 搜目标导出名/枚举名，只读所在行段
+- 组件属性：`component\<组件名>.d.ts`（如 `component\button.d.ts`）
+- Kit 导入确认：`kits\@kit.<Kit>Kit.d.ts`
+- 用法/指南/最佳实践：加载 `harmonyos-docs` skill，QUICK_INDEX → 子索引 → 目标文档
 
 
 # HarmonyOS API 使用规范
 
 - 优先使用 HarmonyOS 官方提供的 API、UI 组件、动画、代码模板
 - API 调用前请确认遵循官方文档入参、返回值及对应 API Level 和设备支持情况
-- 对于任何不肯定的语法和 API 使用，不要猜测或自行构造 API，请尝试使用搜索工具获取华为开发者官方文档并进行确认
 - 使用 API 前请确认是否需要在文件头添加 import 语句
 - 调用 API 前请确认是否需要对应权限，在对应模块的 `module.json5` 中确认权限配置
 - 如需使用依赖库，请确认依赖库的存在和匹配版本，并在对应模块的 `oh-package.json5` 中添加依赖配置
@@ -115,10 +151,6 @@
 - UI 界面展示引用的常量需要定义 resources 资源值，并使用 `$r` 引用，一般不直接使用字面值
 - 新增国际化资源字符串时在对应的国际化每种语言下添加值，避免遗漏
 - 新增颜色等资源请确认是否需要添加黑色主题支持（参考历史工程），新工程建议默认支持黑色及白色主题
-
-## ArkTS 疑难处理
-
-当处理或使用 ArkTS 时，如遇到不确定的语法、API 用法，或用户报告了编译/运行错误，必须积极通过网络搜索查阅华为开发者官方文档，确认正确的 ArkTS 使用方式，而非凭经验猜测
 
 ## ArkUI 动画规范
 
