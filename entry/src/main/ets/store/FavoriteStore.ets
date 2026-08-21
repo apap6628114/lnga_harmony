@@ -392,7 +392,11 @@ export class FavoriteStore extends BaseStore<Object> {
     }
     const scope: AuthScope = AuthScope.capture(this.auth, this.generationGuard.current())
     const requestToken: string = this.auth.token
-    const result: ApiResult = await renameFavoriteTopicFolder(requestToken, folderId, name)
+    // 服务端 modify_folder 缺省 opt 会「设为默认」（实测），重命名必须显式携带
+    // opt 保持默认状态意图：当前为默认夹 → 传 "0"（设为默认），否则传 "1"（不设）
+    const currentFolder: FavoriteTopicFolder | null = this.findFolderReference(folderId)
+    const result: ApiResult = await renameFavoriteTopicFolder(requestToken, folderId, name,
+      currentFolder?.isDefault ?? false)
     if (!scope.isCurrent(this.auth, this.generationGuard.current())) {
       result.ok = false
       result.error = '登录状态已变更'
@@ -431,7 +435,16 @@ export class FavoriteStore extends BaseStore<Object> {
     }
     const scope: AuthScope = AuthScope.capture(this.auth, this.generationGuard.current())
     const requestToken: string = this.auth.token
-    const result: ApiResult = await setDefaultFavoriteTopicFolder(requestToken, folderId)
+    // 服务端 modify_folder 的 name 必填（实测缺 name 时默认状态异常），
+    // 由快照提供当前夹名；快照缺失时防御性返回错误
+    const currentFolder: FavoriteTopicFolder | null = this.findFolderReference(folderId)
+    if (currentFolder === null || currentFolder.name.length === 0) {
+      const unavailable: ApiResult = new ApiResult()
+      unavailable.error = '无法确定收藏夹名称'
+      return unavailable
+    }
+    const result: ApiResult = await setDefaultFavoriteTopicFolder(requestToken, folderId,
+      currentFolder.name)
     if (!scope.isCurrent(this.auth, this.generationGuard.current())) {
       result.ok = false
       result.error = '登录状态已变更'

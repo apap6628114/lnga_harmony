@@ -16,7 +16,7 @@ export const LOG_ENABLED: boolean = true;
  *
  * 调试时临时改为 true 即可查看网络请求详情，无需改动其他代码。
  */
-export const VERBOSE: boolean = false;
+export const VERBOSE: boolean = true;
 
 // ============== 模块 DOMAIN 常量 ==============
 

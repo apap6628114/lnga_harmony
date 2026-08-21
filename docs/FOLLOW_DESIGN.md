@@ -230,7 +230,7 @@ MNGA 分支**没有**实现"关注/取消关注"操作接口（只有只读动�
 
 ### 5.1 API 层（新增 `entry/src/main/ets/service/api/FollowApi.ets`）
 
-对齐现有风格（`FavoriteApi.ets` / `UserApi.ets`：`ApiResult` 子类 + `sessionRegistry.getSession` + `parseNgaError` + `logger.warn`）：
+对齐现有风格（`FollowApi.ets` / `MessageApi.ets`：`ApiResult` 子类 + `sessionRegistry.getSession` + `extractFollowError` + `logger.warn`）：
 
 ```typescript
 // 关注 / 取消关注用户
@@ -331,7 +331,7 @@ Result 类：`FollowedUserListResult extends ApiResult { data: FollowedUser[] }`
 | `entry/src/main/ets/model/User.ets` | `ProfileData.followByNum` 已存在，需加 `follow` |
 | `entry/src/main/ets/store/ProfileStore.ets` | 用户资料缓存；关注操作成功后需失效/更新 |
 | `entry/src/main/ets/pages/ProfilePanel.ets`、`common/components/ProfileCardPopup.ets` | 关注按钮挂载点（现有"被关注"展示行附近） |
-| `entry/src/main/ets/service/api/FavoriteApi.ets` | `postWithQueryAndBody` 用法范本（与 get_follow/get_push_list 同构） |
+| `entry/src/main/ets/service/api/FavoriteApi.ets` | 官方签名通道用法范本（`postSigned`，与 follow 系接口同构；收藏功能已迁移至 topic_favor_v2 官方接口） |
 | `entry/src/main/ets/service/NgaClient.ets` | `INgaClient` 接口：`post` / `postWithQueryAndBody` / `postWithQuery` |
 
 **MNGA 参考（外部仓库 `C:\Users\ll\Desktop\MNGA`）**：

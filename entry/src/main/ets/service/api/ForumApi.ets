@@ -87,8 +87,9 @@ export function createTopicListParams(): TopicListParams {
 /**
  * 构建 thread.php 主题列表查询参数（JSON 主通道与 HTML 降级通道共用同一语义）。
  *
- * 仅服务普通版面/收藏/搜索列表；用户发帖/回帖历史（authorid/searchpost）已由
- * 官方 APP 签名接口承载（见 getAppUserTopicList），不再进入 thread.php 通道。
+ * 仅服务普通版面/搜索列表；用户发帖/回帖历史（authorid/searchpost）与收藏夹内
+ * 主题列表（favor）已由官方 APP 签名接口承载（见 getAppUserTopicList 与
+ * getAppFavoriteTopicList），不再进入 thread.php 通道。
  *
  * 差异仅在通道标志：JSON 通道需 `lite=js&noprefix`（script store 包裹），
  * HTML 降级走静态页（topicArg.add 元数据），其余筛选/排序参数完全一致。
@@ -106,7 +107,6 @@ function buildThreadQuery(params: TopicListParams, forJson: boolean): Record<str
     query['noprefix'] = '';
   }
 
-  if (params.favor) query['favor'] = params.favor;
   if (params.content) query['content'] = params.content;
 
   if (params.author) {
@@ -170,6 +170,69 @@ async function getAppUserTopicList(token: string, params: TopicListParams,
   return null;
 }
 
+/**
+ * 使用官方 APP 签名接口抓取收藏夹内主题列表（app_api.php favor/all）。
+ *
+ * 官方接口（POST form + sign，__output=12，signParams 为空）与 thread.php 网页版
+ * 不同，实测响应（ngabbs.com）：
+ *   {"code":"0","msg":"操作成功",
+ *    "result":{"data":[{tid,fid,author,authorid,subject,postdate,lastpost,
+ *      lastposter,replies,type,forumname,...}]},
+ *    "totalPage":"1","total":"9","currentPage":"1","perPage":"35"}
+ * - result.data 直接为主题数组（与 app_api.php user/subjects 同构），分页字段
+ *   totalPage/total/currentPage/perPage 在响应顶层（值可能为 string）
+ * - 搜索时追加 favkey（官方老封装 kt.c.P0 的 keyword 参数；thread.php 网页版
+ *   用 key，参数名不同，勿混）
+ * - 解析复用 parseAppUserTopicList（已兼容 result.data + 顶层 totalPage 形状）
+ *
+ * 网页版通道（thread.php?favor=）已随本次迁移移除，不再降级——官方接口是唯一
+ * 通道，失败即返回 null 由调用方以错误态呈现。
+ *
+ * @param token - 当前应用会话令牌
+ * @param params - 页面层主题列表参数（favor 为收藏夹 ID，key 为搜索词）
+ * @param blacklist - 用户黑名单 UID
+ * @param keywords - 标题屏蔽关键词
+ * @returns 主题列表信息；失败时返回 null
+ */
+async function getAppFavoriteTopicList(token: string, params: TopicListParams,
+  blacklist: Set<string>, keywords: string[]): Promise<TopicListInfo | null> {
+  const session = appStore.getSession(token);
+  if (!session) {
+    return null;
+  }
+  const cookies: Cookies = { uid: session.uid, cid: session.cid };
+  const page: number = Number(params.page || '1') || 1;
+  const appParams: Record<string, string> = {
+    'folder': params.favor,
+    'uid': session.uid,
+    'page': String(page),
+  };
+  if (params.key) {
+    appParams['favkey'] = params.key;
+  }
+  try {
+    const raw: Record<string, Object> = await ngaClient.postSigned(
+      '/app_api.php', 'favor', 'all', appParams, cookies, '', '12') as Record<string, Object>;
+    // 业务失败（code!=0）时记录服务端 code/msg 便于诊断（UI 统一呈现「收藏列表加载失败」）
+    const code: number = Number(raw['code'] ?? 0)
+    if (code !== 0) {
+      logger.warn('[NGA][REQ] 收藏夹列表官方接口业务失败(folder=%{public}s page=%{public}d code=%{public}d msg=%{public}s)',
+        params.favor, page, code, String(raw['msg'] ?? ''));
+      return null;
+    }
+    const info: TopicListInfo | null = parseAppUserTopicList(raw, blacklist, keywords, page);
+    if (info !== null) {
+      return info;
+    }
+    logger.warn('[NGA][REQ] 收藏夹列表官方接口无数据(folder=%{public}s page=%{public}d)',
+      params.favor, page);
+  } catch (e) {
+    logger.warn('[NGA][REQ] 收藏夹列表官方接口异常(folder=%{public}s): %{public}s',
+      params.favor, formatError(e));
+  }
+  return null;
+}
+
 export async function getTopicList(token: string, params: TopicListParams,
   blacklist: Set<string> = new Set(),
   keywords: string[] = []): Promise<TopicListResult> {
@@ -192,6 +255,21 @@ export async function getTopicList(token: string, params: TopicListParams,
     logger.warn('[NGA][REQ] 用户列表官方接口全部失败(authorid=%{public}s searchpost=%{public}s)',
       params.authorid, params.searchpost);
     result.error = '用户列表加载失败';
+    return result;
+  }
+
+  // 收藏夹内主题列表仅走官方 APP 签名接口（app_api.php favor/all，thread.php
+  // 网页版通道已移除，不再降级——官方接口是唯一通道，失败即返回错误）。
+  if (params.favor) {
+    const appInfo: TopicListInfo | null = await getAppFavoriteTopicList(token, params, blacklist, keywords);
+    if (appInfo) {
+      result.data = appInfo;
+      result.ok = true;
+      return result;
+    }
+    logger.warn('[NGA][REQ] 收藏夹列表官方接口失败(favor=%{public}s page=%{public}s)',
+      params.favor, params.page);
+    result.error = '收藏列表加载失败';
     return result;
   }
 
