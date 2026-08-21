@@ -5,10 +5,9 @@
 import { ngaClient, Cookies } from '../NgaClient';
 import { appStore } from '../../store/AppStore';
 import { parseForumCategories, parseForumSearch } from '../../parser/ForumParser';
-import { parseTopicList } from '../../parser/TopicParser';
+import { parseAppTopicList, extractAppTopicListError } from '../../parser/AppTopicListParser';
 import { parseNgaError } from '../../parser/ErrorParser';
-import { parseTopicListHtmlTask } from '../../parser/task/TopicListHtmlParseTask';
-import { taskpool } from '@kit.ArkTS';
+import { buildAppThreadQuery, buildAppSignParams } from '../../common/utils/AppTopicListQuery';
 import { ApiResult, CategoriesResult, TopicListResult, SearchForumResult } from '../../model/NgaApiResults';
 import type { TopicListInfo } from '../../model/Topic';
 import { appUserListEndpoints, parseAppUserTopicList } from '../../parser/AppUserTopicParser';
@@ -28,8 +27,20 @@ export async function getForumCategories(token: string): Promise<CategoriesResul
   }
 
   try {
-    const params: Record<string, string> = { '__lib': 'home', '__act': 'category' };
-    const raw = await ngaClient.get('/app_api.php', params, { uid: session.uid, cid: session.cid });
+    // 官方 APP 签名通道（app_api.php home/category）：POST form + sign，
+    // 业务参数仅 _v=2，signParams 为空，__output=14（卡片 2-app-business 卡片 1 实测）。
+    // 响应 {code, msg, result: Category[], forum_icon_list, forum_recommend, ...}。
+    const appParams: Record<string, string> = { '_v': '2' };
+    const raw = await ngaClient.postSigned('/app_api.php', 'home', 'category', appParams,
+      { uid: session.uid, cid: session.cid }, '', '14') as Record<string, Object>;
+    const code: number = Number(raw['code'] ?? 0);
+    if (code !== 0) {
+      // 业务失败（签名错误/频率限制等）：置错误而非静默空列表
+      result.error = String(raw['msg'] ?? `错误码: ${code}`);
+      logger.warn('[NGA][REQ] 板块分类官方接口业务失败(code=%{public}d msg=%{public}s)',
+        code, result.error);
+      return result;
+    }
     result.data = parseForumCategories(raw as object);
     result.ok = true;
   } catch (e) {
@@ -47,15 +58,39 @@ export async function searchForum(token: string, key: string): Promise<SearchFor
     return result;
   }
 
+  // 官方 APP 签名通道（app_api.php forum/search）主通道：POST form + sign，
+  // 参数 key + page，signParams=key，__output=14（逆向 NetRequestWrapper.E0，
+  // nga-hack 实测 code=0 时 result 为 Forum 数组）。
+  // 注意：官方接口对关键字长度校验苛刻（实测 ASCII 8~10 字符可行，中文多数字符数
+  // 返回 2048「关键字过短/长」），失败时降级网页版 forum.php（保留短词搜索体验）。
+  let appError: string = '';
+  try {
+    const appParams: Record<string, string> = { 'key': key, 'page': '1' };
+    const raw = await ngaClient.postSigned('/app_api.php', 'forum', 'search', appParams,
+      { uid: session.uid, cid: session.cid }, key, '14') as Record<string, Object>;
+    const code: number = Number(raw['code'] ?? 0);
+    if (code === 0) {
+      result.data = parseForumSearch(raw as object);
+      result.ok = true;
+      return result;
+    }
+    appError = String(raw['msg'] ?? `错误码: ${code}`);
+    logger.warn('[NGA][REQ] 版块搜索官方接口业务失败(key=%{public}s code=%{public}d msg=%{public}s)',
+      key, code, appError);
+  } catch (e) {
+    appError = (e as Error).message ?? '版块搜索失败';
+    logger.warn('[NGA][REQ] 版块搜索官方接口异常，降级网页版: %{public}s', appError);
+  }
+
+  // 网页版降级通道：forum.php?__output=8（短词/官方接口失败时使用）
   try {
     const params: Record<string, string> = { '__output': '8', 'key': key };
-    // 走默认通道（https + 失败时按 DOMAINS 轮换备用域），与 getTopicList 一致
     const raw = await ngaClient.get('/forum.php', params, { uid: session.uid, cid: session.cid });
     result.data = parseForumSearch(raw as object);
     result.ok = true;
   } catch (e) {
     logger.warn('搜索失败: %{public}s', formatError(e));
-    result.error = (e as Error).message ?? '搜索失败';
+    result.error = appError || ((e as Error).message ?? '搜索失败');
   }
   return result;
 }
@@ -82,51 +117,6 @@ export function createTopicListParams(): TopicListParams {
     fid: '', stid: '', page: '1', key: '', author: '', authorid: '',
     favor: '', recommend: '', orderBy: '', searchpost: '', content: '', fidgroup: '',
   };
-}
-
-/**
- * 构建 thread.php 主题列表查询参数（JSON 主通道与 HTML 降级通道共用同一语义）。
- *
- * 仅服务普通版面/搜索列表；用户发帖/回帖历史（authorid/searchpost）与收藏夹内
- * 主题列表（favor）已由官方 APP 签名接口承载（见 getAppUserTopicList 与
- * getAppFavoriteTopicList），不再进入 thread.php 通道。
- *
- * 差异仅在通道标志：JSON 通道需 `lite=js&noprefix`（script store 包裹），
- * HTML 降级走静态页（topicArg.add 元数据），其余筛选/排序参数完全一致。
- *
- * @param params 页面层主题列表参数
- * @param forJson true=JSON 通道（lite=js+noprefix），false=HTML 降级（静态页）
- * @returns thread.php 查询参数
- */
-function buildThreadQuery(params: TopicListParams, forJson: boolean): Record<string, string> {
-  const query: Record<string, string> = {
-    'page': params.page || '1',
-  };
-  if (forJson) {
-    query['lite'] = 'js';
-    query['noprefix'] = '';
-  }
-
-  if (params.content) query['content'] = params.content;
-
-  if (params.author) {
-    query['author'] = params.author;
-  } else {
-    if (params.stid) query['stid'] = params.stid;
-    else if (params.fid && params.fid !== '-1') query['fid'] = params.fid;
-    if (params.key) query['key'] = params.key;
-    if (params.fidgroup) query['fidgroup'] = params.fidgroup;
-  }
-
-  if (params.recommend) {
-    query['recommend'] = params.recommend;
-    query['order_by'] = 'postdatedesc';
-    query['user'] = '1';
-  } else if (params.orderBy) {
-    // 与 recommend 互斥（TopicListPanel 侧不会同时设置），避免 order_by 被覆盖后残留 user 参数
-    query['order_by'] = params.orderBy;
-  }
-  return query;
 }
 
 /**
@@ -273,56 +263,41 @@ export async function getTopicList(token: string, params: TopicListParams,
     return result;
   }
 
-  let jsonError: string = '';
+  // 普通版面/搜索列表：官方 APP 签名接口是唯一通道（thread.php POST form + sign，
+  // 无 __lib/__act，__output=14，signParams=fid|key）。网页版通道（GET
+  // thread.php?lite=js 与 HTML 静态页降级）已随本次迁移彻底移除——
+  // 官方接口失败即返回错误，不再降级（与关注/收藏/用户列表迁移模式一致）。
+  let channelError: string = '';
   try {
-    const ngaParams: Record<string, string> = buildThreadQuery(params, true);
-    const raw = await ngaClient.get('/thread.php', ngaParams, { uid: session.uid, cid: session.cid }) as Record<string, Object>;
-    const error = parseNgaError(raw);
+    if (params.author) {
+      // 官方 thread.php 无 author（按作者名过滤）参数；该场景无 UI 入口，
+      // 防御性直接返回错误，不静默忽略 author 导致列表语义错误
+      throw new Error('官方接口不支持作者名过滤');
+    }
+    const appParams: Record<string, string> = buildAppThreadQuery(params);
+    const signParams: string = buildAppSignParams(params);
+    const raw = await ngaClient.postSignedPath('/thread.php', appParams,
+      { uid: session.uid, cid: session.cid }, signParams, '14') as Record<string, Object>;
+    const error: string | null = extractAppTopicListError(raw);
     if (error) {
-      jsonError = error;
+      channelError = error;
+      logger.warn('[NGA][REQ] 主题列表官方签名通道业务失败(fid=%{public}s key=%{public}s page=%{public}s code-msg=%{public}s)',
+        params.fid, params.key, params.page, error);
     } else {
-      const dataObj = raw?.['data'] as Record<string, Object> | undefined;
-      const page = Number(dataObj?.['__PAGE'] ?? params.page ?? 1);
-      result.data = parseTopicList(raw, blacklist, keywords, page);
-      result.ok = true;
-      return result;
-    }
-  } catch (e) {
-    jsonError = (e as Error).message ?? '获取主题列表失败';
-    logger.warn('[NGA][REQ] 主题列表 JSON 请求失败，尝试 HTML 降级: %{public}s', jsonError);
-  }
-
-  // HTML 降级：thread.php 静态页（topicArg.add 元数据）→ 与 JSON 同形状 → 复用 parseTopicList
-  try {
-    const htmlParams: Record<string, string> = buildThreadQuery(params, false);
-    const html: string = await ngaClient.getHtmlText('/thread.php', htmlParams,
-      { uid: session.uid, cid: session.cid });
-    const rawObj: Object = await taskpool.execute(parseTopicListHtmlTask, html);
-    const dataObj = (rawObj as Record<string, Object>)?.['data'] as Record<string, Object> | undefined;
-    const page = Number(dataObj?.['__PAGE'] ?? params.page ?? 1);
-    result.data = parseTopicList(rawObj, blacklist, keywords, page);
-    result.ok = true;
-    result.viaHtml = true;
-    result.jsonError = jsonError;
-    // 调试模式：JSON 主通道失败降级为 HTML 解析时弹出提示，便于观察请求通道
-    if (result.viaHtml && result.jsonError.length > 0 && appStore.settings.debugMode) {
-      appStore.showToast('JSON 接口失败，已降级为 HTML 模式：' + result.jsonError)
-    }
-    // 降级通道解析不到任何条目时判定失败（JSON 主通道保持原语义）
-    if (result.data?.threadPageList.length === 0) {
-      result.ok = false;
-      result.error = jsonError || '无法加载主题列表';
-      if (appStore.settings.debugMode) {
-        appStore.showToast('主题列表加载失败（JSON 与 HTML 均失败）：' + result.error)
+      const page: number = Number(params.page || '1') || 1;
+      const appInfo: TopicListInfo | null = parseAppTopicList(raw, blacklist, keywords, page);
+      if (appInfo !== null) {
+        result.data = appInfo;
+        result.ok = true;
+        return result;
       }
+      channelError = '主题列表解析失败';
     }
   } catch (e) {
-    logger.warn('[NGA][REQ] 主题列表 HTML 降级失败: %{public}s', formatError(e));
-    result.error = jsonError || ((e as Error).message ?? '获取主题列表失败');
-    if (appStore.settings.debugMode) {
-      appStore.showToast('主题列表加载失败（JSON 与 HTML 均失败）：' + result.error)
-    }
+    channelError = (e as Error).message ?? '获取主题列表失败';
+    logger.warn('[NGA][REQ] 主题列表官方签名通道失败: %{public}s', channelError);
   }
+  result.error = channelError || '获取主题列表失败';
   return result;
 }
 

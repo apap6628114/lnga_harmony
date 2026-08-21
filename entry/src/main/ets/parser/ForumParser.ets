@@ -1,11 +1,12 @@
 import type { Category, CategorySub, BoardContent, ForumSearchItem } from '../model/Forum';
 
 /**
- * 解析版块搜索（forum.php?key=）响应为结构化条目。
+ * 解析版块搜索响应为结构化条目。
  *
  * NGA compact JSON（__output=8）历史上存在两种形态：裸数组与
- * `{"data": [...]}` 包装；此处两种均兼容，字段缺失一律兜底，
- * 非法条目（无 name）直接过滤。
+ * `{"data": [...]}` 包装；官方 APP 签名通道（app_api.php forum/search，
+ * __output=14）返回 `{"code":0,"result":[...]}` 的 result 数组。
+ * 三种形态均兼容，字段缺失一律兜底，非法条目（无 name）直接过滤。
  *
  * @param raw - 版块搜索响应
  * @returns 结构化版块条目列表
@@ -23,7 +24,12 @@ export function parseForumSearch(raw: object | null): ForumSearchItem[] {
     if (Array.isArray(data)) {
       list = data;
     } else {
-      return result;
+      const appResult = rawObj['result'];
+      if (Array.isArray(appResult)) {
+        list = appResult;
+      } else {
+        return result;
+      }
     }
   }
 
@@ -42,6 +48,21 @@ export function parseForumSearch(raw: object | null): ForumSearchItem[] {
   return result;
 }
 
+/**
+ * 解析版块分类树响应为结构化分类列表。
+ *
+ * 兼容两种 result 形状：
+ *  - 官方 APP 签名通道（app_api.php home/category，__output=14）：result 为
+ *    **数组**（实测 7 个分类），元素 {id, _id, name, groups:[{name, id, info,
+ *    forums:[{fid, name, bit, is_forumlist, id, icon, info, nameS}]}]}；
+ *    分类标识用 _id（实测各分类 id 恒为 0）
+ *  - 旧网页版通道：result 为数字键对象（Object.keys 遍历）
+ *
+ * 数组在 Object.keys 下返回索引字符串，两种形状共用同一数字键遍历。
+ *
+ * @param raw - 版块分类响应
+ * @returns 结构化分类列表
+ */
 export function parseForumCategories(raw: object | null): Category[] {
   const categories: Category[] = [];
   if (!raw) return categories;

@@ -50,22 +50,38 @@ const logger = new Logger(DOMAIN_NETWORK, 'NgaClient');
 
 const LOG_CHUNK_SIZE: number = 1500;
 
+/**
+ * 对请求/响应日志中的敏感字段打码（access_token/access_uid/sign/password）。
+ *
+ * 官方签名通道的 POST body 含 access_uid/access_token/sign，verbose 日志不得
+ * 泄露凭据。注意：仅脱敏值本身，参数名保留便于诊断。
+ *
+ * @param text - 原始日志文本
+ * @returns 脱敏后的日志文本
+ */
+function sanitizeSensitiveLog(text: string): string {
+  let s: string = text;
+  s = s.replace(/(access_token|access_uid|sign|password)=([^&\s]*)/gi, '$1=***');
+  return s;
+}
+
 function logChunks(prefix: string, text: string): void {
   if (!logger.isVerbose()) {
     return;
   }
-  if (text.length === 0) {
+  const safeText: string = sanitizeSensitiveLog(text);
+  if (safeText.length === 0) {
     return;
   }
-  if (text.length <= LOG_CHUNK_SIZE) {
-    logger.verbose('%{public}s', prefix + text);
+  if (safeText.length <= LOG_CHUNK_SIZE) {
+    logger.verbose('%{public}s', prefix + safeText);
     return;
   }
   let offset = 0;
   let seq = 1;
-  while (offset < text.length) {
-    const end = Math.min(offset + LOG_CHUNK_SIZE, text.length);
-    logger.verbose('%{public}s', prefix + `[${seq}]` + text.slice(offset, end));
+  while (offset < safeText.length) {
+    const end = Math.min(offset + LOG_CHUNK_SIZE, safeText.length);
+    logger.verbose('%{public}s', prefix + `[${seq}]` + safeText.slice(offset, end));
     offset = end;
     seq++;
   }
@@ -267,15 +283,92 @@ async function ngaPostWithQuery(path: string, params: Record<string, string>,
 }
 
 /**
- * App 签名接口（POST form + access_uid/access_token/sign）。
+ * 构造官方 APP 签名接口的 POST body 字段（公共参数 + 业务参数）。
+ *
+ * 公共参数（app_id/access_uid/access_token/t/sign/__output/__inchst）与业务参数
+ * 全部进 POST body（urlencoded）；签名 `sign = MD5(app_id+access_uid+access_token+
+ * signParams+t+secret)`。access_uid = session uid，access_token = session cid。
+ *
+ * @param params - 业务参数
+ * @param cookies - 会话 cookie（提供 access_uid/access_token）
+ * @param signParams - 参与签名的参数值拼接（addSignParams；无则空串）
+ * @param output - __output 值（'14'=build 默认，'12'=buildNew 默认）
+ * @returns POST body 字段
+ */
+function buildSignedFields(params: Record<string, string>, cookies: Cookies | undefined,
+  signParams: string, output: string): Record<string, string> {
+  const ts: string = String(Math.floor(Date.now() / 1000));
+  const accessUid: string = cookies ? cookies.uid : '';
+  const accessToken: string = cookies ? cookies.cid : '';
+  const fields: Record<string, string> = {
+    '__output': output,
+    '__inchst': 'utf-8',
+    'app_id': NGA_APP_ID,
+    'access_uid': accessUid,
+    'access_token': accessToken,
+    't': ts,
+    'sign': makeSign({ accessUid: accessUid, accessToken: accessToken, signParams: signParams, ts: ts }),
+  };
+  const keys = Object.keys(params);
+  for (let i = 0; i < keys.length; i++) {
+    fields[keys[i]] = params[keys[i]];
+  }
+  return fields;
+}
+
+/**
+ * 官方 APP 签名接口的完整认证头。
+ *
+ * ngaRequest 默认只有 NGA_WP_JW/X-User-Agent+Cookie，缺 X-NGA-* 会被服务端拒/
+ * 签名错误，官方接口即失败。这里与 nga-hack nga-client buildHeaders 对齐：
+ * Nga_Official 版本头 + 认证头。
+ *
+ * @returns 认证头
+ */
+function buildSignedHeaders(): Record<string, string> {
+  const extraHeaders: Record<string, string> = {
+    'User-Agent': 'Mozilla/5.0 (Linux; Android 10; NOH-AN00 Build/HUAWEINOH-AN00; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/83.0.4103.106 Mobile Safari/537.36 Nga_Official/7.17.17',
+    'X-Requested-With': 'gov.pianzong.androidnga',
+    'X-USER-AGENT': 'Nga_Official/7.17.17(HUAWEI NOH-AN00;Android 10)',
+    'X-NGA-CHANNEL': 'official',
+    'X-NGA-VERSION-NAME': '7.17.17',
+    'X-NGA-VERSION-CODE': '71717',
+    'Referer': 'https://ngabbs.com/',
+  };
+  return extraHeaders;
+}
+
+/**
+ * 官方 APP 签名 POST 的公共发送原语。
+ *
+ * skipInchst=true：query 不含 __inchst（__inchst 已由 fields 进入 body），与官方 appPost 一致。
+ * baseUrl 固定 ngabbs.com：官方接口在 ngabbs.com 有效（bbs.nga.cn 上部分接口返回
+ * 「未定义服务」，实测）；不走 DOMAINS 轮换。
+ *
+ * @param path - 请求路径（如 /thread.php、/nuke.php、/app_api.php）
+ * @param qparams - URL query 参数（带 __lib/__act 的接口由调用方传入；thread.php 无此参数）
+ * @param fields - POST body 字段（buildSignedFields 构造）
+ * @param cookies - 会话 cookie
+ * @returns NGA JSON 响应
+ */
+async function ngaPostSignedCore(path: string, qparams: Record<string, string>,
+  fields: Record<string, string>, cookies: Cookies | undefined): Promise<object> {
+  const extraHeaders: Record<string, string> = buildSignedHeaders();
+  return ngaRequest(path, http.RequestMethod.POST, qparams,
+    buildEncodedBody(fields), cookies, 'https://ngabbs.com', extraHeaders, true);
+}
+
+/**
+ * App 签名接口（POST form + access_uid/access_token/sign），__lib/__act 放 URL query。
  *
  * 对应官方客户端 appPost：`__lib/__act` 放 URL query（`<host>/<path>?__lib=..&__act=..`），
  * 其余公共参数（app_id/access_uid/access_token/t/sign/__output/__inchst）与业务参数
- * 放 POST body（urlencoded）；签名 `sign = MD5(app_id+access_uid+access_token+signParams+t+secret)`。
+ * 放 POST body（urlencoded）。
  *
  * 鸿蒙端实测：把 `__lib/__act` 放 body 时 app_api.php 返回 `{"code":2,"msg":"未定义服务"}`，
  * 放 URL query 才被识别（与 nga-hack nga-client 结论一致）。该方法供官方接口
- * （用户发帖回帖 app_api.php user/subjects|replys、私信 app_api.php message/list|detail、
+ * （首页分类 app_api.php home/category、版块搜索 app_api.php forum/search、
+ * 用户发帖回帖 app_api.php user/subjects|replys、私信 app_api.php message/list|detail、
  * 通知 app_api.php notify/list、关注动态 nuke.php follow_v2/get_push_list、
  * 关注/取关与关注/粉丝列表 nuke.php follow_v2/follow|get_follow|get_follow_by、
  * 主题收藏夹 nuke.php topic_favor_v2/list_folder|new_folder|modify_folder|
@@ -293,40 +386,33 @@ async function ngaPostWithQuery(path: string, params: Record<string, string>,
 async function ngaPostSigned(path: string, lib: string, act: string,
   params: Record<string, string>, cookies: Cookies | undefined,
   signParams: string, output: string): Promise<object> {
-  const ts: string = String(Math.floor(Date.now() / 1000));
-  const accessUid: string = cookies ? cookies.uid : '';
-  const accessToken: string = cookies ? cookies.cid : '';
-  const fields: Record<string, string> = {
-    '__output': output,
-    '__inchst': 'utf-8',
-    'app_id': NGA_APP_ID,
-    'access_uid': accessUid,
-    'access_token': accessToken,
-    't': ts,
-    'sign': makeSign({ accessUid: accessUid, accessToken: accessToken, signParams: signParams, ts: ts }),
-  };
-  const keys = Object.keys(params);
-  for (let i = 0; i < keys.length; i++) {
-    fields[keys[i]] = params[keys[i]];
-  }
+  const fields: Record<string, string> = buildSignedFields(params, cookies, signParams, output);
   const qparams: Record<string, string> = { '__lib': lib, '__act': act };
-  // 官方 APP 签名接口需要完整认证头（ngaRequest 默认只有 NGA_WP_JW/X-User-Agent+Cookie，
-  // 缺 X-NGA-* 会被服务端拒/签名错误，官方接口即失败）。
-  // 这里与 nga-hack nga-client buildHeaders 对齐：Nga_Official 版本头 + 认证头。
-  const extraHeaders: Record<string, string> = {
-    'User-Agent': 'Mozilla/5.0 (Linux; Android 10; NOH-AN00 Build/HUAWEINOH-AN00; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/83.0.4103.106 Mobile Safari/537.36 Nga_Official/7.17.17',
-    'X-Requested-With': 'gov.pianzong.androidnga',
-    'X-USER-AGENT': 'Nga_Official/7.17.17(HUAWEI NOH-AN00;Android 10)',
-    'X-NGA-CHANNEL': 'official',
-    'X-NGA-VERSION-NAME': '7.17.17',
-    'X-NGA-VERSION-CODE': '71717',
-    'Referer': 'https://ngabbs.com/',
-  };
-  // skipInchst=true：query 不含 __inchst（__inchst 已由 fields 进入 body），与官方 appPost 一致
-  // baseUrl 固定 ngabbs.com：官方接口（user/subjects|replys、load_topic_by_uid）在 ngabbs.com
-  // 有效，bbs.nga.cn 上 user/replys 返回「未定义服务」（实测）；不走 DOMAINS 轮换。
-  return ngaRequest(path, http.RequestMethod.POST, qparams,
-    buildEncodedBody(fields), cookies, 'https://ngabbs.com', extraHeaders, true);
+  return ngaPostSignedCore(path, qparams, fields, cookies);
+}
+
+/**
+ * App 签名接口（POST form + access_uid/access_token/sign），**无 __lib/__act**。
+ *
+ * 用于 thread.php 官方主题列表/主题搜索（卡片 R2：`thread.php?` 无 `__lib/__act`，
+ * 官方客户端 kt.c.V/W/S0 走 thread.php 入口 + 公共参数签名）。请求形态与
+ * ngaPostSigned 完全一致（公共参数 + 业务参数进 body，完整认证头，ngabbs.com），
+ * 仅 URL 不拼 __lib/__act。
+ *
+ * 实测（nga-hack nga-client 探测）：POST + sign + `signParams=fid|key` + `__output=14`
+ * 返回 `{"code":0,"result":{"__T":[...],"__F":{...},"__ROWS":...,"__T__ROWS_PAGE":35,...}}`；
+ * signParams 传错（空/不符）返回 `{"code":5,"msg":"签名错误"}`。
+ *
+ * @param path - 请求路径（如 /thread.php）
+ * @param params - 业务参数（进 body）
+ * @param cookies - 会话 cookie（提供 access_uid/access_token 与 Cookie 头）
+ * @param signParams - 参与签名的参数值拼接（thread.php 主题列表 = fid，搜索 = key；无则空串）
+ * @param output - __output，默认 '14'（thread.php 官方通道实测值）
+ */
+async function ngaPostSignedPath(path: string, params: Record<string, string>,
+  cookies: Cookies | undefined, signParams: string, output: string): Promise<object> {
+  const fields: Record<string, string> = buildSignedFields(params, cookies, signParams, output);
+  return ngaPostSignedCore(path, emptyStringRecord(), fields, cookies);
 }
 
 async function ngaGetRaw(path: string, params: Record<string, string>,
@@ -373,7 +459,7 @@ async function ngaRequest(path: string, method: http.RequestMethod,
   const rawText = decodeGb18030(response.body);
   logChunks('[NGA][RES] body:', rawText);
 
-  // 部分接口（如 ucp/get、thread.php 主题列表，lite=js）成功时也返回 HTML 包裹的
+  // 部分接口（如 ucp/get）成功时也返回 HTML 包裹的
   // <script>window.script_muti_get_var_store={...}</script> 而非纯 JSON；
   // 必须先于「HTML 错误页」判定识别该形态，否则会被误判为错误页。
   const storeJson: string | null = extractScriptStoreJson(rawText);
@@ -452,6 +538,9 @@ interface INgaClient {
   /** App 签名接口（POST form + access_uid/access_token/sign），__lib/__act 放 URL query。 */
   postSigned: (path: string, lib: string, act: string, params: Record<string, string>,
     cookies: Cookies | undefined, signParams: string, output: string) => Promise<object>;
+  /** App 签名接口（POST form + access_uid/access_token/sign），无 __lib/__act（thread.php 官方通道）。 */
+  postSignedPath: (path: string, params: Record<string, string>,
+    cookies: Cookies | undefined, signParams: string, output: string) => Promise<object>;
   getHtmlText: (path: string, params: Record<string, string>,
     cookies?: Cookies) => Promise<string>;
   getCaptchaV2: (captchaId: string) => Promise<string>;
@@ -496,6 +585,11 @@ const client: INgaClient = {
     params: Record<string, string>, cookies: Cookies | undefined,
     signParams: string, output: string): Promise<object> {
     return ngaPostSigned(path, lib, act, params, cookies, signParams, output);
+  },
+
+  async postSignedPath(path: string, params: Record<string, string>,
+    cookies: Cookies | undefined, signParams: string, output: string): Promise<object> {
+    return ngaPostSignedPath(path, params, cookies, signParams, output);
   },
 
   async getHtmlText(path: string, params: Record<string, string>,

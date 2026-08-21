@@ -1,4 +1,0 @@
-{
-  "note": "thread.php 主题列表 HTML 降级已知缺口（字段级豁免，适用于全部成对样本）：__P.postdate 静态页面无回复时间（官方网页版亦不显示，保持空值不伪造）。占位条目（subject 含「超过限制/帐号权限不足」）的 tid/fid/__P.tid/__P.pid/__P.type 为服务端占位符（HTML 与 JSON 各给一套假值），由测试自动豁免；真实条目的 __P.type 从 commonui.postDispMini 第 7 参恢复，与 JSON 一致。",
-  "fields": ["__P.postdate"]
-}

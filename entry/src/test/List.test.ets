@@ -12,13 +12,13 @@ import followUnitTest from './FollowUnit.test';
 import sanitizerUnitTest from './SanitizerUnit.test';
 import guardedRefreshUnitTest from './GuardedRefreshUnit.test';
 import cacheEnvelopeUnitTest from './CacheEnvelopeUnit.test';
-import topicListHtmlUnitTest from './TopicListHtmlUnit.test';
 import ngaSignerUnitTest from './NgaSignerUnit.test';
 import appUserTopicUnitTest from './AppUserTopicUnit.test';
 import appMessageUnitTest from './AppMessageUnit.test';
 import appFollowActivityUnitTest from './AppFollowActivityUnit.test';
 import appNotificationUnitTest from './AppNotificationUnit.test';
 import appFavoriteTopicUnitTest from './AppFavoriteTopicUnit.test';
+import appTopicListUnitTest from './AppTopicListUnit.test';
 
 /**
  * 注册全部本地单元测试。
@@ -38,11 +38,11 @@ export default function testsuite(): void {
   sanitizerUnitTest();
   guardedRefreshUnitTest();
   cacheEnvelopeUnitTest();
-  topicListHtmlUnitTest();
   ngaSignerUnitTest();
   appUserTopicUnitTest();
   appMessageUnitTest();
   appFollowActivityUnitTest();
   appNotificationUnitTest();
   appFavoriteTopicUnitTest();
+  appTopicListUnitTest();
 }

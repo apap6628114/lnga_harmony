@@ -65,24 +65,20 @@ HTML 降级通道：read.php 静态 HTML → parseHtmlToRawJson
 4. 仅有 `pid`、没有 `tid` 的客户端场景当前直接走 HTML，这是现有特例，不改变 `tid` 帖子
    “JSON 优先”的总规则。
 
-#### R1.1b 主题列表/用户发帖回帖记录 MUST 先走 JSON（thread.php）
+#### R1.1b 主题列表/用户发帖回帖记录已迁移官方 APP 签名通道（无 HTML 降级）
 
-主题列表（`ForumApi.getTopicList`，含「我的主题/我的回帖」）与用户成分分析
-（`UserApi.getUserActivityAnalysis`）共用同一通道语义：
+主题列表（`ForumApi.getTopicList`，含「我的主题/我的回帖」）已全面接入官方 APP
+签名接口（设计文档 `docs/FORUM_API_DESIGN.md`）：
 
-1. MUST 首先请求 `thread.php?lite=js&noprefix&[authorid=<uid>][&searchpost=1]`，
-   响应为 `window.script_muti_get_var_store={JSON}` 包裹的 `{data:{__T,...}}`。
-2. JSON 请求、净化、解析或 NGA 业务检查失败后，MAY 降级抓取 `thread.php` 静态 HTML，
-   经 `parseHtmlTopicListToRawJson`（镜像真源 `src/parser/nga/html-topiclist/`）
-   还原为同形状 `{data:{__T,...}}`，直接复用 `parseTopicList`。
-3. 页面静态 HTML 数据源是每行后的 `commonui.topicArg.add(...)` 元数据脚本
-   （21 形参位：fid/tid/pid/quoteTid/quoteFrom/postdate/lastpost/replies/type/topicMisc），
-   DOM 仅承载标题/作者/版块等展示字段；降级解析以 topicArg 参数为准、DOM 为辅。
-4. 已知缺口（不伪造）：`__P.postdate`（回复发布时间，静态页无）、占位条目
-   （subject 含「超过限制/帐号权限不足」）的 tid/fid/__P.tid/__P.pid/__P.type
-   为服务端占位符；`__ROWS` 按 `__PAGE` 总页数×每页行数估计。
-5. 客户端调试模式（`appStore.settings.debugMode`）下，降级成功或双通道均失败会
-   弹 Toast 提示（与 `ThreadApi.getThread` 行为一致）。
+1. 普通版面/搜索列表走 `thread.php` 官方签名通道（POST form + sign，无 `__lib/__act`，
+   `__output=14`，signParams=fid|key，参数构建见
+   `entry/src/main/ets/common/utils/AppTopicListQuery.ets`，解析见
+   `parser/AppTopicListParser.ets`）；用户主页发帖/回帖走
+   `app_api.php user/subjects|replys`（`parser/AppUserTopicParser.ets`）。
+2. **官方通道是唯一通道**：失败即返回错误，**无** thread.php HTML 静态页降级
+   （html-topiclist 解析器已随迁移移除，2026-08）。
+3. 帖子详情（read.php）仍保留 JSON 主通道 + HTML 降级（Rule 1.1 / html-thread），
+   本节的 JSON/HTML 双通道规则仅适用于帖子详情。
 
 #### R1.2 不同事实必须使用不同基准
 
@@ -226,14 +222,12 @@ npm run inspect:html -- 47373567 2 20 23 34
 
 #### R4.1 真源边界
 
-下列 34 个 `.ts` 文件属于镜像真源，`npm run sync` 会按相对路径机械覆盖为 `.ets`：
+下列 31 个 `.ts` 文件属于镜像真源，`npm run sync` 会按相对路径机械覆盖为 `.ets`：
 
 - `src/parser/bbcode/`：BBCode 词法、块级、内联和 handler；
 - `src/parser/_shared/`：HTML 实体和附件 URL；
 - `src/parser/AnonymousParser.ts`、`src/parser/NgaJsonSanitizer.ts`；
 - `src/parser/nga/html-thread/`：帖子 HTML 降级解析器（read.php → JSON 同形状）；
-- `src/parser/nga/html-topiclist/`：主题列表 HTML 降级解析器（thread.php 静态页
-  `topicArg.add` 元数据 → JSON 同形状，含用户发帖/回帖记录，见 Rule 1.1b）；
 - `src/model/BBCodeNode.ts`；
 - `src/common/components/bbcode/`：Run 格式化和表格布局；
 - `src/common/typography/`、`src/common/constants/`、`src/common/utils/Utils.ts`。
@@ -411,7 +405,6 @@ tools/bbcode-ts/
     parser/bbcode/              # BBCode 解析
     parser/_shared/             # 实体、附件 URL
     parser/nga/html-thread/     # 帖子 HTML 降级 → JSON 同形状
-    parser/nga/html-topiclist/  # 主题列表 HTML 降级（topicArg.add → JSON 同形状）
     parser/NgaJsonSanitizer.ts  # JSON 非标准输入净化
     parser/AnonymousParser.ts   # 匿名名解码
     model/BBCodeNode.ts         # 语义树节点
@@ -430,7 +423,6 @@ npm run build
 npm run inspect:json -- <tid> [page] [输出文件名] [lou]
 npm run inspect:html -- <tid> [page] [lou ...]
 node scripts/fetch-thread-pair.mjs <tid> [page]
-node scripts/fetch-topic-pair.mjs <uid> [reply] [page]   # 用户发帖/回帖记录成对抓取
 npm run compare:html-json
 npm run compare:official
 npm run snapshot

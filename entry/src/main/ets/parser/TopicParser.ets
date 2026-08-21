@@ -120,7 +120,13 @@ function collectSubBoards(raw: Object | undefined, idKind: SubBoardIdKind,
   const keys: string[] = Object.keys(record);
   for (let i = 0; i < keys.length; i++) {
     const key: string = keys[i];
-    const childKind: SubBoardIdKind = key === 'item' || key === 'fid' ? 'fid'
+    // 子版块字典的数字键（如 "124"）与合集键（如 "t25124476"）的数组值
+    // 第一个元素是 fid（官方 thread.php 实测/卡片 R2：{key: [fid, 名称, 简介,
+    // tid, 类型位]}），按 fid 解析；item/fid 分组同 fid，stid 分组显式 stid。
+    const isNumericKey: boolean = /^\d+$/.test(key);
+    const isTopicKey: boolean = key.startsWith('t') && /^\d+$/.test(key.slice(1));
+    const childKind: SubBoardIdKind = key === 'item' || key === 'fid'
+      || isNumericKey || isTopicKey ? 'fid'
       : key === 'stid' ? 'stid' : idKind;
     collectSubBoards(record[key], childKind, result, seen);
   }
