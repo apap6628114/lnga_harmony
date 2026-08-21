@@ -15,7 +15,7 @@
 /**
  * 从 NGA 响应文本中提取 `window.script_muti_get_var_store=` 变量存储中的 JSON。
  *
- * 部分接口（如 `follow_v2` 系列，`__output=3`）即使成功也返回 HTML 包裹的
+ * 部分接口（如 `ucp/get`、`thread.php` 主题列表，`lite=js`）即使成功也返回 HTML 包裹的
  * `<script>window.script_muti_get_var_store={...}</script>` 而非纯 JSON，
  * 需在「HTML 错误页」判定之前先识别该形态。
  *
