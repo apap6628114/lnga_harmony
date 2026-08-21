@@ -1,5 +1,25 @@
 # NGA 关注系统设计文档（Follow）
 
+> **2026-08 迁移说明**：本文 2/3 节记录的网页版通道（`__output=3` 的
+> `raw.data` 序号字典 / `script_muti_get_var_store` 包裹）已随「关注功能全面接入
+> 官方 APP 签名接口」迁移**移除**，不再降级。现行实现只走官方签名通道
+> （POST form + sign，`__lib/__act` 放 URL query，`signParams` 恒为空串）：
+>
+> - 关注/取关：`nuke.php?__lib=follow_v2&__act=follow`，body `id` + `type`(1/8)，`__output=14`
+> - 我的关注：`nuke.php?__lib=follow_v2&__act=get_follow`，body `page`，`__output=12`
+> - 我的粉丝：`nuke.php?__lib=follow_v2&__act=get_follow_by`，body `page` + `uid`，`__output=12`
+> - 关注动态：`nuke.php?__lib=follow_v2&__act=get_push_list`，body `page`，`__output=12`
+>
+> 官方通道响应形状（ngabbs.com 实测）：成功 `{code:0,result:[...]}`；follow 写操作
+> `{code:0,result:["操作成功"]}`（重复操作服务端幂等）；业务失败 `code!=0 + msg`。
+> 关注/粉丝列表的 `result` 为用户数组 `{uid,username,groupid,bit_data,avatar}`（uid 为
+> 数字），解析见 `parser/FollowParser.ets`（`parseFollowedUsers`/`extractFollowError`），
+> 请求构造见 `service/api/FollowApi.ets`。协议情报完整来源：nga-hack
+> `nga-client/docs/cards/3-nuke-user.md`（卡片 9/10）。
+>
+> 本文其余章节（位掩码废弃结论、生态现状、MNGA 对照、落地建议）仍可作为
+> 功能语义与 UI 行为的历史参考。
+
 本文汇总 NGA 关注（关注用户）功能的完整情报，作为 nga_oh 开发关注系统的设计依据与契约。
 文中所有接口协议均通过**真实登录账号在 bbs.nga.cn 上抓包实测验证**（关注 → 查列表 → 查动态 → 取消关注全流程闭环），并交叉核对了 NGA 前端源码（`js_commonui.js` / `js_ucp.js`）与 MNGA 参考实现（`bz/enormous-pike` 分支）。
 
@@ -50,6 +70,8 @@ Body: __lib=follow_v2&__act=follow&id={uid}&type={type}&raw=3
 ```json
 {"error":{"0":"你已经关注这个用户了"}}
 ```
+
+> ⚠️ 上述「重复发 type=1 被拒」与「响应 `{"data":{"0":"操作成功"}}`」均为**网页版通道**（`raw=3`）实测行为。**官方 APP 签名通道**（现行通道，见头部迁移说明）对重复操作**幂等**返回 `{code:0,result:["操作成功"]}`（2026-08 实测：重复取消同样返回成功），错误形态为 `code!=0 + msg`。
 
 > **位掩码废弃结论（重要）**：`js_commonui.js` 中的位掩码注释（`1fo用户 2fo主题 4fo回复 ... 128取消fo用户的回复`）是**历史设计文档**，但服务端 `follow_v2.follow` **只实现了 `1`/`8`/`256`**：
 >

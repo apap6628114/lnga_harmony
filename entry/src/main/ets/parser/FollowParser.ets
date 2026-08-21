@@ -1,11 +1,18 @@
 /**
- * NGA 关注系统响应解析器 - follow_v2.get_follow / get_push_list
+ * NGA 关注系统响应解析器 - follow_v2.get_follow / get_push_list（官方 APP 签名通道）
  *
- * - get_follow（我关注的用户）：网页版通道（__output=3），raw.data 序号字典结构，
- *   parseFollowedUsers 处理
- * - get_push_list（关注动态）：仅官方 APP 签名通道（__output=12，POST+sign），
- *   raw.result 直接为活动数组（元素为数字键对象 + summary，无用户表/主题表/分页字段），
- *   parseAppFollowedActivity 处理
+ * 本模块只处理官方 APP 签名通道（__output=12，POST form + sign）的响应形状；
+ * 网页版通道（__output=3 的 raw.data 序号字典）已随迁移移除，不再降级。
+ *
+ * - get_follow / get_follow_by（我关注的用户 / 我的粉丝）：响应
+ *   {"code":0,"result":[{uid,username,groupid,bit_data,avatar}]}（实测 ngabbs.com），
+ *   result 直接为用户数组（uid 为数字），parseFollowedUsers 处理；
+ *   业务失败（code!=0）或 result 缺失/非数组时返回空列表。
+ * - get_push_list（关注动态）：raw.result 直接为活动数组（元素为数字键对象 + summary，
+ *   无用户表/主题表/分页字段），parseAppFollowedActivity 处理。
+ *
+ * 协议情报来源：nga-hack nga-client/docs/cards（3-nuke-user.md 卡片 9/10 与
+ * METHODS_UNDECOMPILED_SOLVED.md 实测样本）+ 本仓库实测（2026-08）。
  */
 import {
   FollowedUser,
@@ -92,52 +99,70 @@ function buildActivityFromValues(values: Object[], summary: string): FollowedAct
 }
 
 /**
- * 从 NGA JSON 响应中读取 data 对象。
+ * 提取 follow_v2 系列接口（follow/get_follow/get_follow_by）的业务错误文案。
  *
- * @param raw - NGA 客户端返回的完整响应
- * @returns data 对象；缺失或非对象时返回空对象
+ * 官方 APP 签名通道响应为 `{code, msg, result}`（实测：成功 `{code:0,
+ * result:["操作成功"]}`，重复操作幂等返回成功；业务失败形态为 code!=0 + msg，
+ * 与 get_push_list 等官方接口一致）。另兼容旧网页版 `{"error":{"0":"..."}}`
+ * 形态与 ngaRequest 的 `__parseError` 响应（JSON 解析失败）作防御。
+ *
+ * @param raw - 官方接口响应
+ * @returns 错误文案；成功（code=0）或形状缺失时返回 null
  */
-function getFollowResponseData(raw: object): Record<string, Object> {
-  const response: Record<string, Object> = raw as Record<string, Object>
-  const data: Object | undefined = response['data']
-  if (data !== undefined && data !== null && typeof data === 'object' && !Array.isArray(data)) {
-    return data as Record<string, Object>
+export function extractFollowError(raw: object): string | null {
+  const rec: Record<string, Object> = raw as Record<string, Object>
+  // ngaRequest 在 JSON 解析失败时返回 {__parseError:true, __rawLength:N, error:Error 实例}
+  // （NgaClient.ets），Error 实例不是可遍历的错误对象，必须先于 error/code 分支识别；
+  // 否则 error['0'] 取不到、code 缺失回落 0，会把「响应解析失败」误判为成功
+  // （旧 parseNgaError 对 Error 实例返回「未知错误」，此处修复该行为回归）。
+  if (rec['__parseError'] === true) {
+    return '响应解析失败'
   }
-  return {}
+  const err: Object | undefined = rec['error']
+  if (err !== undefined && err !== null) {
+    if (typeof err === 'string') {
+      return String(err)
+    }
+    const err0: Object | undefined = (err as Record<string, Object>)['0']
+    if (err0 !== undefined && err0 !== null) {
+      return String(err0)
+    }
+  }
+  const code: number = Number(rec['code'] ?? 0)
+  if (code === 0) {
+    return null
+  }
+  const msg: Object | undefined = rec['msg']
+  return msg !== undefined && msg !== null ? String(msg) : `错误码: ${code}`
 }
 
 /**
- * 判断值是否为可遍历的普通对象（非 null、非数组）。
+ * 解析我关注的用户 / 我的粉丝列表（官方 APP 签名通道 get_follow/get_follow_by
+ * __output=12）。
  *
- * @param value - 待判断值
- * @returns 是普通对象返回 true
- */
-function isPlainObject(value: Object | undefined): boolean {
-  return value !== undefined && value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-/**
- * 解析我关注的用户列表（follow_v2.get_follow 的 data[0]）。
+ * 响应形状（实测）：`{"code":0,"result":[{uid,username,groupid,bit_data,avatar}]}`，
+ * result 直接为用户数组，元素 uid 为数字（解析统一转字符串）；
+ * 空数据形态为 result:[]，返回空列表；code!=0（业务失败）或 result 缺失/非数组
+ * （形状异常）同样返回空列表，由调用方以失败态呈现（不把异常形状当空数据）。
  *
- * data[0] 是「序号 → 用户对象」的映射，用户对象至少含 uid/username/avatar。
- * 空数据形态为 {} 或缺失，均返回空列表。
- *
- * @param raw - NGA 客户端返回的完整响应
- * @returns 关注的用户列表
+ * @param raw - 官方接口响应
+ * @returns 用户列表
  */
 export function parseFollowedUsers(raw: object): FollowedUser[] {
-  const data: Record<string, Object> = getFollowResponseData(raw)
-  const container: Object | undefined = data['0']
-  if (!isPlainObject(container)) {
+  const rec: Record<string, Object> = raw as Record<string, Object>
+  const code: number = Number(rec['code'] ?? 0)
+  if (code !== 0) {
     return []
   }
-
-  const record: Record<string, Object> = container as Record<string, Object>
-  const keys: string[] = Object.keys(record)
+  const res: Object | undefined = rec['result']
+  if (res === undefined || res === null || !Array.isArray(res)) {
+    return []
+  }
+  const arr: Object[] = res as Object[]
   const users: FollowedUser[] = []
-  for (let i = 0; i < keys.length; i++) {
-    const entry: Object = record[keys[i]]
-    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+  for (let i = 0; i < arr.length; i++) {
+    const entry: Object | undefined = arr[i]
+    if (entry === undefined || entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
       continue
     }
     const item: Record<string, Object> = entry as Record<string, Object>

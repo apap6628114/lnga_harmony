@@ -276,7 +276,8 @@ async function ngaPostWithQuery(path: string, params: Record<string, string>,
  * 鸿蒙端实测：把 `__lib/__act` 放 body 时 app_api.php 返回 `{"code":2,"msg":"未定义服务"}`，
  * 放 URL query 才被识别（与 nga-hack nga-client 结论一致）。该方法供官方接口
  * （用户发帖回帖 app_api.php user/subjects|replys、私信 app_api.php message/list|detail、
- * 通知 app_api.php notify/list、动态 nuke.php follow_v2/get_push_list 等）使用，
+ * 通知 app_api.php notify/list、关注动态 nuke.php follow_v2/get_push_list、
+ * 关注/取关与关注/粉丝列表 nuke.php follow_v2/follow|get_follow|get_follow_by 等）使用，
  * 是官方 APP 签名接口的统一通道。
  *
  * @param path - 请求路径（如 /nuke.php、/app_api.php）
@@ -370,7 +371,7 @@ async function ngaRequest(path: string, method: http.RequestMethod,
   const rawText = decodeGb18030(response.body);
   logChunks('[NGA][RES] body:', rawText);
 
-  // 部分接口（如 follow_v2 系列，__output=3）成功时也返回 HTML 包裹的
+  // 部分接口（如 ucp/get、thread.php 主题列表，lite=js）成功时也返回 HTML 包裹的
   // <script>window.script_muti_get_var_store={...}</script> 而非纯 JSON；
   // 必须先于「HTML 错误页」判定识别该形态，否则会被误判为错误页。
   const storeJson: string | null = extractScriptStoreJson(rawText);

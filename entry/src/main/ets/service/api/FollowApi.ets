@@ -1,11 +1,21 @@
 /**
- * NGA 关注系统 API - 关注/取消关注用户、我关注的用户、关注动态
+ * NGA 关注系统 API - 关注/取消关注用户、我关注的用户、我的粉丝、关注动态
  *
- * 协议见 docs/FOLLOW_DESIGN.md（bbs.nga.cn 实测）：
- * - follow：POST /nuke.php，body 含 __lib=follow_v2&__act=follow&id={uid}&type={1|8}&raw=3
- * - get_follow / get_follow_by：必须 POST，__lib/__act/page 在 query，__output=3 在 body
- * - get_push_list（关注动态）：仅走官方 APP 签名接口（POST form + sign，
- *   __output=12，不分页），见 fetchFollowedActivity
+ * 全部走官方 APP 签名接口（POST form + sign，__lib/__act 放 URL query）：
+ * - follow（关注/取关）：nuke.php?__lib=follow_v2&__act=follow，
+ *   body 含 id={uid}&type={1|8}，__output=14（实测响应 {code:0,result:["操作成功"]}，
+ *   重复操作服务端幂等）
+ * - get_follow（我关注的用户）：nuke.php?__lib=follow_v2&__act=get_follow，
+ *   body 含 page，__output=12（实测 {code:0,result:[{uid,username,groupid,bit_data,avatar}]}）
+ * - get_follow_by（我的粉丝）：nuke.php?__lib=follow_v2&__act=get_follow_by，
+ *   body 含 page + uid，__output=12（响应与 get_follow 同构；官方客户端 MY_FANS_LIST
+ *   恒带 uid，uid 缺省时以当前会话 uid 填充）
+ * - get_push_list（关注动态）：nuke.php?__lib=follow_v2&__act=get_push_list，
+ *   __output=12，signParams 为空，见 fetchFollowedActivity
+ *
+ * 协议情报来源：nga-hack nga-client/docs/cards（3-nuke-user.md 卡片 9/10、
+ * METHODS_UNDECOMPILED_SOLVED.md）与 bbs/ngabbs 实测；网页版通道（__output=3 的
+ * postWithQueryAndBody 形态）已随本次迁移移除，不再降级——官方接口是唯一通道。
  *
  * 缓存分工约定：本层只负责请求与解析，不修改 ProfileStore；调用方在写操作
  * （followUser）成功后自行做乐观更新 + 失败回滚 + appStore.invalidateProfile(uid)。
@@ -13,7 +23,6 @@
 
 import { ngaClient, Cookies } from '../NgaClient';
 import { sessionRegistry } from '../../store/SessionRegistry';
-import { parseNgaError } from '../../parser/ErrorParser';
 import { ApiResult } from '../../model/NgaApiResults';
 import {
   FollowedUserListResult,
@@ -22,18 +31,23 @@ import {
 import {
   parseFollowedUsers,
   parseAppFollowedActivity,
+  extractFollowError,
 } from '../../parser/FollowParser';
 import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger';
 
 const logger = new Logger(DOMAIN_SERVICE, 'FollowApi')
 
 /**
- * 关注或取消关注用户。
+ * 关注或取消关注用户（官方 APP 签名接口 follow_v2.follow）。
+ *
+ * 仅走官方签名通道（POST form + sign，__output=14，signParams 为空）：
+ * type=1 关注、type=8 取消关注（实测服务端对重复操作幂等返回"操作成功"，
+ * 不会返回"你已经关注这个用户了"之类拒绝；业务失败以 code!=0 + msg 透出）。
  *
  * @param token - 当前应用会话令牌
  * @param uid - 目标用户 ID
  * @param follow - true 关注（type=1），false 取消关注（type=8）
- * @returns 通用操作结果；服务端错误（如"你已经关注这个用户了"）直接透出
+ * @returns 通用操作结果；服务端错误（如 code!=0 的 msg）直接透出
  */
 export async function followUser(token: string, uid: string, follow: boolean): Promise<ApiResult> {
   const result = new ApiResult()
@@ -47,15 +61,15 @@ export async function followUser(token: string, uid: string, follow: boolean): P
     return result
   }
   try {
-    const fields: Record<string, string> = {
-      '__lib': 'follow_v2',
-      '__act': 'follow',
+    const cookies: Cookies = { uid: session.uid, cid: session.cid }
+    const params: Record<string, string> = {
       'id': uid,
       'type': follow ? '1' : '8',
-      'raw': '3',
     }
-    const raw: object = await ngaClient.post('/nuke.php', fields, { uid: session.uid, cid: session.cid })
-    const error: string | null = parseNgaError(raw)
+    const raw: Record<string, Object> = await ngaClient.postSigned(
+      '/nuke.php', 'follow_v2', 'follow', params, cookies, '', '14'
+    ) as Record<string, Object>
+    const error: string | null = extractFollowError(raw)
     if (error !== null) {
       result.error = error
       return result
@@ -69,7 +83,10 @@ export async function followUser(token: string, uid: string, follow: boolean): P
 }
 
 /**
- * 获取我关注的用户列表（分页）。
+ * 获取我关注的用户列表（官方 APP 签名接口 follow_v2.get_follow，分页）。
+ *
+ * 仅走官方签名通道（POST form + sign，__output=12，signParams 为空），响应
+ * result 直接为用户数组；官方接口无总页数字段，调用方沿用「上一页非空即翻页」。
  *
  * @param token - 当前应用会话令牌
  * @param page - 页码（1 基）
@@ -83,17 +100,21 @@ export async function fetchFollowedUsers(token: string, page: number): Promise<F
     return result
   }
   try {
-    const query: Record<string, string> = {
-      '__lib': 'follow_v2',
-      '__act': 'get_follow',
-      'page': String(page),
-    }
-    const body: Record<string, string> = { '__output': '3' }
-    const raw: object = await ngaClient.postWithQueryAndBody(
-      '/nuke.php', query, body, { uid: session.uid, cid: session.cid })
-    const error: string | null = parseNgaError(raw)
+    const cookies: Cookies = { uid: session.uid, cid: session.cid }
+    const params: Record<string, string> = { 'page': String(page) }
+    const raw: Record<string, Object> = await ngaClient.postSigned(
+      '/nuke.php', 'follow_v2', 'get_follow', params, cookies, '', '12'
+    ) as Record<string, Object>
+    const error: string | null = extractFollowError(raw)
     if (error !== null) {
       result.error = error
+      return result
+    }
+    // 形状严格校验（与 MessageApi「数据格式异常」语义对齐）：code=0 但 result
+    // 缺失/非数组视为失败而非「空数据」，防止调用方把异常形状当空列表
+    const res: Object | undefined = raw['result']
+    if (res === undefined || res === null || !Array.isArray(res)) {
+      result.error = '关注列表数据格式异常'
       return result
     }
     result.data = parseFollowedUsers(raw)
@@ -106,7 +127,12 @@ export async function fetchFollowedUsers(token: string, page: number): Promise<F
 }
 
 /**
- * 获取用户的粉丝列表（分页）。
+ * 获取用户的粉丝列表（官方 APP 签名接口 follow_v2.get_follow_by，分页）。
+ *
+ * 仅走官方签名通道（POST form + sign，__output=12，signParams 为空）。
+ * 官方客户端 MY_FANS_LIST（NetRequestWrapper.l0(page, uid)）恒带 uid 参数；
+ * uid 为空时以当前登录账号 uid 填充（查自己的粉丝）。响应与 get_follow 同构
+ * （实测），解析复用 parseFollowedUsers。
  *
  * @param token - 当前应用会话令牌
  * @param page - 页码（1 基）
@@ -121,20 +147,20 @@ export async function fetchFollowers(token: string, page: number, uid: string = 
     return result
   }
   try {
-    const query: Record<string, string> = {
-      '__lib': 'follow_v2',
-      '__act': 'get_follow_by',
-      'page': String(page),
-    }
-    if (uid.length > 0) {
-      query['uid'] = uid
-    }
-    const body: Record<string, string> = { '__output': '3' }
-    const raw: object = await ngaClient.postWithQueryAndBody(
-      '/nuke.php', query, body, { uid: session.uid, cid: session.cid })
-    const error: string | null = parseNgaError(raw)
+    const cookies: Cookies = { uid: session.uid, cid: session.cid }
+    const params: Record<string, string> = { 'page': String(page) }
+    params['uid'] = uid.length > 0 ? uid : session.uid
+    const raw: Record<string, Object> = await ngaClient.postSigned(
+      '/nuke.php', 'follow_v2', 'get_follow_by', params, cookies, '', '12'
+    ) as Record<string, Object>
+    const error: string | null = extractFollowError(raw)
     if (error !== null) {
       result.error = error
+      return result
+    }
+    const res: Object | undefined = raw['result']
+    if (res === undefined || res === null || !Array.isArray(res)) {
+      result.error = '粉丝列表数据格式异常'
       return result
     }
     result.data = parseFollowedUsers(raw)
