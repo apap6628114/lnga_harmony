@@ -13,6 +13,8 @@ import sanitizerUnitTest from './SanitizerUnit.test';
 import guardedRefreshUnitTest from './GuardedRefreshUnit.test';
 import cacheEnvelopeUnitTest from './CacheEnvelopeUnit.test';
 import topicListHtmlUnitTest from './TopicListHtmlUnit.test';
+import ngaSignerUnitTest from './NgaSignerUnit.test';
+import appUserTopicUnitTest from './AppUserTopicUnit.test';
 
 /**
  * 注册全部本地单元测试。
@@ -33,4 +35,6 @@ export default function testsuite(): void {
   guardedRefreshUnitTest();
   cacheEnvelopeUnitTest();
   topicListHtmlUnitTest();
+  ngaSignerUnitTest();
+  appUserTopicUnitTest();
 }

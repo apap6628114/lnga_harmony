@@ -2,7 +2,7 @@
  * NGA 版块 API - 版块分类、版块搜索、主题列表
  */
 
-import { ngaClient } from '../NgaClient';
+import { ngaClient, Cookies } from '../NgaClient';
 import { appStore } from '../../store/AppStore';
 import { parseForumCategories, parseForumSearch } from '../../parser/ForumParser';
 import { parseTopicList } from '../../parser/TopicParser';
@@ -10,6 +10,9 @@ import { parseNgaError } from '../../parser/ErrorParser';
 import { parseTopicListHtmlTask } from '../../parser/task/TopicListHtmlParseTask';
 import { taskpool } from '@kit.ArkTS';
 import { ApiResult, CategoriesResult, TopicListResult, SearchForumResult } from '../../model/NgaApiResults';
+import type { TopicListInfo } from '../../model/Topic';
+import { appUserListEndpoints, parseAppUserTopicList } from '../../parser/AppUserTopicParser';
+import type { AppUserListEndpoint } from '../../parser/AppUserTopicParser';
 import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger';
 
 const logger = new Logger(DOMAIN_SERVICE, 'ForumApi')
@@ -84,6 +87,9 @@ export function createTopicListParams(): TopicListParams {
 /**
  * 构建 thread.php 主题列表查询参数（JSON 主通道与 HTML 降级通道共用同一语义）。
  *
+ * 仅服务普通版面/收藏/搜索列表；用户发帖/回帖历史（authorid/searchpost）已由
+ * 官方 APP 签名接口承载（见 getAppUserTopicList），不再进入 thread.php 通道。
+ *
  * 差异仅在通道标志：JSON 通道需 `lite=js&noprefix`（script store 包裹），
  * HTML 降级走静态页（topicArg.add 元数据），其余筛选/排序参数完全一致。
  *
@@ -100,8 +106,6 @@ function buildThreadQuery(params: TopicListParams, forJson: boolean): Record<str
     query['noprefix'] = '';
   }
 
-  if (params.authorid) query['authorid'] = params.authorid;
-  if (params.searchpost) query['searchpost'] = params.searchpost;
   if (params.favor) query['favor'] = params.favor;
   if (params.content) query['content'] = params.content;
 
@@ -125,6 +129,47 @@ function buildThreadQuery(params: TopicListParams, forJson: boolean): Record<str
   return query;
 }
 
+/**
+ * 使用官方 APP 签名接口抓取用户发帖/回帖主题列表（用户主页「TA 的主题/回帖」）。
+ *
+ * 候选接口与响应解析（result 三种形状兼容、字段归一化、分页「乐观页数」编码）
+ * 见 parser/AppUserTopicParser（纯函数模块）。失败（全部候选接口均失败）返回 null，
+ * 由调用方以错误态呈现（不再回落 thread.php）。
+ */
+async function getAppUserTopicList(token: string, params: TopicListParams,
+  blacklist: Set<string>, keywords: string[]): Promise<TopicListInfo | null> {
+  const session = appStore.getSession(token);
+  if (!session) {
+    return null;
+  }
+  const cookies: Cookies = { uid: session.uid, cid: session.cid };
+  const authorid: string = params.authorid;
+  const page: number = Number(params.page || '1') || 1;
+  const endpoints: AppUserListEndpoint[] = appUserListEndpoints(params.searchpost.length > 0);
+  for (let i = 0; i < endpoints.length; i++) {
+    const ep: AppUserListEndpoint = endpoints[i];
+    if (ep.maxPage > 0 && page > ep.maxPage) {
+      continue;
+    }
+    try {
+      const appParams: Record<string, string> = { 'uid': authorid, 'page': String(page) };
+      const raw: Record<string, Object> = await ngaClient.postSigned(ep.path, ep.lib, ep.act,
+        appParams, cookies, authorid, '12') as Record<string, Object>;
+      // maxPage 透传：不分页接口（load_topic_by_uid）第 1 页即到底，不诱导翻页
+      const info: TopicListInfo | null = parseAppUserTopicList(raw, blacklist, keywords, page, ep.maxPage);
+      if (info !== null) {
+        return info;
+      }
+      logger.warn('[NGA][REQ] 用户列表官方接口无数据(%{public}s/%{public}s page=%{public}d)',
+        ep.lib, ep.act, page);
+    } catch (e) {
+      logger.warn('[NGA][REQ] 用户列表官方接口异常(%{public}s/%{public}s): %{public}s',
+        ep.lib, ep.act, formatError(e));
+    }
+  }
+  return null;
+}
+
 export async function getTopicList(token: string, params: TopicListParams,
   blacklist: Set<string> = new Set(),
   keywords: string[] = []): Promise<TopicListResult> {
@@ -132,6 +177,21 @@ export async function getTopicList(token: string, params: TopicListParams,
   const session = appStore.getSession(token);
   if (!session) {
     result.error = '未登录';
+    return result;
+  }
+
+  // 用户主页「TA 的主题/回帖」仅走官方 APP 签名接口（thread.php 网页版通道已移除，
+  // 不再降级——官方接口是唯一通道，失败即返回错误）。
+  if (params.authorid) {
+    const appInfo: TopicListInfo | null = await getAppUserTopicList(token, params, blacklist, keywords);
+    if (appInfo) {
+      result.data = appInfo;
+      result.ok = true;
+      return result;
+    }
+    logger.warn('[NGA][REQ] 用户列表官方接口全部失败(authorid=%{public}s searchpost=%{public}s)',
+      params.authorid, params.searchpost);
+    result.error = '用户列表加载失败';
     return result;
   }
 

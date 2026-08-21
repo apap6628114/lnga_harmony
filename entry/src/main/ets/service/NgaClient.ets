@@ -13,6 +13,7 @@ import { extractHostname, buildUrl } from '../common/utils/UrlUtils';
 import { parseSessionCookies, normalizeCookieList } from '../common/CookieUtils';
 import { NGA_API_DOMAINS as DOMAINS } from '../common/constants/NgaDomains';
 import { encryptPassword } from '../common/security/NgaRsaCipher';
+import { makeSign, NGA_APP_ID } from '../common/security/NgaSigner';
 
 // ============== 类型定义 ==============
 
@@ -265,13 +266,63 @@ async function ngaPostWithQuery(path: string, params: Record<string, string>,
     '', cookies, '', extraHeaders, true);
 }
 
-async function ngaPostMultipart(path: string, fields: Record<string, string>,
-  cookies?: Cookies, baseUrl: string = ''): Promise<object> {
-  const mp = buildMultipart(fields);
-  const headers: Record<string, string> = emptyStringRecord();
-  headers['Content-Type'] = mp.contentType;
-  return ngaRequest(path, http.RequestMethod.POST, emptyStringRecord(),
-    mp.body, cookies, baseUrl, headers);
+/**
+ * App 签名接口（POST form + access_uid/access_token/sign）。
+ *
+ * 对应官方客户端 appPost：`__lib/__act` 放 URL query（`<host>/<path>?__lib=..&__act=..`），
+ * 其余公共参数（app_id/access_uid/access_token/t/sign/__output/__inchst）与业务参数
+ * 放 POST body（urlencoded）；签名 `sign = MD5(app_id+access_uid+access_token+signParams+t+secret)`。
+ *
+ * 鸿蒙端实测：把 `__lib/__act` 放 body 时 app_api.php 返回 `{"code":2,"msg":"未定义服务"}`，
+ * 放 URL query 才被识别（与 nga-hack nga-client 结论一致）。该方法供官方接口
+ * （用户发帖回帖 app_api.php user/subjects|replys、nuke.php load_topic/load_topic_by_uid 等）
+ * 使用，是用户历史查询的唯一通道。
+ *
+ * @param path - 请求路径（如 /nuke.php、/app_api.php）
+ * @param lib - __lib 值
+ * @param act - __act 值
+ * @param params - 业务参数（进 body）
+ * @param cookies - 会话 cookie（提供 access_uid/access_token 与 Cookie 头）
+ * @param signParams - 参与签名的参数值拼接（addSignParams，如用户主题/回帖 = 目标 uid；无则空串）
+ * @param output - __output，默认 '12'
+ */
+async function ngaPostSigned(path: string, lib: string, act: string,
+  params: Record<string, string>, cookies: Cookies | undefined,
+  signParams: string, output: string): Promise<object> {
+  const ts: string = String(Math.floor(Date.now() / 1000));
+  const accessUid: string = cookies ? cookies.uid : '';
+  const accessToken: string = cookies ? cookies.cid : '';
+  const fields: Record<string, string> = {
+    '__output': output,
+    '__inchst': 'utf-8',
+    'app_id': NGA_APP_ID,
+    'access_uid': accessUid,
+    'access_token': accessToken,
+    't': ts,
+    'sign': makeSign({ accessUid: accessUid, accessToken: accessToken, signParams: signParams, ts: ts }),
+  };
+  const keys = Object.keys(params);
+  for (let i = 0; i < keys.length; i++) {
+    fields[keys[i]] = params[keys[i]];
+  }
+  const qparams: Record<string, string> = { '__lib': lib, '__act': act };
+  // 官方 APP 签名接口需要完整认证头（ngaRequest 默认只有 NGA_WP_JW/X-User-Agent+Cookie，
+  // 缺 X-NGA-* 会被服务端拒/签名错误，官方接口即失败）。
+  // 这里与 nga-hack nga-client buildHeaders 对齐：Nga_Official 版本头 + 认证头。
+  const extraHeaders: Record<string, string> = {
+    'User-Agent': 'Mozilla/5.0 (Linux; Android 10; NOH-AN00 Build/HUAWEINOH-AN00; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/83.0.4103.106 Mobile Safari/537.36 Nga_Official/7.17.17',
+    'X-Requested-With': 'gov.pianzong.androidnga',
+    'X-USER-AGENT': 'Nga_Official/7.17.17(HUAWEI NOH-AN00;Android 10)',
+    'X-NGA-CHANNEL': 'official',
+    'X-NGA-VERSION-NAME': '7.17.17',
+    'X-NGA-VERSION-CODE': '71717',
+    'Referer': 'https://ngabbs.com/',
+  };
+  // skipInchst=true：query 不含 __inchst（__inchst 已由 fields 进入 body），与官方 appPost 一致
+  // baseUrl 固定 ngabbs.com：官方接口（user/subjects|replys、load_topic_by_uid）在 ngabbs.com
+  // 有效，bbs.nga.cn 上 user/replys 返回「未定义服务」（实测）；不走 DOMAINS 轮换。
+  return ngaRequest(path, http.RequestMethod.POST, qparams,
+    buildEncodedBody(fields), cookies, 'https://ngabbs.com', extraHeaders, true);
 }
 
 async function ngaGetRaw(path: string, params: Record<string, string>,
@@ -290,11 +341,6 @@ async function ngaGetHtmlText(path: string, params: Record<string, string>,
     DOMAINS[activeDomainIndex]
   );
   return decodeGb18030(response.body);
-}
-
-async function ngaGetWithBaseUrl(path: string, params: Record<string, string>,
-  baseUrl: string, cookies?: Cookies): Promise<object> {
-  return ngaRequest(path, http.RequestMethod.GET, params, '', cookies, baseUrl, emptyStringRecord());
 }
 
 export interface Cookies {
@@ -399,18 +445,14 @@ interface INgaClient {
   postWithQueryAndBody: (path: string, params: Record<string, string>,
     body: Record<string, string>, cookies?: Cookies) => Promise<object>;
   postWithQuery: (path: string, params: Record<string, string>, cookies?: Cookies) => Promise<object>;
-  postMultipart: (path: string, fields: Record<string, string>,
-    cookies?: Cookies, baseUrl?: string) => Promise<object>;
-  getRaw: (path: string, params: Record<string, string>,
-    extraHeaders?: Record<string, string>) => Promise<ArrayBuffer>;
-  getWithBaseUrl: (path: string, params: Record<string, string>,
-    baseUrl: string, cookies?: Cookies) => Promise<object>;
+  /** App 签名接口（POST form + access_uid/access_token/sign），__lib/__act 放 URL query。 */
+  postSigned: (path: string, lib: string, act: string, params: Record<string, string>,
+    cookies: Cookies | undefined, signParams: string, output: string) => Promise<object>;
   getHtmlText: (path: string, params: Record<string, string>,
     cookies?: Cookies) => Promise<string>;
   getCaptchaV2: (captchaId: string) => Promise<string>;
   loginPassword: (loginParams: LoginParams) => Promise<LoginResultData>;
   logout: (cookies: Cookies) => Promise<void>;
-  rotateDomain: () => void;
   getActiveDomain: () => string;
   setActiveDomainIndex: (index: number) => void;
   getDomainList: () => string[];
@@ -446,19 +488,10 @@ const client: INgaClient = {
     return ngaPostWithQuery(path, params, cookies);
   },
 
-  async postMultipart(path: string, fields: Record<string, string>,
-    cookies?: Cookies, baseUrl?: string): Promise<object> {
-    return ngaPostMultipart(path, fields, cookies, baseUrl || '');
-  },
-
-  async getRaw(path: string, params: Record<string, string>,
-    extraHeaders?: Record<string, string>): Promise<ArrayBuffer> {
-    return ngaGetRaw(path, params, extraHeaders);
-  },
-
-  async getWithBaseUrl(path: string, params: Record<string, string>,
-    baseUrl: string, cookies?: Cookies): Promise<object> {
-    return ngaGetWithBaseUrl(path, params, baseUrl, cookies);
+  async postSigned(path: string, lib: string, act: string,
+    params: Record<string, string>, cookies: Cookies | undefined,
+    signParams: string, output: string): Promise<object> {
+    return ngaPostSigned(path, lib, act, params, cookies, signParams, output);
   },
 
   async getHtmlText(path: string, params: Record<string, string>,
@@ -568,10 +601,6 @@ const client: INgaClient = {
       '__output': '1',
     };
     await ngaGet('/nuke.php', params, cookies);
-  },
-
-  rotateDomain(): void {
-    activeDomainIndex = (activeDomainIndex + 1) % DOMAINS.length;
   },
 
   getActiveDomain(): string {

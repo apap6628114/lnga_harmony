@@ -41,6 +41,10 @@ export interface ThreadPageInfo {
   previewAuthorId?: string;
   previewSnippet?: string;
   previewImages?: string[];
+  /** 官方接口受限/占位条目的附件标记（如「帖子发布或回复时间超过限制」时为空串）。 */
+  attachs?: string;
+  /** 官方接口受限/占位条目的受限原因（如「帖子发布或回复时间超过限制」）。 */
+  error?: string;
 }
 
 export interface ReplyInfo {

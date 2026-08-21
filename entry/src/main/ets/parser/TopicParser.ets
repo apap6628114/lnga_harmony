@@ -304,6 +304,9 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean): Threa
     previewAuthorId: String(__P?.['authorid'] ?? ''),
     previewSnippet: snippet,
     previewImages: [],
+    // 官方接口受限/占位条目的受限原因透传（普通 thread.php 列表无此字段，为空串）
+    attachs: String(raw['attachs'] ?? ''),
+    error: String(raw['error'] ?? ''),
   };
 }
 
