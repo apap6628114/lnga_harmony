@@ -275,8 +275,9 @@ async function ngaPostWithQuery(path: string, params: Record<string, string>,
  *
  * 鸿蒙端实测：把 `__lib/__act` 放 body 时 app_api.php 返回 `{"code":2,"msg":"未定义服务"}`，
  * 放 URL query 才被识别（与 nga-hack nga-client 结论一致）。该方法供官方接口
- * （用户发帖回帖 app_api.php user/subjects|replys、nuke.php load_topic/load_topic_by_uid 等）
- * 使用，是用户历史查询的唯一通道。
+ * （用户发帖回帖 app_api.php user/subjects|replys、私信 app_api.php message/list|detail、
+ * 通知 app_api.php notify/list、动态 nuke.php follow_v2/get_push_list 等）使用，
+ * 是官方 APP 签名接口的统一通道。
  *
  * @param path - 请求路径（如 /nuke.php、/app_api.php）
  * @param lib - __lib 值

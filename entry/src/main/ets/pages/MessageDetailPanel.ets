@@ -86,7 +86,10 @@ export struct MessageDetailPanel {
 
     this.sending = true
     try {
-      const result = await sendMessage(appStore.auth.token, '', this.mid, '', content)
+      // 官方 message/reply 的 subject 为必填参数：回复时以会话标题兜底
+      // （title 为空态时保持空串，由服务端校验结果透出）
+      const replySubject: string = this.title !== '私信详情' ? this.title : ''
+      const result = await sendMessage(appStore.auth.token, '', this.mid, replySubject, content)
       if (result.ok) {
         this.replyText = ''
         appStore.showToast('回复成功')
