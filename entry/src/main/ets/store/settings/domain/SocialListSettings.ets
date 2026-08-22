@@ -1,10 +1,11 @@
-import { fetchForumFavorites } from '../../../service/api/FavoriteApi'
+import { fetchForumFavorites, syncForumFavorites } from '../../../service/api/FavoriteApi'
 import { AuthScope } from '../../AuthScope'
 import { FilterListManager } from '../../../common/utils/FilterListManager'
 import { SettingsContext } from '../SettingsContext'
 import { SettingsState } from '../SettingsState'
 import { FavBoard } from '../../../model/SocialEntries'
 import type { BlacklistEntry } from '../../../model/SocialEntries'
+import type { ApiResult } from '../../../model/NgaApiResults'
 import { KEY_BLACKLIST_VERSION, KEY_FAV_VERSION } from '../../../common/constants/AppStorageKeys'
 import { bumpAppStorageVersion } from '../../../common/utils/AppStorageVersion'
 import {
@@ -22,12 +23,20 @@ const REFRESH_DELAY: number = 10000
  * 社交列表设置域子 store。
  *
  * 承载黑名单（BlacklistEntry）与收藏版块（FavBoard）字段及其增删查逻辑。
- * 黑名单通过 FilterListManager 维护去重，收藏版块支持从服务端刷新。
+ * 黑名单通过 FilterListManager 维护去重；收藏版块支持从服务端刷新
+ * （forum_favor2/get）与写侧全量同步（favorforum/sync，官方模型 =
+ * 本地整表 → 全量上传，乐观更新 + 失败回滚）。
  */
 export class SocialListSettings {
   private ctx: SettingsContext
   private blacklistManager: FilterListManager<BlacklistEntry> = new FilterListManager<BlacklistEntry>()
   private favoritesLoaded: boolean = false
+  /** 收藏版面同步是否在途（串行化：在途期间新变更仅标记 dirty，完成后再重放）。 */
+  private favoritesSyncRunning: boolean = false
+  /** 同步在途期间是否又发生本地变更（需要以最新整表重放一次）。 */
+  private favoritesSyncDirty: boolean = false
+  /** 最近一次本地变更前的整表快照（同步失败且本地未再变更时回滚到此状态）。 */
+  private favoritesSyncBefore: FavBoard[] = []
 
   constructor(ctx: SettingsContext) {
     this.ctx = ctx
@@ -148,7 +157,15 @@ export class SocialListSettings {
       if (!scope.isCurrent(this.ctx.auth, 0)) {
         return
       }
-      if (result.ok && result.data.length > 0) {
+      // 同步在途时跳过本次覆盖：本地已是用户最新操作（sync 完成后服务端
+      // 已一致），避免旧服务端快照踩掉未落盘的本地变更
+      if (this.favoritesSyncRunning || this.favoritesSyncDirty) {
+        this.favoritesLoaded = true
+        return
+      }
+      if (result.ok) {
+        // 服务端为唯一真源（写侧已接 favorforum/sync）：无条件覆盖本地，
+        // 含空列表（账号未收藏任何版面时清空本地残留）
         const favs: FavBoard[] = []
         for (let i = 0; i < result.data.length; i++) {
           const item = result.data[i]
@@ -169,13 +186,87 @@ export class SocialListSettings {
   }
 
   addFavorite(board: FavBoard): void {
-    this.ctx.state.favorites = [...this.ctx.state.favorites, board]
+    const before: FavBoard[] = this.ctx.state.favorites.slice()
+    this.ctx.state.favorites = [...before, board]
     this.ctx.persist()
     bumpAppStorageVersion(KEY_FAV_VERSION)
+    this.scheduleFavoritesSync(before)
   }
 
   removeFavorite(fid: number): void {
-    this.ctx.state.favorites = this.ctx.state.favorites.filter(f => f.fid !== fid)
+    const before: FavBoard[] = this.ctx.state.favorites.slice()
+    this.ctx.state.favorites = before.filter(f => f.fid !== fid)
+    this.ctx.persist()
+    bumpAppStorageVersion(KEY_FAV_VERSION)
+    this.scheduleFavoritesSync(before)
+  }
+
+  /**
+   * 调度收藏版面全量同步（官方模型：本地整表 → favorforum/sync 上传）。
+   *
+   * 未登录时仅本地（与历史行为一致，登录后以服务端为准）。已登录时串行化
+   * 执行：在途期间的新变更只标记 dirty，当前批次完成后以最新整表重放，
+   * 避免并发请求乱序导致服务端收藏被旧整表覆盖。
+   *
+   * @param before - 本次本地变更前的整表快照（失败回滚基准）
+   */
+  private scheduleFavoritesSync(before: FavBoard[]): void {
+    if (!this.ctx.auth || !this.ctx.auth.isAuthenticated) {
+      return
+    }
+    this.favoritesSyncBefore = before
+    if (this.favoritesSyncRunning) {
+      this.favoritesSyncDirty = true
+      return
+    }
+    this.favoritesSyncRunning = true
+    this.runFavoritesSyncLoop()
+  }
+
+  private async runFavoritesSyncLoop(): Promise<void> {
+    try {
+      do {
+        this.favoritesSyncDirty = false
+        await this.syncFavoritesOnce()
+      } while (this.favoritesSyncDirty && this.ctx.auth && this.ctx.auth.isAuthenticated)
+    } finally {
+      this.favoritesSyncRunning = false
+    }
+  }
+
+  /**
+   * 单次全量同步：捕获当前整表 → fidlist 逗号串上传 → 失败且本地未再变更
+   * 时回滚到同步前快照。
+   */
+  private async syncFavoritesOnce(): Promise<void> {
+    const auth = this.ctx.auth
+    if (!auth || !auth.isAuthenticated) return
+    const scope: AuthScope = AuthScope.capture(auth, 0)
+    const snapshot: FavBoard[] = this.ctx.state.favorites.slice()
+    const fidlist: string = snapshot.map(f => f.fid).join(',')
+    const result: ApiResult = await syncForumFavorites(auth.token, fidlist)
+    // 请求期间已退出/切换账号：放弃回写（本地可能已被 reset，回滚会污染新账号）
+    if (!scope.isCurrent(this.ctx.auth, 0)) {
+      return
+    }
+    if (!result.ok) {
+      logger.warn('收藏版面同步失败: %{public}s', result.error)
+      this.rollbackFavoritesIfUnchanged(snapshot)
+    }
+  }
+
+  /**
+   * 同步失败回滚：仅当本地列表与提交时一致（期间无新变更）才恢复为
+   * 最近一次变更前的整表；本地已再变更时保留（由下一次同步重放最新整表，
+   * 服务端最终一致）。
+   *
+   * @param snapshot - 本次同步提交时的整表快照
+   */
+  private rollbackFavoritesIfUnchanged(snapshot: FavBoard[]): void {
+    if (!sameFidList(this.ctx.state.favorites, snapshot)) {
+      return
+    }
+    this.ctx.state.favorites = this.favoritesSyncBefore.slice()
     this.ctx.persist()
     bumpAppStorageVersion(KEY_FAV_VERSION)
   }
@@ -201,4 +292,23 @@ export class SocialListSettings {
     this.blacklistManager = new FilterListManager<BlacklistEntry>()
     this.favoritesLoaded = false
   }
+}
+
+/**
+ * 按 fid 序列比较两个收藏版面列表是否一致（顺序敏感，与整表同步语义一致）。
+ *
+ * @param left - 列表 A
+ * @param right - 列表 B
+ * @returns 是否完全一致
+ */
+function sameFidList(left: FavBoard[], right: FavBoard[]): boolean {
+  if (left.length !== right.length) {
+    return false
+  }
+  for (let i = 0; i < left.length; i++) {
+    if (left[i].fid !== right[i].fid) {
+      return false
+    }
+  }
+  return true
 }

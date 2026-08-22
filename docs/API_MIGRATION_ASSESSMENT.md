@@ -71,9 +71,8 @@
   `HanziToPinyin.Token.SEPARATOR`，非逗号）；非空响应实体 `ShieldKeyword{_id,keyword,loginUid}`（分组方式仍需实测）；
   空数据实测 `{"code":0,"result":null}`。官方 App 本地 ormlite 存储 + 启动拉取模型，与鸿蒙端 SettingsStore 语义一致。
 
-### P3. 收藏版面（推荐，但需先补 UI 语义）
-- 现状：`appStore.settings.favorites`（`TopicListPanel.toggleCurrentBoardFavorite` 纯本地增删）；
-  读侧已接 `forum_favor2/get`（`FavoriteApi.fetchForumFavorites`，官方接口）
+### P3. 收藏版面（✅ 已落地，2026-08）
+- 现状：`appStore.settings.favorites`（`TopicListPanel.toggleCurrentBoardFavorite` / `CommunityPanel.handleToggleFav` 增删）
 - 官方接口（AppUrls + 卡片 2）：
   - 读：`nuke.php forum_favor2/get`（已接入）
   - **写（同步整表）**：`app_api.php favorforum/sync`，body `fidlist`（收藏版面 fid **逗号拼接**），
@@ -81,6 +80,10 @@
 - 迁移方式：收藏/取消收藏后调 `favorforum/sync` 上传整表；启动时以 `forum_favor2/get` 结果覆盖本地。
 - 备注：鸿蒙端收藏版面（FavBoard）含 stid 语义（`favorite.stid`），官方 `forum_favor2/get` 的 Item 含
   `id/fid/stid/name/info` 字段，可对齐；`favorforum/sync` 的 l1 变体（file 参数）为上传文件形态，非默认。
+- 落地记录：`FavoriteApi.syncForumFavorites`（favorforum/sync，signParams=fidlist，`__output=14`）；
+  `SocialListSettings` 乐观更新 + 串行化全量同步 + 失败回滚；`doRefreshFavorites` 改为无条件覆盖
+  （服务端唯一真源）。实测（2026-08，ngabbs.com）：sync 响应 `{"code":0,"result":"操作成功"}`，
+  幂等（同步前后 get 列表一致）；空串 fidlist 行为未实测（会清空收藏）。
 
 ### P4. 私信已读 / 离开会话（可选）
 - 现状：私信已读为本地 `UnseenListPolicy` 模型（`MessageListPanel`/`NotificationPanel`），不通知服务端

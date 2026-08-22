@@ -13,6 +13,9 @@
 > - 主题出夹：`nuke.php?__lib=topic_favor_v2&__act=del`，body `folder`+`del`(tid 逗号串)，`__output=14`
 > - 收藏夹内主题列表：`app_api.php?__lib=favor&__act=all`，body `folder`+`uid`+`page`（搜索加 `favkey`），`__output=12`
 > - 收藏版面列表：`nuke.php?__lib=forum_favor2&__act=get`，body 无业务参数，`__output=12`
+> - 收藏版面全量同步：`app_api.php?__lib=favorforum&__act=sync`，body `fidlist`（收藏
+>   版面 fid 逗号拼接）+ `__output=14`，**signParams=fidlist 完整串**（官方 kt.c.b1 /
+>   AppUrls.SYNC_COLLECT_LIST，卡片 19；实测响应 `{"code":0,"result":"操作成功"}`）
 >
 > 官方通道响应形状（ngabbs.com 实测，2026-08）：
 >
@@ -188,6 +191,39 @@ Body: folder={folderId}&uid={uid}&page={page}[&favkey={搜索词}]&__output=12&.
 `extractFavoriteError` 另防御旧网页版 `{"error":{"0":"..."}}` 与 ngaRequest 的
 `__parseError` 响应。
 
+### 2.10 收藏版面全量同步 `favorforum/sync`（`__output=14`）
+
+```
+POST https://ngabbs.com/app_api.php?__lib=favorforum&__act=sync
+Body: fidlist={收藏 fid 逗号拼接}&__output=14&app_id=1010&access_uid=..&access_token=..&t=..&sign=..
+```
+
+- **signParams = `fidlist` 完整串**（官方 `kt.c.b1(fidList)` →
+  `addSignParams(fidlist)`，非空串；与 topic_favor_v2 系列恒空串不同）
+- **实测响应（2026-08，ngabbs.com）**：`{"code":0,"result":"操作成功"}`
+  （result 为**字符串**，无 msg 字段；code 为 number 0）——成功判定仅依赖
+  code=0（`extractFavoriteError`），不校验 result 形状
+- **幂等（实测）**：对同一 fidlist 重复上传不改变服务端状态（实测同步前后
+  `forum_favor2/get` 列表一致）
+- 官方模型 = **「本地整表 → 全量同步」**：收藏/取消收藏后把本地整表 fid 逗号
+  拼接上传，服务端以该列表覆盖账号收藏；重复上传同一列表幂等
+- `l1` 变体（`file` 文件参数上传）为非常规形态，未接入
+- 空串 `fidlist`（清空收藏）的服务端行为**未实测**（避免清空真实收藏，
+  落地前如需验证须先备份现有列表）
+
+nga_oh 落地（2026-08，`SocialListSettings`）：
+
+- `addFavorite`/`removeFavorite` 保持同步签名：本地乐观更新（persist +
+  bump `KEY_FAV_VERSION`）后调度 `syncForumFavorites`（`FavoriteApi`）上传
+  整表；未登录仅本地（与历史一致，登录后以服务端为准）
+- 同步串行化：在途期间新变更仅标记 dirty，当前批次完成后以最新整表重放，
+  避免并发乱序覆盖服务端
+- 失败回滚：本地列表与提交快照一致时回滚到最近一次变更前整表；已再变更
+  则保留，由下一次同步重放（服务端最终一致）
+- `doRefreshFavorites` 覆盖条件放宽为无条件覆盖（含空列表）：写侧已接
+  sync 后服务端为唯一真源，账号未收藏任何版面时清空本地残留；同步在途
+  时跳过本次覆盖
+
 ---
 
 ## 3. 行为变更点（迁移影响面）
@@ -204,6 +240,7 @@ Body: folder={folderId}&uid={uid}&page={page}[&favkey={搜索词}]&__output=12&.
 | 收藏夹列表解析 | `data['0']` 数字键字典 | `result` 直接数组（字段全字符串） | 解析器重写；旧网页版字典形状已移除（官方 12/14 两种形状兼容） |
 | 新建夹 ID 提取 | `data['1']`/`data['0']` | `result[1]`（number） | `extractFavoriteFolderId` 兼容多形状 |
 | 收藏版面列表 | `forum_favor2/forum_favor`+`action=sync`（`__output=8`） | `forum_favor2/get`（`__output=12`） | 官方 ForumRepository 同款入口 |
+| 收藏版面写操作 | 本地 `SettingsState.favorites` 增删，无服务端交互 | 本地乐观更新 + `favorforum/sync` 整表上传（`__output=14`，signParams=fidlist），失败回滚 | 官方 kt.c.b1 同款「本地整表 → 全量同步」；未登录仍仅本地 |
 | 收藏版面 stid | 旧实现 `stid=item['id']`（=fid，语义错误） | 官方实测无 stid 字段 → `stid=0` | 修复性变更；当前消费方（CommunityPanel/SocialListSettings）不消费 stid，无回归 |
 | 写操作成功判定 | `parseNgaError`（error 对象） | `extractFavoriteError`：code=0 即成功（写操作响应 result 形态多样，不做 result 形状校验，与 FollowApi 一致） | 实测写操作恒带 result；`__parseError` 已挡解析失败 |
 
@@ -225,6 +262,7 @@ Body: folder={folderId}&uid={uid}&page={page}[&favkey={搜索词}]&__output=12&.
 - **写操作幂等**：add/del/modify 等写操作 UI 需防重复提交（Store 已按 folderId+tid
   去重 pending mutation）。
 - **限流**：官方签名通道为 APP 同款认证，规避网页版通道限流；列表分页仍不宜过密。
-- **收藏版面写操作**（收藏/取消收藏板块）为鸿蒙端本地管理（`SettingsState.favorites`
-  本地增删），仅列表拉取走官方 `forum_favor2/get`；如需服务端同步可后续接入
-  `favorforum/sync`（app_api.php）。
+- **收藏版面写操作**：本地乐观更新 + `favorforum/sync` 整表上传（`FavoriteApi.syncForumFavorites`，
+  `SocialListSettings` 调度）；同步失败回滚本地并记日志（UI 星标弹回）。服务端为唯一真源：
+  启动 `forum_favor2/get` 无条件覆盖本地。未登录期间收藏仅本地，登录后以服务端为准。
+  `favorforum/sync` 响应形状与空串 `fidlist` 行为见 2.10 实测标注。

@@ -22,11 +22,14 @@
  * - 收藏夹内主题列表：app_api.php favor/all（见 ForumApi.getTopicList favor 分支）
  * - 收藏版面列表：nuke.php forum_favor2/get，__output=12（实测 result 直接为
  *   版面数组 {id,fid,name,info}；14 时为数组套数组分组）
+ * - 收藏版面全量同步：app_api.php favorforum/sync，body fidlist（收藏 fid
+ *   逗号拼接）+ __output=14，signParams=fidlist 完整串（卡片 19；响应仅
+ *   code/msg，官方模型 = 本地整表 → 全量同步）
  *
- * 协议情报来源：nga-hack nga-client/docs/cards（3-nuke-user.md 卡片 6/7/8、AppUrls
- * GET_FAVORITES/ADD_FAVORITE、ct/d$a.smali pswitch 映射、kt.c 老封装
- * CREATE/EDIT/DELETE_FAVORITE 与 DELETE_POST_COMMENT）+ nga-hack nga-client 实测
- * （2026-08）。
+ * 协议情报来源：nga-hack nga-client/docs/cards（3-nuke-user.md 卡片 6/7/8、
+ * 2-app-business.md 卡片 19、AppUrls GET_FAVORITES/ADD_FAVORITE、
+ * ct/d$a.smali pswitch 映射、kt.c 老封装 CREATE/EDIT/DELETE_FAVORITE 与
+ * DELETE_POST_COMMENT）+ nga-hack nga-client 实测（2026-08）。
  *
  * 缓存分工约定：本层只负责请求与解析，不修改 FavoriteStore；调用方在写操作
  * （createFolder/renameFolder 等）成功后自行做乐观更新 + 失败回滚 + 刷新列表。
@@ -89,6 +92,49 @@ export async function fetchForumFavorites(token: string): Promise<ForumFavorites
   } catch (e) {
     logger.warn('获取收藏板块失败: %{public}s', formatError(e));
     result.error = (e as Error).message ?? '获取收藏板块失败'
+  }
+  return result
+}
+
+/**
+ * 全量同步收藏版面到服务端（官方 APP 签名接口 favorforum.sync）。
+ *
+ * 官方模型为「本地整表 → 全量同步」（kt.c.b1 → AppUrls.SYNC_COLLECT_LIST，
+ * 卡片 19）：调用方把本地收藏版面的 fid 逗号拼接后整表上传，服务端以该
+ * 列表覆盖账号收藏。仅走官方签名通道（POST form + sign，__output=14，
+ * **signParams=fidlist 完整串**）。实测响应（2026-08，ngabbs.com）：
+ * `{"code":0,"result":"操作成功"}`（result 为字符串，无 msg 字段）；
+ * 成功回调语义 = 清空本地收藏并写入新列表（官方 kt.c$a）。
+ *
+ * 幂等安全：对同一 fidlist 重复上传不改变服务端状态（实测同步前后
+ * forum_favor2/get 列表一致），可用于启动/变更后的全量校正。
+ *
+ * @param token - 当前应用会话令牌
+ * @param fidlist - 收藏版面 fid 逗号拼接串（空串 = 清空收藏，服务端行为待实测）
+ * @returns 同步结果
+ */
+export async function syncForumFavorites(token: string, fidlist: string): Promise<ApiResult> {
+  const result = new ApiResult()
+  const session = sessionRegistry.getSession(token)
+  if (!session) {
+    result.error = '未登录'
+    return result
+  }
+  try {
+    const cookies: Cookies = { uid: session.uid, cid: session.cid }
+    const params: Record<string, string> = { 'fidlist': fidlist }
+    const raw: Record<string, Object> = await ngaClient.postSigned(
+      '/app_api.php', 'favorforum', 'sync', params, cookies, fidlist, '14'
+    ) as Record<string, Object>
+    const error: string | null = extractFavoriteError(raw)
+    if (error !== null) {
+      result.error = error
+      return result
+    }
+    result.ok = true
+  } catch (e) {
+    logger.warn('同步收藏板块失败: %{public}s', formatError(e));
+    result.error = (e as Error).message ?? '同步收藏板块失败'
   }
   return result
 }
