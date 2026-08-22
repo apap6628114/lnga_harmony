@@ -12,6 +12,7 @@ import { ProfileData, ReputationData, AdminForumsData } from '../../model/User';
 import { resolveEffectiveMuteTs } from '../../parser/MuteParser';
 import { appUserListEndpoints, extractAppUserTopicItems } from '../../parser/AppUserTopicParser';
 import type { AppUserListEndpoint } from '../../parser/AppUserTopicParser';
+import { extractAppUser, extractAppUserError } from '../../parser/AppUserParser';
 import { formatTime, formatTimestampCST } from '../../common/utils/Utils';
 import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger';
 
@@ -19,6 +20,42 @@ const logger = new Logger(DOMAIN_SERVICE, 'UserApi')
 
 // ============== 当前用户 ==============
 
+/**
+ * 通过 NGA 官方 APP 签名接口查询用户对象。
+ *
+ * ucp/get 使用 POST form，__lib/__act 位于 URL query；uid 查询传 uid，用户名
+ * 查询传 username，signParams 为空，输出格式使用官方客户端的 __output=12。
+ * 所有昵称、会话校验、用户搜索和用户资料请求都经此入口，避免重新落回网页 GET。
+ *
+ * @param cookies - NGA 会话凭据
+ * @param lookupKey - 查询字段，uid 或 username
+ * @param lookupValue - 查询值
+ * @returns NGA 用户对象
+ */
+export async function getSignedUser(cookies: Cookies, lookupKey: string,
+  lookupValue: string): Promise<Record<string, Object>> {
+  const params: Record<string, string> = {};
+  params[lookupKey] = lookupValue;
+  const raw: Record<string, Object> = await ngaClient.postSigned(
+    '/nuke.php', 'ucp', 'get', params, cookies, '', '12'
+  ) as Record<string, Object>;
+  const code: Object | undefined = raw['code'];
+  if (code !== undefined && Number(code) !== 0) {
+    throw new Error(extractAppUserError(raw, '获取用户信息失败'));
+  }
+  const user: Record<string, Object> | null = extractAppUser(raw);
+  if (user === null) {
+    throw new Error(extractAppUserError(raw, '用户不存在或资料为空'));
+  }
+  return user;
+}
+
+/**
+ * 获取当前登录用户的轻量信息，并刷新本地会话缓存。
+ *
+ * @param token - 当前账号令牌
+ * @returns 当前用户信息
+ */
 export async function getCurrentUser(token: string): Promise<CurrentUserResult> {
   const result = new CurrentUserResult();
   const session = appStore.getSession(token);
@@ -28,15 +65,12 @@ export async function getCurrentUser(token: string): Promise<CurrentUserResult> 
   }
 
   try {
-    const params: Record<string, string> = {
-      '__lib': 'ucp', '__act': 'get', 'lite': 'js', 'noprefix': '', 'uid': session.uid,
-    };
-    const raw = await ngaClient.get('/nuke.php', params, { uid: session.uid, cid: session.cid }) as Record<string, Object>;
-    const data = raw?.['data'] as Record<string, Object> | undefined;
-    const d = (data?.['0'] ?? data) as Record<string, Object> | undefined;
+    const d: Record<string, Object> = await getSignedUser(
+      { uid: session.uid, cid: session.cid }, 'uid', session.uid
+    );
 
-    const nickName = String(d?.['username'] ?? session.nickName);
-    const avatarUrl = String(d?.['avatar'] ?? session.avatarUrl);
+    const nickName = String(d['nickname'] ?? d['username'] ?? session.nickName);
+    const avatarUrl = String(d['avatar'] ?? session.avatarUrl);
 
     await appStore.updateSession(token, nickName, avatarUrl);
 
@@ -76,36 +110,18 @@ export async function searchUser(token: string, key: string): Promise<SearchUser
   }
 
   try {
-    const params: Record<string, string> = {
-      '__lib': 'ucp', '__act': 'get', 'lite': 'js', 'noprefix': '',
-    };
-    // 纯数字输入按 uid 查询（与 MNGA GlobalSearchModel 判别逻辑一致）
+    let lookupKey: string = 'username';
     if (/^\d+$/.test(key)) {
-      params['uid'] = key;
-    } else {
-      params['username'] = key;
+      lookupKey = 'uid';
     }
-    const raw = await ngaClient.get('/nuke.php', params, { uid: session.uid, cid: session.cid }) as Record<string, Object>;
-
-    const errorObj = raw?.['error'];
-    if (errorObj) {
-      // NGA 错误对象形如 {"0": "找不到用户"}；取不到字符串值时回退通用文案，
-      // 避免 String(undefined) 产生 "undefined" 提示
-      const errMsg = typeof errorObj === 'string' ? String(errorObj) :
-        (typeof (errorObj as Record<string, Object>)['0'] === 'string'
-          ? String((errorObj as Record<string, Object>)['0'])
-          : '搜索用户失败');
-      result.error = errMsg;
-      return result;
-    }
-
-    const rawInner = (raw?.['data'] ?? {}) as Record<string, Object>;
-    const d = (rawInner['0'] ?? rawInner) as Record<string, Object> | undefined;
-    const uid = String(d?.['uid'] ?? '');
-    if (d && uid.length > 0) {
+    const d: Record<string, Object> = await getSignedUser(
+      { uid: session.uid, cid: session.cid }, lookupKey, key
+    );
+    const uid: string = String(d['uid'] ?? '');
+    if (uid.length > 0) {
       result.data.push({
         uid: uid,
-        userName: String(d['username'] ?? ''),
+        userName: String(d['username'] ?? d['nickname'] ?? ''),
         avatarUrl: String(d['avatar'] ?? ''),
       });
     }
@@ -119,6 +135,13 @@ export async function searchUser(token: string, key: string): Promise<SearchUser
 
 // ============== 用户资料 ==============
 
+/**
+ * 获取指定用户的资料卡数据。
+ *
+ * @param token - 当前账号令牌
+ * @param uid - 目标用户 UID
+ * @returns 用户资料
+ */
 export async function getUserProfile(token: string, uid: string): Promise<UserProfileResult> {
   const result = new UserProfileResult();
   const session = appStore.getSession(token);
@@ -128,29 +151,14 @@ export async function getUserProfile(token: string, uid: string): Promise<UserPr
   }
 
   try {
-    const params: Record<string, string> = {
-      '__lib': 'ucp', '__act': 'get', 'lite': 'js', 'noprefix': '', 'uid': uid,
-    };
-    const extraHeaders: Record<string, string> = {
-      'Referer': `https://bbs.nga.cn/nuke.php?func=ucp&lite=jsx&uid=${uid}`,
-    };
-    const raw = await ngaClient.get('/nuke.php', params, { uid: session.uid, cid: session.cid }, extraHeaders) as Record<string, Object>;
-
-    const errorObj = raw?.['error'];
-    if (errorObj) {
-      const errMsg = typeof errorObj === 'string' ? String(errorObj) :
-        String((errorObj as Record<string, Object>)['0']);
-      result.error = errMsg || '获取用户资料失败';
-      return result;
-    }
-
-    const rawInner = (raw?.['data'] ?? {}) as Record<string, Object>;
-    const d = (rawInner['0'] ?? rawInner) as Record<string, Object>;
+    const d: Record<string, Object> = await getSignedUser(
+      { uid: session.uid, cid: session.cid }, 'uid', uid
+    );
     const regTimestamp = Number(d['regdate']) || 0;
     // 禁言到期时间：maxBuffMute 为 buff 类禁言（105）到期时间戳，muteTime 为旧字段
     // （仅反映历史 mute_time，对 buff 禁言恒为 0）——优先 maxBuffMute
     const effectiveMuteTs = resolveEffectiveMuteTs(
-      Number(d['muteTime']) || 0,
+      Number(d['muteTime'] ?? d['mute_time']) || 0,
       Number(d['maxBuffMute']) || 0
     );
     const medalStr = String(d['medal'] ?? '0');
@@ -194,7 +202,7 @@ export async function getUserProfile(token: string, uid: string): Promise<UserPr
 
     const profile = new ProfileData();
     profile.uid = String(d['uid'] ?? uid);
-    profile.userName = String(d['username'] ?? '');
+    profile.userName = String(d['username'] ?? d['nickname'] ?? '');
     profile.avatarUrl = String(d['avatar'] ?? '');
     profile.group = String(d['group'] ?? '');
     profile.title = String(d['title'] ?? '');
@@ -203,9 +211,9 @@ export async function getUserProfile(token: string, uid: string): Promise<UserPr
     profile.money = String(d['money'] ?? '');
     profile.fame = String(d['fame'] ?? '');
     profile.rvrc = String(d['rvrc'] ?? '');
-    profile.posts = String(d['posts'] ?? '');
+    profile.posts = String(d['posts'] ?? d['postnum'] ?? '');
     profile.regdate = regTimestamp > 0 ? String(regTimestamp) : '';
-    profile.sign = String(d['sign'] ?? '');
+    profile.sign = String(d['sign'] ?? d['signature'] ?? '');
     profile.ipLoc = String(d['ipLoc'] ?? '');
     profile.medal = hasMedal ? medalStr : '';
     profile.muteTime = effectiveMuteTs > 0 ? formatTimestampCST(effectiveMuteTs) : '';
@@ -227,25 +235,21 @@ export async function getUserProfile(token: string, uid: string): Promise<UserPr
 /**
  * 按用户名解析用户 UID。
  *
- * 官方 [@用户名] 链接指向 nuke.php?func=ucp&username= 用户页（页内 `__UCPUSER`
- * JSON 变量携带 uid）；客户端资料卡只认 uid，故点击时先经本函数解析 uid。
- * 用户不存在时服务端返回 `{"error":{"0":"找不到用户"}}`。
+ * 官方 [@用户名] 链接最终通过 ucp/get 的 username 查询拿到用户对象，不再抓取
+ * HTML 用户页；资料卡仍只接收 UID，因此保留这个解析入口供链接分发层调用。
  *
  * @param token - 登录令牌
- * @param username - 用户名称（原文，URL 编码由 NgaClient 统一处理）
+ * @param username - 用户名称
  * @returns 用户 UID；用户不存在、未登录或请求失败时返回空字符串
  */
 export async function resolveUidByUsername(token: string, username: string): Promise<string> {
   const session = appStore.getSession(token);
   if (!session) return '';
   try {
-    const params: Record<string, string> = {
-      'func': 'ucp', 'lite': 'js', 'noprefix': '', '__inchst': 'UTF8', 'username': username,
-    };
-    const text: string = await ngaClient.getHtmlText('/nuke.php', params, { uid: session.uid, cid: session.cid });
-    if (text.indexOf('找不到用户') >= 0) return '';
-    const match: RegExpMatchArray | null = text.match(/__UCPUSER\s*=\s*\{"uid":(\d+)/);
-    return match ? match[1] : '';
+    const user: Record<string, Object> = await getSignedUser(
+      { uid: session.uid, cid: session.cid }, 'username', username
+    );
+    return String(user['uid'] ?? '');
   } catch (e) {
     logger.warn('按用户名解析 UID 失败: %{public}s', formatError(e));
     return '';

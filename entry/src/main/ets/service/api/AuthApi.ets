@@ -6,7 +6,8 @@
 import { ngaClient } from '../NgaClient';
 import { appStore } from '../../store/AppStore';
 import type { Session } from '../../store/SessionRegistry';
-import { parseNgaError } from '../../parser/ErrorParser';
+import { getSignedUser } from './UserApi';
+import { extractAppUser } from '../../parser/AppUserParser';
 import {
   CaptchaResult, LoginStep1Result, LoginStep2Result,
   InjectResult,
@@ -159,18 +160,14 @@ function extractNickName(setCookies: string[]): string {
  */
 async function fetchNickNameFromNga(uid: string, cid: string, targetUid: string): Promise<UserInfo | null> {
   try {
-    const params: Record<string, string> = {
-      '__lib': 'ucp', '__act': 'get', 'lite': 'js', 'noprefix': '', 'uid': targetUid,
-    };
-    const raw = await ngaClient.get('/nuke.php', params, { uid, cid }) as Record<string, Object>;
-    const data = raw?.['data'] as Record<string, Object> | undefined;
-    const d = (data?.['0'] ?? data) as Record<string, Object> | undefined;
-    if (d && d['username']) {
-      const user = new UserInfo();
-      user.nickName = String(d['username']);
-      user.avatarUrl = String(d['avatar'] ?? '');
-      return user;
-    }
+    const d: Record<string, Object> = await getSignedUser(
+      { uid, cid }, 'uid', targetUid
+    );
+    const user = new UserInfo();
+    user.uid = String(d['uid'] ?? targetUid);
+    user.nickName = String(d['nickname'] ?? d['username'] ?? '');
+    user.avatarUrl = String(d['avatar'] ?? '');
+    return user;
   } catch (e) {
     // ignore
   }
@@ -198,14 +195,14 @@ export async function verifyToken(token: string): Promise<boolean> {
   }
   try {
     const params: Record<string, string> = {
-      '__lib': 'ucp', '__act': 'get', 'lite': 'js', 'noprefix': '', 'uid': session.uid,
+      'uid': session.uid,
     };
-    const raw = await ngaClient.get('/nuke.php', params, { uid: session.uid, cid: session.cid }) as Record<string, Object>;
-    const error = parseNgaError(raw);
-    if (error) {
-      return false;
-    }
-    return true;
+    const raw: Record<string, Object> = await ngaClient.postSigned(
+      '/nuke.php', 'ucp', 'get', params, { uid: session.uid, cid: session.cid }, '', '12'
+    ) as Record<string, Object>;
+    const code: Object | undefined = raw['code'];
+    const user: Record<string, Object> | null = extractAppUser(raw);
+    return (code === undefined || Number(code) === 0) && user !== null;
   } catch (e) {
     // 网络异常时无法验证，默认视为有效，避免离线时强制登出
     return true;

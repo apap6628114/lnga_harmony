@@ -196,10 +196,20 @@ export function handleForumLink(
           return
         }
       } else if (path === '/nuke.php' && params.get('func') === 'ucp') {
-        // NGA 用户主页链接 → 弹窗资料卡
         const uid: string = params.get('uid') || ''
         if (uid.length > 0 && onProfileClick) {
           onProfileClick(uid)
+          return
+        }
+        const rawName: string = params.get('username') || ''
+        if (rawName.length > 0 && onProfileClick) {
+          let name: string = rawName
+          try {
+            name = decodeURIComponent(rawName)
+          } catch (e) {
+            name = rawName
+          }
+          openProfileCardByUsername(name, onProfileClick)
           return
         }
       }

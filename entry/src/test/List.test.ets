@@ -20,6 +20,7 @@ import appNotificationUnitTest from './AppNotificationUnit.test';
 import appFavoriteTopicUnitTest from './AppFavoriteTopicUnit.test';
 import appTopicListUnitTest from './AppTopicListUnit.test';
 import appThreadUnitTest from './AppThreadUnit.test';
+import appUserUnitTest from './AppUserUnit.test';
 
 /**
  * 注册全部本地单元测试。
@@ -47,4 +48,5 @@ export default function testsuite(): void {
   appFavoriteTopicUnitTest();
   appTopicListUnitTest();
   appThreadUnitTest();
+  appUserUnitTest();
 }
