@@ -33,8 +33,8 @@ const MAX_CACHED_NOTIFICATIONS: number = 200
 /** 普通刷新最短成功间隔。 */
 const NOTIFICATION_REFRESH_DELAY: number = 30 * 1000
 
-/** 前台通知轮询间隔，与 MNGA 的发布配置保持一致。 */
-const NOTIFICATION_POLL_INTERVAL: number = 60 * 1000
+/** 前台通知轮询间隔（调整为 300s，降低高频轮询被服务端风控的风险）。 */
+const NOTIFICATION_POLL_INTERVAL: number = 300 * 1000
 
 /** 通知 Store 日志实例。 */
 const logger: Logger = new Logger(DOMAIN_STORE, 'NotificationStore')
@@ -43,7 +43,7 @@ const logger: Logger = new Logger(DOMAIN_STORE, 'NotificationStore')
  * 通知缓存、本地查看状态与红点管理。
  *
  * 机制（与 FollowActivityStore 共用同一套骨架）：
- * - 定时抓取：前台 60s 轮询（PollingController 调度）
+ * - 定时抓取：前台 300s 轮询（PollingController 调度）
  * - 条件抓取：非强制刷新受 30s 最小成功间隔约束，并发调用复用同一请求
  *   （runGuardedRefresh 统一协调）
  * - 缓存：按账号隔离的偏好持久化信封（CacheEnvelopeStore，schemaVersion=3），

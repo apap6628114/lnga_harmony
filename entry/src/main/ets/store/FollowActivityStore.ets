@@ -33,8 +33,8 @@ const MAX_DISPLAY_ACTIVITIES: number = 10000
 /** 普通刷新最短成功间隔。 */
 const ACTIVITY_REFRESH_DELAY: number = 30 * 1000
 
-/** 前台动态轮询间隔，与通知轮询保持一致。 */
-const ACTIVITY_POLL_INTERVAL: number = 60 * 1000
+/** 前台动态轮询间隔（调整为 300s，与通知轮询保持一致，降低风控风险）。 */
+const ACTIVITY_POLL_INTERVAL: number = 300 * 1000
 
 /** 动态 Store 日志实例。 */
 const logger: Logger = new Logger(DOMAIN_STORE, 'FollowActivityStore')
@@ -43,7 +43,7 @@ const logger: Logger = new Logger(DOMAIN_STORE, 'FollowActivityStore')
  * 关注动态缓存、本地已读状态与红点管理。
  *
  * 机制与 NotificationStore 对齐（共用同一套骨架）：
- * - 定时抓取：前台 60s 轮询（PollingController 调度）
+ * - 定时抓取：前台 300s 轮询（PollingController 调度）
  * - 条件抓取：非强制刷新受 30s 最小成功间隔约束，并发调用复用同一请求
  *   （runGuardedRefresh 统一协调）
  * - 缓存：按账号隔离的偏好持久化信封（CacheEnvelopeStore，schemaVersion=2），
