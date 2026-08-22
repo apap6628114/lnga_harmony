@@ -15,7 +15,7 @@ import { formatTimestampCST } from '../../utils/Utils'
  * - type 2 评分：均分行（官方 voteScore 布局，scoNum/voteNum 两位小数 + 相对 max 进度条）
  * - type 3/4 评分单条/问答：只读标题列表
  * - 信息行：按类型拼装"共计N人... [结束时间] [结果查看限制]"
- * - 未结束且已登录时显示选择控件与提交按钮；提交走 nuke.php?__lib=vote&__act=vote
+ * - 未结束且已登录时显示选择控件与提交按钮；提交走 app_api.php?__lib=subject&__act=vote
  * - 提交成功后乐观更新票数并隐藏选择控件（服务端拒绝重复投票时会返回错误提示）
  */
 @Component

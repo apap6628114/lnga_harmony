@@ -370,6 +370,8 @@ async function ngaPostSignedCore(path: string, qparams: Record<string, string>,
  * 用户发帖回帖 app_api.php user/subjects|replys、私信 app_api.php message/list|detail、
  * 通知 app_api.php notify/list、关注动态 nuke.php follow_v2/get_push_list、
  * 关注/取关与关注/粉丝列表 nuke.php follow_v2/follow|get_follow|get_follow_by、
+ * 发帖分类与推荐 app_api.php post/titletype|recommend、投票 app_api.php subject/vote、
+ * 签到 nuke.php check_in/check_in、
  * 主题收藏夹 nuke.php topic_favor_v2/list_folder|new_folder|modify_folder|
  * del_folder|add|del、收藏夹内主题列表 app_api.php favor/all 等）使用，
  * 是官方 APP 签名接口的统一通道。

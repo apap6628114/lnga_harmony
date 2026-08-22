@@ -23,6 +23,8 @@ export class ApiResult {
  */
 export class VoteResult extends ApiResult {
   message: string = '';
+  /** 服务端返回的最终推荐状态：1=推荐、-1=反对、0=取消、99=未返回。 */
+  state: number = 99;
 }
 
 /**

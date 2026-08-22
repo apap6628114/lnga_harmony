@@ -4,7 +4,6 @@
 
 import { ngaClient } from '../NgaClient';
 import { sessionRegistry } from '../../store/SessionRegistry';
-import { parseNgaError } from '../../parser/ErrorParser';
 import { VoteSubmitResult } from '../../model/NgaApiResults';
 import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger';
 
@@ -13,9 +12,9 @@ const logger = new Logger(DOMAIN_SERVICE, 'VoteApi')
 /**
  * 提交投票帖的投票。
  *
- * 官方实现（js_read.js commonui.vote.submit → __API.vote）：
- * POST /nuke.php?__lib=vote&__act=vote&tid=<tid>&voteid=<逗号分隔选项ID>&raw=3
- * 成功时 data[0] 为服务端提示文本（如"投票成功"），失败时返回错误信息。
+ * 官方 APP 接口为 `app_api.php?__lib=subject&__act=vote`，表单传入 tid、
+ * voteid（逗号分隔选项 ID）和 raw=3，签名业务参数为 tid+voteid。
+ * 成功时 msg 为服务端提示文本，失败时 code/msg 返回业务错误。
  *
  * @param token 会话令牌
  * @param tid 主题 ID
@@ -41,23 +40,21 @@ export async function submitPollVote(token: string, tid: number, voteIds: string
       }
       ids += voteIds[i]
     }
-    const fields: Record<string, string> = {
-      '__lib': 'vote',
-      '__act': 'vote',
+    const params: Record<string, string> = {
       'raw': '3',
-      '__output': '8',
       'tid': String(tid),
       'voteid': ids,
     };
-    const raw = await ngaClient.post('/nuke.php', fields, { uid: session.uid, cid: session.cid });
-    const err = parseNgaError(raw);
-    if (err) {
-      result.error = err;
+    const raw: Record<string, Object> = await ngaClient.postSigned(
+      '/app_api.php', 'subject', 'vote', params,
+      { uid: session.uid, cid: session.cid }, `${tid}${ids}`, '12'
+    ) as Record<string, Object>;
+    const code: number = Number(raw['code'] ?? 0);
+    if (code !== 0) {
+      result.error = String(raw['msg'] ?? `错误码: ${code}`);
       return result;
     }
-    const rawObj = raw as Record<string, Object>;
-    const dataObj = rawObj['data'] as Record<string, Object>;
-    result.message = String(dataObj?.['0'] ?? '投票成功');
+    result.message = String(raw['msg'] ?? '投票成功');
     result.ok = true;
   } catch (e) {
     logger.warn('投票失败: %{public}s', formatError(e));

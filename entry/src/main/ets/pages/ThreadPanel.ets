@@ -9,7 +9,7 @@ import { votePost } from '../service/api/FavoriteApi'
 import { getActiveDomain } from '../service/api/MiscApi'
 import type { ThreadResult, PostReplyResult } from '../model/ThreadResult'
 import type { PostInfo } from '../model/PostInfo'
-import type { VoteResult } from '../model/NgaApiResults'
+import { VoteResult } from '../model/NgaApiResults'
 import { FavoriteMembershipState } from '../model/Favorite'
 import { getCachedBBNodes } from '../parser/bbcode/BBCodeCache'
 import { preWarmPosts } from '../common/utils/PostWarmup'
@@ -1801,28 +1801,31 @@ export struct ThreadPanel {
     })
   }
 
-  private async handleVote(post: PostInfo, value: number): Promise<void> {
+  private async handleVote(post: PostInfo, value: number): Promise<VoteResult> {
     if (!appStore.auth.isAuthenticated) {
       appStore.showToast('请先登录')
-      return
+      const result: VoteResult = new VoteResult()
+      result.error = '请先登录'
+      return result
     }
     const pidKey: string = String(post.pid)
     const wasUp: boolean = this.votedUpPids.has(pidKey)
     const wasDown: boolean = this.votedDownPids.has(pidKey)
     const result: VoteResult = await votePost(appStore.auth.token, Number(this.threadTid), post.pid, value)
+    const expectedState: number = value === 1 ? (wasUp ? 0 : 1) : (wasDown ? 0 : -1)
+    const effectiveState: number = result.ok ? expectedState : result.state
     if (result.ok) {
       const upPids = new Set(this.votedUpPids)
       const downPids = new Set(this.votedDownPids)
-      if (result.message.indexOf('取消了对这个帖子的支持') >= 0) {
-        upPids.delete(pidKey)
-      } else if (result.message.indexOf('取消了对这个帖子的反对') >= 0) {
-        downPids.delete(pidKey)
-      } else if (result.message.indexOf('表示支持') >= 0) {
+      if (effectiveState === 1) {
         upPids.add(pidKey)
         downPids.delete(pidKey)
-      } else if (result.message.indexOf('表示反对') >= 0) {
+      } else if (effectiveState === -1) {
         downPids.add(pidKey)
         upPids.delete(pidKey)
+      } else {
+        upPids.delete(pidKey)
+        downPids.delete(pidKey)
       }
       this.votedUpPids = upPids
       this.votedDownPids = downPids
@@ -1831,15 +1834,14 @@ export struct ThreadPanel {
       const isDown: boolean = downPids.has(pidKey)
       const scoreDelta: number = (isUp ? 1 : 0) - (wasUp ? 1 : 0)
       const score2Delta: number = (isDown ? 1 : 0) - (wasDown ? 1 : 0)
-      const voteIdx: number = this.mgr.updateVoteScore(post.pid, scoreDelta, score2Delta)
-      if (voteIdx >= 0) {
-        this.postsDataSource.updateAt(voteIdx, this.mgr.posts[voteIdx])
-      }
+      this.mgr.updateVoteScore(post.pid, scoreDelta, score2Delta)
       if (result.message.length > 0) {
         appStore.showToast(result.message)
       }
+      return result
     } else {
       appStore.showToast(result.error || '操作失败')
+      return result
     }
   }
 
@@ -1915,8 +1917,8 @@ export struct ThreadPanel {
                 onProfileClick: (uid: string, screenX: number, screenY: number): void => {
                   this.showProfileCard(uid, screenX, screenY)
                 },
-                onVote: (p: PostInfo, value: number): void => {
-                  this.handleVote(p, value)
+                onVote: (p: PostInfo, value: number): Promise<VoteResult> => {
+                  return this.handleVote(p, value)
                 },
                 onReply: (p: PostInfo): void => {
                   replyManager.startFloorReply(p, Number(this.threadTid), this.threadFid, this.displayPage)

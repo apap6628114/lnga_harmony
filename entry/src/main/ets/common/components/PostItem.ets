@@ -3,6 +3,7 @@ import { parseAlterinfoTs, formatTimestampCST } from '../utils/Utils'
 import { getCachedBBNodes } from '../../parser/bbcode/BBCodeCache'
 import { BBCodeContentView } from './BBCodeContentView'
 import { PostInfo } from '../../model/PostInfo'
+import { VoteResult } from '../../model/NgaApiResults'
 import { PostItemHeader } from './post-item/PostItemHeader'
 import { PostAttachments } from './post-item/PostAttachments'
 import { PostVoteBar } from './post-item/PostVoteBar'
@@ -44,8 +45,12 @@ export struct PostItem {
   onVideoClick: (url: string) => void = (_url: string) => {}
   /** 点击用户资料回调，传入 uid 与点击位置的屏幕坐标 */
   onProfileClick: (uid: string, screenX: number, screenY: number) => void = (_uid: string, _x: number, _y: number) => {}
-  /** 投票回调，value=1 为赞，-1 为踩 */
-  onVote: (post: PostInfo, value: number) => void = (_post: PostInfo, _value: number) => {}
+  /** 投票回调，value=1 为赞，-1 为踩；返回服务端最终状态供动作栏局部刷新。 */
+  onVote: (post: PostInfo, value: number) => Promise<VoteResult> = async (_post: PostInfo, _value: number): Promise<VoteResult> => {
+    const result: VoteResult = new VoteResult()
+    result.error = '投票回调未设置'
+    return result
+  }
   /** 回复回调 */
   onReply: (post: PostInfo) => void = (_post: PostInfo) => {}
   /** 评论回调 */

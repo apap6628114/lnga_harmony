@@ -1,5 +1,5 @@
 /**
- * NGA 收藏/投票/签到 API
+ * NGA 收藏/推荐/签到 API
  *
  * 主题收藏夹全链路（收藏夹列表/新建/重命名/设默认/删除、主题入夹/出夹、收藏夹内
  * 主题列表）已迁移至官方 APP 签名接口（POST form + sign，__lib/__act 放 URL query），
@@ -34,12 +34,12 @@
 
 import { ngaClient, Cookies } from '../NgaClient';
 import { sessionRegistry } from '../../store/SessionRegistry';
-import { parseNgaError } from '../../parser/ErrorParser';
 import {
   ApiResult, VoteResult, CheckinResult, ForumFavoritesResult,
   FavoriteFolderListResult, FavoriteFolderCreateResult, TopicFavoriteResult,
 } from '../../model/NgaApiResults';
 import { TopicFavoriteOperation } from '../../model/Favorite';
+import { makeClientChecksum } from '../../common/security/NgaSigner';
 import {
   extractFavoriteError,
   extractFavoriteFolderId,
@@ -93,8 +93,21 @@ export async function fetchForumFavorites(token: string): Promise<ForumFavorites
   return result
 }
 
-// ============== 投票 ==============
+// ============== 推荐 ==============
 
+/**
+ * 对指定楼层进行推荐或反对操作。
+ *
+ * 官方 APP 接口为 `app_api.php?__lib=post&__act=recommend`，请求使用
+ * `tid + pid + value` 作为签名业务参数，返回 `result.last_state` 表示服务端
+ * 最终状态：1 为推荐、-1 为反对、0 为取消。
+ *
+ * @param token - 当前应用会话令牌
+ * @param tid - 主题 ID
+ * @param pid - 楼层 ID
+ * @param value - 1 表示推荐，-1 表示反对
+ * @returns 推荐状态变更结果
+ */
 export async function votePost(token: string, tid: number, pid: number, value: number): Promise<VoteResult> {
   const result = new VoteResult();
   const session = sessionRegistry.getSession(token);
@@ -102,33 +115,78 @@ export async function votePost(token: string, tid: number, pid: number, value: n
     result.error = '未登录';
     return result;
   }
+  if (value !== 1 && value !== -1) {
+    result.error = '推荐值无效';
+    return result;
+  }
   try {
-    const fields: Record<string, string> = {
-      '__lib': 'topic_recommend',
-      '__act': 'add',
-      'raw': '3',
-      '__output': '8',
+    const params: Record<string, string> = {
       'value': String(value),
       'tid': String(tid),
       'pid': String(pid),
     };
-    const raw = await ngaClient.post('/nuke.php', fields, { uid: session.uid, cid: session.cid });
-    const err = parseNgaError(raw);
-    if (err) {
-      result.error = err;
+    const cookies: Cookies = { uid: session.uid, cid: session.cid };
+    const raw: Record<string, Object> = await ngaClient.postSigned(
+      '/app_api.php', 'post', 'recommend', params, cookies,
+      `${tid}${pid}${value}`, '12'
+    ) as Record<string, Object>;
+    const error: string | null = extractFavoriteError(raw)
+    if (error !== null) {
+      result.error = error
+      return result
+    }
+    const rawCode: Object | undefined = raw['code']
+    if (rawCode === undefined || rawCode === null) {
+      result.error = '推荐响应格式异常'
+      return result
+    }
+    const code: number = Number(rawCode)
+    if (!Number.isFinite(code)) {
+      result.error = '推荐响应格式异常'
+      return result
+    }
+    if (code !== 0) {
+      result.error = String(raw['msg'] ?? `错误码: ${code}`);
       return result;
     }
-    const rawObj = raw as Record<string, Object>;
-    const dataObj = rawObj['data'] as Record<string, Object>;
-    if (dataObj) {
-      result.message = String(dataObj['0'] ?? '');
+    result.message = String(raw['msg'] ?? '操作成功');
+    const rawResult: Object | undefined = raw['result'];
+    if (rawResult !== undefined && rawResult !== null) {
+      const resultObject: Record<string, Object> | null = getRecommendResultObject(rawResult);
+      if (resultObject !== null) {
+        const rawState: Object | undefined = resultObject['last_state'] ??
+          resultObject['last'] ?? resultObject['state']
+        const parsedState: number = Number(rawState ?? 99)
+        result.state = parsedState === 1 || parsedState === -1 || parsedState === 0
+          ? parsedState : 99
+      }
     }
     result.ok = true;
   } catch (e) {
-    logger.warn('投票失败: %{public}s', formatError(e));
+    logger.warn('推荐失败: %{public}s', formatError(e));
     result.error = (e as Error).message ?? '操作失败';
   }
   return result;
+}
+
+/**
+ * 从推荐接口的 result 字段中提取状态对象，兼容对象和单元素数组外壳。
+ *
+ * @param rawResult - 官方接口返回的 result 字段
+ * @returns 状态对象；无法识别时返回 null
+ */
+function getRecommendResultObject(rawResult: Object): Record<string, Object> | null {
+  if (Array.isArray(rawResult)) {
+    const values: Object[] = rawResult as Object[];
+    if (values.length === 0 || values[0] === null || typeof values[0] !== 'object') {
+      return null;
+    }
+    return values[0] as Record<string, Object>;
+  }
+  if (typeof rawResult !== 'object') {
+    return null;
+  }
+  return rawResult as Record<string, Object>;
 }
 
 // ============== 主题收藏 ==============
@@ -408,14 +466,21 @@ export async function checkin(token: string): Promise<CheckinResult> {
     return result;
   }
   try {
-    const fields: Record<string, string> = { '__lib': 'check_in', '__act': 'check_in', 'lite': 'js' };
-    const raw = await ngaClient.post('/nuke.php', fields, { uid: session.uid, cid: session.cid }) as Record<string, Object>;
-    const error = parseNgaError(raw);
-    if (error) {
-      result.error = error;
+    const ts: string = String(Math.floor(Date.now() / 1000));
+    const params: Record<string, string> = {
+      '_auto': '1',
+      '__ngaClientChecksum': makeClientChecksum({ uid: session.uid, ts: ts }),
+    };
+    const raw: Record<string, Object> = await ngaClient.postSigned(
+      '/nuke.php', 'check_in', 'check_in', params,
+      { uid: session.uid, cid: session.cid }, '', '12'
+    ) as Record<string, Object>;
+    const code: number = Number(raw['code'] ?? 0);
+    if (code !== 0) {
+      result.error = String(raw['msg'] ?? `错误码: ${code}`);
       return result;
     }
-    result.data = raw?.['data'] ?? null;
+    result.data = (raw['data'] ?? raw['result'] ?? null) as object | null;
     result.ok = true;
   } catch (e) {
     logger.warn('签到失败: %{public}s', formatError(e));

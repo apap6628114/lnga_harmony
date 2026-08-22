@@ -13,7 +13,6 @@
 import { ngaClient } from '../NgaClient';
 import { appStore } from '../../store/AppStore';
 import { parseThreadData } from '../../parser/ThreadParser';
-import { parseNgaError } from '../../parser/ErrorParser';
 import { parseFromClient } from '../../parser/ClientParser';
 import { isUserMuted } from '../../parser/MuteParser';
 import { resolveAttachUrl } from '../../parser/_shared/AttachUrl';
@@ -553,33 +552,33 @@ export async function getTopicCategories(token: string, fid: number): Promise<To
 
   try {
     const params: Record<string, string> = {
-      '__lib': 'topic_key',
-      '__act': 'get',
       'fid': String(fid),
-      '__output': '8',
     };
-    const raw = await ngaClient.get('/nuke.php', params, { uid: session.uid, cid: session.cid }) as Record<string, Object>;
-    const err = parseNgaError(raw);
-    if (err) {
-      result.error = err;
+    const raw: Record<string, Object> = await ngaClient.postSigned(
+      '/app_api.php', 'post', 'titletype', params,
+      { uid: session.uid, cid: session.cid }, '', '12'
+    ) as Record<string, Object>;
+    const code: number = Number(raw['code'] ?? 0);
+    if (code !== 0) {
+      result.error = String(raw['msg'] ?? `错误码: ${code}`);
       return result;
     }
-    // 响应结构: data["0"] 为有序分类表，每项形如 {"0": "分类名"}
-    const dataObj = raw?.['data'] as Record<string, Object> | undefined;
-    const table = dataObj?.['0'] as Record<string, Object> | undefined;
-    if (table) {
-      const keys: string[] = Object.keys(table);
-      for (let i = 0; i < keys.length; i++) {
-        const entry: Object | undefined = table[keys[i]];
-        if (entry === undefined) {
-          continue;
-        }
-        // 兼容条目为原始字符串或 {"0": "分类名"} 对象两种形状
-        const name: string = typeof entry === 'string' ? String(entry)
-          : String((entry as Record<string, Object>)['0'] ?? '');
-        if (name.length > 0) {
-          result.categories.push(name);
-        }
+    const resultValue: Object | undefined = raw['result'];
+    if (resultValue === undefined || resultValue === null || !Array.isArray(resultValue)) {
+      result.error = '主题分类数据格式异常';
+      return result;
+    }
+    const entries: Object[] = resultValue as Object[];
+    for (let i: number = 0; i < entries.length; i++) {
+      const entry: Object | undefined = entries[i];
+      if (entry === undefined || entry === null) {
+        continue;
+      }
+      const name: string = typeof entry === 'string'
+        ? entry
+        : String((entry as Record<string, Object>)['name'] ?? '');
+      if (name.length > 0) {
+        result.categories.push(name);
       }
     }
     result.ok = true;

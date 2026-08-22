@@ -278,6 +278,7 @@ TITLE_SCROLL_EFFECT_DISTANCE = 20vp
 | 回复成功后旧窗口被静默刷新污染 | 静默刷新响应未校验请求代际 | 提交前比较发起时代际，不一致即丢弃 | 依赖请求返回顺序 |
 | 快速跳页后旧页面覆盖新页面 | 旧响应未做请求代际校验 | `REPLACE` 推进代际，提交前比较代际 | 依赖请求返回顺序 |
 | 编辑成功后楼层正文不刷新 | LazyForEach 键值只含 pid，内容变化不改变键值，`onDataChange` 不触发组件更新 | 内容变化时递增 `uiRev`（键值 `pid + uiRev`）重建该楼层；静默刷新返回旧缓存时经 `protectedContent` 跳过覆盖 | 只改 `content` 后 `updateAt`（键值不变不刷新）；整体 `replaceAll` 重建（破坏窗口与滚动） |
+| 点赞/踩成功后数字与颜色不刷新或整层闪烁 | `PostInfo` 非 `@Observed`，分数内部字段变更不能驱动 LazyForEach；父层投票状态更新还可能用旧 `@Prop post.score` 覆盖动作栏 | `PostVoteBar` 在点击事件内先写入局部 `@State`，失败回滚，成功按本次操作语义确认最终状态；移除点赞状态的旧值 `@Watch` 同步；请求期间屏蔽同楼层重复提交 | 点赞路径递增 `uiRev` 或重建包含图片/正文的 `PostItem` |
 
 ## 8. 诊断与日志
 
