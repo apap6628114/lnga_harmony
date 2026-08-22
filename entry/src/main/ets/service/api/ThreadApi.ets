@@ -1,6 +1,17 @@
 /**
  * NGA 帖子 API - 帖子详情、pid 定位、主题分类（读取域）
- * 含 HTML 强制模式调试开关与 JSON/HTML 双通道解析。
+ * 含 HTML 强制模式调试开关与「官方 APP JSON + APP HTML 降级」双通道解析。
+ *
+ * 帖子内容的 JSON 主通道使用官方 APP 签名请求形态：POST form + 公共签名参数
+ * （app_id/access_uid/access_token/t/sign/__output/__inchst），__output=11，
+ * 无 signParams（卡片 1-read-content R1：read.php 无 addSignParams）。HTML
+ * 降级通道也使用同一官方 APP 签名请求，但改用 __output=17，服务端返回
+ * {code,htmlBaseUrl,htmlTitle,html,msg,template} 包装；官方成功形态为
+ * code=521、template=read，html 是完整帖子页面。
+ * __output=11 返回与网页版同构的结构化 JSON
+ * {data:{__CU,__GLOBAL,__U,__R,__T,__F,__R__ROWS,__R__ROWS_PAGE,__ROWS,__PAGE},time}，
+ * 支持 page=e（末页）、pid 定位（单帖+贴条）、authorid 只看楼主；
+ * 错误形态 {"error":["2048:找不到主题",null,null],"data":{"__MESSAGE":...}}。
  * 发帖、回帖、评论、附件上传等写入操作见 ThreadWriteApi。
  */
 
@@ -49,6 +60,65 @@ export interface ThreadRawResult {
 }
 
 /**
+ * 从官方 APP read.php 的 __output=17 响应中提取帖子 HTML。
+ *
+ * 官方客户端的 Article 模型把 code=521、template=read 视为成功，HTML
+ * 位于顶层 html 字段；这里不依赖 code 的成功判断，只接受非空 html，兼容
+ * 服务端在不同错误场景下省略 code 或 template 的响应差异。
+ *
+ * @param response - ngaClient 解析后的 APP 响应
+ * @returns 完整帖子 HTML
+ * @throws 响应缺少可解析的 html 字段时抛出错误
+ */
+export function extractAppArticleHtml(response: object): string {
+  const responseObj: Record<string, Object> = response as Record<string, Object>;
+  const htmlValue: Object | undefined = responseObj['html'];
+  if (typeof htmlValue === 'string' && htmlValue.trim().length > 0) {
+    return htmlValue;
+  }
+  const code: string = String(responseObj['code'] ?? '');
+  const message: string = String(responseObj['msg'] ?? '');
+  if (message.length > 0) {
+    throw new Error(`APP read.php HTML 接口失败${code ? `（${code}）` : ''}：${message}`);
+  }
+  throw new Error('APP read.php HTML 接口未返回 html');
+}
+
+/**
+ * 通过官方 APP read.php __output=17 拉取并解析帖子 HTML。
+ *
+ * @param uid - 当前登录用户 ID
+ * @param cid - 当前登录会话令牌
+ * @param tid - 主题 ID
+ * @param pid - 楼层 ID
+ * @param authorid - 只看某作者的楼层
+ * @param page - 页码，e 表示末页
+ * @returns 与 JSON 主通道同形状的原始帖子对象
+ */
+async function fetchAppArticleHtmlRaw(uid: string, cid: string, tid: string,
+  pid: string, authorid: string, page: string): Promise<Record<string, Object>> {
+  const appParams: Record<string, string> = {
+    'tid': tid,
+    'pid': pid,
+    'topid': '',
+    'authorid': authorid,
+    'opt': '',
+    'page': page || '1',
+    '__localres': '1',
+  };
+  const response: Record<string, Object> = await ngaClient.postSignedPath('/read.php', appParams,
+    { uid: uid, cid: cid }, '', '17') as Record<string, Object>;
+  const html: string = extractAppArticleHtml(response);
+  const parsed: Object = await taskpool.execute(parseHtmlTask, html);
+  const parsedObj: Record<string, Object> = parsed as Record<string, Object>;
+  const parsedData: Record<string, Object> | undefined = parsedObj['data'] as Record<string, Object> | undefined;
+  if (!parsedData || parsedData['__R'] === undefined) {
+    throw new Error('APP read.php HTML 解析结果缺少帖子楼层');
+  }
+  return parsedObj;
+}
+
+/**
  * 取一页原始数据中页末楼层的 pid。
  *
  * 与 parseThreadData 的 rowList 末尾语义一致：楼层顺序即 Object.keys 顺序，
@@ -82,13 +152,15 @@ function lastPidOfPage(raw: Record<string, Object>): number {
 }
 
 /**
- * 双通道取数原语：read.php JSON 优先，残缺/错误时降级 HTML，返回同形状原始对象。
+ * 双通道取数原语：官方 APP 签名 JSON read.php 优先，残缺/错误时降级为
+ * 官方 APP __output=17 HTML，再复用 HTML 解析器返回同形状原始对象。
  *
  * 这是 getThread（渲染整页）与 locatePidPage（仅取 pid 序列）共享的底层取数：
- * 不解析、不过滤、不触碰渲染状态。JSON 被官方阻断为残缺响应
- * （README Rule 2：Unterminated string / 意外 EOF / HTML 错误页）或返回业务
- * 错误时，自动降级 read.php HTML 解析（parseHtmlTask）。本函数保证不抛异常：
- * 双通道均失败时返回 raw=null。
+ * 不解析、不过滤、不触碰渲染状态。JSON 主通道为官方 APP 签名接口
+ * （POST /read.php + 公共签名参数 + __output=11，见文件头注释），被官方阻断为
+ * 残缺响应或返回业务错误时，自动降级同一 APP 接口的 __output=17 HTML，随后
+ * 运行 parseHtmlTask。ThreadPanel、pid 定位和离线保存均共享此原语。
+ * 本函数保证不抛异常：双通道均失败时返回 raw=null。
  *
  * @param token - 会话令牌
  * @param tid - 主题 ID（可空：仅 pid 场景走 HTML 特例）
@@ -105,67 +177,62 @@ export async function fetchThreadRaw(token: string, tid: string, pid: string,
   }
 
   if (getForceHtmlMode() || !tid) {
-    // 调试模式 / 强制走 HTML 解析 / 仅 pid 无 tid（现有特例）：直接 HTML 通道
-    const htmlParams: Record<string, string> = {
-      'tid': tid || '',
-      'page': page || '1',
-    };
-    if (pid) htmlParams['pid'] = pid;
-    if (authorid) htmlParams['authorid'] = authorid;
     try {
-      const html: string = await ngaClient.getHtmlText('/read.php', htmlParams,
-        { uid: session.uid, cid: session.cid });
-      const rawObj: Object = await taskpool.execute(parseHtmlTask, html)
-      return { raw: rawObj as Record<string, Object>, viaHtml: true, jsonError: '' };
+      const rawObj: Record<string, Object> = await fetchAppArticleHtmlRaw(session.uid, session.cid,
+        tid || '', pid, authorid, page);
+      return { raw: rawObj, viaHtml: true, jsonError: '' };
     } catch (e) {
-      return { raw: null, viaHtml: true, jsonError: (e as Error).message ?? 'HTML 解析异常' };
+      return { raw: null, viaHtml: true, jsonError: (e as Error).message ?? 'APP HTML 解析异常' };
     }
   }
 
-  // JSON 主通道
+  // JSON 主通道：官方 APP 签名接口（postSignedPath 无 __lib/__act 通道，
+  // 固定 ngabbs.com + 完整认证头 + 公共签名参数进 body）。
+  // read.php 无 addSignParams → signParams 传空串；__output=11 实测返回结构化 JSON。
   let jsonError: string = '';
   try {
-    const ngaParams: Record<string, string> = {
+    const appParams: Record<string, string> = {
+      'tid': tid,
+      'pid': pid,
+      'topid': '',
+      'authorid': authorid,
+      'opt': '',
       'page': page || '1',
-      '__output': '8',
-      'noprefix': '',
-      'v2': '',
+      '__localres': '1',
     };
-    if (tid) ngaParams['tid'] = tid;
-    if (pid) ngaParams['pid'] = pid;
-    if (authorid) ngaParams['authorid'] = authorid;
-    const raw = await ngaClient.get('/read.php', ngaParams,
-      { uid: session.uid, cid: session.cid }) as Record<string, Object>;
-    const err = parseNgaError(raw);
-    if (err) {
-      jsonError = err;
+    const raw = await ngaClient.postSignedPath('/read.php', appParams,
+      { uid: session.uid, cid: session.cid }, '', '11') as Record<string, Object>;
+    // 防御：__output=11 偶发返回 code=521 跳转形态（html 字段、无 data）时
+    // 视为异常，避免空 data 被当作成功页提交（假成功）
+    if (raw['html'] !== undefined && raw['data'] === undefined) {
+      jsonError = String(raw['msg'] ?? '服务端返回异常页面');
+      logger.warn('[NGA][REQ] read.php 官方签名通道返回跳转页: %{public}s', jsonError);
     } else {
-      return { raw: raw, viaHtml: false, jsonError: '' };
+      const err = parseNgaError(raw);
+      if (err) {
+        jsonError = err;
+      } else {
+        return { raw: raw, viaHtml: false, jsonError: '' };
+      }
     }
   } catch (e) {
     jsonError = (e as Error).message ?? 'JSON 请求异常';
-    logger.error('[NGA][REQ] JSON API 请求失败，降级 HTML: %{public}s', jsonError);
+    logger.error('[NGA][REQ] 官方签名 API 请求失败，降级 HTML: %{public}s', jsonError);
   }
 
-  // HTML 降级
-  const fallbackParams: Record<string, string> = {
-    'tid': tid || '',
-    'page': page || '1',
-  };
-  if (pid) fallbackParams['pid'] = pid;
-  if (authorid) fallbackParams['authorid'] = authorid;
+  // APP HTML 降级
   try {
-    const html: string = await ngaClient.getHtmlText('/read.php', fallbackParams,
-      { uid: session.uid, cid: session.cid });
-    const rawObj: Object = await taskpool.execute(parseHtmlTask, html)
-    return { raw: rawObj as Record<string, Object>, viaHtml: true, jsonError: jsonError };
+    const rawObj: Record<string, Object> = await fetchAppArticleHtmlRaw(session.uid, session.cid,
+      tid, pid, authorid, page);
+    return { raw: rawObj, viaHtml: true, jsonError: jsonError };
   } catch (e) {
-    return { raw: null, viaHtml: true, jsonError: jsonError };
+    const htmlError: string = (e as Error).message ?? 'APP HTML 解析异常';
+    return { raw: null, viaHtml: true, jsonError: jsonError || htmlError };
   }
 }
 
 /**
- * 获取帖子详情（JSON 主通道优先，残缺/错误时自动降级 HTML 解析）。
+ * 获取帖子详情（官方 APP 签名通道优先，残缺/错误时自动降级 HTML 解析）。
  *
  * 双通道取数由 fetchThreadRaw 完成，本函数负责解析（fillThreadResult）与
  * 过滤，是 ThreadPanel 渲染整页的唯一取数入口。
@@ -194,12 +261,12 @@ export async function getThread(token: string, tid: string, pid: string,
       result.error = fetched.jsonError || '无法加载该帖子';
       return result;
     }
-    // 调试模式：JSON 接口失败降级为 HTML 解析时弹出提示，便于观察请求通道
+    // 调试模式：官方签名接口失败降级为 HTML 解析时弹出提示，便于观察请求通道
     if (fetched.viaHtml && fetched.jsonError.length > 0 && appStore.settings.debugMode) {
-      appStore.showToast('JSON 接口失败，已降级为 HTML 模式：' + fetched.jsonError)
+      appStore.showToast('官方接口失败，已降级为 HTML 模式：' + fetched.jsonError)
     }
     fillThreadResult(fetched.raw, result, blacklist, keywords, noteMap);
-    // 降级通道解析不到楼层时判定失败（JSON 主通道保持原语义：填充即 ok）
+    // 降级通道解析不到楼层时判定失败（官方签名主通道保持原语义：填充即 ok）
     if (fetched.viaHtml && fetched.jsonError.length > 0 && result.posts.length === 0) {
       result.ok = false;
       result.error = fetched.jsonError || result.error || '无法加载该帖子';
@@ -214,9 +281,9 @@ export async function getThread(token: string, tid: string, pid: string,
 /**
  * 二分查找目标楼层 pid 所在页码。
  *
- * 纯数据行为：经由双通道取数原语 fetchThreadRaw（JSON 主通道优先，被官方
- * 阻断为残缺响应时自动降级 HTML），只读原始 __R 的页末 pid 与 __ROWS 分页
- * 信息，不解析、不过滤、不依赖渲染状态。利用 NGA 楼层 pid 在主题内
+ * 纯数据行为：经由双通道取数原语 fetchThreadRaw（官方 APP 签名通道优先，
+ * 被官方阻断为残缺响应时自动降级 HTML），只读原始 __R 的页末 pid 与 __ROWS
+ * 分页信息，不解析、不过滤、不依赖渲染状态。利用 NGA 楼层 pid 在主题内
  * 随楼号严格递增的性质（删除楼层只产生 pid 空洞、不破坏单调性）二分定位。
  * 总页数自包含获取：先请求末页（page=e），以 __ROWS/__R__ROWS_PAGE 按
  * parseThreadData 同款公式换算真实总页数，同时以主题末楼 pid 排除「目标 pid

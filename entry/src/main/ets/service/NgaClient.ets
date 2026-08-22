@@ -5,6 +5,7 @@ import { Logger, DOMAIN_NETWORK, formatError } from '../common/utils/Logger';
 import {
   uint8ArrayToBase64,
   decodeGb18030,
+  decodeUtf8,
   buildEncodedBody,
   buildMultipart,
   emptyStringRecord,
@@ -355,7 +356,7 @@ async function ngaPostSignedCore(path: string, qparams: Record<string, string>,
   fields: Record<string, string>, cookies: Cookies | undefined): Promise<object> {
   const extraHeaders: Record<string, string> = buildSignedHeaders();
   return ngaRequest(path, http.RequestMethod.POST, qparams,
-    buildEncodedBody(fields), cookies, 'https://ngabbs.com', extraHeaders, true);
+    buildEncodedBody(fields), cookies, 'https://ngabbs.com', extraHeaders, true, true);
 }
 
 /**
@@ -395,19 +396,31 @@ async function ngaPostSigned(path: string, lib: string, act: string,
  * App 签名接口（POST form + access_uid/access_token/sign），**无 __lib/__act**。
  *
  * 用于 thread.php 官方主题列表/主题搜索（卡片 R2：`thread.php?` 无 `__lib/__act`，
- * 官方客户端 kt.c.V/W/S0 走 thread.php 入口 + 公共参数签名）。请求形态与
- * ngaPostSigned 完全一致（公共参数 + 业务参数进 body，完整认证头，ngabbs.com），
- * 仅 URL 不拼 __lib/__act。
+ * 官方客户端 kt.c.V/W/S0 走 thread.php 入口 + 公共参数签名）与 read.php 官方
+ * 帖子内容（卡片 R1：`read.php?` 无 `__lib/__act`、无 addSignParams）。
+ * 请求形态与 ngaPostSigned 完全一致（公共参数 + 业务参数进 body，完整认证头，
+ * ngabbs.com），仅 URL 不拼 __lib/__act。
  *
  * 实测（nga-hack nga-client 探测）：POST + sign + `signParams=fid|key` + `__output=14`
  * 返回 `{"code":0,"result":{"__T":[...],"__F":{...},"__ROWS":...,"__T__ROWS_PAGE":35,...}}`；
  * signParams 传错（空/不符）返回 `{"code":5,"msg":"签名错误"}`。
  *
- * @param path - 请求路径（如 /thread.php）
+ * read.php 实测（鸿蒙端）：POST + sign + `signParams=''` + `__output=11` 返回与网页版
+ * 同构的结构化 JSON `{data:{__CU,__GLOBAL,__U,__R,__T,__F,__R__ROWS,__R__ROWS_PAGE,
+ * __ROWS,__PAGE},time}`（中文以 \uXXXX 转义，GB18030/UTF-8 解码均安全），
+ * 支持 page=e（末页）、pid 定位（单帖+贴条）、authorid 只看楼主；业务错误形态
+ * `{"error":["2048:找不到主题",null,null],"data":{"__MESSAGE":...}}`（error 数组）。
+ * 同一 read.php 的 `__output=17` 返回官方 Article 包装
+ * `{code:521,htmlBaseUrl,htmlTitle,html,msg,template:"read"}`，html 是完整帖子页面，
+ * 供客户端 HTML 解析降级使用。
+ *
+ * @param path - 请求路径（如 /thread.php、/read.php）
  * @param params - 业务参数（进 body）
  * @param cookies - 会话 cookie（提供 access_uid/access_token 与 Cookie 头）
- * @param signParams - 参与签名的参数值拼接（thread.php 主题列表 = fid，搜索 = key；无则空串）
- * @param output - __output，默认 '14'（thread.php 官方通道实测值）
+ * @param signParams - 参与签名的参数值拼接（thread.php 主题列表 = fid，搜索 = key；
+ *   read.php 无 addSignParams → 传空串；无则空串）
+ * @param output - __output，默认 '14'（thread.php 官方通道实测值；
+ *   read.php JSON 传 '11'，HTML 降级传 '17'，见上）
  */
 async function ngaPostSignedPath(path: string, params: Record<string, string>,
   cookies: Cookies | undefined, signParams: string, output: string): Promise<object> {
@@ -445,7 +458,7 @@ async function ngaRequest(path: string, method: http.RequestMethod,
   params: Record<string, string>, body: string,
   cookies: Cookies | undefined, baseUrl: string,
   extraHeaders: Record<string, string> | undefined,
-  skipInchst?: boolean): Promise<object> {
+  skipInchst: boolean = false, utf8Response: boolean = false): Promise<object> {
   if (!skipInchst && !params['__inchst']) {
     params['__inchst'] = 'UTF8';
   }
@@ -455,8 +468,7 @@ async function ngaRequest(path: string, method: http.RequestMethod,
     path, params, method, body, cookies, extraHeaders, baseUrl
   );
 
-  // GB18030 解码
-  const rawText = decodeGb18030(response.body);
+  const rawText: string = utf8Response ? decodeUtf8(response.body) : decodeGb18030(response.body);
   logChunks('[NGA][RES] body:', rawText);
 
   // 部分接口（如 ucp/get）成功时也返回 HTML 包裹的

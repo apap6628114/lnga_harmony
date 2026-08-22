@@ -46,6 +46,20 @@ export function decodeGb18030(buffer: ArrayBuffer): string {
 }
 
 /**
+ * 将 ArrayBuffer 按 UTF-8 解码为字符串。
+ *
+ * 官方 APP 签名接口通过 __inchst=utf-8 声明响应编码；该解码器与网页版
+ * GB18030 解码分开，避免 output=17 的 HTML 正文出现中文乱码。
+ *
+ * @param buffer - UTF-8 编码的字节缓冲
+ * @returns 解码后的字符串
+ */
+export function decodeUtf8(buffer: ArrayBuffer): string {
+  const decoder = util.TextDecoder.create('utf-8');
+  return decoder.decodeToString(new Uint8Array(buffer));
+}
+
+/**
  * 将字符串中的 emoji（代理对）转换为 HTML 数字实体（&#codepoint;），
  * 以便后续按 GBK 编码时 emoji 不会被错误拆分。
  * @param str - 原始字符串

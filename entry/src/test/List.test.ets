@@ -19,6 +19,7 @@ import appFollowActivityUnitTest from './AppFollowActivityUnit.test';
 import appNotificationUnitTest from './AppNotificationUnit.test';
 import appFavoriteTopicUnitTest from './AppFavoriteTopicUnit.test';
 import appTopicListUnitTest from './AppTopicListUnit.test';
+import appThreadUnitTest from './AppThreadUnit.test';
 
 /**
  * 注册全部本地单元测试。
@@ -45,4 +46,5 @@ export default function testsuite(): void {
   appNotificationUnitTest();
   appFavoriteTopicUnitTest();
   appTopicListUnitTest();
+  appThreadUnitTest();
 }
