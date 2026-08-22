@@ -13,7 +13,7 @@
 | 板块分类树 | GET `app_api.php?__lib=home&__act=category`（未签名） | POST+sign `home/category`，`_v=2`，`__output=14`，signParams 空 | `service/api/ForumApi.ets` `getForumCategories` |
 | 板块内帖子列表 | GET `thread.php?lite=js&noprefix`（网页版 JSON，限流重灾区） | POST+sign `thread.php`（无 `__lib/__act`），`__output=14`，signParams=fid | `ForumApi.getTopicList` |
 | 主题搜索 | 同上（key 变体） | POST+sign `thread.php`，`key`+`table=7`，signParams=key | `ForumApi.getTopicList`（key 分支） |
-| 版块搜索 | GET `forum.php?__output=8`（App 中**不存在** forum.php 入口） | POST+sign `app_api.php?__lib=forum&__act=search`，`key`+`page`，signParams=key；**失败降级网页版 forum.php**（官方接口关键字长度校验苛刻，中文短词必被 2048 拒绝） | `ForumApi.searchForum` |
+| 版块搜索 | GET 网页接口（已移除） | POST+sign `app_api.php?__lib=forum&__act=search`，`key`+`page`，signParams=key；官方接口失败即返回错误 | `ForumApi.searchForum` |
 
 不在本次范围（沿用既有官方通道）：用户发帖/回帖历史（`user/subjects|replys`）、
 收藏夹内主题列表（`favor/all`）、帖子详情（`read.php` `__output=17` HTML 解析通道）。
@@ -76,8 +76,8 @@
   name, parent:{fid, name, descrip}, info}`。
 - ⚠️ **关键字长度校验苛刻**（实测）：ASCII 8~10 字符可行（`warcraft` 成功）；
   中文 7 字以内、11 字以上均 2048「关键字过短/长」；无匹配返回 2048
-  「没找到符合条件的版面」。**鸿蒙端保留网页版 `forum.php` 降级**（官方失败时
-  走旧通道，短词搜索体验不回退）。
+  「没找到符合条件的版面」。鸿蒙端遵守官方 APP 规则，仅使用此接口；关键字不符合
+  服务端要求时直接展示服务端错误，不再回退网页接口。
 
 ## 实现结构
 
@@ -99,9 +99,9 @@
    以及 html-topiclist 镜像解析器——2026-08 经 bbcode-ts 门禁整体移除，
    镜像数量 34→31，含 `fetch-topic-pair` 脚本与成对样本）。
 
-`searchForum` 通道编排：官方 `forum/search` 主通道；**保留网页版 `forum.php`
-降级**——官方接口对中文短词（≤7 字符）必返 2048「关键字过短/长」（实测 ASCII
-8~10 字符才可），降级是功能补偿而非旧模式残留。
+`searchForum` 通道编排：仅调用官方 `forum/search` 签名接口；官方接口对中文短词
+（≤7 字符）可能返回 2048「关键字过短/长」（实测 ASCII 8~10 字符才可），业务失败、
+网络异常或解析失败均直接返回错误，不再回退网页接口。
 
 ## 测试
 
@@ -109,4 +109,4 @@
   `extractAppTopicListError` 错误提取、`parseAppTopicList` 官方形状解析
   （主题字段/子版块/分页/匿名/黑名单/关键词）、`curTime` 本地兜底、
   业务失败与形状异常返回 null、`parseForumCategories` 官方分类数组、
-  `parseForumSearch` 官方 result 数组与网页版 data 数组兼容。
+  `parseForumSearch` 官方 result 数组解析。

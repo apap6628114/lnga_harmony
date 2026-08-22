@@ -50,6 +50,16 @@ export async function getForumCategories(token: string): Promise<CategoriesResul
   return result;
 }
 
+/**
+ * 使用官方 APP 签名接口搜索版块。
+ *
+ * 官方接口会校验关键字长度；业务失败或请求异常时直接返回错误，遵守官方 APP
+ * 的搜索约束，不再调用网页接口降级。
+ *
+ * @param token - 当前应用会话令牌
+ * @param key - 版块搜索关键字
+ * @returns 版块搜索结果
+ */
 export async function searchForum(token: string, key: string): Promise<SearchForumResult> {
   const result = new SearchForumResult();
   const session = appStore.getSession(token);
@@ -58,12 +68,6 @@ export async function searchForum(token: string, key: string): Promise<SearchFor
     return result;
   }
 
-  // 官方 APP 签名通道（app_api.php forum/search）主通道：POST form + sign，
-  // 参数 key + page，signParams=key，__output=14（逆向 NetRequestWrapper.E0，
-  // nga-hack 实测 code=0 时 result 为 Forum 数组）。
-  // 注意：官方接口对关键字长度校验苛刻（实测 ASCII 8~10 字符可行，中文多数字符数
-  // 返回 2048「关键字过短/长」），失败时降级网页版 forum.php（保留短词搜索体验）。
-  let appError: string = '';
   try {
     const appParams: Record<string, string> = { 'key': key, 'page': '1' };
     const raw = await ngaClient.postSigned('/app_api.php', 'forum', 'search', appParams,
@@ -74,23 +78,14 @@ export async function searchForum(token: string, key: string): Promise<SearchFor
       result.ok = true;
       return result;
     }
-    appError = String(raw['msg'] ?? `错误码: ${code}`);
+    const appError: string = String(raw['msg'] ?? `错误码: ${code}`);
+    result.error = appError;
     logger.warn('[NGA][REQ] 版块搜索官方接口业务失败(key=%{public}s code=%{public}d msg=%{public}s)',
       key, code, appError);
   } catch (e) {
-    appError = (e as Error).message ?? '版块搜索失败';
-    logger.warn('[NGA][REQ] 版块搜索官方接口异常，降级网页版: %{public}s', appError);
-  }
-
-  // 网页版降级通道：forum.php?__output=8（短词/官方接口失败时使用）
-  try {
-    const params: Record<string, string> = { '__output': '8', 'key': key };
-    const raw = await ngaClient.get('/forum.php', params, { uid: session.uid, cid: session.cid });
-    result.data = parseForumSearch(raw as object);
-    result.ok = true;
-  } catch (e) {
-    logger.warn('搜索失败: %{public}s', formatError(e));
-    result.error = appError || ((e as Error).message ?? '搜索失败');
+    const appError: string = formatError(e);
+    logger.warn('[NGA][REQ] 版块搜索官方接口异常: %{public}s', appError);
+    result.error = appError || '版块搜索失败';
   }
   return result;
 }

@@ -43,7 +43,7 @@ export interface BoardContent {
 }
 
 /**
- * 版块搜索（forum.php?key=）返回的版块条目。
+ * 官方 APP 版块搜索接口返回的版块条目。
  */
 export interface ForumSearchItem {
   /** 普通版块 ID。 */
