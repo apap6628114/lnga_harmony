@@ -476,7 +476,7 @@ export struct TopicListPanel {
     this.replaceSubBoardSelection(subBoard.filterId, show)
     try {
       const result = await setSubforumFilter(
-        appStore.auth.token, this.boardFid, subBoard.filterId, show)
+        appStore.auth.token, this.boardFid, subBoard, show)
       if (!result.ok) {
         this.replaceSubBoardSelection(subBoard.filterId, previous)
         appStore.showToast(result.error || '修改子版块显示设置失败')

@@ -249,11 +249,11 @@ export struct SearchPanel {
         const params: TopicListParams = createTopicListParams()
         params.page = String(page)
         params.key = this.submitted
-        // 对齐 MNGA TopicSearchRequest：主题搜索为"标题+正文"一体（thread.php content=1）
+        // 对齐 MNGA TopicSearchRequest：主题搜索为"标题+正文"一体（subject/search content=1）
         params.content = '1'
         // 注：MNGA search_topic 恒传 recommend（默认 false→"0"）；服务端缺省与
-        // recommend=0 等价，且官方 thread.php 通道的 recommend 非空分支仅发
-        // recommend（实测 order_by/user 不影响结果，见 AppTopicListQuery），
+        // recommend=0 等价，且官方 subject/search 通道的 recommend 非空分支仅发
+        // recommend（实测 order_by/user 不影响结果，见 SubjectListQuery），
         // 搜索场景故不传，行为等价。
         // 版块内搜索：限定当前版块（对齐 MNGA TopicSearchRequest.id）；
         // fid 可为负数（NGA 专题版块标识），仅 0 表示全局

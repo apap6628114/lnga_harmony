@@ -5,11 +5,16 @@
 import { ngaClient, Cookies } from '../NgaClient';
 import { appStore } from '../../store/AppStore';
 import { parseForumCategories, parseForumSearch } from '../../parser/ForumParser';
-import { parseAppTopicList, extractAppTopicListError } from '../../parser/AppTopicListParser';
-import { parseNgaError } from '../../parser/ErrorParser';
-import { buildAppThreadQuery, buildAppSignParams } from '../../common/utils/AppTopicListQuery';
+import { parseSubjectList, extractSubjectListError } from '../../parser/AppSubjectListParser';
+import {
+  buildSubjectQuery,
+  buildSubjectSignParams,
+  buildSubscriptionFields,
+  buildSubscriptionSignParams,
+} from '../../common/utils/SubjectListQuery';
 import { ApiResult, CategoriesResult, TopicListResult, SearchForumResult } from '../../model/NgaApiResults';
 import type { TopicListInfo } from '../../model/Topic';
+import type { SubBoard } from '../../model/Forum';
 import { appUserListEndpoints, parseAppUserTopicList } from '../../parser/AppUserTopicParser';
 import type { AppUserListEndpoint } from '../../parser/AppUserTopicParser';
 import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger';
@@ -258,29 +263,31 @@ export async function getTopicList(token: string, params: TopicListParams,
     return result;
   }
 
-  // 普通版面/搜索列表：官方 APP 签名接口是唯一通道（thread.php POST form + sign，
-  // 无 __lib/__act，__output=14，signParams=fid|key）。网页版通道（GET
-  // thread.php?lite=js 与 HTML 静态页降级）已随本次迁移彻底移除——
+  // 普通版面/搜索列表：官方 APP 签名接口（app_api.php subject/list|search，
+  // 官方 SUBJECT_LIST/SUBJECT_SEARCH 同款，__output=12）。subject/list 响应
+  // result.data 为主题数组 + result.subForum 为子版块订阅状态；subject/search
+  // 同构但无 subForum。网页版/thread.php 通道已随本次迁移彻底移除——
   // 官方接口失败即返回错误，不再降级（与关注/收藏/用户列表迁移模式一致）。
   let channelError: string = '';
   try {
     if (params.author) {
-      // 官方 thread.php 无 author（按作者名过滤）参数；该场景无 UI 入口，
+      // 官方 subject 系无 author（按作者名过滤）参数；该场景无 UI 入口，
       // 防御性直接返回错误，不静默忽略 author 导致列表语义错误
       throw new Error('官方接口不支持作者名过滤');
     }
-    const appParams: Record<string, string> = buildAppThreadQuery(params);
-    const signParams: string = buildAppSignParams(params);
-    const raw = await ngaClient.postSignedPath('/thread.php', appParams,
-      { uid: session.uid, cid: session.cid }, signParams, '14') as Record<string, Object>;
-    const error: string | null = extractAppTopicListError(raw);
+    const appParams: Record<string, string> = buildSubjectQuery(params);
+    const signParams: string = buildSubjectSignParams(params);
+    const act: string = params.key ? 'search' : 'list';
+    const raw = await ngaClient.postSigned('/app_api.php', 'subject', act, appParams,
+      { uid: session.uid, cid: session.cid }, signParams, '12') as Record<string, Object>;
+    const error: string | null = extractSubjectListError(raw);
     if (error) {
       channelError = error;
-      logger.warn('[NGA][REQ] 主题列表官方签名通道业务失败(fid=%{public}s key=%{public}s page=%{public}s code-msg=%{public}s)',
+      logger.warn('[NGA][REQ] 主题列表官方接口业务失败(fid=%{public}s key=%{public}s page=%{public}s code-msg=%{public}s)',
         params.fid, params.key, params.page, error);
     } else {
       const page: number = Number(params.page || '1') || 1;
-      const appInfo: TopicListInfo | null = parseAppTopicList(raw, blacklist, keywords, page);
+      const appInfo: TopicListInfo | null = parseSubjectList(raw, blacklist, keywords, page);
       if (appInfo !== null) {
         result.data = appInfo;
         result.ok = true;
@@ -290,53 +297,50 @@ export async function getTopicList(token: string, params: TopicListParams,
     }
   } catch (e) {
     channelError = (e as Error).message ?? '获取主题列表失败';
-    logger.warn('[NGA][REQ] 主题列表官方签名通道失败: %{public}s', channelError);
+    logger.warn('[NGA][REQ] 主题列表官方接口失败: %{public}s', channelError);
   }
   result.error = channelError || '获取主题列表失败';
   return result;
 }
 
 /**
- * 修改父版块中某个子版块的服务器端显示状态。
+ * 修改父版块中某个子版块的服务器端订阅状态（官方 APP 签名接口）。
  *
- * 与 MNGA 保持一致：屏蔽时把 filterId 加入 add_to_block_tids，
- * 恢复显示时从该列表删除，然后由调用方重新加载父版块。
+ * 与官方 App 的 SubForumFragment 一致：订阅（type=1）后该子版块的主题
+ * 混合进父版块列表，取消订阅（type=2）后服务端排除其主题（subject/list
+ * 的 subForum.checked 反映该状态）。show=true → type=1 订阅，show=false →
+ * type=2 取消订阅。
+ *
+ * 参数（T0 smali + 实测确认）：ufid=父版块 fid、fid=子版块 fid、type=1/2、
+ * sub_type=subForum.sub_type、tid=subForum.tid（635 版镜像 id）；
+ * signParams=ufid+fid+type 拼接（实测：错误返回 code=5 签名错误）。
  *
  * @param token - 当前账号令牌
  * @param parentFid - 父版块 fid
- * @param filterId - NGA 子版块筛选标识
- * @param show - 是否在父版块中显示
+ * @param subBoard - 待修改子版块（fid/sub_type/tidStr 来自 subForum 元素）
+ * @param show - 是否在父版块中显示（true=订阅，false=取消订阅）
  * @returns 操作结果
  */
 export async function setSubforumFilter(token: string, parentFid: number,
-  filterId: string, show: boolean): Promise<ApiResult> {
+  subBoard: SubBoard, show: boolean): Promise<ApiResult> {
   const result = new ApiResult();
   const session = appStore.getSession(token);
   if (!session) {
     result.error = '未登录';
     return result;
   }
-  if (parentFid === 0 || filterId.length === 0) {
+  if (parentFid === 0 || subBoard.fid === 0 || subBoard.tidStr.length === 0) {
     result.error = '子版块筛选参数无效';
     return result;
   }
 
   try {
-    const operation: string = show ? 'del' : 'add';
-    const query: Record<string, string> = {
-      '__lib': 'user_option',
-      '__act': 'set',
-      '__output': '8',
-    };
-    query[operation] = filterId;
-    const fields: Record<string, string> = {
-      'fid': String(parentFid),
-      'type': '1',
-      'info': 'add_to_block_tids',
-    };
-    const raw: object = await ngaClient.postWithQueryAndBody(
-      '/nuke.php', query, fields, { uid: session.uid, cid: session.cid });
-    const error: string | null = parseNgaError(raw);
+    const appParams: Record<string, string> = buildSubscriptionFields(
+      parentFid, subBoard.fid, subBoard.type, subBoard.tidStr, show);
+    const signParams: string = buildSubscriptionSignParams(parentFid, subBoard.fid, show);
+    const raw: object = await ngaClient.postSigned('/app_api.php', 'subject', 'subscription',
+      appParams, { uid: session.uid, cid: session.cid }, signParams, '12');
+    const error: string | null = extractSubjectListError(raw);
     if (error !== null) {
       result.error = error;
       return result;

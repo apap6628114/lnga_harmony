@@ -245,21 +245,6 @@ async function executeWithRetry(
 // ============== NGA 核心 ==============
 
 /**
- * 发送同时携带查询参数与表单正文的 POST 请求。
- *
- * @param path - 请求路径
- * @param params - URL 查询参数
- * @param body - application/x-www-form-urlencoded 表单
- * @param cookies - NGA 登录 Cookie
- * @returns NGA JSON 响应
- */
-async function ngaPostWithQueryAndBody(path: string, params: Record<string, string>,
-  body: Record<string, string>, cookies?: Cookies): Promise<object> {
-  return ngaRequest(path, http.RequestMethod.POST, params,
-    buildEncodedBody(body), cookies, '', emptyStringRecord());
-}
-
-/**
  * 构造官方 APP 签名接口的 POST body 字段（公共参数 + 业务参数）。
  *
  * 公共参数（app_id/access_uid/access_token/t/sign/__output/__inchst）与业务参数
@@ -351,7 +336,9 @@ async function ngaPostSignedCore(path: string, qparams: Record<string, string>,
  * 鸿蒙端实测：把 `__lib/__act` 放 body 时 app_api.php 返回 `{"code":2,"msg":"未定义服务"}`，
  * 放 URL query 才被识别（与 nga-hack nga-client 结论一致）。该方法供官方接口
  * （首页分类 app_api.php home/category、版块搜索 app_api.php forum/search、
- * 用户发帖回帖 app_api.php user/subjects|replys、私信 app_api.php message/list|detail、
+ * 版面主题列表/搜索 app_api.php subject/list|search（SUBJECT_LIST/SUBJECT_SEARCH）、
+ * 子版块订阅切换 app_api.php subject/subscription、用户发帖回帖 app_api.php
+ * user/subjects|replys、私信 app_api.php message/list|detail、
  * 通知 app_api.php notify/list、关注动态 nuke.php follow_v2/get_push_list、
  * 关注/取关与关注/粉丝列表 nuke.php follow_v2/follow|get_follow|get_follow_by、
  * 发帖分类与推荐 app_api.php post/titletype|recommend、投票 app_api.php subject/vote、
@@ -384,26 +371,21 @@ async function ngaPostSigned(path: string, lib: string, act: string,
 /**
  * App 签名接口（POST form + access_uid/access_token/sign），**无 __lib/__act**。
  *
- * 用于 thread.php 官方主题列表/主题搜索（卡片 R2：`thread.php?` 无 `__lib/__act`，
- * 官方客户端 kt.c.V/W/S0 走 thread.php 入口 + 公共参数签名）与 read.php 官方
- * 帖子内容（卡片 R1：`read.php?` 无 `__lib/__act`、无 addSignParams）。
- * 请求形态与 ngaPostSigned 完全一致（公共参数 + 业务参数进 body，完整认证头，
- * ngabbs.com），仅 URL 不拼 __lib/__act。
- *
- * 实测（nga-hack nga-client 探测）：POST + sign + `signParams=fid|key` + `__output=14`
- * 返回 `{"code":0,"result":{"__T":[...],"__F":{...},"__ROWS":...,"__T__ROWS_PAGE":35,...}}`；
- * signParams 传错（空/不符）返回 `{"code":5,"msg":"签名错误"}`。
+ * 用于 read.php 官方帖子内容（卡片 R1：`read.php?` 无 `__lib/__act`、
+ * 无 addSignParams）。请求形态与 ngaPostSigned 完全一致（公共参数 + 业务
+ * 参数进 body，完整认证头，ngabbs.com），仅 URL 不拼 __lib/__act。
+ * （版面主题列表/搜索已随迁移切换至 app_api.php subject/list|search，
+ * 不再使用本通道。）
  *
  * read.php 帖子详情使用 `POST + sign + signParams='' + __output=17`，返回官方 Article 包装
  * `{code:521,htmlBaseUrl,htmlTitle,html,msg,template:"read"}`，html 是完整帖子页面，
  * 供客户端 HTML 解析使用。
  *
- * @param path - 请求路径（如 /thread.php、/read.php）
+ * @param path - 请求路径（如 /read.php）
  * @param params - 业务参数（进 body）
  * @param cookies - 会话 cookie（提供 access_uid/access_token 与 Cookie 头）
- * @param signParams - 参与签名的参数值拼接（thread.php 主题列表 = fid，搜索 = key；
- *   read.php 无 addSignParams → 传空串；无则空串）
- * @param output - __output，默认 '14'（thread.php 官方通道实测值；read.php 帖子详情传 '17'）
+ * @param signParams - 参与签名的参数值拼接（read.php 无 addSignParams → 传空串）
+ * @param output - __output，默认 '14'（read.php 帖子详情传 '17'）
  */
 async function ngaPostSignedPath(path: string, params: Record<string, string>,
   cookies: Cookies | undefined, signParams: string, output: string): Promise<object> {
@@ -510,9 +492,6 @@ async function rawRequest(path: string, method: http.RequestMethod,
 // ============== 公共接口 ==============
 
 interface INgaClient {
-  /** 发送同时携带查询参数与表单正文的 POST 请求（网页版接口专用，如子版块筛选 user_option/set）。 */
-  postWithQueryAndBody: (path: string, params: Record<string, string>,
-    body: Record<string, string>, cookies?: Cookies) => Promise<object>;
   /** App 签名接口（POST form + access_uid/access_token/sign），__lib/__act 放 URL query。 */
   postSigned: (path: string, lib: string, act: string, params: Record<string, string>,
     cookies: Cookies | undefined, signParams: string, output: string,
@@ -529,20 +508,6 @@ interface INgaClient {
 }
 
 const client: INgaClient = {
-  /**
-   * 发送同时携带查询参数与表单正文的 POST 请求。
-   *
-   * @param path - 请求路径
-   * @param params - URL 查询参数
-   * @param body - 表单正文
-   * @param cookies - NGA 登录 Cookie
-   * @returns NGA JSON 响应
-   */
-  async postWithQueryAndBody(path: string, params: Record<string, string>,
-    body: Record<string, string>, cookies?: Cookies): Promise<object> {
-    return ngaPostWithQueryAndBody(path, params, body, cookies);
-  },
-
   async postSigned(path: string, lib: string, act: string,
     params: Record<string, string>, cookies: Cookies | undefined,
     signParams: string, output: string, includeClientChecksum: boolean = false,

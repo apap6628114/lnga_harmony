@@ -1,53 +1,63 @@
 import { describe, it, expect } from '@ohos/hypium'
-import { parseTopicList } from '../main/ets/parser/TopicParser'
-import type { TopicListInfo } from '../main/ets/model/Topic'
+import { parseSubjectSubBoards } from '../main/ets/parser/AppSubjectListParser'
+import type { SubBoard } from '../main/ets/model/Forum'
 
 /**
- * 创建包含 MNGA 位置字段格式子版块的主题列表响应。
+ * 创建包含官方 subject/list subForum 数组的响应 result 对象。
  *
- * @returns NGA 主题列表响应
+ * subForum 元素为「位置字段 + 命名键」双格式，checked=账号级真实订阅状态、
+ * allow_checked=是否允许订阅。
+ *
+ * @returns NGA subject/list 响应 result 对象
  */
-function createSubforumResponse(): Record<string, Object> {
-  const emptyTopics: Object = JSON.parse('{}')
-  const selectedFid: Record<string, Object> = {
-    '0': '310',
+function createSubjectSubForumResult(): Record<string, Object> {
+  const selectedSub: Record<string, Object> = {
+    '0': 310,
     '1': '已显示子版块',
     '2': '普通子版块',
-    '3': '19115466',
+    '3': 19115466,
     '4': 558,
+    'id': 310,
+    'name': '已显示子版块',
+    'info': '普通子版块',
+    'checked': 1,
+    'allow_checked': 1,
+    'sub_type': 558,
+    'tid': 19115466,
   }
-  const blockedStid: Record<string, Object> = {
-    '0': '12700430',
+  const blockedSub: Record<string, Object> = {
+    '0': 12700430,
     '1': '已屏蔽分区',
     '2': '专题分区',
-    '3': '12700430',
+    '3': 12700430,
     '4': 41,
+    'id': 12700430,
+    'name': '已屏蔽分区',
+    'info': '专题分区',
+    'checked': 0,
+    'allow_checked': 1,
+    'sub_type': 41,
+    'tid': 12700430,
   }
-  const fixedStid: Record<string, Object> = {
-    '0': '12700431',
+  const fixedSub: Record<string, Object> = {
+    '0': 12700431,
     '1': '固定分区',
     '2': '',
-    '3': '12700431',
+    '3': 12700431,
     '4': 7,
+    'id': 12700431,
+    'name': '固定分区',
+    'info': '',
+    'checked': 1,
+    'allow_checked': 0,
+    'sub_type': 7,
+    'tid': 12700431,
   }
-  const subForums: Record<string, Object> = {
-    'item': [selectedFid],
-    'special': [blockedStid, fixedStid],
+  const subArr: Object[] = [selectedSub, blockedSub, fixedSub]
+  const result: Record<string, Object> = {
+    'subForum': subArr,
   }
-  const forum: Record<string, Object> = {
-    'name': '父版块',
-    'sub_forums': subForums,
-  }
-  const data: Record<string, Object> = {
-    '__T': emptyTopics,
-    '__ROWS': 0,
-    '__T__ROWS_PAGE': 35,
-    '__F': forum,
-  }
-  return {
-    'data': data,
-    'time': 100,
-  }
+  return result
 }
 
 /**
@@ -55,27 +65,59 @@ function createSubforumResponse(): Record<string, Object> {
  */
 export default function subforumUnitTest(): void {
   describe('SubforumUnit', () => {
-    it('parsesMngaSubforumFields', 0, () => {
-      const parsed: TopicListInfo = parseTopicList(createSubforumResponse())
-      expect(parsed.subBoardList.length).assertEqual(3)
+    it('parsesOfficialSubForum', 0, () => {
+      const parsed: SubBoard[] = parseSubjectSubBoards(createSubjectSubForumResult())
+      expect(parsed.length).assertEqual(3)
 
-      const selected = parsed.subBoardList[0]
+      /* 已订阅子版块：checked=1（真实账号状态）、allow_checked=1 可屏蔽 */
+      const selected = parsed[0]
       expect(selected.fid).assertEqual(310)
       expect(selected.stid).assertEqual(0)
+      expect(selected.name).assertEqual('已显示子版块')
+      expect(selected.description).assertEqual('普通子版块')
+      expect(selected.tidStr).assertEqual('19115466')
       expect(selected.filterId).assertEqual('19115466')
+      expect(selected.type).assertEqual(558)
       expect(selected.attributes).assertEqual(558)
-      expect(selected.filterable).assertTrue()
       expect(selected.checked).assertTrue()
+      expect(selected.filterable).assertTrue()
 
-      const blocked = parsed.subBoardList[1]
-      expect(blocked.fid).assertEqual(0)
-      expect(blocked.stid).assertEqual(12700430)
-      expect(blocked.filterable).assertTrue()
+      /* 未订阅子版块：checked=0（主题已被服务端排除混合），仍可订阅 */
+      const blocked = parsed[1]
+      expect(blocked.fid).assertEqual(12700430)
+      expect(blocked.stid).assertEqual(0)
       expect(blocked.checked).assertFalse()
+      expect(blocked.filterable).assertTrue()
 
-      const fixed = parsed.subBoardList[2]
-      expect(fixed.filterable).assertFalse()
+      /* 固定分区：allow_checked=0 → 不允许订阅，UI 禁用开关 */
+      const fixed = parsed[2]
+      expect(fixed.fid).assertEqual(12700431)
       expect(fixed.checked).assertTrue()
+      expect(fixed.filterable).assertFalse()
+      expect(fixed.description).assertEqual('')
+    })
+
+    it('skipsInvalidSubForumEntries', 0, () => {
+      /* 缺关键字段的元素被跳过 */
+      const broken: Record<string, Object> = {
+        '0': 999,
+        'name': '缺 tid 的条目',
+      }
+      const subArr: Object[] = [broken]
+      const result: Record<string, Object> = {
+        'subForum': subArr,
+      }
+      const parsed: SubBoard[] = parseSubjectSubBoards(result)
+      expect(parsed.length).assertEqual(0)
+    })
+
+    it('returnsEmptyWhenMissing', 0, () => {
+      /* 无 subForum 字段 / 非数组 / result 缺失 → 空列表 */
+      const noField: Record<string, Object> = {
+        'data': [],
+      }
+      expect(parseSubjectSubBoards(noField).length).assertEqual(0)
+      expect(parseSubjectSubBoards(undefined).length).assertEqual(0)
     })
   })
 }
