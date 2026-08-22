@@ -8,6 +8,11 @@
  *       --raw 跳过业务判定（调用方自行解释数据）；--out 覆盖落盘路径。
  *   node bin/nga-fetch.js html <url> [--out <file>] [--marker <文本>]...
  *       抓取任意 NGA 页面，可选校验页面标记（如 commonui.postArg.proc(）。
+ *   node bin/nga-fetch.js app-json <endpoint> [k=v ...] [--output <n>]
+ *       [--sign-params <值>] [--query <k=v>]... [--out <file>] [--raw]
+ *       使用官方 APP 签名 POST 抓取接口；__lib/__act 等 URL 参数通过 --query 传入。
+ *   node bin/nga-fetch.js app-html <tid> [page] [--out <file>]
+ *       使用官方 APP read.php __output=17 抓取包装内的完整帖子 HTML。
  *   node bin/nga-fetch.js check
  *       校验当前凭证结构（不发请求）。
  *   node bin/nga-fetch.js verify [--url <u>]
@@ -28,6 +33,7 @@ const credential = require('../lib/credential.js')
 const { buildApiUrl } = require('../lib/request.js')
 const { fetchNgaJson } = require('../lib/json.js')
 const { fetchNgaHtml } = require('../lib/html.js')
+const { fetchNgaAppJson, fetchNgaAppArticleHtml } = require('../lib/app.js')
 
 /** 凭证门禁固定基准：必须成功获取 tid=44191387 的帖子信息（data.__R 存在）。 */
 const PROBE_URL = 'https://bbs.nga.cn/read.php?tid=44191387&page=1&__output=8&__inchst=UTF8'
@@ -37,7 +43,8 @@ function parseArgs(argv) {
   const options = {}
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
-    if (arg === '--out' || arg === '--base' || arg === '--url' || arg === '--marker') {
+    if (arg === '--out' || arg === '--base' || arg === '--url' || arg === '--marker' ||
+      arg === '--output' || arg === '--sign-params' || arg === '--query') {
       const key = arg.slice(2)
       options[key] = options[key] === undefined ? argv[++i] : [].concat(options[key], argv[++i])
       continue
@@ -51,6 +58,22 @@ function parseArgs(argv) {
   return { positional, options }
 }
 
+/**
+ * 把 k=v 参数列表转为对象。
+ *
+ * @param {string[]} args 参数列表
+ * @returns {Record<string, string>} 参数对象
+ */
+function parseKeyValueArgs(args) {
+  const params = {}
+  for (const arg of args) {
+    const separator = arg.indexOf('=')
+    if (separator <= 0) exitError(`参数应为 k=v 形式: ${arg}`)
+    params[arg.slice(0, separator)] = arg.slice(separator + 1)
+  }
+  return params
+}
+
 function exitError(message) {
   console.error(`[nga-fetch] ${message}`)
   process.exit(1)
@@ -59,12 +82,7 @@ function exitError(message) {
 async function cmdJson(args, options) {
   const endpoint = args[0]
   if (!endpoint) exitError('用法: nga-fetch json <endpoint> [k=v ...] [--out <file>] [--raw]')
-  const params = {}
-  for (let i = 1; i < args.length; i++) {
-    const eq = args[i].indexOf('=')
-    if (eq <= 0) exitError(`参数应为 k=v 形式: ${args[i]}`)
-    params[args[i].slice(0, eq)] = args[i].slice(eq + 1)
-  }
+  const params = parseKeyValueArgs(args.slice(1))
   const result = await fetchNgaJson(endpoint, params, {
     raw: options.raw,
     base: options.base,
@@ -82,6 +100,74 @@ async function cmdJson(args, options) {
     console.log(`kind=${result.kind} error=${obj.error === undefined ? '-' : obj.error} ` +
       `error_msg=${obj.error_msg || '-'} data=${obj.data ? '存在' : '无'}`)
   }
+}
+
+/**
+ * 抓取官方 APP 签名 JSON 接口。
+ *
+ * @param {string[]} args 命令位置参数
+ * @param {Record<string, string|string[]|boolean>} options 命令选项
+ * @returns {Promise<void>}
+ */
+async function cmdAppJson(args, options) {
+  const endpoint = args[0]
+  if (!endpoint) {
+    exitError('用法: nga-fetch app-json <endpoint> [k=v ...] [--output <n>] [--sign-params <值>] [--query <k=v>]...')
+  }
+  const params = parseKeyValueArgs(args.slice(1))
+  const queryValues = options.query === undefined
+    ? []
+    : Array.isArray(options.query) ? options.query : [options.query]
+  const query = parseKeyValueArgs(queryValues)
+  const result = await fetchNgaAppJson(endpoint, params, {
+    base: options.base,
+    output: options.output || '12',
+    signParams: options['sign-params'] || '',
+    query,
+    raw: options.raw,
+  })
+  if (!result.ok) {
+    exitError(`${endpoint} APP 请求失败 [${result.kind}]: ${result.error || ''}`)
+  }
+  if (options.out || !options.raw) {
+    const outFile = options.out || `app-${defaultOutName(endpoint, params)}`
+    writeFileSync(outFile, result.raw, 'utf8')
+    console.log(`${endpoint} APP -> ${outFile}（${result.raw.length} 字符）`)
+  }
+  if (result.obj) {
+    const topKeys = Object.keys(result.obj)
+    console.log(`kind=${result.kind} 顶层字段=${topKeys.join(',') || '-'}`)
+  }
+}
+
+/**
+ * 抓取官方 APP read.php __output=17 HTML。
+ *
+ * @param {string[]} args 命令位置参数
+ * @param {Record<string, string|string[]|boolean>} options 命令选项
+ * @returns {Promise<void>}
+ */
+async function cmdAppHtml(args, options) {
+  const tid = args[0]
+  const page = args[1] || '1'
+  if (!tid || !/^\d+$/.test(tid)) {
+    exitError('用法: nga-fetch app-html <tid> [page] [--out <file>]')
+  }
+  const result = await fetchNgaAppArticleHtml({
+    tid,
+    pid: '',
+    topid: '',
+    authorid: '',
+    opt: '',
+    page,
+    __localres: '1',
+  }, { base: options.base })
+  if (!result.ok) {
+    exitError(`read.php APP HTML 失败 [${result.kind}]: ${result.error || ''}`)
+  }
+  const outFile = options.out || `app-read-tid${tid}-page${page}.html`
+  writeFileSync(outFile, result.html, 'utf8')
+  console.log(`APP read.php tid=${tid} page=${page} -> ${outFile}（${result.html.length} 字符）`)
 }
 
 function defaultOutName(endpoint, params) {
@@ -201,12 +287,14 @@ async function main() {
   switch (command) {
     case 'json': await cmdJson(positional, options); break
     case 'html': await cmdHtml(positional, options); break
+    case 'app-json': await cmdAppJson(positional, options); break
+    case 'app-html': await cmdAppHtml(positional, options); break
     case 'check': cmdCheck(); break
     case 'verify': await cmdVerify(options); break
     case 'save': cmdSave(positional); break
     default:
       console.error(`未知命令: ${command || '(空)'}`)
-      console.error('可用: json | html | check | verify | save')
+      console.error('可用: json | html | app-json | app-html | check | verify | save')
       process.exit(1)
   }
 }

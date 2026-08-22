@@ -5,7 +5,7 @@
  * - `splitTopLevelArgs`：在平衡括号内的字符串里按顶层逗号切分（保留各自原样）
  * - `parseAllPostArgs`：扫描所有 commonui.postArg.proc(...) 调用，解析为 PostArgData
  * - `extractUserInfo`：提取 commonui.userInfo.setAll(...) 的用户信息对象
- * - `extractTotalReplies`：从 setDefault 倒数第三个参数提取总回复数
+ * - `extractTotalReplies`：从 setDefault 固定参数位提取总回复数
  *
  * `()` 参数体提取统一走 `scanBalanced`（见 ScanState.ets），调用方去除外层括号。
  */
@@ -26,6 +26,7 @@ interface PostArgData {
   type: number;
   authorid: string;
   postdatetimestamp: number;
+  recommend: number;
   score: number;
   score_2: number;
   contentLength: number;
@@ -115,14 +116,19 @@ function parseAllPostArgs(html: string): Map<number, PostArgData> {
         type: 0,
         authorid: '',
         postdatetimestamp: 0,
+        recommend: 0,
         score: 0,
         score_2: 0,
         contentLength: 0,
         fromClient: '',
         fromClientModel: '',
       };
-      const louStr: string = args[0];
-      data.lou = parseInt(louStr, 10) || 0;
+      const louStr: string = stripQuotes(args[0].trim());
+      if (!/^-?\d+$/.test(louStr)) {
+        searchFrom = startIdx + PROC_MARKER.length;
+        continue;
+      }
+      data.lou = parseInt(louStr, 10);
       const pidStr: string = args[10];
       data.pid = parseInt(pidStr, 10) || 0;
       const typeStr: string = args[11];
@@ -133,8 +139,9 @@ function parseAllPostArgs(html: string): Map<number, PostArgData> {
       data.postdatetimestamp = parseInt(tsStr, 10) || 0;
       const scoreStr: string = args[15];
       const scoreParts: string[] = scoreStr.replace(/'/g, '').split(',');
-      data.score_2 = parseInt(scoreParts[0], 10) || 0;
+      data.recommend = parseInt(scoreParts[0], 10) || 0;
       data.score = parseInt(scoreParts[1], 10) || 0;
+      data.score_2 = parseInt(scoreParts[2], 10) || 0;
       const clStr: string = args[16];
       data.contentLength = parseInt(clStr.replace(/'/g, ''), 10) || 0;
       const fcStr: string = args[19];
@@ -178,9 +185,11 @@ function extractUserInfo(html: string): Record<string, Object> {
 }
 
 /**
- * 从 commonui.postArg.setDefault(fid,stid,tid,...,totalReplies,lastPostTs,pageSize) 提取总回复数。
+ * 从 commonui.postArg.setDefault(fid,stid,tid,tAid,topicMiscBit1,punUsers,visit,
+ * mods,vote,customLevel,tType,totalReplies,lastPostTs,pageSize?) 提取总回复数。
  *
- * 倒数第 3 个参数 = 全楼总回复数，倒数第 1 个 = 每页帖子数。
+ * 网页 HTML 含最后的 pageSize，APP `__output=17 + __localres=1` 会省略它；
+ * totalReplies 在两种形态中都固定为 index 11，不能按倒数位置解释。
  *
  * @param html NGA 帖子页 HTML
  * @returns 总回复数；未找到或参数不足时返回 -1
@@ -197,10 +206,8 @@ function extractTotalReplies(html: string): number {
   }
   const argsStr: string = matched.value.substring(1, matched.value.length - 1);
   const args: string[] = splitTopLevelArgs(argsStr);
-  // 参数格式固定：fid,stid,tid,...,totalReplies,lastPostTs,postsPerPage
-  // 倒数第 3 个 = totalReplies, 倒数第 1 个 = postsPerPage(校验用)
-  if (args.length >= 3) {
-    const val: string = args[args.length - 3].trim();
+  if (args.length >= 13) {
+    const val: string = args[11].trim();
     const n: number = parseInt(val, 10);
     if (!isNaN(n) && n >= 0) {
       return n;
@@ -210,10 +217,11 @@ function extractTotalReplies(html: string): number {
 }
 
 /**
- * 从 commonui.postArg.setDefault(fid,stid,tid,...,totalReplies,lastPostTs,pageSize) 提取全帖最后回复时间戳。
+ * 从 commonui.postArg.setDefault(fid,stid,tid,tAid,topicMiscBit1,punUsers,visit,
+ * mods,vote,customLevel,tType,totalReplies,lastPostTs,pageSize?) 提取全帖最后回复时间戳。
  *
- * 倒数第 2 个参数 = 全帖最后回复时间戳（跨页视图下页面内最后一楼的时间偏早，
- * 与 JSON API `__T.lastpost` 同源，实测两样本逐位一致）。
+ * lastPostTs 在网页与 APP HTML 中都固定为 index 12。跨页视图下页面内最后一楼
+ * 的时间偏早，该字段与 JSON API `__T.lastpost` 同源。
  *
  * @param html NGA 帖子页 HTML
  * @returns 最后回复时间戳；未找到或参数不足时返回 0
@@ -230,10 +238,8 @@ function extractLastPostTs(html: string): number {
   }
   const argsStr: string = matched.value.substring(1, matched.value.length - 1);
   const args: string[] = splitTopLevelArgs(argsStr);
-  // 参数格式固定：fid,stid,tid,...,totalReplies,lastPostTs,postsPerPage
-  // 倒数第 2 个 = lastPostTs
-  if (args.length >= 2) {
-    const val: string = args[args.length - 2].trim();
+  if (args.length >= 13) {
+    const val: string = args[12].trim();
     const n: number = parseInt(val, 10);
     if (!isNaN(n) && n > 0) {
       return n;

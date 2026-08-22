@@ -2,6 +2,7 @@ import { describe, it, expect } from '@ohos/hypium'
 import { parseThreadData } from '../main/ets/parser/ThreadParser'
 import { parseNgaError } from '../main/ets/parser/ErrorParser'
 import { buildThreadHtmlRequest, extractAppArticleHtml, hasRawThreadRows } from '../main/ets/service/api/ThreadApi'
+import { parseHtmlToRawJson } from '../main/ets/parser/nga/html-thread/index'
 import type { ThreadRowInfo } from '../main/ets/model/Thread'
 
 /**
@@ -73,6 +74,30 @@ function createParsedHtmlThreadResponse(): object {
 }
 
 /**
+ * 构造 APP `__output=17 + __localres=1` 的最小 HTML 响应正文。
+ *
+ * 包含 `_pid` 贴条 postArg 与省略 pageSize 的 setDefault，用于验证同步到 ArkTS
+ * 后仍保持 TS 镜像的解释语义。
+ *
+ * @returns 最小 APP HTML
+ */
+function createAppHtmlFixture(): string {
+  return '<script>' +
+    '__CURRENT_TID=44191387;__CURRENT_FID=-7;__CURRENT_PAGE=1;__CURRENT_PAGE_POSTS=20;' +
+    'commonui.userInfo.setAll({"205511":{"uid":205511,"username":"gerraerd"}});' +
+    'commonui.postArg.setDefault(-7,0,44191387,205511,33,"","","","",null,0,540,1787358664);' +
+    '</script>' +
+    '<h2 id=\'currentForumName\'>网事杂谈</h2><h1 id=\'currentTopicName\'>测试主题</h1>' +
+    '<span id=\'postdate0\'>2025-05-26 17:27</span><h3 id=\'postsubject0\'>测试主题</h3>' +
+    '<span id=\'postcontent0\'>主楼正文</span><script>' +
+    'commonui.postArg.proc(0,null,null,null,null,null,null,null,null,null,0,33554432,null,' +
+    '\'205511\',1748251672,\'0,0,0\',\'4\',\'\',\'\',\'7 iOS\',\'\',null);' +
+    'commonui.postArg.proc(\'_824921555\',null,null,null,null,null,null,null,null,null,' +
+    '824921555,1,null,\'205511\',1748252378,\'0,0,0\',null,\'\',\'\',null,\'\',null,0,0);' +
+    '</script>'
+}
+
+/**
  * 注册 Thread HTML 通道单元测试。
  */
 export default function appThreadUnitTest(): void {
@@ -94,6 +119,26 @@ export default function appThreadUnitTest(): void {
       expect(request.params['tid']).assertEqual('44191387')
       expect(request.params['pid']).assertEqual('824920438')
       expect(request.params['page']).assertEqual('2')
+    })
+
+    it('keepsMainMetadataWhenAppHtmlContainsCommentPostArg', 0, (): void => {
+      const raw: Record<string, Object> = parseHtmlToRawJson(createAppHtmlFixture()) as Record<string, Object>
+      const data: Record<string, Object> = raw['data'] as Record<string, Object>
+      const rows: Record<string, Object> = data['__R'] as Record<string, Object>
+      const main: Record<string, Object> = rows['0'] as Record<string, Object>
+      expect(main['pid']).assertEqual(0)
+      expect(main['authorid']).assertEqual('205511')
+      expect(main['postdatetimestamp']).assertEqual(1748251672)
+      expect(main['from_client']).assertEqual('7 iOS')
+    })
+
+    it('parsesAppHtmlSetDefaultWithoutPageSize', 0, (): void => {
+      const raw: Record<string, Object> = parseHtmlToRawJson(createAppHtmlFixture()) as Record<string, Object>
+      const data: Record<string, Object> = raw['data'] as Record<string, Object>
+      const topic: Record<string, Object> = data['__T'] as Record<string, Object>
+      expect(data['__ROWS']).assertEqual(541)
+      expect(data['__R__ROWS_PAGE']).assertEqual(20)
+      expect(topic['lastpost']).assertEqual(1787358664)
     })
 
     it('keepsFilteredThreadPageSuccessful', 0, (): void => {

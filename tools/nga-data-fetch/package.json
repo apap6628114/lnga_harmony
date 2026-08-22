@@ -2,13 +2,14 @@
   "name": "nga-data-fetch",
   "version": "0.1.0",
   "private": true,
-  "description": "NGA 通用数据抓取工具：持久化凭证管理（校验/落盘/失效验证）、任意接口 JSON/HTML 获取、GBK 解码与净化后处理。解析语义由 nga-bbcode-ts 提供（工具只负责取数）。",
+  "description": "NGA 通用数据抓取工具：保留网页 JSON/HTML，并支持官方 APP 签名 POST、UTF-8 JSON 与 output=17 HTML。解析语义由 nga-bbcode-ts 提供。",
   "type": "commonjs",
   "bin": {
     "nga-fetch": "bin/nga-fetch.js"
   },
   "scripts": {
-    "check": "node bin/nga-fetch.js check"
+    "check": "node bin/nga-fetch.js check",
+    "test": "node --test \"tests/*.test.js\""
   },
   "dependencies": {
     "nga-bbcode-ts": "file:../bbcode-ts"

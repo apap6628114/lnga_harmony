@@ -1,7 +1,8 @@
 /**
  * HTML 响应体转 NGA 原始 JSON 结构 — 顶层装配入口。
  *
- * 输入：NGA read.php 返回的 HTML 页面（GBK->UTF-8 解码后）
+ * 输入：NGA read.php 返回的 HTML 页面。Node 工具可传网页 GBK 解码结果或 APP
+ * `__output=17` UTF-8 HTML；鸿蒙运行时只传后者。
  * 输出：与 __output=8 JSON API 相同形状的 { data: { __R, __U, __T, __F, __ROWS } }
  * 可直接喂给 parseThreadData() 使用。
  *
@@ -16,6 +17,7 @@ import {
 } from './DomMarkerExtractor';
 import { tryParseAttachLoad } from './AttachParser';
 import { extractHotReplies } from './HotReplyParser';
+import { extractComments } from './CommentParser';
 
 /**
  * 从 HTML 中提取 `varName = <数字>` 形式的整型变量。
@@ -94,6 +96,7 @@ export function parseHtmlToRawJson(html: string): object {
       'postdate': postDate as Object,
       'postdatetimestamp': arg.postdatetimestamp as Object,
       'type': arg.type as Object,
+      'recommend': arg.recommend as Object,
       'score': arg.score as Object,
       'score_2': arg.score_2 as Object,
       'content_length': arg.contentLength as Object,
@@ -107,6 +110,18 @@ export function parseHtmlToRawJson(html: string): object {
     };
 
     __R[String(lou)] = row;
+  }
+
+  const commentHostKeys: string[] = Object.keys(__R);
+  for (let ci: number = 0; ci < commentHostKeys.length; ci++) {
+    const hostKey: string = commentHostKeys[ci];
+    const hostRow: Record<string, Object> = __R[hostKey] as Record<string, Object>;
+    const parentPid: number = Number(hostRow['pid'] ?? 0);
+    const comments: Record<string, Object> | null = extractComments(
+      html, Number(hostRow['lou'] ?? hostKey), parentPid, fid, tid, __R);
+    if (comments) {
+      hostRow['comment'] = comments as Object;
+    }
   }
 
   // 热点回复附件复用：条目记录的原楼层行若有附件，直接引用（JSON API 中两者相同）

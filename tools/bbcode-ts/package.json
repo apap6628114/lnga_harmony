@@ -12,6 +12,8 @@
     "inspect:html": "npm run build && node scripts/inspect-thread-html.mjs",
     "compare:official": "npm run build && node dist/scripts/compare-official.js",
     "compare:html-json": "npm run build && node dist/scripts/compare-html-json.js",
+    "fetch:app-pair": "node scripts/fetch-thread-app-pair.mjs",
+    "compare:app-html-json": "npm run build && node dist/scripts/compare-html-json.js --suite=app",
     "sync": "node scripts/sync-to-ets.mjs"
   },
   "devDependencies": {

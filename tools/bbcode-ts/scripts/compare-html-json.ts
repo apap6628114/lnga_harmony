@@ -44,10 +44,16 @@ function printRowTable(report: PairReport): void {
     const hotInfo: string = row.hotreply.jsonCount > 0
       ? ` | 热点回复 ${row.hotreply.jsonCount}/${row.hotreply.htmlCount}${row.hotreply.mismatches.length > 0 ? ' 不一致' : ''}`
       : ''
+    const commentInfo: string = row.comment.jsonCount > 0
+      ? ` | 贴条 ${row.comment.jsonCount}/${row.comment.htmlCount}${row.comment.mismatches.length > 0 ? ' 不一致' : ''}`
+      : ''
     console.log(`${row.lou} | ${rowLou} | ${row.foundInHtml ? '✓' : '✗ 缺失!'} | ${cov}` +
-      ` | ${row.attach.jsonCount}/${row.attach.htmlCount} | ${bad.join(',') || '-'}${hotInfo}`)
+      ` | ${row.attach.jsonCount}/${row.attach.htmlCount} | ${bad.join(',') || '-'}${hotInfo}${commentInfo}`)
     for (const m of row.hotreply.mismatches) {
       console.log(`   热点回复差异: ${m}`)
+    }
+    for (const m of row.comment.mismatches) {
+      console.log(`   贴条差异: ${m}`)
     }
     if (row.content.jsonHasContent && row.content.textCoverage < 1 && row.content.missingText.length > 0) {
       console.log(`   未覆盖文本片段: "${row.content.missingText}"`)
@@ -135,14 +141,18 @@ function printPair(report: PairReport): void {
   printStructure(report)
 }
 
-const names: string[] = loadPairNames()
+const appSuite: boolean = process.argv.includes('--suite=app')
+const listFileName: string = appSuite ? 'app-html-pairs.lst' : 'html-pairs.lst'
+const names: string[] = loadPairNames(listFileName)
 if (names.length === 0) {
-  console.log('samples/html-pairs.lst 无成对样本。')
-  console.log('先运行: NGA_COOKIE=<document.cookie> node scripts/fetch-thread-pair.mjs <tid> [page]')
+  console.log(`samples/${listFileName} 无成对样本。`)
+  console.log(appSuite
+    ? '先运行: node scripts/fetch-thread-app-pair.mjs <tid> [page]'
+    : '先运行: node scripts/fetch-thread-pair.mjs <tid> [page]')
   process.exit(0)
 }
 
 const allGaps: Record<string, PairGaps> = loadPairGaps()
 for (const name of names) {
-  printPair(analyzePair(loadPair(name), allGaps[name]))
+  printPair(analyzePair(loadPair(name), appSuite ? undefined : allGaps[name]))
 }

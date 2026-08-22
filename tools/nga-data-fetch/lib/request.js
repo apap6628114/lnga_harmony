@@ -51,14 +51,19 @@ function buildApiUrl(endpoint, params, base) {
  * 发起请求并按指定编码解码为文本。
  *
  * @param {string} url 完整 URL
- * @param {{ cookie?: string, encoding?: string, headers?: Record<string,string> }} [opts]
+ * @param {{ cookie?: string, encoding?: string, headers?: Record<string,string>, method?: string, body?: string }} [opts]
  * @returns {Promise<{ ok: boolean, status: number, text: string, error?: string }>}
  */
 async function ngaFetchText(url, opts = {}) {
   const encoding = opts.encoding || 'gbk'
+  const headers = Object.assign({}, ngaHeaders(opts.cookie || ''), opts.headers || {})
   let response
   try {
-    response = await fetch(url, { headers: ngaHeaders(opts.cookie || '') })
+    response = await fetch(url, {
+      method: opts.method || 'GET',
+      headers,
+      body: opts.body,
+    })
   } catch (err) {
     return { ok: false, status: 0, text: '', error: `网络错误: ${err.message}` }
   }

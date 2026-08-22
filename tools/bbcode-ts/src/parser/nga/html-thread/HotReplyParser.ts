@@ -119,6 +119,7 @@ class CommentMeta {
   type: number = 0;
   authorid: string = '';
   postdatetimestamp: number = 0;
+  recommend: number = 0;
   score: number = 0;
   score2: number = 0;
 }
@@ -163,8 +164,9 @@ function extractCommentMeta(html: string, pid: string): CommentMeta {
   meta.authorid = args[13].replace(/'/g, '');
   meta.postdatetimestamp = parseInt(args[14], 10) || 0;
   const scoreParts: string[] = args[15].replace(/'/g, '').split(',');
-  meta.score2 = parseInt(scoreParts[0], 10) || 0;
+  meta.recommend = parseInt(scoreParts[0], 10) || 0;
   meta.score = parseInt(scoreParts[1], 10) || 0;
+  meta.score2 = parseInt(scoreParts[2], 10) || 0;
   return meta;
 }
 

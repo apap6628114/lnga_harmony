@@ -33,16 +33,16 @@ import { preprocessJson } from '../src/parser/NgaJsonSanitizer'
 const SAMPLES_DIR: string = join(process.cwd(), 'samples')
 
 /** 样本清单文件。 */
-const LIST_FILE: string = join(SAMPLES_DIR, 'html-pairs.lst')
-
 /**
- * 读取 html-pairs.lst 中的基准名列表。
+ * 读取指定成对样本清单中的基准名列表。
  *
+ * @param listFileName 样本清单文件名
  * @returns 基准名数组（如 ['html-pair-46425481-p1']）；清单缺失或为空时返回 []
  */
-export function loadPairNames(): string[] {
-  if (!existsSync(LIST_FILE)) return []
-  return readFileSync(LIST_FILE, 'utf8')
+export function loadPairNames(listFileName: string = 'html-pairs.lst'): string[] {
+  const listFile: string = join(SAMPLES_DIR, listFileName)
+  if (!existsSync(listFile)) return []
+  return readFileSync(listFile, 'utf8')
     .split('\n')
     .map((line: string) => line.trim())
     .filter((line: string) => line.length > 0 && !line.startsWith('#'))
@@ -138,6 +138,11 @@ export interface RowCoverage {
     jsonCount: number
     htmlCount: number
     /** 逐条目不一致描述（pid/authorid/type/score/postdate/content/lou 等） */
+    mismatches: string[]
+  }
+  comment: {
+    jsonCount: number
+    htmlCount: number
     mismatches: string[]
   }
 }
@@ -480,6 +485,32 @@ export function analyzePair(data: HtmlPairData, gaps?: PairGaps): PairReport {
       }
     }
 
+    const jsonComments: Record<string, unknown> = (jsonRow['comment'] ?? {}) as Record<string, unknown>
+    const htmlComments: Record<string, unknown> = (htmlRow ? htmlRow['comment'] ?? {} : {}) as Record<string, unknown>
+    const jsonCommentKeys: string[] = Object.keys(jsonComments)
+    const htmlCommentKeys: string[] = Object.keys(htmlComments)
+    const commentMismatches: string[] = []
+    const COMMENT_FIELDS: string[] = [
+      'pid', 'fid', 'tid', 'authorid', 'type', 'score', 'score_2', 'recommend',
+      'postdate', 'subject', 'content', 'lou', 'content_length', 'from_client',
+      'postdatetimestamp', 'comment_to_id', 'reply_to',
+    ]
+    for (let ci: number = 0; ci < jsonCommentKeys.length; ci++) {
+      const commentKey: string = jsonCommentKeys[ci]
+      const jsonComment: Record<string, unknown> =
+        (jsonComments[commentKey] ?? {}) as Record<string, unknown>
+      const htmlComment: Record<string, unknown> =
+        (htmlComments[commentKey] ?? {}) as Record<string, unknown>
+      for (const field of COMMENT_FIELDS) {
+        const jsonValue: string = norm(jsonComment[field])
+        const htmlValue: string = norm(htmlComment[field])
+        if (jsonValue.length > 0 && jsonValue !== htmlValue) {
+          commentMismatches.push(
+            `comment[${commentKey}].${field}: JSON="${jsonValue.slice(0, 40)}" vs HTML="${htmlValue.slice(0, 40)}"`)
+        }
+      }
+    }
+
     rows.push({
       lou, htmlRowLou, foundInHtml,
       fields,
@@ -499,6 +530,11 @@ export function analyzePair(data: HtmlPairData, gaps?: PairGaps): PairReport {
         jsonCount: jsonHotKeys.length,
         htmlCount: htmlHotKeys.length,
         mismatches: hotMismatches,
+      },
+      comment: {
+        jsonCount: jsonCommentKeys.length,
+        htmlCount: htmlCommentKeys.length,
+        mismatches: commentMismatches,
       },
     })
     if (!foundInHtml) missingRowLous.push(lou)
