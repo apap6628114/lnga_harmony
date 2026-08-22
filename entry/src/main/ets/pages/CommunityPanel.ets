@@ -24,6 +24,8 @@ export struct CommunityPanel {
   categories: Category[] = []
   private categoriesDataSource: CategoryDataSource = new CategoryDataSource()
   private sidebarDataSource: SidebarDataSource = new SidebarDataSource()
+  /** 收藏板块内容版本号：收藏列表变化时递增，驱动侧边栏 LazyForEach 键值变化重建收藏分区。 */
+  private favRev: number = 0
 
   aboutToAppear(): void {
     this.syncFavorites()
@@ -73,6 +75,7 @@ export struct CommunityPanel {
 
   private syncFavorites(): void {
     this.favoritesList = [...appStore.settings.favorites]
+    this.favRev++
   }
 
   private hasSections(): boolean {
@@ -98,7 +101,9 @@ export struct CommunityPanel {
       for (const fav of this.favoritesList) {
         favItems.push({ fid: fav.fid, stid: fav.stid, name: fav.name })
       }
-      sections.push({ id: '__fav__', name: '收藏板块', items: favItems, collapsed: false, collapsible: false })
+      sections.push({
+        id: '__fav__', name: '收藏板块', items: favItems, collapsed: false, collapsible: false, rev: this.favRev
+      })
     }
     for (const cat of this.categories) {
       const boards: SidebarBoardItem[] = []
@@ -116,7 +121,10 @@ export struct CommunityPanel {
         }
       }
       const prev = prevCollapsed.get(cat.id)
-      sections.push({ id: cat.id, name: cat.name, items: boards, collapsed: prev !== undefined ? prev : true, collapsible: true })
+      sections.push({
+        id: cat.id, name: cat.name, items: boards,
+        collapsed: prev !== undefined ? prev : true, collapsible: true, rev: this.catVersion
+      })
     }
     this.sidebarDataSource.replaceAll(sections)
   }
@@ -205,7 +213,7 @@ export struct CommunityPanel {
               }, (item: SidebarBoardItem) => `${item.fid}`)
             }
           }
-        }, (section: SidebarSection) => `${section.id}_${section.collapsed}`)
+        }, (section: SidebarSection) => `${section.id}_${section.collapsed}_${section.rev}`)
       }
       .width('100%')
       .height('100%')
@@ -595,7 +603,8 @@ export struct CommunityPanel {
       name: section.name,
       items: section.items,
       collapsed: !section.collapsed,
-      collapsible: section.collapsible
+      collapsible: section.collapsible,
+      rev: section.rev
     }
     this.sidebarDataSource.updateSection(idx, updated)
   }

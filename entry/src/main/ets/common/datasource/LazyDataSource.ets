@@ -44,6 +44,8 @@ interface SidebarSection {
   items: SidebarBoardItem[];
   collapsed: boolean;
   collapsible: boolean;
+  /** 内容版本号：分区内容变化时递增，驱动 LazyForEach 键值变化重建该分区。 */
+  rev: number;
 }
 
 /**
