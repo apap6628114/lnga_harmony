@@ -1,7 +1,7 @@
 import { describe, it, expect } from '@ohos/hypium'
 import { parseThreadData } from '../main/ets/parser/ThreadParser'
 import { parseNgaError } from '../main/ets/parser/ErrorParser'
-import { extractAppArticleHtml } from '../main/ets/service/api/ThreadApi'
+import { buildThreadHtmlRequest, extractAppArticleHtml, hasRawThreadRows } from '../main/ets/service/api/ThreadApi'
 import type { ThreadRowInfo } from '../main/ets/model/Thread'
 
 /**
@@ -84,6 +84,23 @@ export default function appThreadUnitTest(): void {
           '"msg":"","template":"read"}')
       expect(extractAppArticleHtml(response)).assertEqual(
         '<!--postliststart--><div>帖子内容</div>')
+    })
+
+    it('buildsHtmlOnlyThreadRequest', 0, (): void => {
+      const request = buildThreadHtmlRequest('44191387', '824920438', '', '2')
+      expect(request.path).assertEqual('/read.php')
+      expect(request.signParams).assertEqual('')
+      expect(request.output).assertEqual('17')
+      expect(request.params['tid']).assertEqual('44191387')
+      expect(request.params['pid']).assertEqual('824920438')
+      expect(request.params['page']).assertEqual('2')
+    })
+
+    it('keepsFilteredThreadPageSuccessful', 0, (): void => {
+      const raw: Record<string, Object> = createParsedHtmlThreadResponse() as Record<string, Object>
+      const result = parseThreadData(raw, new Set<string>(), ['停止更新', '安卓版还没做好吗', '是这个吗'])
+      expect(result.rowList.length).assertEqual(0)
+      expect(hasRawThreadRows(raw)).assertTrue()
     })
 
     it('parsesHtmlResultArrayShape', 0, (): void => {

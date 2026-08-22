@@ -40,6 +40,47 @@ export interface ThreadRawResult {
 }
 
 /**
+ * NGA Thread HTML 请求的固定入口与参数。
+ */
+export interface ThreadHtmlRequest {
+  /** 请求路径。 */
+  path: string
+  /** 帖子详情业务参数。 */
+  params: Record<string, string>
+  /** 参与公共签名的参数串。 */
+  signParams: string
+  /** NGA 输出模式。 */
+  output: string
+}
+
+/**
+ * 构造官方 APP 的 Thread HTML 请求。
+ *
+ * @param tid - 主题 ID
+ * @param pid - 楼层 ID
+ * @param authorid - 只看某作者的楼层
+ * @param page - 页码，e 表示末页
+ * @returns 固定使用 read.php 与 __output=17 的请求描述
+ */
+export function buildThreadHtmlRequest(tid: string, pid: string, authorid: string,
+  page: string): ThreadHtmlRequest {
+  return {
+    path: '/read.php',
+    params: {
+      'tid': tid,
+      'pid': pid,
+      'topid': '',
+      'authorid': authorid,
+      'opt': '',
+      'page': page || '1',
+      '__localres': '1',
+    },
+    signParams: '',
+    output: '17',
+  }
+}
+
+/**
  * 从官方 APP read.php 的 __output=17 响应中提取帖子 HTML。
  *
  * 官方客户端的 Article 模型把 code=521、template=read 视为成功，HTML
@@ -77,17 +118,9 @@ export function extractAppArticleHtml(response: object): string {
  */
 async function fetchAppArticleHtmlRaw(uid: string, cid: string, tid: string,
   pid: string, authorid: string, page: string): Promise<Record<string, Object>> {
-  const appParams: Record<string, string> = {
-    'tid': tid,
-    'pid': pid,
-    'topid': '',
-    'authorid': authorid,
-    'opt': '',
-    'page': page || '1',
-    '__localres': '1',
-  };
-  const response: Record<string, Object> = await ngaClient.postSignedPath('/read.php', appParams,
-    { uid: uid, cid: cid }, '', '17') as Record<string, Object>;
+  const request: ThreadHtmlRequest = buildThreadHtmlRequest(tid, pid, authorid, page);
+  const response: Record<string, Object> = await ngaClient.postSignedPath(request.path, request.params,
+    { uid: uid, cid: cid }, request.signParams, request.output) as Record<string, Object>;
   const html: string = extractAppArticleHtml(response);
   const parsed: Object = await taskpool.execute(parseHtmlTask, html);
   const parsedObj: Record<string, Object> = parsed as Record<string, Object>;
@@ -96,6 +129,36 @@ async function fetchAppArticleHtmlRaw(uid: string, cid: string, tid: string,
     throw new Error('APP read.php HTML 解析结果缺少帖子楼层');
   }
   return parsedObj;
+}
+
+/**
+ * 判断 HTML 解析结果是否包含至少一个可作为帖子楼层的原始行。
+ *
+ * 该判断基于关键词过滤前的原始数据，避免所有楼层命中过滤词时被误判为
+ * HTML 请求或解析失败。
+ *
+ * @param raw - HTML 解析后的同形状原始帖子数据
+ * @returns 是否存在有效原始楼层
+ */
+export function hasRawThreadRows(raw: Record<string, Object>): boolean {
+  const dataObj: Record<string, Object> | undefined = raw['data'] as Record<string, Object> | undefined;
+  const rawRows: Record<string, Object> | undefined = dataObj?.['__R'] as Record<string, Object> | undefined;
+  if (!rawRows) {
+    return false;
+  }
+  const keys: string[] = Object.keys(rawRows);
+  for (let i = 0; i < keys.length; i++) {
+    const row: Record<string, Object> | undefined = rawRows[keys[i]] as Record<string, Object> | undefined;
+    if (!row || row['pid'] === undefined || row['pid'] === null) {
+      continue;
+    }
+    if (row['comment_to_id'] !== undefined && row['comment_to_id'] !== null
+      && row['content'] === undefined) {
+      continue;
+    }
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -194,7 +257,7 @@ export async function getThread(token: string, tid: string, pid: string,
       return result;
     }
     fillThreadResult(fetched.raw, result, blacklist, keywords, noteMap);
-    if (result.posts.length === 0) {
+    if (result.posts.length === 0 && !hasRawThreadRows(fetched.raw)) {
       result.ok = false;
       result.error = result.error || 'HTML 解析结果没有帖子楼层';
     }

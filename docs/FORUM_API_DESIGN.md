@@ -83,7 +83,7 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `service/NgaClient.ets` | `postSigned`（`__lib/__act` 在 URL query）；新增 `postSignedPath`（无 `__lib/__act`，thread.php 专用）；公共部分抽出 `buildSignedFields` / `buildSignedHeaders` / `ngaPostSignedCore` |
+| `service/NgaClient.ets` | `postSigned`（`__lib/__act` 在 URL query）；新增 `postSignedPath`（无 `__lib/__act`，thread.php/read.php 专用）；公共部分抽出 `buildSignedFields` / `buildSignedHeaders` / `ngaPostSignedCore` |
 | `parser/AppTopicListParser.ets` | 官方 thread.php 响应解析（纯函数）：`extractAppTopicListError`（code!=0 → msg）、`parseAppTopicList`（`{code,result}` → `{data,time}` 归一化 + `__T` 数组→数字键 Record，复用 `parseTopicList`） |
 | `service/api/ForumApi.ets` | `getForumCategories` / `getTopicList` / `searchForum` 官方通道编排；`buildAppThreadQuery` / `buildAppSignParams` / `normalizeAppFid` |
 | `parser/ForumParser.ets` | `parseForumSearch` 兼容官方 `result` 数组；`parseForumCategories` 兼容官方 result 数组（数字键遍历天然兼容） |
