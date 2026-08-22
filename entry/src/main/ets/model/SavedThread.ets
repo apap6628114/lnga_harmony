@@ -3,9 +3,8 @@
  *
  * 保存的帖子不按账号区分：SavedThreadStore 的存档目录全局唯一，与登录 uid 无关。
  *
- * 存档内容为「与 NGA 官方接口同形状的原始 JSON」（rawPages，每页一项）：
- * - JSON 主通道保存响应对象本身；HTML 降级通道保存 parseHtmlTask 的同形状产物，
- *   两通道产物形状一致，打开时统一由 fillThreadResult 按当前解析器解释；
+ * 存档内容为「与 HTML 解析器输出同形状的原始帖子数据」（rawPages，每页一项）：
+ * - 保存 parseHtmlTask 的同形状产物，打开时统一由 fillThreadResult 按当前解析器解释；
  * - 只要官方协议形状不变，存档可被任意后续版本的解析器重新解释与渲染，
  *   在线/离线表现一致（同一 ThreadPanel 渲染管线），且不依赖任何持久化 UI 快照。
  */
@@ -45,7 +44,7 @@ export class SavedThread {
   lastLou: number = 0
   /** 保存时间戳（毫秒），查看页按此降序排列。 */
   savedAt: number = 0
-  /** 每页的同形状原始 JSON（数组下标 = 页号 - 1）。 */
+  /** 每页的同形状原始帖子数据（数组下标 = 页号 - 1）。 */
   rawPages: Object[] = []
 }
 

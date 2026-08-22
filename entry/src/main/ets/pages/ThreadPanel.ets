@@ -4,7 +4,7 @@ import { taskpool } from '@kit.ArkTS'
 
 import { appStore } from '../store/AppStore'
 import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
-import { getThread, getForceHtmlMode, setForceHtmlMode } from '../service/api/ThreadApi'
+import { getThread } from '../service/api/ThreadApi'
 import { votePost } from '../service/api/FavoriteApi'
 import { getActiveDomain } from '../service/api/MiscApi'
 import type { ThreadResult, PostReplyResult } from '../model/ThreadResult'
@@ -138,11 +138,6 @@ export struct ThreadPanel {
   @State titleScrollEffectProgress: number = 0
   /** 黑名单变更版本号。 */
   @StorageProp('blacklistVersion') @Watch('onBlacklistVersionChange') blacklistVersion: number = 0
-  /**
-   * 调试模式（设置页"调试模式"开关）：开启后在更多菜单显示"HTML 模式打开"调试入口，
-   * 点击可在 HTML / JSON 解析模式间切换并重新加载帖子。
-   */
-  @StorageProp('nga_debugMode') debugMode: boolean = false
   @State showMoreMenu: boolean = false
   @State showPagePicker: boolean = false
   /** 保存帖子对话框控制器（更多菜单「保存帖子」入口）。 */
@@ -446,7 +441,7 @@ export struct ThreadPanel {
    * 记录其页码与 pid（楼层级，不记录像素偏移）。
    *
    * tid 取锚点楼自身 tid：切换帖子（onThreadChanged）补记旧帖时，this.threadTid 已是新帖值，
-   * 而 mgr.posts 仍是旧帖数据，必须用楼层 tid 才能记到旧帖名下；HTML 模式 __CURRENT_TID
+   * 而 mgr.posts 仍是旧帖数据，必须用楼层 tid 才能记到旧帖名下；HTML 解析结果中的 __CURRENT_TID
    * 提取失败时楼层 tid 可能为 0，此时回退路由参数 this.threadTid 兜底。
    */
   private recordReadingProgress(): void {
@@ -577,16 +572,6 @@ export struct ThreadPanel {
       return '收藏到…'
     }
     return '收藏夹…'
-  }
-
-  /**
-   * 更多菜单中"HTML 模式打开"调试入口的文案，随强制模式状态变化。
-   * 该入口仅在设置页"调试模式"开启时显示。
-   *
-   * @returns 当前强制模式对应的菜单文案
-   */
-  private getHtmlModeMenuLabel(): string {
-    return getForceHtmlMode() ? 'HTML 模式已开启' : 'HTML 模式打开'
   }
 
   /**
@@ -2216,25 +2201,6 @@ export struct ThreadPanel {
         }
         .width('100%')
 
-        if (this.debugMode) {
-          Divider().width('100%').color(AppColors.separator)
-
-          Column() {
-            Text(this.getHtmlModeMenuLabel()).fontSize(15)
-              .fontColor(getForceHtmlMode() ? AppColors.primary : AppColors.textPrimary)
-              .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-              .width('100%')
-              .onClick(() => {
-                setForceHtmlMode(!getForceHtmlMode())
-                this.showMoreMenu = false
-                this.pendingTargetPid = ''
-                this.singlePostFallback = false
-                this.pendingTargetLastPost = false
-                this.loadPosts(1, ThreadLoadMode.REPLACE)
-              })
-          }
-          .width('100%')
-        }
       }
       .width(150)
       .backgroundColor(Color.Transparent)

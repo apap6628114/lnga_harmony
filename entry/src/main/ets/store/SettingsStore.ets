@@ -177,7 +177,7 @@ export class SettingsStore extends BaseStore<SettingsState> {
   }
 
   // --- Debug ---
-  /** 设置调试模式（开启后在帖子更多菜单显示"HTML 模式打开"等调试入口） */
+  /** 设置调试模式（开启后输出额外诊断信息） */
   setDebugMode(enabled: boolean): void {
     this.state.debugMode = enabled
     AppStorage.setOrCreate(KEY_DEBUG_MODE, enabled)

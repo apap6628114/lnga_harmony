@@ -5,18 +5,18 @@ import { extractAppArticleHtml } from '../main/ets/service/api/ThreadApi'
 import type { ThreadRowInfo } from '../main/ets/model/Thread'
 
 /**
- * 构造官方 APP 签名通道 read.php（POST form + __output=11）的结构化响应。
+ * 构造官方 APP HTML 解析器输出的帖子数据。
  *
- * 形状与实测样本（ngabbs.com read.php?tid=44191387，__output=11）一致：
+ * 形状与实测样本（ngabbs.com read.php?tid=44191387，__output=17）解析结果一致：
  * - 顶层 {data, time}，无 code/msg（成功态）
  * - data 含 __CU/__GLOBAL/__U/__R/__T/__F/__R__ROWS/__R__ROWS_PAGE/__ROWS/__PAGE
  * - __R 为楼层数组（含主楼 lou=0），贴条以 comment 数组内嵌在宿主楼层
  * - 楼层 attachs 可为 null 或缺失（主楼无该键，回复楼为 null）；__U 用户
  *   mute_time/signature 可为 null
  *
- * @returns 官方通道响应对象
+ * @returns HTML 解析器使用的同形状响应对象
  */
-function createOfficialReadResponse(): object {
+function createParsedHtmlThreadResponse(): object {
   return JSON.parse(
     '{"data":{' +
       '"__CU":{"uid":42023922,"group_bit":98528,"admincheck":false,"rvrc":10},' +
@@ -73,10 +73,10 @@ function createOfficialReadResponse(): object {
 }
 
 /**
- * 注册 Thread 官方 APP 签名通道（read.php __output=11）单元测试。
+ * 注册 Thread HTML 通道单元测试。
  */
 export default function appThreadUnitTest(): void {
-  describe('appThreadOfficialChannel', (): void => {
+  describe('appThreadHtmlChannel', (): void => {
     it('extractsOfficialHtmlArticleEnvelope', 0, (): void => {
       const response: object = JSON.parse(
         '{"code":521,"htmlBaseUrl":"https://ngabbs.com/","htmlTitle":"帖子",' +
@@ -86,8 +86,8 @@ export default function appThreadUnitTest(): void {
         '<!--postliststart--><div>帖子内容</div>')
     })
 
-    it('parsesOfficialReadArrayShape', 0, (): void => {
-      const result = parseThreadData(createOfficialReadResponse())
+    it('parsesHtmlResultArrayShape', 0, (): void => {
+      const result = parseThreadData(createParsedHtmlThreadResponse())
       // 官方 __R 为数组：主楼 + 普通回复 + 贴条宿主行均解析为楼层
       expect(result.rowList.length).assertEqual(3)
       const main: ThreadRowInfo = result.rowList[0]
@@ -110,7 +110,7 @@ export default function appThreadUnitTest(): void {
     })
 
     it('parsesOfficialTieTiaoCommentInline', 0, (): void => {
-      const result = parseThreadData(createOfficialReadResponse())
+      const result = parseThreadData(createParsedHtmlThreadResponse())
       const host: ThreadRowInfo = result.rowList[2]
       expect(host.pid).assertEqual(824921217)
       expect(host.lou).assertEqual(4)
@@ -126,7 +126,7 @@ export default function appThreadUnitTest(): void {
     })
 
     it('parsesOfficialPaginationAndForum', 0, (): void => {
-      const result = parseThreadData(createOfficialReadResponse())
+      const result = parseThreadData(createParsedHtmlThreadResponse())
       // __ROWS=540、__R__ROWS_PAGE=20 → 27 页
       expect(result.__ROWS).assertEqual(540)
       expect(result.pagination.totalRows).assertEqual(540)
@@ -147,7 +147,7 @@ export default function appThreadUnitTest(): void {
           '"data":{"__MESSAGE":"未登录"}}')
       expect(parseNgaError(notLoggedIn)).assertEqual('1:未登录')
       // 成功形状无 error 键 → null
-      expect(parseNgaError(createOfficialReadResponse())).assertNull()
+      expect(parseNgaError(createParsedHtmlThreadResponse())).assertNull()
     })
   })
 }

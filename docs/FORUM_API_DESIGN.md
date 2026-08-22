@@ -16,7 +16,7 @@
 | 版块搜索 | GET `forum.php?__output=8`（App 中**不存在** forum.php 入口） | POST+sign `app_api.php?__lib=forum&__act=search`，`key`+`page`，signParams=key；**失败降级网页版 forum.php**（官方接口关键字长度校验苛刻，中文短词必被 2048 拒绝） | `ForumApi.searchForum` |
 
 不在本次范围（沿用既有官方通道）：用户发帖/回帖历史（`user/subjects|replys`）、
-收藏夹内主题列表（`favor/all`）、帖子详情（`read.php` JSON+HTML 双通道）。
+收藏夹内主题列表（`favor/all`）、帖子详情（`read.php` `__output=17` HTML 解析通道）。
 
 ## 未迁移接口（明确边界）
 

@@ -405,22 +405,16 @@ async function ngaPostSigned(path: string, lib: string, act: string,
  * 返回 `{"code":0,"result":{"__T":[...],"__F":{...},"__ROWS":...,"__T__ROWS_PAGE":35,...}}`；
  * signParams 传错（空/不符）返回 `{"code":5,"msg":"签名错误"}`。
  *
- * read.php 实测（鸿蒙端）：POST + sign + `signParams=''` + `__output=11` 返回与网页版
- * 同构的结构化 JSON `{data:{__CU,__GLOBAL,__U,__R,__T,__F,__R__ROWS,__R__ROWS_PAGE,
- * __ROWS,__PAGE},time}`（中文以 \uXXXX 转义，GB18030/UTF-8 解码均安全），
- * 支持 page=e（末页）、pid 定位（单帖+贴条）、authorid 只看楼主；业务错误形态
- * `{"error":["2048:找不到主题",null,null],"data":{"__MESSAGE":...}}`（error 数组）。
- * 同一 read.php 的 `__output=17` 返回官方 Article 包装
+ * read.php 帖子详情使用 `POST + sign + signParams='' + __output=17`，返回官方 Article 包装
  * `{code:521,htmlBaseUrl,htmlTitle,html,msg,template:"read"}`，html 是完整帖子页面，
- * 供客户端 HTML 解析降级使用。
+ * 供客户端 HTML 解析使用。
  *
  * @param path - 请求路径（如 /thread.php、/read.php）
  * @param params - 业务参数（进 body）
  * @param cookies - 会话 cookie（提供 access_uid/access_token 与 Cookie 头）
  * @param signParams - 参与签名的参数值拼接（thread.php 主题列表 = fid，搜索 = key；
  *   read.php 无 addSignParams → 传空串；无则空串）
- * @param output - __output，默认 '14'（thread.php 官方通道实测值；
- *   read.php JSON 传 '11'，HTML 降级传 '17'，见上）
+ * @param output - __output，默认 '14'（thread.php 官方通道实测值；read.php 帖子详情传 '17'）
  */
 async function ngaPostSignedPath(path: string, params: Record<string, string>,
   cookies: Cookies | undefined, signParams: string, output: string): Promise<object> {

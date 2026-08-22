@@ -1,8 +1,8 @@
 /**
- * 保存帖子服务 - 逐页拉取同形状原始 JSON 并写入存档。
+ * 保存帖子服务 - 逐页拉取 HTML 解析后的同形状原始数据并写入存档。
  *
- * 保存：按用户选择的页范围逐页调用 fetchThreadRaw（官方 APP 签名通道优先、
- * 失败自动降级 HTML，双通道产物同形状），页间节流（最小间隔），每页经
+ * 保存：按用户选择的页范围逐页调用 fetchThreadRaw（官方 APP HTML 通道），
+ * 页间节流（最小间隔），每页经
  * fillThreadResult 校验有效性与统计楼层；任一页拉取失败、返回业务错误或
  * 楼层为空（帖子无效/已删除）时立即终止，不写入不完整数据。进度经
  * savedThreadProgress 发布，由全局指示组件轮询展示。
@@ -112,7 +112,7 @@ export class SavedThreadService {
         )
         const fetched = await fetchThreadRaw(token, tid, '', '', String(page))
         if (!fetched.raw) {
-          outcome.message = '第 ' + String(page) + ' 页拉取失败：' + (fetched.jsonError || '无法加载该帖子')
+          outcome.message = '第 ' + String(page) + ' 页拉取失败：' + (fetched.error || '无法加载该帖子')
           return outcome
         }
         // 用当前解析器校验有效性并统计楼层（保存全量，不应用黑名单/关键词）

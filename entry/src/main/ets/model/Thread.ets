@@ -41,7 +41,7 @@ export interface ThreadRowInfo {
   content: string;
   vote: string;
   postdate: string;
-  /** 楼层发帖时间戳（UNIX 秒，JSON/HTML 双通道均有；postdate 为服务端格式化字符串） */
+  /** 楼层发帖时间戳（UNIX 秒；postdate 为服务端格式化字符串）。 */
   postdatetimestamp: number;
   attachs: Attachment[];
   level: string;
