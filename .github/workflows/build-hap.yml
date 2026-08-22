@@ -1,9 +1,9 @@
-name: Build HarmonyOS HAP (main)
+name: Build HarmonyOS HAP (oh26_web)
 
 on:
   push:
     branches:
-      - main
+      - oh26_web
   workflow_dispatch:
 
 permissions:

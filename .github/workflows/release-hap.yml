@@ -1,8 +1,8 @@
-name: Release HarmonyOS HAP (main)
+name: Release HarmonyOS HAP (oh26_web)
 
 # 手动发布 workflow：不会自动运行。
 # 使用方法：Actions 页面 → 本 workflow → Run workflow
-#   - 选择分支（main / oh23）
+#   - 选择分支（main / oh23 / oh26_web）
 #   - 填写版本号（如 1.2.0，不要带 v 前缀）
 #   - （可选）勾选"标记为预发布版"
 # 会自动完成：校验版本号 → 打 tag → 构建未签名 HAP → 上传到 GitHub Release
