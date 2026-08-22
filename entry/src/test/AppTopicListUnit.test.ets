@@ -453,11 +453,6 @@ export default function appTopicListUnitTest(): void {
       expect(forums[0].stid).assertEqual('0')
       expect(forums[0].name).assertEqual('魔兽争霸')
       expect(forums[1].name).assertEqual('魔兽大作战')
-      /* 网页版 {data:[...]} 形状仍兼容 */
-      const webResponse: Record<string, Object> = {
-        'data': items,
-      }
-      expect(parseForumSearch(webResponse).length).assertEqual(2)
     })
   })
 }

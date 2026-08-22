@@ -133,13 +133,11 @@ interface HttpResponse {
 /**
  * 统一的「首次请求 + 失败后遍历 DOMAINS 重试 + ngaThrottler acquire/release」执行器。
  *
- * ngaRequest（轮换域名）与 ngaGetHtmlText（固定域名，不轮换）逻辑同构，差异仅在
- * 调用方传入的 baseUrl：传空字符串时重试遍历 DOMAINS 轮换；传非空字符串（如
- * DOMAINS[activeDomainIndex]）时重试始终命中该域名，行为与原实现逐字等价。
+ * 调用方传入的 baseUrl 决定重试策略：传空字符串时重试遍历 DOMAINS 轮换；传非空
+ * 字符串时重试始终命中该域名。
  *
  * header 构造逻辑统一：User-Agent + X-User-Agent + extraHeaders(可选) + Cookie(可选) +
- * POST 时的 Content-Type/Content-Length。GET 调用方传 method=GET、body=''、
- * extraHeaders=undefined 时行为与原 ngaGetHtmlText 的 header 构造等价。
+ * POST 时的 Content-Type/Content-Length。
  *
  * Content-Length 注意：POST 分支默认按 body.length（UTF-16 字符数）设置 Content-Length。
  * 这对纯 ASCII body（字符数=字节数，如 urlencoded 表单）安全。但 multipart body 若含非 ASCII
@@ -428,18 +426,6 @@ async function ngaGetRaw(path: string, params: Record<string, string>,
   return result;
 }
 
-async function ngaGetHtmlText(path: string, params: Record<string, string>,
-  cookies?: Cookies): Promise<string> {
-  // 传入 DOMAINS[activeDomainIndex]（非空），使 executeWithRetry 内的
-  // retryBaseUrl = baseUrl || DOMAINS[retryDomainIdx] 永远命中 baseUrl，
-  // 保持原 ngaGetHtmlText "重试不轮换域名"的行为。
-  const response: HttpResponse = await executeWithRetry(
-    path, params, http.RequestMethod.GET, '', cookies, undefined,
-    DOMAINS[activeDomainIndex]
-  );
-  return decodeGb18030(response.body);
-}
-
 export interface Cookies {
   uid: string;
   cid: string;
@@ -547,8 +533,6 @@ interface INgaClient {
   /** App 签名接口（POST form + access_uid/access_token/sign），无 __lib/__act（thread.php 官方通道）。 */
   postSignedPath: (path: string, params: Record<string, string>,
     cookies: Cookies | undefined, signParams: string, output: string) => Promise<object>;
-  getHtmlText: (path: string, params: Record<string, string>,
-    cookies?: Cookies) => Promise<string>;
   getCaptchaV2: (captchaId: string) => Promise<string>;
   loginPassword: (loginParams: LoginParams) => Promise<LoginResultData>;
   logout: (cookies: Cookies) => Promise<void>;
@@ -596,11 +580,6 @@ const client: INgaClient = {
   async postSignedPath(path: string, params: Record<string, string>,
     cookies: Cookies | undefined, signParams: string, output: string): Promise<object> {
     return ngaPostSignedPath(path, params, cookies, signParams, output);
-  },
-
-  async getHtmlText(path: string, params: Record<string, string>,
-    cookies?: Cookies): Promise<string> {
-    return ngaGetHtmlText(path, params, cookies);
   },
 
   async getCaptchaV2(captchaId: string): Promise<string> {

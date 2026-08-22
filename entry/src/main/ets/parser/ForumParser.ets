@@ -3,10 +3,9 @@ import type { Category, CategorySub, BoardContent, ForumSearchItem } from '../mo
 /**
  * 解析版块搜索响应为结构化条目。
  *
- * NGA compact JSON（__output=8）历史上存在两种形态：裸数组与
- * `{"data": [...]}` 包装；官方 APP 签名通道（app_api.php forum/search，
- * __output=14）返回 `{"code":0,"result":[...]}` 的 result 数组。
- * 三种形态均兼容，字段缺失一律兜底，非法条目（无 name）直接过滤。
+ * 官方 APP 签名通道（app_api.php forum/search，__output=14）返回
+ * `{"code":0,"result":[...]}` 的 result 数组；字段缺失一律兜底，非法条目
+ * （无 name）直接过滤。
  *
  * @param raw - 版块搜索响应
  * @returns 结构化版块条目列表
@@ -15,25 +14,11 @@ export function parseForumSearch(raw: object | null): ForumSearchItem[] {
   const result: ForumSearchItem[] = [];
   if (!raw) return result;
 
-  let list: Object | undefined;
-  if (Array.isArray(raw)) {
-    list = raw;
-  } else {
-    const rawObj = raw as Record<string, Object>;
-    const data = rawObj['data'];
-    if (Array.isArray(data)) {
-      list = data;
-    } else {
-      const appResult = rawObj['result'];
-      if (Array.isArray(appResult)) {
-        list = appResult;
-      } else {
-        return result;
-      }
-    }
-  }
+  const rawObj = raw as Record<string, Object>;
+  const appResult = rawObj['result'];
+  if (!Array.isArray(appResult)) return result;
 
-  const arr = list as Array<Object>;
+  const arr = appResult as Array<Object>;
   for (let i = 0; i < arr.length; i++) {
     const item = arr[i] as Record<string, Object>;
     const name = String(item['name'] ?? '');
