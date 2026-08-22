@@ -86,54 +86,18 @@ export function emojiToHtmlEntity(str: string): string {
 }
 
 /**
- * 按 GBK 编码并对结果做百分号编码，emoji 先转 HTML 实体避免拆分。
- * 用于发帖/回复等含中文与 emoji 的表单字段。
- * @param str - 待编码字符串
- * @returns GBK 百分号编码结果
- */
-export function gbkPercentEncode(str: string): string {
-  const cleaned = emojiToHtmlEntity(str);
-  const encoder = util.TextEncoder.create('gbk');
-  const bytes = encoder.encodeInto(cleaned);
-  let result = '';
-  for (let i = 0; i < bytes.length; i++) {
-    const byteVal = bytes[i];
-    if ((byteVal >= 0x41 && byteVal <= 0x5A) ||
-        (byteVal >= 0x61 && byteVal <= 0x7A) ||
-        (byteVal >= 0x30 && byteVal <= 0x39) ||
-        byteVal === 0x2D || byteVal === 0x5F || byteVal === 0x2E || byteVal === 0x7E) {
-      result += String.fromCharCode(byteVal);
-    } else {
-      const hex = byteVal.toString(16).toUpperCase();
-      result += '%' + (hex.length === 1 ? '0' + hex : hex);
-    }
-  }
-  return result;
-}
-
-/**
  * 构造 application/x-www-form-urlencoded 请求体。
- * 普通字段按 UTF-8 百分号编码，gbkFieldKeys 列出的字段按 GBK 百分号编码。
+ * 所有字段按 UTF-8 百分号编码（官方 APP 签名通道与网页版通道均为 UTF-8 body；
+ * 旧网页发帖通道的 GBK 字段编码已随 post.php 迁移移除）。
  * @param fields - 字段名到值的映射
- * @param gbkFieldKeys - 需按 GBK 编码的字段名列表（可选）
  * @returns 拼接后的请求体字符串
  */
-export function buildEncodedBody(fields: Record<string, string>, gbkFieldKeys?: string[]): string {
+export function buildEncodedBody(fields: Record<string, string>): string {
   const parts: string[] = [];
   const keys = Object.keys(fields);
-  const gbkSet: Record<string, boolean> = {};
-  if (gbkFieldKeys) {
-    for (let i = 0; i < gbkFieldKeys.length; i++) {
-      gbkSet[gbkFieldKeys[i]] = true;
-    }
-  }
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
-    if (gbkSet[key]) {
-      parts.push(`${encodeURIComponent(key)}=${gbkPercentEncode(fields[key])}`);
-    } else {
-      parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(fields[key])}`);
-    }
+    parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(fields[key])}`);
   }
   return parts.join('&');
 }

@@ -36,6 +36,10 @@ export class PostAuthResult extends ApiResult {
   auth: string = '';
   attachUrl: string = '';
   if_moderator: number = 0;
+  /** 编辑场景已存在附件的提交参数（attachArray 解析后 tab 拼接，编辑提交时回填保留）。 */
+  attachments: string = '';
+  /** 编辑场景已存在附件的校验参数（attachCheckArray 解析后 tab 拼接）。 */
+  attachmentsCheck: string = '';
 }
 
 /**

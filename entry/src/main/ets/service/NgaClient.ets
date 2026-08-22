@@ -14,7 +14,7 @@ import { extractHostname, buildUrl } from '../common/utils/UrlUtils';
 import { parseSessionCookies, normalizeCookieList } from '../common/CookieUtils';
 import { NGA_API_DOMAINS as DOMAINS } from '../common/constants/NgaDomains';
 import { encryptPassword } from '../common/security/NgaRsaCipher';
-import { makeSign, NGA_APP_ID } from '../common/security/NgaSigner';
+import { makeClientChecksum, makeSign, NGA_APP_ID } from '../common/security/NgaSigner';
 
 // ============== 类型定义 ==============
 
@@ -43,7 +43,7 @@ const logger = new Logger(DOMAIN_NETWORK, 'NgaClient');
 // ============== 工具函数 ==============
 
 // 编解码工具（stringToUint8Array/uint8ArrayToBase64/decodeGb18030/emojiToHtmlEntity/
-// gbkPercentEncode/buildEncodedBody/buildMultipart/emptyStringRecord）
+// buildEncodedBody/buildMultipart/emptyStringRecord）
 // 已下沉至 common/utils/CodecUtils.ets。
 // URL 工具（extractHostname/buildUrl）已下沉至 common/utils/UrlUtils.ets。
 
@@ -244,20 +244,8 @@ async function executeWithRetry(
 
 // ============== NGA 核心 ==============
 
-async function ngaGet(path: string, params: Record<string, string>,
-  cookies?: Cookies, extraHeaders?: Record<string, string>): Promise<object> {
-  return ngaRequest(path, http.RequestMethod.GET, params, '', cookies, '', extraHeaders);
-}
-
-async function ngaPost(path: string, body: Record<string, string>,
-  cookies?: Cookies, gbkFieldKeys?: string[]): Promise<object> {
-  const hasGbk: boolean = gbkFieldKeys !== undefined && gbkFieldKeys.length > 0;
-  return ngaRequest(path, http.RequestMethod.POST, emptyStringRecord(),
-    buildEncodedBody(body, gbkFieldKeys), cookies, '', emptyStringRecord(), hasGbk);
-}
-
 /**
- * 发送同时携带查询参数与表单正文的 NGA POST 请求。
+ * 发送同时携带查询参数与表单正文的 POST 请求。
  *
  * @param path - 请求路径
  * @param params - URL 查询参数
@@ -271,16 +259,6 @@ async function ngaPostWithQueryAndBody(path: string, params: Record<string, stri
     buildEncodedBody(body), cookies, '', emptyStringRecord());
 }
 
-async function ngaPostWithQuery(path: string, params: Record<string, string>,
-  cookies?: Cookies): Promise<object> {
-  const extraHeaders: Record<string, string> = {
-    'Content-Length': '0',
-    'User-Agent': 'Mozilla/5.0 (Linux; Android 10; HarmonyOS) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.144 Mobile Safari/537.36',
-  };
-  return ngaRequest(path, http.RequestMethod.POST, params,
-    '', cookies, '', extraHeaders, true);
-}
-
 /**
  * 构造官方 APP 签名接口的 POST body 字段（公共参数 + 业务参数）。
  *
@@ -292,22 +270,27 @@ async function ngaPostWithQuery(path: string, params: Record<string, string>,
  * @param cookies - 会话 cookie（提供 access_uid/access_token）
  * @param signParams - 参与签名的参数值拼接（addSignParams；无则空串）
  * @param output - __output 值（'14'=build 默认，'12'=buildNew 默认）
+ * @param inchst - __inchst 值
  * @returns POST body 字段
  */
 function buildSignedFields(params: Record<string, string>, cookies: Cookies | undefined,
-  signParams: string, output: string): Record<string, string> {
+  signParams: string, output: string, includeClientChecksum: boolean = false,
+  inchst: string = 'utf-8'): Record<string, string> {
   const ts: string = String(Math.floor(Date.now() / 1000));
   const accessUid: string = cookies ? cookies.uid : '';
   const accessToken: string = cookies ? cookies.cid : '';
   const fields: Record<string, string> = {
     '__output': output,
-    '__inchst': 'utf-8',
+    '__inchst': inchst,
     'app_id': NGA_APP_ID,
     'access_uid': accessUid,
     'access_token': accessToken,
     't': ts,
     'sign': makeSign({ accessUid: accessUid, accessToken: accessToken, signParams: signParams, ts: ts }),
   };
+  if (includeClientChecksum) {
+    fields['__ngaClientChecksum'] = makeClientChecksum({ uid: accessUid, ts: ts });
+  }
   const keys = Object.keys(params);
   for (let i = 0; i < keys.length; i++) {
     fields[keys[i]] = params[keys[i]];
@@ -326,6 +309,7 @@ function buildSignedFields(params: Record<string, string>, cookies: Cookies | un
  */
 function buildSignedHeaders(): Record<string, string> {
   const extraHeaders: Record<string, string> = {
+    'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
     'User-Agent': 'Mozilla/5.0 (Linux; Android 10; NOH-AN00 Build/HUAWEINOH-AN00; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/83.0.4103.106 Mobile Safari/537.36 Nga_Official/7.17.17',
     'X-Requested-With': 'gov.pianzong.androidnga',
     'X-USER-AGENT': 'Nga_Official/7.17.17(HUAWEI NOH-AN00;Android 10)',
@@ -383,11 +367,16 @@ async function ngaPostSignedCore(path: string, qparams: Record<string, string>,
  * @param cookies - 会话 cookie（提供 access_uid/access_token 与 Cookie 头）
  * @param signParams - 参与签名的参数值拼接（addSignParams，如用户主题/回帖 = 目标 uid；无则空串）
  * @param output - __output，默认 '12'
+ * @param includeClientChecksum - 是否加入官方帖子提交使用的客户端校验和
+ * @param inchst - __inchst 值；轻量 post/reply 评论接口显式传空串
  */
 async function ngaPostSigned(path: string, lib: string, act: string,
   params: Record<string, string>, cookies: Cookies | undefined,
-  signParams: string, output: string): Promise<object> {
-  const fields: Record<string, string> = buildSignedFields(params, cookies, signParams, output);
+  signParams: string, output: string, includeClientChecksum: boolean = false,
+  inchst: string = 'utf-8'): Promise<object> {
+  const fields: Record<string, string> = buildSignedFields(
+    params, cookies, signParams, output, includeClientChecksum, inchst
+  );
   const qparams: Record<string, string> = { '__lib': lib, '__act': act };
   return ngaPostSignedCore(path, qparams, fields, cookies);
 }
@@ -521,17 +510,13 @@ async function rawRequest(path: string, method: http.RequestMethod,
 // ============== 公共接口 ==============
 
 interface INgaClient {
-  get: (path: string, params: Record<string, string>,
-    cookies?: Cookies, extraHeaders?: Record<string, string>) => Promise<object>;
-  post: (path: string, body: Record<string, string>, cookies?: Cookies,
-    gbkFieldKeys?: string[]) => Promise<object>;
-  /** 发送同时携带查询参数与表单正文的 POST 请求。 */
+  /** 发送同时携带查询参数与表单正文的 POST 请求（网页版接口专用，如子版块筛选 user_option/set）。 */
   postWithQueryAndBody: (path: string, params: Record<string, string>,
     body: Record<string, string>, cookies?: Cookies) => Promise<object>;
-  postWithQuery: (path: string, params: Record<string, string>, cookies?: Cookies) => Promise<object>;
   /** App 签名接口（POST form + access_uid/access_token/sign），__lib/__act 放 URL query。 */
   postSigned: (path: string, lib: string, act: string, params: Record<string, string>,
-    cookies: Cookies | undefined, signParams: string, output: string) => Promise<object>;
+    cookies: Cookies | undefined, signParams: string, output: string,
+    includeClientChecksum?: boolean, inchst?: string) => Promise<object>;
   /** App 签名接口（POST form + access_uid/access_token/sign），无 __lib/__act（thread.php 官方通道）。 */
   postSignedPath: (path: string, params: Record<string, string>,
     cookies: Cookies | undefined, signParams: string, output: string) => Promise<object>;
@@ -544,16 +529,6 @@ interface INgaClient {
 }
 
 const client: INgaClient = {
-  async get(path: string, params: Record<string, string>,
-    cookies?: Cookies, extraHeaders?: Record<string, string>): Promise<object> {
-    return ngaGet(path, params, cookies, extraHeaders);
-  },
-
-  async post(path: string, body: Record<string, string>,
-    cookies?: Cookies, gbkFieldKeys?: string[]): Promise<object> {
-    return ngaPost(path, body, cookies, gbkFieldKeys);
-  },
-
   /**
    * 发送同时携带查询参数与表单正文的 POST 请求。
    *
@@ -568,15 +543,11 @@ const client: INgaClient = {
     return ngaPostWithQueryAndBody(path, params, body, cookies);
   },
 
-  async postWithQuery(path: string, params: Record<string, string>,
-    cookies?: Cookies): Promise<object> {
-    return ngaPostWithQuery(path, params, cookies);
-  },
-
   async postSigned(path: string, lib: string, act: string,
     params: Record<string, string>, cookies: Cookies | undefined,
-    signParams: string, output: string): Promise<object> {
-    return ngaPostSigned(path, lib, act, params, cookies, signParams, output);
+    signParams: string, output: string, includeClientChecksum: boolean = false,
+    inchst: string = 'utf-8'): Promise<object> {
+    return ngaPostSigned(path, lib, act, params, cookies, signParams, output, includeClientChecksum, inchst);
   },
 
   async postSignedPath(path: string, params: Record<string, string>,
@@ -681,11 +652,15 @@ const client: INgaClient = {
   },
 
   async logout(cookies: Cookies): Promise<void> {
+    // 官方映射（ct_d_pswitch_map pswitch_683）：nuke.php?__lib=login&__act=logout。
+    // 登录系接口不走标准签名（卡片 7：无 access_uid/access_token/t/sign），cookie 认证即可；
+    // 官方 App 主流程以本地清态为主（H5 网页登出为辅），此处为服务端会话通知。
     const params: Record<string, string> = {
-      '__lib': 'logout',
+      '__lib': 'login',
+      '__act': 'logout',
       '__output': '1',
     };
-    await ngaGet('/nuke.php', params, cookies);
+    await ngaRequest('/nuke.php', http.RequestMethod.GET, params, '', cookies, '', undefined, true);
   },
 
   getActiveDomain(): string {

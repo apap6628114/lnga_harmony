@@ -116,9 +116,11 @@ export class ReplyManagerClass {
     }
   }
 
-  // 构建引用前缀 — 对应 Java ArticleListAdapter.getReplyIntent()
+  // 构建引用预览块（仅本地预览/草稿用，不随提交发送）— 对应 Java ArticleListAdapter.getReplyIntent()
   // 清洗 post.content 中的已有引用，避免多层嵌套
   // [quote][pid={pid},{tid},{page}]Reply[/pid] [b]Post by [uid={authorId}]{author}[/uid] ({postDate}):[/b]\n{cleanedContent}[/quote]\n
+  // 官方协议（nga-hack 卡片 8 §3.3）：客户端提交 quote 不构造 [quote] 块，content 仅为用户输入，
+  // 服务端按 pid 自动生成引用块（真实帖子格式：[quote][pid=..,..,1]Reply[/pid] <b>Post by ...</b>...[/quote]）
   buildQuotePrefix(post: PostInfo, tid: number, page: number): string {
     const uid: string = post.authorid < 0 ? '-1' : String(post.authorid)
     let cleanContent: string = post.content
@@ -195,7 +197,9 @@ export class ReplyManagerClass {
     this.pendingAttachmentsCheck = ''
   }
 
-  // 获取完整正文: 引用楼层时 content = quotePrefix + userText，否则 = userText
+  // 预览内容：引用楼层时展示 quotePrefix + 用户输入（仅编辑器预览用）
+  // 注意：提交时不再拼接 quotePrefix——官方客户端 quote 提交 content 仅为用户输入，
+  // 引用块由服务端按 pid 生成（见 buildQuotePrefix 注释）
   buildContent(userText: string): string {
     if (this.ctx.quotePrefix && this.ctx.type === ReplyType.FLOOR) {
       return this.ctx.quotePrefix + userText
@@ -246,14 +250,24 @@ export class ReplyManagerClass {
     if (this.cachedAuth && this.cachedAuth.ok) {
       return this.cachedAuth
     }
-    const actionParam: string = this.ctx.type === ReplyType.EDIT ? 'modify' : 'reply'
+    const actionParam: string = this.ctx.type === ReplyType.EDIT ? 'modify' :
+      (this.ctx.type === ReplyType.COMMENT ? 'tietiao' :
+        (this.ctx.type === ReplyType.FLOOR ? 'quote' : 'reply'))
     const authResult: PostAuthResult = await getPostAuth(
       appStore.auth.token, this.ctx.fid, actionParam,
       this.ctx.tid, this.ctx.targetPost ? this.ctx.targetPost.pid : 0,
-      this.ctx.type === ReplyType.COMMENT ? 1 : 0
+      0
     )
     if (authResult.ok) {
       this.cachedAuth = authResult
+      // 编辑场景回填服务端返回的旧附件参数：修改带附件帖子时保留既有附件，
+      // 新上传附件在此基础上累积（与官方 PostFragment 对 ActionCheck.attachArray 的
+      // 回填一致）。仅在本地尚无附件参数时回填，避免覆盖上传累积结果。
+      if (this.ctx.type === ReplyType.EDIT && this.pendingAttachments.length === 0 &&
+        authResult.attachments.length > 0) {
+        this.pendingAttachments = authResult.attachments
+        this.pendingAttachmentsCheck = authResult.attachmentsCheck
+      }
     }
     return authResult
   }
@@ -274,20 +288,18 @@ export class ReplyManagerClass {
     const compressed: ArrayBuffer = await this.compressImage(imageData)
     logger.verbose('[IMGUP] compressed size: %{public}s', String(compressed.byteLength))
     const uploadResult: UploadAttachmentResult = await uploadAttachment(
-      appStore.auth.token, authResult.auth, this.ctx.fid,
+      appStore.auth.token, authResult.auth, this.ctx.fid, authResult.attachUrl,
       compressed, fileName
     )
     logger.verbose('[IMGUP] uploadAttachment ok: %{public}s url: %{public}s err: %{public}s', String(uploadResult.ok), String(uploadResult.url), String(uploadResult.error))
     if (!uploadResult.ok) {
       throw new Error(uploadResult.error || '上传图片失败')
     }
-    // 累积附件参数（对应 Java PostParam.appendAttachment）
-    if (this.pendingAttachments.length > 0) {
-      this.pendingAttachments += '\t' + uploadResult.attachments
-      this.pendingAttachmentsCheck += '\t' + uploadResult.attachmentsCheck
-    } else {
-      this.pendingAttachments = uploadResult.attachments
-      this.pendingAttachmentsCheck = uploadResult.attachmentsCheck
+    // 累积附件参数（对应 Java PostParam.appendAttachment / L0 拼接：每个非空元素后追加 \t，
+    // 最终串含尾 \t；多次上传形如 "a1\ta2\t"）
+    if (uploadResult.attachments.length > 0) {
+      this.pendingAttachments += uploadResult.attachments + '\t'
+      this.pendingAttachmentsCheck += uploadResult.attachmentsCheck + '\t'
     }
     return uploadResult.url
   }
@@ -332,14 +344,15 @@ export class ReplyManagerClass {
   }
 
   private async sendReply(userText: string, isAnonymous: boolean): Promise<PostReplyResult> {
-    const content: string = this.buildContent(userText)
+    // 官方一致：提交 content 仅为用户输入，不携带 [quote] 块（服务端按 pid 生成引用块）
+    const content: string = userText
     const pid: number = this.ctx.targetPost ? this.ctx.targetPost.pid : 0
     return postReply(
       appStore.auth.token, this.ctx.tid, this.ctx.fid,
       content,
       isAnonymous ? 1 : 0,
       this.pendingAttachments, this.pendingAttachmentsCheck,
-      0, 'reply', pid, ''
+      0, this.ctx.type === ReplyType.FLOOR ? 'quote' : 'reply', pid, ''
     )
   }
 

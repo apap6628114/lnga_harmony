@@ -140,7 +140,7 @@ export class NewTopicManagerClass {
     }
     const compressed: ArrayBuffer = await this.compressImage(imageData)
     const uploadResult: UploadAttachmentResult = await uploadAttachment(
-      appStore.auth.token, authResult.auth, this.ctx.fid,
+      appStore.auth.token, authResult.auth, this.ctx.fid, authResult.attachUrl,
       compressed, fileName
     )
     logger.verbose('[NTPIC] uploadAttachment ok: %{public}s url: %{public}s err: %{public}s',
@@ -148,12 +148,11 @@ export class NewTopicManagerClass {
     if (!uploadResult.ok) {
       throw new Error(uploadResult.error || '上传图片失败')
     }
-    if (this.pendingAttachments.length > 0) {
-      this.pendingAttachments += '\t' + uploadResult.attachments
-      this.pendingAttachmentsCheck += '\t' + uploadResult.attachmentsCheck
-    } else {
-      this.pendingAttachments = uploadResult.attachments
-      this.pendingAttachmentsCheck = uploadResult.attachmentsCheck
+    // 累积附件参数（对应 Java PostParam.appendAttachment / L0 拼接：每个非空元素后追加 \t，
+    // 最终串含尾 \t；多次上传形如 "a1\ta2\t"）
+    if (uploadResult.attachments.length > 0) {
+      this.pendingAttachments += uploadResult.attachments + '\t'
+      this.pendingAttachmentsCheck += uploadResult.attachmentsCheck + '\t'
     }
     return uploadResult.url
   }
