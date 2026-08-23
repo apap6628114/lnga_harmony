@@ -423,6 +423,13 @@ export struct ProfilePanel {
             if (this.isOwnProfile) {
               Column() {
                 SettingRow({
+                  iconRes: $r('app.media.icon_bell'), iconColor: ProfileActionIconColors.notifications, label: '我的消息',
+                  onAction: () => {
+                    routerStore.navigateActivity(Screen.notifications())
+                  }
+                })
+                Divider().margin({ left: 60 }).color(AppColors.separator)
+                SettingRow({
                   iconRes: $r('app.media.profile_topics'), iconColor: ProfileActionIconColors.topics, label: '我的主题',
                   onAction: () => {
                     routerStore.navigateActivity(Screen.topicList(this.profile!.userName + '的主题', -1, this.profile!.uid))
