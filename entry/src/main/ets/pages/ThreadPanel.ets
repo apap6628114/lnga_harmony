@@ -204,6 +204,9 @@ export struct ThreadPanel {
   /** 当前帖子的阅读进度恢复是否已经处理过（防止页面重新显示时重复恢复）。 */
   private readingResumeHandled: boolean = false
 
+  /** 待用户确认的阅读进度：Toast「前往查看」点击后执行定位；切帖/销毁时失效。 */
+  private pendingResumeEntry: ReadingProgressEntry | null = null
+
   /** 尚未交给帖子接口定位的路由目标楼层。 */
   private pendingTargetPid: string = ''
 
@@ -357,6 +360,8 @@ export struct ThreadPanel {
     this.progressRecordTimer = -1
     // 使在途的进度恢复读取失效：页面销毁后不得继续在已销毁组件上执行恢复定位
     this.readingResumePending = false
+    // 使已弹出的「前往」恢复提示失效：Toast 回调晚于销毁触发时不得再定位
+    this.pendingResumeEntry = null
     this.stopHoldingHandMonitoring()
     clearTimeout(this.loadingDelayTimer)
     this.loadingDelayTimer = -1
@@ -386,6 +391,8 @@ export struct ThreadPanel {
     this.progressRecordTimer = -1
     this.readingResumeHandled = false
     this.readingResumePending = false
+    // 切换帖子后旧帖的「前往」恢复提示失效，防止 Toast 回调定位到新帖
+    this.pendingResumeEntry = null
     const initialPage: number = Math.max(this.threadPage, 1)
     this.pendingTargetPid = this.threadPid
     this.singlePostFallback = false
@@ -466,6 +473,9 @@ export struct ThreadPanel {
    *   主楼哨兵 pid 会被 Screen.thread 归一为空串，仅靠路由参数无法识别，
    *   必须按来源白名单排除（如链接 pid 查找失败退化打开首页、通知主楼）。
    * 页面从 activity 栈重新显示不会重复恢复（readingResumeHandled 去重）。
+   *
+   * 恢复不静默定位：进度读取通过校验后仅弹「前往查看」Toast，由用户点击后
+   * 经 goToResumedPosition 执行定位（与回复成功的「前往查看」同一交互模式）。
    */
   private tryRestoreReadingProgress(): void {
     if (this.readingResumeHandled || this.readingResumePending) return
@@ -504,12 +514,43 @@ export struct ThreadPanel {
     if (entry === null || entry.pid < 0 || entry.page < 1) return
     // 初始内容已提交且用户已经开始滚动阅读：不打断当前阅读
     if (this.mgr.posts.length > 0 && this.lastScrollStart > 0) return
+    // 不静默定位：保存进度并弹 Toast，由用户点击「前往查看」后执行恢复定位。
+    // 回调可能晚于面板销毁/切帖触发，由 goToResumedPosition 做一致性校验。
+    this.pendingResumeEntry = entry
+    appStore.showToastAction('检测到上次阅读进度', '前往查看', (): void => {
+      this.goToResumedPosition()
+    })
+  }
+
+  /**
+   * 用户点击阅读进度 Toast 的「前往查看」后执行恢复定位。
+   *
+   * Toast 是全局组件（ToastManager），回调可能晚于面板销毁或帖子切换触发，
+   * 因此入口必须重新校验：进度未被清空（未切帖/未销毁）、List 仍挂载、
+   * 帖子/账号/开关仍与记录时一致，校验失败仅提示不定位。
+   */
+  private goToResumedPosition(): void {
+    const entry: ReadingProgressEntry | null = this.pendingResumeEntry
+    this.pendingResumeEntry = null
+    if (entry === null) return
+    if (!this.listMounted) {
+      logger.warn(
+        'progress-resume unmounted tid=%{public}s page=%{public}d pid=%{public}d',
+        this.threadTid, entry.page, entry.pid
+      )
+      appStore.showToast('帖子页面已关闭')
+      return
+    }
+    if (this.threadTid !== entry.tid) return
+    if (!appStore.settings.recordReadingProgress || appStore.auth.uid.length === 0) return
     this.applyReadingResume(entry)
   }
 
   /**
    * 执行阅读进度恢复：锚点已在当前窗口时页内直接定位（楼层居中），
    * 否则按记录页码整页加载后经列表导航事务定位。
+   *
+   * 由 goToResumedPosition（用户点击 Toast「前往查看」）调用，不再静默触发。
    *
    * @param entry - 阅读进度条目
    */
