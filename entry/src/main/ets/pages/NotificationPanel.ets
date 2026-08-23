@@ -940,6 +940,21 @@ export struct NotificationPanel {
     return $r('app.media.icon_chat_bubble')
   }
 
+  /**
+   * 私信会话的展示发送者名。
+   *
+   * 系统消息会话（官方接口 from_uid=0）的 from_username / last_from_username
+   * 均为空串（实测 APP 签名接口与网页版一致），此处兜底为「系统消息」，
+   * 避免会话行副文本渲染成「· N条消息」缺人名。
+   *
+   * @param thread - 私信会话
+   * @returns 展示名
+   */
+  private threadActorName(thread: MessageThreadInfo): string {
+    const name: string = unescapeHtml(thread.last_from_username || thread.from_username)
+    return name.length > 0 ? name : '系统消息'
+  }
+
   /** 跳转到动态对应的帖子（回复定位楼层）；点开即标记该动态已读。 */
   private openActivity(activity: FollowedActivity): void {
     if (activity.tid.length === 0) {
@@ -1120,7 +1135,8 @@ export struct NotificationPanel {
                       .fill(AppColors.primary)
                       .opacity(this.hasUnreadForThread(String(thread.mid)) ? 1 : 0)
                       .margin({ right: 9 })
-                    Avatar({ name: thread.last_from_username || thread.from_username, avatarSize: 40 })
+                    Avatar({ name: this.threadActorName(thread), avatarSize: 40 })
+                      .margin({ right: 10 })
                     Column() {
                       Row() {
                         Text(unescapeHtml(thread.subject))
@@ -1137,7 +1153,7 @@ export struct NotificationPanel {
                           .fontColor(AppColors.textTertiary)
                           .margin({ left: 12 })
                       }.width('100%').alignItems(VerticalAlign.Center)
-                      Text(`${unescapeHtml(thread.last_from_username || thread.from_username)} · ${thread.posts}条消息`)
+                      Text(`${this.threadActorName(thread)} · ${thread.posts}条消息`)
                         .fontSize(13)
                         .fontColor(AppColors.textTertiary)
                         .maxLines(1)
