@@ -40,8 +40,6 @@ export struct ProfilePanel {
   @State hasError: boolean = false
   @State errorMsg: string = ''
   @State profile: ProfileData | null = null
-  /** 当前账号的未查看私信通知数量。 */
-  @StorageProp('unreadMessageCount') unreadMessages: number = 0
   @State checkinLoading: boolean = false
   @State checkinResult: string = ''
   /** 当前登录用户是否已关注主页用户（来自 ucp.get 的 follow 字段）。 */
@@ -186,12 +184,6 @@ export struct ProfilePanel {
       appStore.showToast('操作失败')
     }
     this.followLoading = false
-  }
-
-  private formatBadge(count: number): string {
-    if (count <= 0) return ''
-    if (count > 99) return '99+'
-    return String(count)
   }
 
   private getStatGridTemplate(): string {
@@ -462,14 +454,6 @@ export struct ProfilePanel {
                   iconRes: $r('app.media.profile_history'), iconColor: ProfileActionIconColors.history, label: '浏览历史',
                   onAction: () => {
                     routerStore.navigateActivity(Screen.browseHistory())
-                  }
-                })
-                Divider().margin({ left: 60 }).color(AppColors.separator)
-                SettingRow({
-                  iconRes: $r('app.media.profile_messages'), iconColor: ProfileActionIconColors.messages, label: '私信',
-                  badge: this.formatBadge(this.unreadMessages),
-                  onAction: () => {
-                    routerStore.navigateActivity(Screen.messages())
                   }
                 })
                 Divider().margin({ left: 60 }).color(AppColors.separator)

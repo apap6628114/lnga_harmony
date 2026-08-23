@@ -17,6 +17,7 @@ import { escHtml } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { Avatar } from '../common/components/Avatar'
 import { PanelNavBar } from '../common/components/PanelNavBar'
+import { TAB_ACTIVITIES } from './NotificationPanel'
 import { FollowedUserDataSource } from '../common/datasource/LazyDataSource'
 import { EmptyStateView, LoadingStateView, ErrorStateView } from '../common/components/PageStateView'
 import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
@@ -395,12 +396,12 @@ export struct FollowListPanel {
       PanelNavBar({
         title: '我的关注',
         scrollEffectProgress: this.titleScrollEffectProgress,
-        // 「关注动态」直达入口：铃铛跳通知页动态 tab（Screen.notifications(1)），
+        // 「关注动态」直达入口：铃铛跳通知页动态 tab（Screen.notifications(TAB_ACTIVITIES)），
         // 与帖子列表标题栏铃铛（进通知页消息 tab）的图标语言一致
         secondaryRightIcon: $r('app.media.icon_bell'),
         secondaryRightIconAccessibilityText: '关注动态',
         onSecondaryRightClick: (): void => {
-          routerStore.navigateActivity(Screen.notifications(1))
+          routerStore.navigateActivity(Screen.notifications(TAB_ACTIVITIES))
         }
       })
         .width('100%').position({ x: 0, y: 0 })

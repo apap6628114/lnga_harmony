@@ -1,9 +1,11 @@
 /**
- * 通知面板 - 消息 / 关注动态 双筛选
+ * 通知面板 - 消息 / 私信 / 关注动态 三筛选
  *
  * 标题区与帖子 UI（TopicListPanel）保持一致：左侧返回 + 标题「通知」，
- * 筛选项（消息/动态）作为列表首个元素随内容滚动穿越标题区。
- * - 消息：通知中心数据（回复/私信/点赞提醒），点击已读 / 全部已读；
+ * 筛选项（消息/私信/动态）作为列表首个元素随内容滚动穿越标题区。
+ * - 消息：通知中心非私信数据（回复/点赞提醒），点击已读 / 全部已读；
+ * - 私信：私信会话列表（getMessageList，滚动分页），会话行已读按可索引 ID
+ *   （私信通知 notificationId 内含 mid）精确表达，点击会话标记该会话已读；
  * - 动态：关注动态流，数据来自 FollowActivityStore（轮询/条件抓取/缓存），
  *   已读规则与消息一致：点开帖子才标记已读，右上角「全部已读」作用于当前 Tab 的系统。
  */
@@ -12,20 +14,30 @@ import { appStore } from '../store/AppStore'
 import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
 import type {
   MessageNotification,
+  NgaNotification,
   NotificationInfo,
   ReplyNotification,
   UpvoteNotification
 } from '../model/Notification'
 import { FollowedActivity, FollowedActivityType } from '../model/Follow'
+import type { MessageThreadInfo } from '../model/Message'
+import type { MessageListResult } from '../model/MessageResult'
+import { getMessageList } from '../service/api/MessageApi'
 import { AppColors, BreakpointType, NOTI_TYPE_MAP, getNotiIcon } from '../common/constants/Constants'
 import { formatTime } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { Avatar } from '../common/components/Avatar'
-import { NotificationDataSource, FollowedActivityDataSource } from '../common/datasource/LazyDataSource'
+import { ComposeMessageSheet } from '../common/components/ComposeMessageSheet'
+import {
+  NotificationDataSource,
+  FollowedActivityDataSource,
+  MessageThreadDataSource
+} from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/components/PageStateView'
 import { PageScope } from '../common/concurrency/PageScope'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
+import { isMessageNotificationType } from '../common/utils/NotificationPolicy'
 import {
   SegmentButton,
   SegmentButtonOptions,
@@ -34,13 +46,19 @@ import {
 } from '@kit.ArkUI'
 
 /** 通知页筛选 Tab。 */
-const TAB_MESSAGES: number = 0
-const TAB_ACTIVITIES: number = 1
+export const TAB_MESSAGES: number = 0
+export const TAB_PRIVATE: number = 1
+export const TAB_ACTIVITIES: number = 2
+
+/** 私信列表快照复用窗口：成功刷新后窗口内切 Tab 不重复请求（详情返回强制刷新不受限）。 */
+const PRIVATE_REFRESH_WINDOW_MS: number = 30 * 1000
 
 @Component
 export struct NotificationPanel {
-  /** 初始筛选 Tab（0=消息，1=动态）。 */
+  /** 初始筛选 Tab（0=消息，1=私信，2=动态）。 */
   @Prop initialTab: number = 0
+  /** 直达写私信的初始收件人（非空时强制私信 Tab 并弹出写私信面板）。 */
+  @Prop composeToInit: string = ''
   @State notifications: NotificationInfo[] = []
   @State isLoading: boolean = true
   @State hasError: boolean = false
@@ -53,12 +71,27 @@ export struct NotificationPanel {
   @State activitiesError: boolean = false
   /** 动态分页加载更多进行中（仅用于 footer 显示；store 内部有并发防护）。 */
   @State isLoadingMore: boolean = false
+  /** 私信会话列表快照。 */
+  @State threads: MessageThreadInfo[] = []
+  /** 私信首屏是否加载中。 */
+  @State privateLoading: boolean = true
+  /** 私信加载是否失败。 */
+  @State privateError: boolean = false
+  /** 私信分页加载更多进行中。 */
+  @State privateLoadingMore: boolean = false
+  /** 私信会话列表下一页页码（<=0 表示没有更多）。 */
+  @State privateNextPage: number = 0
+  /** 私信通知快照（可索引 ID 已读表达的数据源：会话行未读点与私信全部已读）。 */
+  @State messageNotifications: MessageNotification[] = []
+  /** 写私信面板是否可见。 */
+  @State showCompose: boolean = false
   /** 当前筛选 Tab。 */
   @State activeTab: number = 0
   /** 筛选条分段按钮选项（原生 SegmentButton，胶囊单选）。 */
   @State tabOptions: SegmentButtonOptions = SegmentButtonOptions.capsule({
     buttons: [
       { text: '消息' },
+      { text: '私信' },
       { text: '动态' }
     ] as SegmentButtonItemTuple,
     multiply: false,
@@ -83,12 +116,21 @@ export struct NotificationPanel {
   @StorageProp('notificationVersion') @Watch('onNotificationVersionChange') notificationVersion: number = 0
   /** 动态 Store 的页面刷新信号（仅数据合并时触发）。 */
   @StorageProp('activityVersion') @Watch('onActivityVersionChange') activityVersion: number = 0
+  /** 私信会话列表刷新信号（详情页关闭时 bump，驱动私信 Tab 静默刷新）。 */
+  @StorageProp('messageVersion') @Watch('onMessageVersionChange') messageVersion: number = 0
   /** 消息 Tab 未读数量（以括号文本拼入按钮文案，0 不显示）。 */
   @StorageProp('unreadNotiCount') @Watch('onUnreadCountChange') unreadNotiCount: number = 0
+  /** 私信 Tab 未读数量（私信通知未读数，以括号文本拼入按钮文案，0 不显示）。 */
+  @StorageProp('unreadMessageCount') @Watch('onUnreadCountChange') unreadMessageCount: number = 0
   /** 动态 Tab 未读数量（以括号文本拼入按钮文案，0 不显示）。 */
   @StorageProp('unreadActivityCount') @Watch('onUnreadCountChange') unreadActivityCount: number = 0
   private notificationsDataSource: NotificationDataSource = new NotificationDataSource()
   private activitiesDataSource: FollowedActivityDataSource = new FollowedActivityDataSource()
+  private threadsDataSource: MessageThreadDataSource = new MessageThreadDataSource()
+  /** mid → 是否存在未读私信通知（syncMessageNotificationsFromStore 时重建，行查询 O(1)）。 */
+  private unreadByMid: Map<string, boolean> = new Map<string, boolean>()
+  /** 私信列表最近一次成功刷新时间戳（快照复用窗口判定）。 */
+  private lastPrivateRefreshMs: number = 0
   private scroller: Scroller = new Scroller()
   /** 筛选条在窗口中的底部纵坐标（onAreaChange 实时采集，供状态视图撑满估算）。 */
   private sortBarBottomY: number = 0
@@ -108,14 +150,27 @@ export struct NotificationPanel {
 
   aboutToAppear(): void {
     const currentGeneration: number = this.scope.begin()
-    const initialTab: number = this.initialTab === TAB_ACTIVITIES ? TAB_ACTIVITIES : TAB_MESSAGES
+    let initialTab: number = this.initialTab
+    if (this.composeToInit.length > 0) {
+      // 直达写私信：强制进入私信 Tab 并弹出写私信面板
+      initialTab = TAB_PRIVATE
+    }
+    if (initialTab !== TAB_MESSAGES && initialTab !== TAB_PRIVATE && initialTab !== TAB_ACTIVITIES) {
+      initialTab = TAB_MESSAGES
+    }
     this.activeTab = initialTab
     this.tabSelected = [initialTab]
     this.rebuildTabOptions()
     this.syncNotificationsFromStore()
     this.syncActivitiesFromStore()
+    this.syncMessageNotificationsFromStore()
     if (initialTab === TAB_ACTIVITIES) {
       this.loadActivities(currentGeneration)
+    } else if (initialTab === TAB_PRIVATE) {
+      if (this.composeToInit.length > 0) {
+        this.showCompose = true
+      }
+      this.loadPrivateMessages(currentGeneration)
     } else {
       this.loadNotifications(currentGeneration)
     }
@@ -126,8 +181,9 @@ export struct NotificationPanel {
     this.scope.end()
   }
 
-  /** 通知 Store 发布新版本时同步页面快照。 */
+  /** 通知 Store 发布新版本时同步页面快照（私信通知快照任何 Tab 都同步，供会话行已读索引）。 */
   private onNotificationVersionChange(): void {
+    this.syncMessageNotificationsFromStore()
     if (this.activeTab === TAB_MESSAGES) {
       this.syncNotificationsFromStore()
     }
@@ -140,13 +196,45 @@ export struct NotificationPanel {
     }
   }
 
-  /** 从通知 Store 同步列表快照和懒加载数据源。 */
+  /** 私信详情页关闭后强制静默刷新会话列表（忽略快照复用窗口，保证回复后列表最新）。 */
+  private onMessageVersionChange(): void {
+    if (this.activeTab === TAB_PRIVATE) {
+      this.loadPrivateMessages(this.scope.begin(), true)
+    }
+  }
+
+  /** 从通知 Store 同步列表快照和懒加载数据源（消息 Tab 仅展示非私信通知）。 */
   private syncNotificationsFromStore(): void {
-    this.notifications = appStore.getCachedNotifications() as NotificationInfo[]
+    this.notifications = appStore.getCachedNonMessageNotifications() as NotificationInfo[]
     this.notificationsDataSource.replaceAll(this.notifications)
     if (this.notifications.length === 0) {
       this.titleScrollEffectProgress = 0
     }
+  }
+
+  /**
+   * 从通知 Store 同步私信通知快照（可索引 ID 已读表达的数据源）。
+   *
+   * 私信会话行的未读点与私信 Tab「全部已读」可用性均由该快照推导；
+   * 任何通知版本变化（轮询合并 / 单条已读 / 全部已读）都需刷新它。
+   * 同步时同时重建 mid → 未读 Map，行查询从 O(n) 降为 O(1)。
+   */
+  private syncMessageNotificationsFromStore(): void {
+    const cached: NgaNotification[] = appStore.getCachedNotifications()
+    const result: MessageNotification[] = []
+    const unreadMap: Map<string, boolean> = new Map<string, boolean>()
+    for (let index: number = 0; index < cached.length; index++) {
+      const item: NgaNotification = cached[index]
+      if (isMessageNotificationType(item.type)) {
+        const message: MessageNotification = item as MessageNotification
+        result.push(message)
+        if (!message.seen) {
+          unreadMap.set(message.mid, true)
+        }
+      }
+    }
+    this.messageNotifications = result
+    this.unreadByMid = unreadMap
   }
 
   /**
@@ -281,7 +369,185 @@ export struct NotificationPanel {
   }
 
   /**
-   * 列表滚动处理：动态 tab 下接近底部时触发分页加载。
+   * 刷新私信会话列表并仅在当前页面出现周期内更新页面快照。
+   *
+   * 有数据时静默刷新（不显示全屏加载态），无数据时显示首屏加载态；
+   * 成功后同步通知状态（与私信列表面板行为一致）。
+   * 快照复用窗口（PRIVATE_REFRESH_WINDOW_MS）内切 Tab 直接复用现有列表
+   * 不发请求；force=true（详情返回 messageVersion 信号）时强制刷新。
+   *
+   * @param appearanceGeneration - 请求发起时的页面出现周期版本号
+   * @param force - 是否忽略快照复用窗口强制请求
+   */
+  private async loadPrivateMessages(appearanceGeneration: number, force: boolean = false): Promise<void> {
+    if (!appStore.auth.isAuthenticated) {
+      // 未登录：不发请求，登录引导空态由 UI 分支负责
+      this.privateLoading = false
+      return
+    }
+    if (!force && this.threads.length > 0 &&
+      Date.now() - this.lastPrivateRefreshMs < PRIVATE_REFRESH_WINDOW_MS) {
+      // 快照复用窗口内：直接使用现有列表（不打断滚动、不重复请求）
+      this.privateLoading = false
+      return
+    }
+    this.privateLoading = this.threads.length === 0
+    this.privateError = false
+    this.titleScrollEffectProgress = 0
+    try {
+      const result: MessageListResult = await getMessageList(appStore.auth.token, '1')
+      if (!this.scope.isActive(appearanceGeneration)) {
+        return
+      }
+      if (result.ok && result.data) {
+        this.mergePrivateSnapshot(result.data.messageEntryList, result.data.nextPage)
+        this.lastPrivateRefreshMs = Date.now()
+        this.privateLoading = false
+        await appStore.refreshNotifications(true)
+        return
+      }
+      if (this.threads.length === 0) {
+        this.privateError = true
+        this.errorMsg = '加载失败'
+      } else {
+        appStore.showToast('刷新私信失败')
+      }
+    } catch (e) {
+      if (this.scope.isActive(appearanceGeneration)) {
+        if (this.threads.length === 0) {
+          this.privateError = true
+          this.errorMsg = '加载失败'
+        } else {
+          appStore.showToast('刷新私信失败')
+        }
+      }
+    }
+    if (this.scope.isActive(appearanceGeneration)) {
+      this.privateLoading = false
+    }
+  }
+
+  /**
+   * 增量合并私信快照：旧列表与快照前缀（mid 序列）一致时逐行更新变化字段、
+   * 尾部追加新增会话，保留滚动位置与已分页上下文；否则整体替换并重置分页游标。
+   *
+   * 快照可能短于旧列表（分页后刷新仅返回第 1 页）：前缀一致时仅更新重叠部分，
+   * 已分页尾部保留。合并后 this.threads 恒等于 dataSource 内容
+   * （threads 仅作空态/加载态判定，行渲染走 dataSource）。
+   *
+   * @param snapshot - 本次拉取的第 1 页会话快照
+   * @param nextPage - 本次拉取的下一页游标
+   */
+  private mergePrivateSnapshot(snapshot: MessageThreadInfo[], nextPage: number): void {
+    const oldCount: number = this.threadsDataSource.totalCount()
+    const overlap: number = oldCount > 0 && snapshot.length > 0
+      ? Math.min(oldCount, snapshot.length) : 0
+    if (overlap > 0 && this.threadIdsMatch(snapshot, 0, overlap)) {
+      for (let index: number = 0; index < overlap; index++) {
+        const current: MessageThreadInfo = this.threadsDataSource.getData(index)
+        const next: MessageThreadInfo = snapshot[index]
+        if (current.subject !== next.subject || current.lasttime !== next.lasttime ||
+          current.posts !== next.posts || current.from_username !== next.from_username ||
+          current.last_from_username !== next.last_from_username) {
+          this.threadsDataSource.updateAt(index, next)
+        }
+      }
+      if (snapshot.length > oldCount) {
+        const added: MessageThreadInfo[] = []
+        for (let index: number = oldCount; index < snapshot.length; index++) {
+          added.push(snapshot[index])
+        }
+        this.threadsDataSource.appendAll(added)
+      }
+      // 分页上下文保留：游标取较大值（快照为第 1 页，旧列表已分页则继续旧游标）
+      if (nextPage > this.privateNextPage) {
+        this.privateNextPage = nextPage
+      }
+    } else {
+      this.threadsDataSource.replaceAll(snapshot)
+      this.privateNextPage = nextPage
+    }
+    const merged: MessageThreadInfo[] = []
+    for (let index: number = 0; index < this.threadsDataSource.totalCount(); index++) {
+      merged.push(this.threadsDataSource.getData(index))
+    }
+    this.threads = merged
+  }
+
+  /**
+   * 判断快照从 snapshotStart 起与旧数据源 mid 序列是否逐项一致。
+   *
+   * @param snapshot - 新快照
+   * @param snapshotStart - 快照比较起点
+   * @param count - 比较条数
+   * @returns 是否逐项一致
+   */
+  private threadIdsMatch(snapshot: MessageThreadInfo[], snapshotStart: number, count: number): boolean {
+    for (let index: number = 0; index < count; index++) {
+      if (snapshot[snapshotStart + index].mid !== this.threadsDataSource.getData(index).mid) {
+        return false
+      }
+    }
+    return true
+  }
+
+  /**
+   * 加载私信会话列表下一页（服务端 nextPage 驱动，尾部追加不打断滚动）。
+   *
+   * 请求捕获当前代际：期间发生首屏/静默刷新（begin 新代际）或切 Tab 时
+   * 结果将被丢弃，避免与 replaceAll/增量合并竞态；追加前按 mid 去重，
+   * 防止游标回退造成的重复会话。
+   */
+  private async loadMorePrivateMessages(): Promise<void> {
+    if (this.privateLoadingMore || this.privateNextPage <= 0) {
+      return
+    }
+    if (!appStore.auth.isAuthenticated) {
+      return
+    }
+    this.privateLoadingMore = true
+    const generation: number = this.scope.begin()
+    try {
+      const result: MessageListResult = await getMessageList(appStore.auth.token, String(this.privateNextPage))
+      if (!this.scope.isActive(generation)) {
+        return
+      }
+      if (result.ok && result.data) {
+        const knownMids: Set<string> = new Set<string>()
+        for (let index: number = 0; index < this.threadsDataSource.totalCount(); index++) {
+          knownMids.add(String(this.threadsDataSource.getData(index).mid))
+        }
+        const added: MessageThreadInfo[] = []
+        for (let index: number = 0; index < result.data.messageEntryList.length; index++) {
+          const item: MessageThreadInfo = result.data.messageEntryList[index]
+          if (!knownMids.has(String(item.mid))) {
+            knownMids.add(String(item.mid))
+            added.push(item)
+          }
+        }
+        if (added.length > 0) {
+          this.threadsDataSource.appendAll(added)
+          const merged: MessageThreadInfo[] = []
+          for (let index: number = 0; index < this.threadsDataSource.totalCount(); index++) {
+            merged.push(this.threadsDataSource.getData(index))
+          }
+          this.threads = merged
+        }
+        this.privateNextPage = result.data.nextPage
+      } else {
+        appStore.showToast('加载更多失败')
+      }
+    } catch (e) {
+      appStore.showToast('加载更多失败')
+    } finally {
+      if (this.scope.isAlive()) {
+        this.privateLoadingMore = false
+      }
+    }
+  }
+
+  /**
+   * 列表滚动处理：动态 tab 下接近底部时触发分页加载，私信 tab 下触发会话分页。
    *
    * 数据项从列表索引 1 开始（索引 0 为筛选条占位），触发阈值
    * `endIndex >= 数据项数 - 2` 即等价换算的「数据项索引距尾部 3 项内」，
@@ -291,12 +557,18 @@ export struct NotificationPanel {
    * @param endIndex - 当前可见终点列表索引（含筛选条占位）
    */
   private handleScrollIndex(_startIndex: number, endIndex: number): void {
-    if (this.activeTab !== TAB_ACTIVITIES) {
+    if (this.activeTab === TAB_ACTIVITIES) {
+      const total: number = this.activitiesDataSource.totalCount()
+      if (total > 0 && endIndex >= total - 2) {
+        this.loadMoreActivities()
+      }
       return
     }
-    const total: number = this.activitiesDataSource.totalCount()
-    if (total > 0 && endIndex >= total - 2) {
-      this.loadMoreActivities()
+    if (this.activeTab === TAB_PRIVATE) {
+      const total: number = this.threadsDataSource.totalCount()
+      if (total > 0 && endIndex >= total - 2) {
+        this.loadMorePrivateMessages()
+      }
     }
   }
 
@@ -336,10 +608,28 @@ export struct NotificationPanel {
     return this.notifications.some((notification: NotificationInfo) => !notification.seen)
   }
 
+  /** 判断私信通知快照是否包含未读项（私信 Tab 全部已读可用性与标题栏按钮颜色）。 */
+  private hasUnreadMessageNotifications(): boolean {
+    return this.messageNotifications.some((notification: MessageNotification) => !notification.seen)
+  }
+
+  /**
+   * 判断私信会话行是否存在未读（按可索引 ID 表达：该 mid 是否有未读私信通知）。
+   *
+   * @param mid - 私信会话 ID
+   * @returns 是否存在未读私信通知
+   */
+  private hasUnreadForThread(mid: string): boolean {
+    return this.unreadByMid.get(mid) === true
+  }
+
   /** 判断当前选中 Tab 的系统是否存在未读项。 */
   private hasCurrentTabUnread(): boolean {
     if (this.activeTab === TAB_MESSAGES) {
       return this.hasUnreadNotifications()
+    }
+    if (this.activeTab === TAB_PRIVATE) {
+      return this.hasUnreadMessageNotifications()
     }
     return this.hasUnreadActivities()
   }
@@ -347,15 +637,24 @@ export struct NotificationPanel {
   /**
    * 将当前选中 Tab 代表的系统全部标记为已读。
    *
-   * 消息 tab：通知中心全部已读；动态 tab：关注动态全部已读。
+   * 消息 tab：非私信通知全部已读；私信 tab：私信通知全部已读；
+   * 动态 tab：关注动态全部已读。
    */
   private handleMarkAllSeen(): void {
     if (this.activeTab === TAB_MESSAGES) {
       if (!this.hasUnreadNotifications()) {
         return
       }
-      appStore.markAllNotificationsSeen()
+      appStore.markNonMessageNotificationsSeen()
       this.syncNotificationsFromStore()
+      return
+    }
+    if (this.activeTab === TAB_PRIVATE) {
+      if (!this.hasUnreadMessageNotifications()) {
+        return
+      }
+      appStore.markMessageNotificationsSeen()
+      this.syncMessageNotificationsFromStore()
       return
     }
     if (!this.hasUnreadActivities()) {
@@ -400,6 +699,9 @@ export struct NotificationPanel {
     if (index === TAB_MESSAGES) {
       this.syncNotificationsFromStore()
       this.loadNotifications(generation)
+    } else if (index === TAB_PRIVATE) {
+      this.syncMessageNotificationsFromStore()
+      this.loadPrivateMessages(generation)
     } else {
       this.syncActivitiesFromStore()
       this.loadActivities(generation)
@@ -413,7 +715,20 @@ export struct NotificationPanel {
   }
 
   /**
-   * 未读数变化时重建筛选条文案（消息(9) / 动态(99+) 形式）。
+   * 标记并打开一个私信会话：按可索引 ID 精确标记该会话的私信通知已读，
+   * 刷新快照（行未读点消失）后进入私信详情。
+   *
+   * @param thread - 被点击的私信会话
+   */
+  private handleThreadClick(thread: MessageThreadInfo): void {
+    const mid: string = String(thread.mid)
+    appStore.markMessageNotificationsSeenByMid(mid)
+    this.syncMessageNotificationsFromStore()
+    routerStore.navigateActivity(Screen.messageDetail(mid))
+  }
+
+  /**
+   * 未读数变化时重建筛选条文案（消息(9) / 私信(3) / 动态(99+) 形式）。
    */
   private onUnreadCountChange(): void {
     this.rebuildTabOptions()
@@ -426,6 +741,7 @@ export struct NotificationPanel {
     this.tabOptions = SegmentButtonOptions.capsule({
       buttons: [
         { text: this.badgeLabel('消息', this.unreadNotiCount) },
+        { text: this.badgeLabel('私信', this.unreadMessageCount) },
         { text: this.badgeLabel('动态', this.unreadActivityCount) }
       ] as SegmentButtonItemTuple,
       multiply: false,
@@ -466,6 +782,9 @@ export struct NotificationPanel {
 
   /**
    * 获取通知行的主要标题。
+   *
+   * 注意：私信通知（type 10/11）已迁出消息 Tab，`category === 'message'`
+   * 分支为防御性保留（当前不可达），维护时勿据此以为消息 Tab 仍含私信。
    *
    * @param notification - 通知记录
    * @returns 主题标题或通知类别标题
@@ -545,6 +864,9 @@ export struct NotificationPanel {
 
   /**
    * 标记并打开一条具体通知。
+   *
+   * 注意：私信通知（type 10/11）已迁出消息 Tab，`category === 'message'`
+   * 分支为防御性保留（当前不可达），私信会话入口在私信 Tab 的会话行。
    *
    * @param notification - 被点击的通知
    */
@@ -751,6 +1073,97 @@ export struct NotificationPanel {
                 }
               }, (n: NotificationInfo) => `${n.notificationId}_${n.seen}`)
             }
+          } else if (this.activeTab === TAB_PRIVATE) {
+            if (!appStore.auth.isAuthenticated) {
+              ListItem() {
+                Column() {
+                  EmptyStateView({ msg: '登录后查看私信', icon: $r('app.media.icon_mail') })
+                }
+                .width('100%').height(this.getStateViewHeight())
+                .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+                .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+              }
+            } else if (this.privateLoading) {
+              ListItem() {
+                Column() {
+                  LoadingStateView()
+                }
+                .width('100%').height(this.getStateViewHeight())
+                .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+                .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+              }
+            } else if (this.privateError) {
+              ListItem() {
+                Column() {
+                  ErrorStateView({ msg: this.errorMsg, onRetry: () => this.loadPrivateMessages(this.scope.begin()) })
+                }
+                .width('100%').height(this.getStateViewHeight())
+                .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+                .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+              }
+            } else if (this.threads.length === 0) {
+              ListItem() {
+                Column() {
+                  EmptyStateView({ msg: '暂无私信', icon: $r('app.media.icon_mail') })
+                }
+                .width('100%').height(this.getStateViewHeight())
+                .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+                .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+              }
+            } else {
+              LazyForEach(this.threadsDataSource, (thread: MessageThreadInfo) => {
+                ListItem() {
+                  Row() {
+                    Circle()
+                      .width(7)
+                      .height(7)
+                      .fill(AppColors.primary)
+                      .opacity(this.hasUnreadForThread(String(thread.mid)) ? 1 : 0)
+                      .margin({ right: 9 })
+                    Avatar({ name: thread.last_from_username || thread.from_username, avatarSize: 40 })
+                    Column() {
+                      Row() {
+                        Text(unescapeHtml(thread.subject))
+                          .fontSize(15)
+                          .fontColor(this.hasUnreadForThread(String(thread.mid))
+                            ? AppColors.textPrimary : AppColors.textSecondary)
+                          .fontWeight(this.hasUnreadForThread(String(thread.mid))
+                            ? FontWeight.Medium : FontWeight.Normal)
+                          .maxLines(1)
+                          .textOverflow({ overflow: TextOverflow.Ellipsis })
+                          .layoutWeight(1)
+                        Text(formatTime(Number(thread.lasttime)))
+                          .fontSize(12)
+                          .fontColor(AppColors.textTertiary)
+                          .margin({ left: 12 })
+                      }.width('100%').alignItems(VerticalAlign.Center)
+                      Text(`${unescapeHtml(thread.last_from_username || thread.from_username)} · ${thread.posts}条消息`)
+                        .fontSize(13)
+                        .fontColor(AppColors.textTertiary)
+                        .maxLines(1)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
+                        .margin({ top: 5 })
+                        .width('100%')
+                    }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+                  }.width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })
+                  .alignItems(VerticalAlign.Center)
+                  .onClick(() => { this.handleThreadClick(thread) })
+                }
+              }, (thread: MessageThreadInfo) =>
+                `${String(thread.mid)}_${this.hasUnreadForThread(String(thread.mid)) ? '1' : '0'}`)
+
+              ListItem() {
+                Row() {
+                  if (this.privateLoadingMore) {
+                    LoadingProgress().width(16).height(16).color(AppColors.textTertiary)
+                    Text('加载更多...').fontSize(13).fontColor(AppColors.textTertiary).margin({ left: 8 })
+                  } else if (this.privateNextPage <= 0) {
+                    Text('— 已到底 —').fontSize(12).fontColor(AppColors.textTertiary)
+                  }
+                }
+                .width('100%').justifyContent(FlexAlign.Center).padding(16)
+              }
+            }
           } else {
             if (!appStore.auth.isAuthenticated) {
               ListItem() {
@@ -888,15 +1301,37 @@ export struct NotificationPanel {
       PanelNavBar({
         title: '通知',
         scrollEffectProgress: this.titleScrollEffectProgress,
-        rightIcon: $r('app.media.icon_nav_mark_all_read'),
-        rightIconColor: this.hasCurrentTabUnread()
-          ? AppColors.primary : AppColors.textTertiary,
-        rightIconAccessibilityText: '全部标记为已读',
+        // 私信 tab：主图标为写私信，次图标为全部已读；其余 tab 主图标为全部已读
+        rightIcon: this.activeTab === TAB_PRIVATE
+          ? $r('app.media.icon_compose') : $r('app.media.icon_nav_mark_all_read'),
+        rightIconColor: this.activeTab === TAB_PRIVATE
+          ? '' : (this.hasCurrentTabUnread() ? AppColors.primary : AppColors.textTertiary),
+        rightIconAccessibilityText: this.activeTab === TAB_PRIVATE ? '写私信' : '全部标记为已读',
         onRightClick: (): void => {
+          if (this.activeTab === TAB_PRIVATE) {
+            this.showCompose = true
+          } else {
+            this.handleMarkAllSeen()
+          }
+        },
+        secondaryRightIcon: this.activeTab === TAB_PRIVATE
+          ? $r('app.media.icon_nav_mark_all_read') : '',
+        secondaryRightIconColor: this.activeTab === TAB_PRIVATE
+          ? (this.hasCurrentTabUnread() ? AppColors.primary : AppColors.textTertiary) : '',
+        secondaryRightIconAccessibilityText: '全部标记为已读',
+        onSecondaryRightClick: (): void => {
           this.handleMarkAllSeen()
         }
       })
         .width('100%').position({ x: 0, y: 0 })
+
+      ComposeMessageSheet({
+        showCompose: $showCompose,
+        composeToInit: this.composeToInit,
+        onSent: (): void => {
+          this.loadPrivateMessages(this.scope.begin())
+        }
+      })
     }
     .width('100%').height('100%').backgroundColor(AppColors.bg)
   }

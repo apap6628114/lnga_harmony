@@ -116,8 +116,10 @@ export class Screen {
   mid: string = ''
   messagePage: number = 1
   composeTo: string = ''
-  /** 通知页初始筛选 Tab（0=消息，1=动态）。 */
+  /** 通知页初始筛选 Tab（0=消息，1=私信，2=动态）。 */
   notificationsInitialTab: number = 0
+  /** 直达写私信的初始收件人（随 notifications/messages 路由透传）。 */
+  notificationsComposeTo: string = ''
   topicListName: string = ''
   topicListFid: number = 0
   topicListAuthorid: string = ''
@@ -170,10 +172,11 @@ export class Screen {
     return s
   }
 
-  static notifications(initialTab: number = 0): Screen {
+  static notifications(initialTab: number = 0, composeTo: string = ''): Screen {
     const s = new Screen()
     s.type = 'notifications'
     s.notificationsInitialTab = initialTab
+    s.notificationsComposeTo = composeTo
     return s
   }
 

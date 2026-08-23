@@ -97,6 +97,18 @@
 - `catch` 子句变量请省略类型标注
 - 不支持 `this` 关键字用于类型标注
 
+## ArkUI 响应式约定（V1）
+
+- `@Builder` 按值传入的参数**不建立响应式依赖**：状态变量变化不会刷新
+  @Builder 内部的 UI，且不报错（静默渲染旧值）。@Builder 内部消费可能
+  变化的状态（图标、颜色、角标等）必须通过 `this` 访问组件属性
+  （@State / @Prop / @StorageProp），禁止按值传参
+- 自定义组件的 @Builder 与 @Prop 同理：可变值一律经 `this` 读取；
+  按值传参只适合真正静态的字面量
+- 典型教训：PanelNavBar.iconPod 曾按值传 icon，切 Tab 后图标固化为
+  首次渲染值（如「全部已读」双勾替代「写私信」铅笔）；修复后统一走
+  `this.resolveIcon(isBack, isSecondary)`，与颜色/角标同一模式
+
 
 
 

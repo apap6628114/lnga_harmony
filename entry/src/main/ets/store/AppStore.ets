@@ -311,10 +311,18 @@ class AppStoreClass {
   getCachedNotifications(): NgaNotification[] { return this.notificationStore.getCachedNotifications() }
   /** 将指定通知标记为已查看。 */
   markNotificationSeen(notificationId: string): void { this.notificationStore.markSeen(notificationId) }
-  /** 将全部通知标记为已查看。 */
-  markAllNotificationsSeen(): void { this.notificationStore.markAllSeen() }
+  /** 将全部非私信通知标记为已查看（消息 Tab 全部已读，不波及私信通知）。 */
+  markNonMessageNotificationsSeen(): void { this.notificationStore.markNonMessageSeen() }
   /** 将私信通知标记为已查看。 */
   markMessageNotificationsSeen(): void { this.notificationStore.markMessagesSeen() }
+  /** 将指定会话（mid）的私信通知标记为已查看（按可索引 ID 精确表达已读）。 */
+  markMessageNotificationsSeenByMid(mid: string): void {
+    this.notificationStore.markMessagesSeenByMid(mid)
+  }
+  /** 返回通知缓存中非私信通知的只读快照（消息 Tab 数据源）。 */
+  getCachedNonMessageNotifications(): NgaNotification[] {
+    return this.notificationStore.getCachedNonMessageNotifications()
+  }
 
   // ---------- Facade: Follow Activities ----------
 

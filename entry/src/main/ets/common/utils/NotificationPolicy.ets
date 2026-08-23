@@ -1,4 +1,4 @@
-import type { NgaNotification } from '../../model/Notification'
+import type { MessageNotification, NgaNotification } from '../../model/Notification'
 import { UnseenListAccessors, UnseenListPolicy } from './UnseenListPolicy'
 
 /**
@@ -66,7 +66,11 @@ export function markNotificationSeen(
 }
 
 /**
- * 将所有通知标记为已查看。
+ * 将所有通知（含私信）标记为已查看。
+ *
+ * @deprecated 生产侧已不使用：消息 Tab「全部已读」请用
+ * markNonMessageNotificationsSeen（不波及私信通知）；本函数仅保留
+ * 供策略层单测验证「全部含私信」语义。
  *
  * @param notifications - 通知列表
  * @returns 是否发生状态变化
@@ -87,6 +91,43 @@ export function markMessageNotificationsSeen(notifications: NgaNotification[]): 
 }
 
 /**
+ * 将指定会话（mid）的私信通知标记为已查看。
+ *
+ * 私信 Tab 会话行的已读按可索引 ID（notificationId 内含 mid）精确表达：
+ * 点击会话时仅标记该会话对应的私信通知，不波及其它会话。
+ *
+ * @param notifications - 通知列表
+ * @param mid - 私信会话 ID
+ * @returns 是否发生状态变化
+ */
+export function markMessageNotificationsSeenByMid(
+  notifications: NgaNotification[],
+  mid: string
+): boolean {
+  return notificationPolicy.markSeenWhere(notifications,
+    (item: NgaNotification): boolean => {
+      if (!isMessageNotificationType(item.type)) {
+        return false
+      }
+      return (item as MessageNotification).mid === mid
+    })
+}
+
+/**
+ * 将非私信类通知全部标记为已查看。
+ *
+ * 消息 Tab 的「全部已读」只作用于帖子互动/点赞等通知，
+ * 不波及私信通知（私信 Tab 的已读由 markMessageNotificationsSeen 系列管理）。
+ *
+ * @param notifications - 通知列表
+ * @returns 是否发生状态变化
+ */
+export function markNonMessageNotificationsSeen(notifications: NgaNotification[]): boolean {
+  return notificationPolicy.markSeenWhere(notifications,
+    (item: NgaNotification): boolean => !isMessageNotificationType(item.type))
+}
+
+/**
  * 计算全部未查看通知数量。
  *
  * @param notifications - 通知列表
@@ -94,6 +135,37 @@ export function markMessageNotificationsSeen(notifications: NgaNotification[]): 
  */
 export function countUnseenNotifications(notifications: NgaNotification[]): number {
   return notificationPolicy.countUnseen(notifications)
+}
+
+/**
+ * 计算非私信未查看通知数量（消息 Tab 角标与铃铛计数的数据源）。
+ *
+ * @param notifications - 通知列表
+ * @returns 未查看的非私信通知数量
+ */
+export function countUnseenNonMessageNotifications(notifications: NgaNotification[]): number {
+  return notificationPolicy.countUnseenWhere(notifications,
+    (item: NgaNotification): boolean => !isMessageNotificationType(item.type))
+}
+
+/**
+ * 过滤出非私信通知（消息 Tab 展示数据源）。
+ *
+ * 私信通知保留在缓存中作为私信未读数与会话行已读（可索引 ID）的数据源，
+ * 展示层通过本函数隔离。
+ *
+ * @param notifications - 通知列表
+ * @returns 非私信通知数组（新数组）
+ */
+export function filterNonMessageNotifications(notifications: NgaNotification[]): NgaNotification[] {
+  const result: NgaNotification[] = []
+  for (let index: number = 0; index < notifications.length; index++) {
+    const item: NgaNotification = notifications[index]
+    if (!isMessageNotificationType(item.type)) {
+      result.push(item)
+    }
+  }
+  return result
 }
 
 /**

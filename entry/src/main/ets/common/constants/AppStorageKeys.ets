@@ -46,6 +46,9 @@ export const KEY_NOTIFICATION_VERSION: string = 'notificationVersion'
 /** 关注动态缓存版本号（数据变化时 +1 触发页面刷新） */
 export const KEY_ACTIVITY_VERSION: string = 'activityVersion'
 
+/** 私信会话列表版本号（详情页关闭时 +1，驱动通知面板私信 Tab 静默刷新） */
+export const KEY_MESSAGE_VERSION: string = 'messageVersion'
+
 /** 浏览历史版本号（变更时 +1 触发 @Watch） */
 export const KEY_BROWSE_HISTORY_VERSION: string = 'browseHistoryVersion'
 

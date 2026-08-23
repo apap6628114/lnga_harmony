@@ -3,8 +3,7 @@ import { AppColors } from '../common/constants/Constants'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { ThreadPanel } from './ThreadPanel'
 import { ProfilePanel } from './ProfilePanel'
-import { NotificationPanel } from './NotificationPanel'
-import { MessageListPanel } from './MessageListPanel'
+import { NotificationPanel, TAB_PRIVATE } from './NotificationPanel'
 import { MessageDetailPanel } from './MessageDetailPanel'
 import { BlacklistPanel } from './BlacklistPanel'
 import { NotesPanel } from './NotesPanel'
@@ -76,11 +75,15 @@ export struct ActivityRouter {
           } else if (entry.screen.type === 'followList') {
             FollowListPanel({ initialMode: entry.screen.followListMode })
           } else if (entry.screen.type === 'messages') {
-            MessageListPanel({ composeToInit: entry.screen.composeTo })
+            // 私信已迁入通知面板私信 Tab：兼容别名路由，直达私信 Tab 并可预填写私信收件人
+            NotificationPanel({ initialTab: TAB_PRIVATE, composeToInit: entry.screen.composeTo })
           } else if (entry.screen.type === 'messageDetail') {
             MessageDetailPanel({ mid: entry.screen.mid })
           } else if (entry.screen.type === 'notifications') {
-            NotificationPanel({ initialTab: entry.screen.notificationsInitialTab })
+            NotificationPanel({
+              initialTab: entry.screen.notificationsInitialTab,
+              composeToInit: entry.screen.notificationsComposeTo
+            })
           } else if (entry.screen.type === 'blacklist') {
             BlacklistPanel()
           } else if (entry.screen.type === 'notes') {

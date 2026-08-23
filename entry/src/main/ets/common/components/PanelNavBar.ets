@@ -54,27 +54,26 @@ export struct PanelNavBar {
   /**
    * 标题栏内可操作图标按钮：圆形光感底板 + 按压形变反馈。
    *
-   * 颜色与角标通过 this 读取状态变量，而不是按值传入参数：
+   * 图标与颜色、角标一样通过 this 读取状态变量，而不是按值传入：
    * @Builder 私有构建函数按值传递时，参数（状态变量）变化不会触发 UI 刷新，
-   * 通过 this 访问才建立响应式依赖（rightIconBadge / rightIconColor 变化即刷新）。
-   * icon 为静态资源按值传入；isBack/isSecondary 用于区分颜色与角标来源。
+   * 图标会固化为首次渲染值（切换 Tab 导致 rightIcon 变化时不更新）。
+   * 通过 this 访问才建立响应式依赖（rightIcon / rightIconColor /
+   * rightIconBadge 变化即刷新）。
    *
-   * @param icon - 图标资源（静态）
-   * @param isBack - 是否为返回按钮（固定颜色、无角标）
+   * @param isBack - 是否为返回按钮（固定图标、无角标）
    * @param isSecondary - 是否为第二个操作图标
    * @param accessibilityText - 无障碍名称
    * @param onTap - 点击回调
    */
   @Builder
   iconPod(
-    icon: ResourceStr,
     isBack: boolean,
     isSecondary: boolean,
     accessibilityText: string,
     onTap: () => void
   ) {
     Stack() {
-      Image(icon).width(18).height(18).objectFit(ImageFit.Contain)
+      Image(this.resolveIcon(isBack, isSecondary)).width(18).height(18).objectFit(ImageFit.Contain)
         .fillColor(this.resolveIconColor(isBack, isSecondary))
       if (!isBack && this.resolveBadgeCount(isSecondary) > 0) {
         Text(this.formatBadgeCount(this.resolveBadgeCount(isSecondary)))
@@ -90,6 +89,20 @@ export struct PanelNavBar {
     .systemMaterial(UIMaterialManager.fabMaterial)
     .accessibilityText(accessibilityText)
     .onClick(onTap)
+  }
+
+  /**
+   * 取图标资源：返回按钮固定返回图标，主/次操作图标取各自 @Prop。
+   *
+   * @param isBack - 是否为返回按钮
+   * @param isSecondary - 是否为第二个操作图标
+   * @returns 图标资源
+   */
+  private resolveIcon(isBack: boolean, isSecondary: boolean): ResourceStr {
+    if (isBack) {
+      return $r('app.media.icon_back')
+    }
+    return isSecondary ? this.secondaryRightIcon : this.rightIcon
   }
 
   /**
@@ -156,7 +169,7 @@ export struct PanelNavBar {
       Row() {
         if (this.showBack) {
           Row() {
-            this.iconPod($r('app.media.icon_back'), true, false, '返回', () => {
+            this.iconPod(true, false, '返回', () => {
               if (this.onBack) { this.onBack() } else { routerStore.back() }
             })
           }
@@ -174,7 +187,6 @@ export struct PanelNavBar {
           Row({ space: TITLE_ACTION_BUTTON_GAP }) {
             if (this.rightIcon) {
               this.iconPod(
-                this.rightIcon,
                 false,
                 false,
                 this.rightIconAccessibilityText,
@@ -183,7 +195,6 @@ export struct PanelNavBar {
             }
             if (this.secondaryRightIcon) {
               this.iconPod(
-                this.secondaryRightIcon,
                 false,
                 true,
                 this.secondaryRightIconAccessibilityText,

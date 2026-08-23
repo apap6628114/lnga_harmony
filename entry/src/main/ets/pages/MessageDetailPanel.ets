@@ -14,6 +14,8 @@ import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/comp
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
+import { KEY_MESSAGE_VERSION } from '../common/constants/AppStorageKeys'
+import { bumpAppStorageVersion } from '../common/utils/AppStorageVersion'
 
 @Component
 export struct MessageDetailPanel {
@@ -48,6 +50,14 @@ export struct MessageDetailPanel {
 
   aboutToAppear(): void {
     this.loadMessages()
+  }
+
+  /**
+   * 关闭详情页时发布私信会话列表版本信号，
+   * 驱动通知面板私信 Tab 静默刷新（回复/已读变化后列表及时同步）。
+   */
+  aboutToDisappear(): void {
+    bumpAppStorageVersion(KEY_MESSAGE_VERSION)
   }
 
   private onMidChanged(): void {

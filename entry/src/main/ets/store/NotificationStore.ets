@@ -12,10 +12,12 @@ import {
 import { bumpAppStorageVersion } from '../common/utils/AppStorageVersion'
 import {
   countUnseenMessageNotifications,
-  countUnseenNotifications,
+  countUnseenNonMessageNotifications,
+  filterNonMessageNotifications,
   isMessageNotificationType,
-  markAllNotificationsSeen,
   markMessageNotificationsSeen,
+  markMessageNotificationsSeenByMid,
+  markNonMessageNotificationsSeen,
   markNotificationSeen,
   mergeNotifications
 } from '../common/utils/NotificationPolicy'
@@ -202,6 +204,18 @@ export class NotificationStore extends BaseStore<Object> {
   }
 
   /**
+   * 获取当前通知缓存中非私信通知的只读数组快照。
+   *
+   * 消息 Tab 仅展示非私信通知；私信通知保留在缓存中作为私信未读数
+   * 与私信 Tab 会话行已读（可索引 ID）的数据源。
+   *
+   * @returns 非私信通知数组快照
+   */
+  getCachedNonMessageNotifications(): NgaNotification[] {
+    return filterNonMessageNotifications(this.cachedNotifications)
+  }
+
+  /**
    * 将指定通知标记为已查看并持久化。
    *
    * @param notificationId - 本地稳定通知 ID
@@ -215,10 +229,10 @@ export class NotificationStore extends BaseStore<Object> {
   }
 
   /**
-   * 将全部通知标记为已查看。
+   * 将全部非私信通知标记为已查看（消息 Tab 全部已读不波及私信通知）。
    */
-  markAllSeen(): void {
-    if (!markAllNotificationsSeen(this.cachedNotifications)) {
+  markNonMessageSeen(): void {
+    if (!markNonMessageNotificationsSeen(this.cachedNotifications)) {
       this.publishState()
       return
     }
@@ -232,6 +246,23 @@ export class NotificationStore extends BaseStore<Object> {
   markMessagesSeen(): void {
     if (!markMessageNotificationsSeen(this.cachedNotifications)) {
       this.publishState()
+      return
+    }
+    this.publishState()
+    this.persistCachedNotifications()
+  }
+
+  /**
+   * 将指定会话（mid）的私信通知标记为已查看。
+   *
+   * 私信 Tab 会话行点击时调用：按可索引 ID（notificationId 内含 mid）
+   * 精确标记该会话对应的私信通知，不波及其它会话。
+   * 无状态变化（该会话通知已全部已读）时不发布任何信号。
+   *
+   * @param mid - 私信会话 ID
+   */
+  markMessagesSeenByMid(mid: string): void {
+    if (!markMessageNotificationsSeenByMid(this.cachedNotifications, mid)) {
       return
     }
     this.publishState()
@@ -256,9 +287,12 @@ export class NotificationStore extends BaseStore<Object> {
 
   /**
    * 发布统一红点和通知版本。
+   *
+   * unreadNotiCount 语义为「非私信通知未读数」（消息 Tab 角标与铃铛计数）；
+   * 私信未读数独立由 unreadMessageCount 承载。
    */
   private publishState(): void {
-    this.unreadNotiCount = countUnseenNotifications(this.cachedNotifications)
+    this.unreadNotiCount = countUnseenNonMessageNotifications(this.cachedNotifications)
     this.unreadMessageCount = countUnseenMessageNotifications(this.cachedNotifications)
     AppStorage.setOrCreate(KEY_UNREAD_NOTI_COUNT, this.unreadNotiCount)
     AppStorage.setOrCreate(KEY_UNREAD_MESSAGE_COUNT, this.unreadMessageCount)
