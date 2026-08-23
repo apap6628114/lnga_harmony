@@ -13,6 +13,7 @@ import { resolveEffectiveMuteTs } from '../../parser/MuteParser';
 import { appUserListEndpoints, extractAppUserTopicItems } from '../../parser/AppUserTopicParser';
 import type { AppUserListEndpoint } from '../../parser/AppUserTopicParser';
 import { extractAppUser, extractAppUserError } from '../../parser/AppUserParser';
+import { parseReputationList } from '../../parser/ReputationParser';
 import { formatTime, formatTimestampCST } from '../../common/utils/Utils';
 import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger';
 
@@ -164,26 +165,8 @@ export async function getUserProfile(token: string, uid: string): Promise<UserPr
     const medalStr = String(d['medal'] ?? '0');
     const hasMedal = medalStr !== '0' && medalStr !== '';
 
-    const repList: ReputationData[] = [];
-    if (d['reputation'] && typeof d['reputation'] === 'object') {
-      const repObj = d['reputation'] as Record<string, Object>;
-      const repKeys = Object.keys(repObj);
-      for (let i = 0; i < repKeys.length; i++) {
-        const entry = repObj[repKeys[i]];
-        if (Array.isArray(entry)) {
-          const arr = entry as Object[];
-          const repItem = new ReputationData();
-          repItem.name = String(arr[0] ?? '');
-          repItem.value = String(arr[1] ?? '');
-          repItem.reputation = Number(arr[2] ?? 0);
-          repItem.topicSubject = String(arr[3] ?? '');
-          repItem.postContent = String(arr[4] ?? '');
-          repItem.author = String(arr[5] ?? '');
-          repItem.time = Number(arr[6] ?? 0);
-          repList.push(repItem);
-        }
-      }
-    }
+    // 多版面声望（[名称, 数值, 描述] 三元组；非「威望历史记录」，见 ReputationParser）
+    const repList: ReputationData[] = parseReputationList(d['reputation']);
 
     const adminList: AdminForumsData[] = [];
     if (d['adminForums'] && typeof d['adminForums'] === 'object') {

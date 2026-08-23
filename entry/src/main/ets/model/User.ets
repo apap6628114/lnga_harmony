@@ -26,6 +26,7 @@ export class ProfileData {
   honor: string = '';
   yz: number = 0;
   money: string = '';
+  /** 接口冗余字段：实测与 rvrc 返回恒等值，UI 统一用 rvrc 展示威望（保留以对齐接口）。 */
   fame: string = '';
   rvrc: string = '';
   posts: string = '';
@@ -49,13 +50,22 @@ export class AdminForumsData {
   forumName: string = '';
 }
 
+/**
+ * 多版面声望条目（ucp.get 的 `reputation` 字段，APP 签名通道 __output=12）。
+ *
+ * 官方语义（对齐网页端 js_ucp.js 渲染）：reputation 表示「论坛/某版面/某用户
+ * 对目标用户的关系」，每个条目是 [名称, 数值, 描述] 三元组，如
+ * ["N币", 181, "用于N币商店兑换,作货币使用"]。
+ * 注意：这不是「威望历史记录」——NGA 无威望增删历史接口，历史各字段
+ * （主题/内容/作者/时间）在真实数据中不存在。
+ */
 export class ReputationData {
+  /** 声望名称（如「N币」）。 */
   name: string = '';
+  /** 数值字符串（如 "181"）。 */
   value: string = '';
+  /** 描述（如「用于N币商店兑换,作货币使用」）。 */
   desc: string = '';
+  /** 数值形态（Number(value)；解析时已防 NaN，当前 UI 未消费，保留对齐官方三元组）。 */
   reputation: number = 0;
-  topicSubject: string = '';
-  postContent: string = '';
-  author: string = '';
-  time: number = 0;
 }

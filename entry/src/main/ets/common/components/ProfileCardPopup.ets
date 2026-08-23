@@ -346,6 +346,8 @@ export struct ProfileCardPopup {
             this.StatItem(fmtNum(profile.posts), '发帖')
           }
           if (Number(profile.rvrc)) {
+            // 威望按官方 App 口径展示 rvrc（ucp.get 实测 rvrc 与 fame 恒等；
+            // App 作者信息条「威望」列与威望页均显示 rvrc 直接值）
             this.StatItem(fmtNum(profile.rvrc), '威望')
           }
           if (Number(profile.money)) {

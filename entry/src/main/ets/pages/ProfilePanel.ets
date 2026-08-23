@@ -9,7 +9,6 @@ import { AppColors, BreakpointType, ProfileActionIconColors } from '../common/co
 import { formatTime, fmtNum, formatMoney, escHtml } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { Avatar } from '../common/components/Avatar'
-import { AnonymousName } from '../common/components/AnonymousName'
 import { MakeNoteDialog } from '../common/dialogs/Dialogs'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { LoadingStateView, ErrorStateView } from '../common/components/PageStateView'
@@ -206,11 +205,14 @@ export struct ProfilePanel {
 
   /**
    * 构造个人主页统计项数组（数据驱动 Grid ForEach）。
-   * 当前四项：posts/money/fame 走 fmtNum；regdate 走 formatTime 或兜底「未知」。
+   * 当前四项：posts/rvrc 走 fmtNum，money 走 formatMoney；regdate 走 formatTime
+   * 或兜底「未知」。
    * 按产品需求移除的统计展示（其信息另有落点）：
    * - 会员组：头像区已有 group 徽章（UID 旁）；
    * - 被关注/关注：入口移至操作列表（"我的关注"进入关注/粉丝列表）。
-   * 威望按官方口径展示 fame/10（fame 为 ×10 存储的威望，见 NGA js_ucp.js）。
+   * 威望按官方 App 口径展示 rvrc（ucp.get 实测 rvrc 与 fame 返回恒等值；
+   * App 作者信息条「威望」列与威望页均显示 rvrc 直接值，js_ucp.js 的 fame/10
+   * 为网页端旧展示逻辑，不再采用）。
    */
   private buildStatItems(): StatItem[] {
     const items: StatItem[] = []
@@ -231,7 +233,7 @@ export struct ProfilePanel {
     const s3: StatItem = new StatItem()
     s3.iconRes = $r('app.media.icon_medal')
     s3.label = '威望'
-    s3.value = fmtNum(Math.floor(Number(p.fame) / 10))
+    s3.value = fmtNum(p.rvrc)
     items.push(s3)
 
     const s4: StatItem = new StatItem()
@@ -240,7 +242,33 @@ export struct ProfilePanel {
     s4.value = p.regdate ? formatTime(Number(p.regdate)) : '未知'
     items.push(s4)
 
+    if (p.reputationEntryList.length > 0) {
+      const s5: StatItem = new StatItem()
+      s5.iconRes = $r('app.media.icon_shield')
+      s5.label = '声望'
+      // 学金钱样式：网格统计项展示「数值 名称」（如「181 N币」），多条换行
+      s5.value = this.joinReputationValues(p.reputationEntryList)
+      items.push(s5)
+    }
+
     return items
+  }
+
+  /**
+   * 拼接多版面声望条目为「数值 名称」多行文本（如 "181 N币\n-5 声望X"）。
+   *
+   * @param list - 声望条目列表
+   * @returns 多行展示文本
+   */
+  private joinReputationValues(list: ReputationData[]): string {
+    let out: string = ''
+    for (let i = 0; i < list.length; i++) {
+      if (i > 0) out += '\n'
+      const value: string = list[i].value
+      const name: string = list[i].name
+      out += value.length > 0 ? value + ' ' + name : name
+    }
+    return out
   }
 
   build() {
@@ -336,6 +364,7 @@ export struct ProfilePanel {
                     }
                     .alignItems(VerticalAlign.Center)
                     Text(item.value).fontSize(14).fontWeight(FontWeight.Medium).fontColor(AppColors.textPrimary).margin({ top: 4 })
+                      .textAlign(TextAlign.Center)
                   }
                   .alignItems(HorizontalAlign.Center)
                   .width('100%')
@@ -397,72 +426,6 @@ export struct ProfilePanel {
               .borderRadius(12)
               .margin({ top: 12 })
               .alignItems(HorizontalAlign.Start)
-            }
-
-            if (this.profile!.reputationEntryList && this.profile!.reputationEntryList.length > 0) {
-              Column() {
-                Text('威望记录')
-                  .fontSize(13)
-                  .fontWeight(FontWeight.Bold)
-                  .fontColor(AppColors.textSecondary)
-                  .padding({ top: 12, bottom: 4, left: 16, right: 16 })
-
-                ForEach(this.profile!.reputationEntryList, (entry: ReputationData, index: number) => {
-                  Column() {
-                    Row() {
-                      Text(entry.reputation > 0 ? `+${entry.reputation}` : `${entry.reputation}`)
-                        .fontSize(13)
-                        .fontWeight(FontWeight.Medium)
-                        .fontColor(entry.reputation > 0 ? AppColors.success : entry.reputation < 0 ? AppColors.destructive : AppColors.textTertiary)
-                      Text(entry.time ? formatTime(entry.time) : '')
-                        .fontSize(12)
-                        .fontColor(AppColors.textTertiary)
-                        .layoutWeight(1)
-                        .textAlign(TextAlign.End)
-                    }
-                    .width('100%')
-                    if (entry.topicSubject) {
-                      Text(unescapeHtml(entry.topicSubject))
-                        .fontSize(13)
-                        .fontColor(AppColors.textPrimary)
-                        .maxLines(1)
-                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-                        .margin({ top: 2 })
-                        .width('100%')
-                    }
-                    if (entry.postContent) {
-                      Text(unescapeHtml(entry.postContent))
-                        .fontSize(12)
-                        .fontColor(AppColors.textTertiary)
-                        .maxLines(2)
-                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-                        .margin({ top: 2 })
-                        .width('100%')
-                    }
-                    Row() {
-                      Text('来自: ').fontSize(12).fontColor(AppColors.textTertiary)
-                      AnonymousName({
-                        author: entry.author ?? '',
-                        isAnonymous: (entry.author ?? '').startsWith('#anony_') &&
-                          (entry.author ?? '').length === 39,
-                        fontSize: 12
-                      })
-                    }
-                      .margin({ top: 2 })
-                      .width('100%')
-                  }
-                  .width('100%')
-                  .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-                  .border({ width: { top: index === 0 ? 0 : 0.5 }, color: AppColors.separator })
-                  .alignItems(HorizontalAlign.Start)
-                }, (entry: ReputationData, index: number) => `${index}`)
-              }
-              .width('92%')
-              .backgroundColor(AppColors.bgTertiary)
-              .borderRadius(12)
-              .margin({ top: 12 })
-              .alignItems(HorizontalAlign.Start)
-              .clip(true)
             }
 
             if (this.isOwnProfile) {
