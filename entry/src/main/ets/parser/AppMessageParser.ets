@@ -126,10 +126,13 @@ export function parseAppMessageList(raw: object, page: number): MessageListInfo 
 /**
  * 从官方 message/detail 响应解析会话内消息（映射为网页版 MessageDetailInfo 同形状）。
  *
- * 字段映射：id 不展示（会话 ID 由调用方持有）、subject/addTime/content 同名映射，
- * author/from 均取 user.username（网页版 author=发送人名、from=发送人名，语义一致）；
- * 官方版无 js_escap_avatar/yz/mute_time/signature/formated_html_data，置空
- * （UI 对 formated_html_data 为空走纯文本分支）。
+ * 字段映射：id→id（列表 key 唯一标识）、subject/addTime/content 同名映射，
+ * user.uid→uid（0 为系统消息）、user.username→author/from（网页版 author=发送人名、
+ * from=发送人名，语义一致）；官方版无 js_escap_avatar/yz/mute_time/signature/
+ * formated_html_data，置空（UI 对 formated_html_data 为空走纯文本分支）。
+ *
+ * 分页映射：官方响应顶层 nextPage（bool，true=还有更早消息）/currentPage（int），
+ * 与列表解析一致换算为整数页码（nextPage=0 表示没有更多）。
  *
  * 标题兜底：官方响应无 title 字段，以首条消息 subject 作为会话标题
  * （与网页版 data.title 语义近似）。
@@ -162,10 +165,15 @@ export function parseAppMessageDetail(raw: object, page: number): MessageDetailI
     }
     const user: Object | undefined = item['user']
     let username: string = ''
+    let userUid: string = ''
     if (user !== undefined && user !== null && typeof user === 'object' && !Array.isArray(user)) {
-      username = String((user as Record<string, Object>)['username'] ?? '')
+      const userRec: Record<string, Object> = user as Record<string, Object>
+      username = String(userRec['username'] ?? '')
+      userUid = String(userRec['uid'] ?? '')
     }
     const article: MessageArticle = {
+      id: String(id),
+      uid: userUid,
       subject: String(item['subject'] ?? ''),
       time: String(item['addTime'] ?? ''),
       content: normalizeAppMessageContent(String(item['content'] ?? '')),
@@ -181,11 +189,14 @@ export function parseAppMessageDetail(raw: object, page: number): MessageDetailI
     articles.push(article)
   }
 
+  const currentPageRaw: number = Number(rec['currentPage'] ?? 0)
+  const hasNext: boolean = rec['nextPage'] === true || rec['nextPage'] === 'true'
+  const currentPage: number = currentPageRaw > 0 ? currentPageRaw : page
   const allUsers: Object | undefined = rec['allUsers']
   const title: string = articles.length > 0 ? articles[0].subject : ''
   const info: MessageDetailInfo = {
-    nextPage: 0,
-    currentPage: page > 0 ? page : 1,
+    nextPage: hasNext ? currentPage + 1 : 0,
+    currentPage: currentPage > 0 ? currentPage : 1,
     // allUsers 官方为 JSON 串（回复页使用）；非字符串（对象/数字）时置空避免
     // String() 产生 "[object Object]"，UI 当前不消费该字段
     alluser: typeof allUsers === 'string' ? allUsers : '',

@@ -119,6 +119,9 @@ export default function appMessageUnitTest(): void {
       // <br> 系列换行标签转 \n，其余（BBCode）原样保留
       expect(article.content).assertEqual('第一行\n[quote]引用内容\n\n[/quote]\n结束')
       expect(article.time).assertEqual('1777225492')
+      // 官方 id 透传（列表 key 唯一标识）、user.uid 透传（自己/对方判断）
+      expect(article.id).assertEqual('253649708')
+      expect(article.uid).assertEqual('1001')
       // author/from 均取 user.username；无网页版字段置空
       expect(article.author).assertEqual('测试用户甲')
       expect(article.from).assertEqual('测试用户甲')
@@ -128,6 +131,22 @@ export default function appMessageUnitTest(): void {
       expect(info.title).assertEqual('你好')
       expect(info.currentPage).assertEqual(1)
       expect(info.nextPage).assertEqual(0)
+    })
+
+    it('parsesDetailNextPageAsPagePlusOne', 0, (): void => {
+      // 官方响应顶层 nextPage 为 bool：true 表示还有更早消息 → 下一页=currentPage+1
+      const raw: object = JSON.parse(
+        '{"code":0,"result":[' +
+          '{"id":11,"subject":"a","content":"c","addTime":1787000000,"user":{"uid":0,"username":"#SYSTEM#"}}' +
+          '],"currentPage":2,"nextPage":true}')
+      const info: MessageDetailInfo | null = parseAppMessageDetail(raw, 2)
+      expect(info !== null).assertTrue()
+      if (info === null) return
+      expect(info.currentPage).assertEqual(2)
+      expect(info.nextPage).assertEqual(3)
+      expect(info.messageEntryList.length).assertEqual(1)
+      expect(info.messageEntryList[0].id).assertEqual('11')
+      expect(info.messageEntryList[0].uid).assertEqual('0')
     })
 
     it('returnsEmptyListForEmptyResult', 0, (): void => {
