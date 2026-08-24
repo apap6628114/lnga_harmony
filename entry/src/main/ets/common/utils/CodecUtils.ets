@@ -86,6 +86,311 @@ export function emojiToHtmlEntity(str: string): string {
 }
 
 /**
+ * HTML 命名实体表（官方 `ft.c1.a` 实体表的常用子集）。
+ *
+ * 与官方语义对齐：未知实体名保留原文（`&name;` 原样输出）。
+ */
+const HTML_NAMED_ENTITIES: Record<string, string> = {
+  'amp': '&',
+  'lt': '<',
+  'gt': '>',
+  'quot': '"',
+  'apos': "'",
+  'nbsp': ' ',
+  'cent': '¢',
+  'pound': '£',
+  'yen': '¥',
+  'euro': '€',
+  'sect': '§',
+  'copy': '©',
+  'reg': '®',
+  'trade': '™',
+  'deg': '°',
+  'plusmn': '±',
+  'middot': '·',
+  'times': '×',
+  'divide': '÷',
+  'frac12': '½',
+  'frac14': '¼',
+  'frac34': '¾',
+  'sup1': '¹',
+  'sup2': '²',
+  'sup3': '³',
+  'micro': 'µ',
+  'para': '¶',
+  'hellip': '…',
+  'ndash': '–',
+  'mdash': '—',
+  'lsquo': '‘',
+  'rsquo': '’',
+  'sbquo': '‚',
+  'ldquo': '“',
+  'rdquo': '”',
+  'bdquo': '„',
+  'bull': '•',
+  'dagger': '†',
+  'Dagger': '‡',
+  'permil': '‰',
+  'laquo': '«',
+  'raquo': '»',
+  'iquest': '¿',
+  'szlig': 'ß',
+  'AElig': 'Æ',
+  'aelig': 'æ',
+  'Oslash': 'Ø',
+  'oslash': 'ø',
+  'Aring': 'Å',
+  'aring': 'å',
+  'agrave': 'à',
+  'aacute': 'á',
+  'acirc': 'â',
+  'atilde': 'ã',
+  'auml': 'ä',
+  'ccedil': 'ç',
+  'egrave': 'è',
+  'eacute': 'é',
+  'ecirc': 'ê',
+  'euml': 'ë',
+  'igrave': 'ì',
+  'iacute': 'í',
+  'icirc': 'î',
+  'iuml': 'ï',
+  'ntilde': 'ñ',
+  'ograve': 'ò',
+  'oacute': 'ó',
+  'ocirc': 'ô',
+  'otilde': 'õ',
+  'ouml': 'ö',
+  'ugrave': 'ù',
+  'uacute': 'ú',
+  'ucirc': 'û',
+  'uuml': 'ü',
+  'yacute': 'ý',
+  'yuml': 'ÿ',
+  'Agrave': 'À',
+  'Aacute': 'Á',
+  'Acirc': 'Â',
+  'Atilde': 'Ã',
+  'Auml': 'Ä',
+  'Ccedil': 'Ç',
+  'Egrave': 'È',
+  'Eacute': 'É',
+  'Ecirc': 'Ê',
+  'Euml': 'Ë',
+  'Igrave': 'Ì',
+  'Iacute': 'Í',
+  'Icirc': 'Î',
+  'Iuml': 'Ï',
+  'Ntilde': 'Ñ',
+  'Ograve': 'Ò',
+  'Oacute': 'Ó',
+  'Ocirc': 'Ô',
+  'Otilde': 'Õ',
+  'Ouml': 'Ö',
+  'Ugrave': 'Ù',
+  'Uacute': 'Ú',
+  'Ucirc': 'Û',
+  'Uuml': 'Ü',
+  'Yacute': 'Ý',
+  'THORN': 'Þ',
+  'thorn': 'þ',
+  'ETH': 'Ð',
+  'eth': 'ð',
+  'OElig': 'Œ',
+  'oelig': 'œ',
+  'Scaron': 'Š',
+  'scaron': 'š',
+  'Yuml': 'Ÿ',
+  'fnof': 'ƒ',
+  'Alpha': 'Α',
+  'Beta': 'Β',
+  'Gamma': 'Γ',
+  'Delta': 'Δ',
+  'Epsilon': 'Ε',
+  'Zeta': 'Ζ',
+  'Eta': 'Η',
+  'Theta': 'Θ',
+  'Iota': 'Ι',
+  'Kappa': 'Κ',
+  'Lambda': 'Λ',
+  'Mu': 'Μ',
+  'Nu': 'Ν',
+  'Xi': 'Ξ',
+  'Omicron': 'Ο',
+  'Pi': 'Π',
+  'Rho': 'Ρ',
+  'Sigma': 'Σ',
+  'Tau': 'Τ',
+  'Upsilon': 'Υ',
+  'Phi': 'Φ',
+  'Chi': 'Χ',
+  'Psi': 'Ψ',
+  'Omega': 'Ω',
+  'alpha': 'α',
+  'beta': 'β',
+  'gamma': 'γ',
+  'delta': 'δ',
+  'epsilon': 'ε',
+  'zeta': 'ζ',
+  'eta': 'η',
+  'theta': 'θ',
+  'iota': 'ι',
+  'kappa': 'κ',
+  'lambda': 'λ',
+  'mu': 'μ',
+  'nu': 'ν',
+  'xi': 'ξ',
+  'omicron': 'ο',
+  'pi': 'π',
+  'rho': 'ρ',
+  'sigmaf': 'ς',
+  'sigma': 'σ',
+  'tau': 'τ',
+  'upsilon': 'υ',
+  'phi': 'φ',
+  'chi': 'χ',
+  'psi': 'ψ',
+  'omega': 'ω',
+  'thetasym': 'ϑ',
+  'upsih': 'ϒ',
+  'piv': 'ϖ',
+  'ensp': ' ',
+  'emsp': ' ',
+  'thinsp': ' ',
+  'zwnj': '‌',
+  'zwj': '‍',
+  'lrm': '‎',
+  'rlm': '‏',
+  'prime': '′',
+  'Prime': '″',
+  'oline': '‾',
+  'frasl': '⁄',
+  'weierp': '℘',
+  'image': 'ℑ',
+  'real': 'ℜ',
+  'alefsym': 'ℵ',
+  'larr': '←',
+  'uarr': '↑',
+  'rarr': '→',
+  'darr': '↓',
+  'harr': '↔',
+  'crarr': '↵',
+  'lArr': '⇐',
+  'uArr': '⇑',
+  'rArr': '⇒',
+  'dArr': '⇓',
+  'hArr': '⇔',
+  'forall': '∀',
+  'part': '∂',
+  'exist': '∃',
+  'empty': '∅',
+  'nabla': '∇',
+  'isin': '∈',
+  'notin': '∉',
+  'ni': '∋',
+  'prod': '∏',
+  'sum': '∑',
+  'minus': '−',
+  'lowast': '∗',
+  'radic': '√',
+  'prop': '∝',
+  'infin': '∞',
+  'ang': '∠',
+  'and': '∧',
+  'or': '∨',
+  'cap': '∩',
+  'cup': '∪',
+  'int': '∫',
+  'there4': '∴',
+  'sim': '∼',
+  'cong': '≅',
+  'asymp': '≈',
+  'ne': '≠',
+  'equiv': '≡',
+  'le': '≤',
+  'ge': '≥',
+  'sub': '⊂',
+  'sup': '⊃',
+  'nsub': '⊄',
+  'sube': '⊆',
+  'supe': '⊇',
+  'oplus': '⊕',
+  'otimes': '⊗',
+  'perp': '⊥',
+  'sdot': '⋅',
+  'lceil': '⌈',
+  'rceil': '⌉',
+  'lfloor': '⌊',
+  'rfloor': '⌋',
+  'lang': '〈',
+  'rang': '〉',
+  'loz': '◊',
+  'spades': '♠',
+  'clubs': '♣',
+  'hearts': '♥',
+  'diams': '♦',
+};
+
+/**
+ * HTML 实体解码（对齐官方 `ft.c1.a` 语义）。
+ *
+ * 支持 `&name;` 命名实体（表内）与 `&#N;` 数字实体（十进制）；`&#xH;` 十六进制
+ * 与未知实体名按官方行为保留原文。数字实体码点 > 0xFFFF 时保留 `&#N;` 原样。
+ * 官方引用块（post/check 响应的 content）为 HTML 混合 BBCode 文本，提交前须
+ * 先经本函数解码再拼接（对应官方 quote 提交链 `d1.r(d1.w(content))` 的 `w`）。
+ *
+ * @param str - 原始文本
+ * @returns 实体解码后的文本
+ */
+export function decodeHtmlEntities(str: string): string {
+  if (str.length === 0) {
+    return '';
+  }
+  let result: string = '';
+  let cursor: number = 0;
+  while (cursor < str.length) {
+    const ampIndex: number = str.indexOf('&', cursor);
+    if (ampIndex < 0) {
+      result += str.substring(cursor);
+      break;
+    }
+    result += str.substring(cursor, ampIndex);
+    const semiIndex: number = str.indexOf(';', ampIndex + 1);
+    if (semiIndex < 0) {
+      result += str.substring(ampIndex);
+      break;
+    }
+    const nextAmp: number = str.indexOf('&', ampIndex + 1);
+    if (nextAmp >= 0 && nextAmp < semiIndex) {
+      // '&' 与最近的 ';' 之间又出现 '&'：按官方语义不构成实体，保留 '&' 继续扫描
+      result += '&';
+      cursor = ampIndex + 1;
+      continue;
+    }
+    const name: string = str.substring(ampIndex + 1, semiIndex);
+    let code: number = -1;
+    if (name.startsWith('#')) {
+      const parsed: number = Number(name.substring(1));
+      if (!Number.isNaN(parsed)) {
+        code = parsed;
+      }
+    } else {
+      const mapped: string | undefined = HTML_NAMED_ENTITIES[name];
+      if (mapped !== undefined) {
+        code = mapped.charCodeAt(0);
+      }
+    }
+    if (code >= 0 && code <= 0xFFFF) {
+      result += String.fromCharCode(code);
+    } else {
+      result += '&' + name + ';';
+    }
+    cursor = semiIndex + 1;
+  }
+  return result;
+}
+
+/**
  * 构造 application/x-www-form-urlencoded 请求体。
  * 所有字段按 UTF-8 百分号编码（官方 APP 签名通道与网页版通道均为 UTF-8 body；
  * 旧网页发帖通道的 GBK 字段编码已随 post.php 迁移移除）。

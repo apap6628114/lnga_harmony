@@ -4,6 +4,7 @@ import { getPostAuth, postReply, postComment, uploadAttachment } from '../../ser
 import type { UploadAttachmentResult } from '../../model/NgaApiResults'
 import { appStore } from '../../store/AppStore'
 import { Logger, DOMAIN_MANAGER } from '../utils/Logger'
+import { decodeHtmlEntities } from '../utils/CodecUtils'
 
 const logger = new Logger(DOMAIN_MANAGER, 'ReplyManager')
 
@@ -28,6 +29,8 @@ export class ReplyContext {
 export class ReplyManagerClass {
   private ctx: ReplyContext = new ReplyContext()
   private cachedAuth: PostAuthResult | null = null
+  /** cachedAuth 对应的 post/check action（reply/quote/tietiao/modify），action 变化时缓存失效。 */
+  private cachedAuthAction: string = ''
   private pendingAttachments: string = ''
   private pendingAttachmentsCheck: string = ''
 
@@ -181,6 +184,7 @@ export class ReplyManagerClass {
     this.ctx.targetPost = post
     this.ctx.quotePrefix = ''
     this.cachedAuth = null
+    this.cachedAuthAction = ''
     this.pendingAttachments = ''
     this.pendingAttachmentsCheck = ''
   }
@@ -193,6 +197,7 @@ export class ReplyManagerClass {
     this.ctx.targetPost = null
     this.ctx.quotePrefix = ''
     this.cachedAuth = null
+    this.cachedAuthAction = ''
     this.pendingAttachments = ''
     this.pendingAttachmentsCheck = ''
   }
@@ -247,12 +252,14 @@ export class ReplyManagerClass {
   }
 
   async getOrFetchAuth(): Promise<PostAuthResult> {
-    if (this.cachedAuth && this.cachedAuth.ok) {
-      return this.cachedAuth
-    }
     const actionParam: string = this.ctx.type === ReplyType.EDIT ? 'modify' :
       (this.ctx.type === ReplyType.COMMENT ? 'tietiao' :
         (this.ctx.type === ReplyType.FLOOR ? 'quote' : 'reply'))
+    // 缓存按 action 区分：quote 的 check 响应携带引用块 content（提交时必须带回），
+    // 复用其它 action 的 check 结果会导致引用块丢失；action 变化即重新请求。
+    if (this.cachedAuth && this.cachedAuth.ok && this.cachedAuthAction === actionParam) {
+      return this.cachedAuth
+    }
     const authResult: PostAuthResult = await getPostAuth(
       appStore.auth.token, this.ctx.fid, actionParam,
       this.ctx.tid, this.ctx.targetPost ? this.ctx.targetPost.pid : 0,
@@ -260,6 +267,7 @@ export class ReplyManagerClass {
     )
     if (authResult.ok) {
       this.cachedAuth = authResult
+      this.cachedAuthAction = actionParam
       // 编辑场景回填服务端返回的旧附件参数：修改带附件帖子时保留既有附件，
       // 新上传附件在此基础上累积（与官方 PostFragment 对 ActionCheck.attachArray 的
       // 回填一致）。仅在本地尚无附件参数时回填，避免覆盖上传累积结果。
@@ -344,8 +352,25 @@ export class ReplyManagerClass {
   }
 
   private async sendReply(userText: string, isAnonymous: boolean): Promise<PostReplyResult> {
-    // 官方一致：提交 content 仅为用户输入，不携带 [quote] 块（服务端按 pid 生成引用块）
-    const content: string = userText
+    // 引用（FLOOR）提交对齐官方 K0：content = post/check 响应引用块 + 用户输入。
+    // 官方 post/check（action=quote, pid=被引用楼层）在响应 content 字段返回服务端
+    // 预生成的引用块（[quote][pid=..,..,1]Reply[/pid] <b>Post by ...</b>...[/quote]），
+    // K0 提交时经 d1.r(d1.w())（实体解码 + <br/>→\n）拼到用户输入前随 action=quote
+    // 一起提交，服务端据此生成正式引用——仅靠 pid 参数不生效（迁移期曾丢弃该字段
+    // 导致引用失效）。响应缺失引用块时回退本地构造（[quote][pid=..] 标记，
+    // 与网页端引用同款格式），保证引用标记必然随 content 提交。
+    let content: string = userText
+    if (this.ctx.type === ReplyType.FLOOR) {
+      let quoteBlock: string = ''
+      const checkContent: string = this.cachedAuth !== null && this.cachedAuthAction === 'quote'
+        ? this.cachedAuth.content : ''
+      if (checkContent.length > 0) {
+        quoteBlock = decodeHtmlEntities(checkContent).replace(/<br\s*\/?>/gi, '\n')
+      } else if (this.ctx.targetPost !== null) {
+        quoteBlock = this.buildQuotePrefix(this.ctx.targetPost, this.ctx.tid, 1)
+      }
+      content = quoteBlock + userText
+    }
     const pid: number = this.ctx.targetPost ? this.ctx.targetPost.pid : 0
     return postReply(
       appStore.auth.token, this.ctx.tid, this.ctx.fid,

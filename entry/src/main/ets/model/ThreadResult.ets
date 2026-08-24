@@ -36,6 +36,11 @@ export class PostAuthResult extends ApiResult {
   auth: string = '';
   attachUrl: string = '';
   if_moderator: number = 0;
+  /** post/check 响应 content：楼层引用（quote）时为服务端预生成的引用块
+   *  （`[quote][pid=..,..,1]Reply[/pid] <b>Post by ...</b>...[/quote]`，HTML 混合
+   *  BBCode）；提交 quote 时必须随 content 带回（官方 K0/L0 拼接语义）；modify
+   *  时为编辑回显正文。其余 action 通常为空串。 */
+  content: string = '';
   /** 编辑场景已存在附件的提交参数（attachArray 解析后 tab 拼接，编辑提交时回填保留）。 */
   attachments: string = '';
   /** 编辑场景已存在附件的校验参数（attachCheckArray 解析后 tab 拼接）。 */

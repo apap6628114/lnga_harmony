@@ -406,6 +406,10 @@ export async function getPostAuth(token: string, fid: number, action: string,
     result.auth = String(payload['auth'] ?? '');
     result.attachUrl = String(payload['attach_url'] ?? '');
     result.if_moderator = Number(payload['if_moderator'] ?? 0);
+    // 引用（quote）场景：服务端按 pid 预生成引用块返回在 content 字段，提交 quote
+    // 时必须随 content 带回（官方 K0 的 d1.r(d1.w(actionCheck.getContent())) 拼接）；
+    // modify 场景为编辑回显正文。其余 action 通常为空串。
+    result.content = String(payload['content'] ?? '');
     // 编辑（modify）场景：服务端回传已存在附件的提交参数，供提交时保留旧附件
     result.attachments = parseAttachArrayValue(payload['attachArray']);
     result.attachmentsCheck = parseAttachArrayValue(payload['attachCheckArray']);
