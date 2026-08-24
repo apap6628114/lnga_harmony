@@ -6,6 +6,7 @@
  * - `parseAllPostArgs`：扫描所有 commonui.postArg.proc(...) 调用，解析为 PostArgData
  * - `extractUserInfo`：提取 commonui.userInfo.setAll(...) 的用户信息对象
  * - `extractTotalReplies`：从 setDefault 固定参数位提取总回复数
+ * - `extractAlertInfo`：扫描 commonui.loadAlertInfo(...) 调用，提取楼层改动信息（alterinfo）
  *
  * `()` 参数体提取统一走 `scanBalanced`（见 ScanState.ets），调用方去除外层括号。
  */
@@ -16,6 +17,7 @@ import { preprocessJson } from '../../NgaJsonSanitizer';
 const PROC_MARKER: string = 'commonui.postArg.proc(';
 const SETALL_MARKER: string = 'commonui.userInfo.setAll(';
 const SETDEFAULT_MARKER: string = 'commonui.postArg.setDefault(';
+const ALERT_MARKER: string = 'commonui.loadAlertInfo(';
 
 /**
  * 单条 postArg.proc 调用解析后的结构化数据。
@@ -295,4 +297,81 @@ function extractSetDefaultVote(html: string): string {
   return '';
 }
 
-export { PostArgData, splitTopLevelArgs, parseAllPostArgs, extractUserInfo, extractTotalReplies, extractLastPostTs, extractSetDefaultVote };
+/**
+ * 从 `commonui.loadAlertInfo(alterinfo, containerId)` 调用提取楼层改动信息。
+ *
+ * 页面为每个被编辑/被操作的楼层渲染
+ * `<span id='alertc<lou>'></span><script>commonui.loadAlertInfo('[E<ts> 0 0]\t','alertc<lou>')</script>`，
+ * 第一参数即 JSON API 的 `row.alterinfo` 原串（`[E...]` 编辑 / `[A...]` 加分 / `[L...]` /
+ * `[U...]` 前缀，含尾随制表符），第二参数为容器 id `alertc<lou>`（lou 即页面楼层号）。
+ * 无改动的楼层不渲染该调用。
+ *
+ * @param html NGA 帖子页 HTML
+ * @returns 页面楼层号（alertc 容器号）到 alterinfo 原串的映射
+ */
+function extractAlertInfo(html: string): Map<number, string> {
+  const result: Map<number, string> = new Map();
+  let searchFrom: number = 0;
+  while (true) {
+    const startIdx: number = html.indexOf(ALERT_MARKER, searchFrom);
+    if (startIdx < 0) {
+      break;
+    }
+    const openPos: number = startIdx + ALERT_MARKER.length - 1;
+    const matched = scanBalanced(html, openPos, '(', ')');
+    if (!matched.value) {
+      break;
+    }
+    const argsStr: string = matched.value.substring(1, matched.value.length - 1);
+    const args: string[] = splitTopLevelArgs(argsStr);
+    if (args.length >= 2) {
+      const alterinfo: string = unescapeJsString(stripQuotes(args[0].trim()));
+      const container: string = stripQuotes(args[1].trim());
+      const louMatch: RegExpExecArray | null = /^alertc(\d+)$/.exec(container);
+      if (louMatch && alterinfo.length > 0) {
+        result.set(parseInt(louMatch[1], 10), alterinfo);
+      }
+    }
+    searchFrom = startIdx + ALERT_MARKER.length;
+  }
+  return result;
+}
+
+/**
+ * 还原 JS 字符串字面量中的常见转义（`\\`、`\'`、`\"`、`\t`、`\n`、`\r`）。
+ *
+ * alterinfo 由服务端生成（`[E<ts> 0 0]\t` 形态），正常不含引号，但页面 JS 转义
+ * 可能引入 `\'`/`\\`，此处保守还原以避免污染提交/展示。
+ *
+ * @param s 原始字符串（已去外层引号）
+ * @returns 还原转义后的字符串
+ */
+function unescapeJsString(s: string): string {
+  let result: string = '';
+  for (let i: number = 0; i < s.length; i++) {
+    const ch: string = s[i];
+    if (ch === '\\' && i + 1 < s.length) {
+      const next: string = s[i + 1];
+      if (next === '\\' || next === "'" || next === '"') {
+        result += next;
+        i++;
+      } else if (next === 't') {
+        result += '\t';
+        i++;
+      } else if (next === 'n') {
+        result += '\n';
+        i++;
+      } else if (next === 'r') {
+        result += '\r';
+        i++;
+      } else {
+        result += ch;
+      }
+    } else {
+      result += ch;
+    }
+  }
+  return result;
+}
+
+export { PostArgData, splitTopLevelArgs, parseAllPostArgs, extractUserInfo, extractTotalReplies, extractLastPostTs, extractSetDefaultVote, extractAlertInfo };

@@ -94,6 +94,7 @@ function createAppHtmlFixture(): string {
     '\'205511\',1748251672,\'0,0,0\',\'4\',\'\',\'\',\'7 iOS\',\'\',null);' +
     'commonui.postArg.proc(\'_824921555\',null,null,null,null,null,null,null,null,null,' +
     '824921555,1,null,\'205511\',1748252378,\'0,0,0\',null,\'\',\'\',null,\'\',null,0,0);' +
+    'commonui.loadAlertInfo(\'[E1748252294 0 0]\t\',\'alertc0\');' +
     '</script>'
 }
 
@@ -139,6 +140,19 @@ export default function appThreadUnitTest(): void {
       expect(data['__ROWS']).assertEqual(541)
       expect(data['__R__ROWS_PAGE']).assertEqual(20)
       expect(topic['lastpost']).assertEqual(1787358664)
+    })
+
+    it('extractsAlterinfoFromAlertContainer', 0, (): void => {
+      // 页面 `commonui.loadAlertInfo('[E<ts> 0 0]\t','alertc<lou>')` 的第一参数与 JSON API
+      // row.alterinfo 同源（编辑/加分/处罚信息），必须随楼层行恢复，供客户端展示编辑时间。
+      const raw: Record<string, Object> = parseHtmlToRawJson(createAppHtmlFixture()) as Record<string, Object>
+      const data: Record<string, Object> = raw['data'] as Record<string, Object>
+      const rows: Record<string, Object> = data['__R'] as Record<string, Object>
+      const main: Record<string, Object> = rows['0'] as Record<string, Object>
+      expect(main['alterinfo']).assertEqual('[E1748252294 0 0]\t')
+      // 未渲染 loadAlertInfo 的楼层保持空串（与 JSON 无改动行一致）
+      const result = parseThreadData(raw)
+      expect(result.rowList[0].alterinfo).assertEqual('[E1748252294 0 0]\t')
     })
 
     it('keepsFilteredThreadPageSuccessful', 0, (): void => {

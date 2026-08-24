@@ -10,7 +10,7 @@
  * 组装为 __R/__U/__T/__F/__ROWS/__R__ROWS_PAGE/__PAGE 结构。
  */
 
-import { PostArgData, parseAllPostArgs, extractUserInfo, extractTotalReplies, extractLastPostTs, extractSetDefaultVote } from './PostArgScanner';
+import { PostArgData, parseAllPostArgs, extractUserInfo, extractTotalReplies, extractLastPostTs, extractSetDefaultVote, extractAlertInfo } from './PostArgScanner';
 import {
   extractPostContent, extractPostSubject, extractPostDate,
   extractForumName, extractThreadSubject, extractPostAuthorName,
@@ -66,6 +66,10 @@ export function parseHtmlToRawJson(html: string): object {
   });
   procKeys.sort((a: number, b: number): number => a - b);
 
+  // 楼层改动信息（编辑/加分/处罚）：页面 `commonui.loadAlertInfo('[...]','alertc<lou>')`
+  // 的第一参数即 JSON API 的 row.alterinfo 原串，按 alertc 容器号（=页面楼层号）关联
+  const alertInfo: Map<number, string> = extractAlertInfo(html);
+
   for (let i: number = 0; i < procKeys.length; i++) {
     const lou: number = procKeys[i];
     const arg: PostArgData | undefined = postArgs.get(lou);
@@ -103,7 +107,7 @@ export function parseHtmlToRawJson(html: string): object {
       'from_client': arg.fromClient as Object,
       'from_client_model': arg.fromClientModel as Object,
       'vote': (lou === 0 ? topicVote : '') as Object,
-      'alterinfo': '' as Object,
+      'alterinfo': (alertInfo.get(lou) ?? '') as Object,
       'isanonymous': false as Object,
       'attachs': attachs as Object,
       'hotreply': (hotReplies ?? noHotReplies) as Object,

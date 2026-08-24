@@ -31,7 +31,8 @@ import {
  * - 字段：hotreply（热门回复）/ comment（楼中楼评论）/ signature / js_escap_avatar 等
  *   （JSON 有值而 HTML 输出无此字段，统计进 missingFields 报告）
  * - __U 用户字段：avatar/signature/mute_time/__GROUPS 页面 setAll 不提供
- * - alterinfo（如"主楼"标记）：HTML 行硬编码为空
+ * - alterinfo：主楼层已从 `commonui.loadAlertInfo('[E...]','alertc<lou>')` 恢复
+ *   （与 JSON row.alterinfo 同源）；hotreply 元素 alterinfo 恒为空串（JSON 亦为空）
  *
  * 无样本时不失败：先运行 scripts/fetch-thread-pair.mjs 抓取并登记后再生效。
  */
