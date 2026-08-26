@@ -109,6 +109,98 @@ export function extractSubjectTopicItems(raw: object): Record<string, Object>[] 
 }
 
 /**
+ * 把归一化后的主题条目数组构造为 parseTopicList 兼容形状的原始响应，
+ * 并换算为 TopicListInfo（不分页接口专用）。
+ *
+ * 置顶/热帖接口（subject/topped、subject/hot）实测均不分页：服务端一次性
+ * 返回全部条目，响应无 totalPage 字段。这里用 __ROWS=N、__T__ROWS_PAGE=N
+ * 使 calcPagination 得出 totalPages=1（ceil(N/N)），避免 UI 诱导翻页。
+ *
+ * @param rawArr - 归一化主题条目数组
+ * @param blacklist - 用户黑名单 UID
+ * @param keywords - 标题屏蔽关键词
+ * @param page - 当前页码
+ * @returns 主题列表信息
+ */
+function buildFlatTopicListInfo(rawArr: Record<string, Object>[], blacklist: Set<string>,
+  keywords: string[], page: number): TopicListInfo {
+  const t: Record<string, Object> = {};
+  for (let i = 0; i < rawArr.length; i++) {
+    t[String(i)] = rawArr[i];
+  }
+  const dataObj: Record<string, Object> = {};
+  dataObj['__T'] = t;
+  dataObj['__ROWS'] = rawArr.length;
+  dataObj['__T__ROWS_PAGE'] = rawArr.length;
+  const fakeRaw: Record<string, Object> = {};
+  fakeRaw['data'] = dataObj;
+  fakeRaw['time'] = Math.floor(Date.now() / 1000);
+  return parseTopicList(fakeRaw, blacklist, keywords, page);
+}
+
+/**
+ * 解析官方 subject/topped 置顶列表响应。
+ *
+ * 实测响应形状（fid=7，登录态）：{code, msg, result:{data:[...]}}——
+ * result.data 为置顶主题数组（元素字段与 subject/list 同构），无
+ * totalPage/subForum 字段，且服务端忽略 page 参数、恒返回全部置顶帖。
+ * 数据元素复用 normalizeSubjectTopicItem 归一化。
+ *
+ * @param raw - 官方接口响应
+ * @param blacklist - 用户黑名单 UID
+ * @param keywords - 标题屏蔽关键词
+ * @param page - 当前页码（置顶恒为 1）
+ * @returns 主题列表信息；业务失败或形状不可识别时返回 null
+ */
+export function parseToppedList(raw: object, blacklist: Set<string>, keywords: string[],
+  page: number): TopicListInfo | null {
+  const rawArr: Record<string, Object>[] | null = extractSubjectTopicItems(raw);
+  if (rawArr === null) {
+    return null;
+  }
+  return buildFlatTopicListInfo(rawArr, blacklist, keywords, page);
+}
+
+/**
+ * 解析官方 subject/hot 热帖列表响应。
+ *
+ * 实测响应形状（fid=7，登录态）：{code, expire_at, attachPrefix, bit_data,
+ * result:[...]}——result 为**扁平主题数组**（与 subject/list 的
+ * result.data 不同），无 msg/totalPage 字段；_page 参数被服务端忽略，
+ * 恒返回该时间窗（days）的完整热度榜。元素字段与 subject/list 同构，
+ * 复用 normalizeSubjectTopicItem 归一化。响应无 time 字段，curTime 以
+ * 本地时间兜底（与 parseSubjectList 同口径）。
+ *
+ * @param raw - 官方接口响应
+ * @param blacklist - 用户黑名单 UID
+ * @param keywords - 标题屏蔽关键词
+ * @param page - 当前页码（热帖恒为 1）
+ * @returns 主题列表信息；业务失败或形状不可识别时返回 null
+ */
+export function parseHotSubjectList(raw: object, blacklist: Set<string>, keywords: string[],
+  page: number): TopicListInfo | null {
+  const rec: Record<string, Object> = raw as Record<string, Object>;
+  const code: number = Number(rec['code'] ?? 0);
+  if (code !== 0) {
+    return null;
+  }
+  const res: Object | undefined = rec['result'];
+  if (res === undefined || res === null || !Array.isArray(res)) {
+    return null;
+  }
+  const arr: Object[] = res as Object[];
+  const rawArr: Record<string, Object>[] = [];
+  for (let i = 0; i < arr.length; i++) {
+    const item: Object | undefined = arr[i];
+    if (item === undefined || item === null || typeof item !== 'object' || Array.isArray(item)) {
+      continue;
+    }
+    rawArr.push(normalizeSubjectTopicItem(item as Record<string, Object>));
+  }
+  return buildFlatTopicListInfo(rawArr, blacklist, keywords, page);
+}
+
+/**
  * 把官方 subject 系单个主题条目归一化为 parseTopicList 兼容形状。
  *
  * @param item - 官方接口条目

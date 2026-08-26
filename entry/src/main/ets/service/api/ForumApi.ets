@@ -5,10 +5,15 @@
 import { ngaClient, Cookies } from '../NgaClient';
 import { appStore } from '../../store/AppStore';
 import { parseForumCategories, parseForumSearch } from '../../parser/ForumParser';
-import { parseSubjectList, extractSubjectListError } from '../../parser/AppSubjectListParser';
+import { parseSubjectList, extractSubjectListError, parseToppedList,
+  parseHotSubjectList } from '../../parser/AppSubjectListParser';
 import {
   buildSubjectQuery,
   buildSubjectSignParams,
+  buildToppedQuery,
+  buildToppedSignParams,
+  buildHotQuery,
+  buildHotSignParams,
   buildSubscriptionFields,
   buildSubscriptionSignParams,
 } from '../../common/utils/SubjectListQuery';
@@ -110,12 +115,17 @@ export interface TopicListParams {
   searchpost: string;
   content: string;
   fidgroup: string;
+  /** 置顶模式版块 fid（非空时走官方 subject/topped，页面层排序模式置顶时设置）。 */
+  topped: string;
+  /** 热门模式时间窗天数（'1' | '7' | '30'，非空时走官方 subject/hot）。 */
+  hotDays: string;
 }
 
 export function createTopicListParams(): TopicListParams {
   return {
     fid: '', stid: '', page: '1', key: '', author: '', authorid: '',
     favor: '', recommend: '', orderBy: '', searchpost: '', content: '', fidgroup: '',
+    topped: '', hotDays: '',
   };
 }
 
@@ -223,6 +233,97 @@ async function getAppFavoriteTopicList(token: string, params: TopicListParams,
   return null;
 }
 
+/**
+ * 使用官方 APP 签名接口抓取版块置顶列表（app_api.php subject/topped）。
+ *
+ * 官方 kt.c.r0 同款：params 为 topped=fid + page，signParams=fid，
+ * __output=12。实测响应 {code, msg, result:{data:[...]}} 与 subject/list
+ * 同构但无分页字段——服务端忽略 page、恒返回全部置顶帖（解析侧
+ * parseToppedList 直接构造单页 TopicListInfo）。
+ *
+ * @param token - 当前应用会话令牌
+ * @param params - 页面层主题列表参数（topped 为置顶模式版块 fid）
+ * @param blacklist - 用户黑名单 UID
+ * @param keywords - 标题屏蔽关键词
+ * @returns 主题列表信息；失败时返回 null
+ */
+async function getAppToppedTopicList(token: string, params: TopicListParams,
+  blacklist: Set<string>, keywords: string[]): Promise<TopicListInfo | null> {
+  const session = appStore.getSession(token);
+  if (!session) {
+    return null;
+  }
+  const cookies: Cookies = { uid: session.uid, cid: session.cid };
+  const appParams: Record<string, string> = buildToppedQuery(params.topped, params.page);
+  const signParams: string = buildToppedSignParams(params.topped);
+  try {
+    const raw: Record<string, Object> = await ngaClient.postSigned(
+      '/app_api.php', 'subject', 'topped', appParams, cookies, signParams, '12') as Record<string, Object>;
+    const error: string | null = extractSubjectListError(raw);
+    if (error !== null) {
+      logger.warn('[NGA][REQ] 置顶列表官方接口业务失败(topped=%{public}s code-msg=%{public}s)',
+        params.topped, error);
+      return null;
+    }
+    const info: TopicListInfo | null = parseToppedList(raw, blacklist, keywords, 1);
+    if (info !== null) {
+      return info;
+    }
+    logger.warn('[NGA][REQ] 置顶列表官方接口无数据(topped=%{public}s)', params.topped);
+  } catch (e) {
+    logger.warn('[NGA][REQ] 置顶列表官方接口异常(topped=%{public}s): %{public}s',
+      params.topped, formatError(e));
+  }
+  return null;
+}
+
+/**
+ * 使用官方 APP 签名接口抓取版块热门列表（app_api.php subject/hot）。
+ *
+ * 官方 kt.c.O 同款：params 为 fid + days + _page，signParams=fid+days，
+ * __output=12。实测响应 {code, expire_at, attachPrefix, bit_data,
+ * result:[扁平数组]}——result 直接是主题数组（与 subject/list 的
+ * result.data 不同），无分页字段、无 msg；_page 被服务端忽略，恒返回
+ * 该时间窗（days=1/7/30）完整热度榜（解析侧 parseHotSubjectList
+ * 直接构造单页 TopicListInfo）。
+ *
+ * @param token - 当前应用会话令牌
+ * @param params - 页面层主题列表参数（hotDays 为时间窗天数）
+ * @param blacklist - 用户黑名单 UID
+ * @param keywords - 标题屏蔽关键词
+ * @returns 主题列表信息；失败时返回 null
+ */
+async function getAppHotTopicList(token: string, params: TopicListParams,
+  blacklist: Set<string>, keywords: string[]): Promise<TopicListInfo | null> {
+  const session = appStore.getSession(token);
+  if (!session) {
+    return null;
+  }
+  const cookies: Cookies = { uid: session.uid, cid: session.cid };
+  const appParams: Record<string, string> = buildHotQuery(params.fid, params.hotDays);
+  const signParams: string = buildHotSignParams(params.fid, params.hotDays);
+  try {
+    const raw: Record<string, Object> = await ngaClient.postSigned(
+      '/app_api.php', 'subject', 'hot', appParams, cookies, signParams, '12') as Record<string, Object>;
+    const error: string | null = extractSubjectListError(raw);
+    if (error !== null) {
+      logger.warn('[NGA][REQ] 热门列表官方接口业务失败(fid=%{public}s days=%{public}s code-msg=%{public}s)',
+        params.fid, params.hotDays, error);
+      return null;
+    }
+    const info: TopicListInfo | null = parseHotSubjectList(raw, blacklist, keywords, 1);
+    if (info !== null) {
+      return info;
+    }
+    logger.warn('[NGA][REQ] 热门列表官方接口无数据(fid=%{public}s days=%{public}s)',
+      params.fid, params.hotDays);
+  } catch (e) {
+    logger.warn('[NGA][REQ] 热门列表官方接口异常(fid=%{public}s days=%{public}s): %{public}s',
+      params.fid, params.hotDays, formatError(e));
+  }
+  return null;
+}
+
 export async function getTopicList(token: string, params: TopicListParams,
   blacklist: Set<string> = new Set(),
   keywords: string[] = []): Promise<TopicListResult> {
@@ -260,6 +361,41 @@ export async function getTopicList(token: string, params: TopicListParams,
     logger.warn('[NGA][REQ] 收藏夹列表官方接口失败(favor=%{public}s page=%{public}s)',
       params.favor, params.page);
     result.error = '收藏列表加载失败';
+    return result;
+  }
+
+  // 置顶列表仅走官方 APP 签名接口（app_api.php subject/topped，官方
+  // kt.c.r0 同款）：topped=fid + page，signParams=fid；实测服务端不分页、
+  // 恒返回全部置顶帖。topped 为空串（非置顶模式）时不进入本分支。
+  // 注意：置顶模式与 key（搜索）/author（作者名）互斥，页面层无同时
+  // 设置路径（搜索走 SearchPanel 独立页面）；若未来组合出现，key/author
+  // 会被本分支静默忽略，与普通列表分支对 author 显式报错的口径不同。
+  if (params.topped.length > 0) {
+    const appInfo: TopicListInfo | null = await getAppToppedTopicList(token, params, blacklist, keywords);
+    if (appInfo) {
+      result.data = appInfo;
+      result.ok = true;
+      return result;
+    }
+    logger.warn('[NGA][REQ] 置顶列表官方接口失败(topped=%{public}s page=%{public}s)',
+      params.topped, params.page);
+    result.error = '置顶列表加载失败';
+    return result;
+  }
+
+  // 热门列表仅走官方 APP 签名接口（app_api.php subject/hot，官方 kt.c.O
+  // 同款）：fid + days + _page，signParams=fid+days；实测服务端忽略 _page、
+  // 恒返回该时间窗完整热度榜（days=1/7/30）。
+  if (params.hotDays.length > 0) {
+    const appInfo: TopicListInfo | null = await getAppHotTopicList(token, params, blacklist, keywords);
+    if (appInfo) {
+      result.data = appInfo;
+      result.ok = true;
+      return result;
+    }
+    logger.warn('[NGA][REQ] 热门列表官方接口失败(fid=%{public}s days=%{public}s)',
+      params.fid, params.hotDays);
+    result.error = '热门列表加载失败';
     return result;
   }
 

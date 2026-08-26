@@ -3,17 +3,24 @@ import {
   extractSubjectListError,
   parseSubjectList,
   parseSubjectSubBoards,
+  parseToppedList,
+  parseHotSubjectList,
   convertTitleFontApi,
 } from '../main/ets/parser/AppSubjectListParser'
 import { parseForumCategories, parseForumSearch } from '../main/ets/parser/ForumParser'
 import {
   buildSubjectQuery,
   buildSubjectSignParams,
+  buildToppedQuery,
+  buildToppedSignParams,
+  buildHotQuery,
+  buildHotSignParams,
   buildSubscriptionFields,
   buildSubscriptionSignParams,
   buildSubscriptionType,
   normalizeSubjectFid,
 } from '../main/ets/common/utils/SubjectListQuery'
+import { getHotDays } from '../main/ets/common/utils/TopicListUtils'
 import type { TopicListInfo } from '../main/ets/model/Topic'
 import type { SubBoard, Category, ForumSearchItem } from '../main/ets/model/Forum'
 import type { TopicListParams } from '../main/ets/service/api/ForumApi'
@@ -152,6 +159,98 @@ function createParams(): TopicListParams {
   return {
     fid: '', stid: '', page: '1', key: '', author: '', authorid: '',
     favor: '', recommend: '', orderBy: '', searchpost: '', content: '', fidgroup: '',
+    topped: '', hotDays: '',
+  }
+}
+
+/**
+ * 构造官方 subject/topped 置顶列表响应（实测形状，nga-hack app-json 探测 fid=7）。
+ *
+ * {code, msg, result:{data:[...]}}——与 subject/list 同构但无 totalPage/
+ * subForum 字段；服务端忽略 page 参数、恒返回全部置顶帖（实测 fid=7 共 18 条）。
+ *
+ * @returns 官方响应
+ */
+function createToppedListResponse(): Record<string, Object> {
+  const topic1: Record<string, Object> = {
+    'tid': 17326655,
+    'fid': 7,
+    'author': 'zeg',
+    'authorid': 58,
+    'subject': '[置顶]版头公告与版规',
+    'postdate': 1500000000,
+    'lastpost': 1787743598,
+    'lastposter': 'zeg',
+    'replies': 0,
+    'type': 2097152,
+    'forumname': '艾泽拉斯议事厅',
+  }
+  const topic2: Record<string, Object> = {
+    'tid': 47344551,
+    'fid': 7,
+    'author': '皮纳特丶',
+    'authorid': 64371487,
+    'subject': '[置顶]开荒战报集合帖',
+    'postdate': 1786338953,
+    'lastpost': 1787343739,
+    'lastposter': 'IceLibra',
+    'replies': 504,
+    'type': 73732,
+    'forumname': '',
+  }
+  const result: Record<string, Object> = {
+    'data': [topic1, topic2],
+  }
+  return {
+    'code': 0,
+    'msg': '操作成功',
+    'result': result,
+  }
+}
+
+/**
+ * 构造官方 subject/hot 热帖列表响应（实测形状，nga-hack app-json 探测 fid=7 days=1）。
+ *
+ * {code, expire_at, attachPrefix, bit_data, result:[扁平主题数组]}——result
+ * 直接是数组（与 subject/list 的 result.data 不同），无 msg/totalPage；
+ * _page 参数被服务端忽略（实测 days=1 返回 32 条、days=7 返回 230 条、
+ * days=30 返回 930 条完整热度榜）。
+ *
+ * @returns 官方响应
+ */
+function createHotSubjectListResponse(): Record<string, Object> {
+  const topic1: Record<string, Object> = {
+    'tid': 47442318,
+    'fid': 7,
+    'author': 'hiroqq',
+    'authorid': 60884047,
+    'subject': '商城新坐骑，有什么好说的，直接冲雷子就对了！',
+    'postdate': 1787713440,
+    'lastpost': 1787743350,
+    'lastposter': '吹唢呐的猫7262',
+    'replies': 170,
+    'type': 8196,
+    'forumname': '',
+  }
+  const topic2: Record<string, Object> = {
+    'tid': 47442690,
+    'fid': 7,
+    'author': '测试用户',
+    'authorid': 100,
+    'subject': '[吐槽氵] 两天休闲团是怎么管理团队的',
+    'postdate': 1787723936,
+    'lastpost': 1787743606,
+    'lastposter': '有时午夜有彩虹',
+    'replies': 27,
+    'type': 0,
+    'forumname': '',
+  }
+  return {
+    'expire_at': 1787747245,
+    'attachPrefix': 'https://img.nga.cn/attachments/',
+    'bit_data': 134217832,
+    'code': 0,
+    'result': [topic1, topic2],
   }
 }
 
@@ -483,6 +582,149 @@ export default function appTopicListUnitTest(): void {
       expect(buildSubjectSignParams(stidParams)).assertEqual('')
       /* 空参数 */
       expect(buildSubjectSignParams(createParams())).assertEqual('')
+    })
+
+    it('buildsToppedQueryAndSignParams', 0, () => {
+      /* 置顶变体（官方 kt.c.r0）：topped=fid + page，无 order_by/recommend */
+      const query: Record<string, string> = buildToppedQuery('7', '1')
+      expect(query['topped']).assertEqual('7')
+      expect(query['page']).assertEqual('1')
+      expect(query['order_by']).assertUndefined()
+      /* page 缺省兜底 1 */
+      const defaultPage: Record<string, string> = buildToppedQuery('-195362', '')
+      expect(defaultPage['topped']).assertEqual('-195362')
+      expect(defaultPage['page']).assertEqual('1')
+      /* signParams = topped 值原样（官方 r0 无 356→323 归一化） */
+      expect(buildToppedSignParams('356')).assertEqual('356')
+      expect(buildToppedSignParams('7')).assertEqual('7')
+    })
+
+    it('buildsHotQueryAndSignParams', 0, () => {
+      /* 热门变体（官方 kt.c.O）：fid + days + _page */
+      const query: Record<string, string> = buildHotQuery('7', '1')
+      expect(query['fid']).assertEqual('7')
+      expect(query['days']).assertEqual('1')
+      expect(query['_page']).assertEqual('1')
+      /* signParams = fid+days 直接拼接（如 7+1 → "71"） */
+      expect(buildHotSignParams('7', '1')).assertEqual('71')
+      expect(buildHotSignParams('7', '30')).assertEqual('730')
+      /* fid 空串（合集场景）：signParams 仅 days，与官方 .a(str + i2) 一致 */
+      expect(buildHotSignParams('', '7')).assertEqual('7')
+    })
+
+    it('mapsHotRangeToDays', 0, () => {
+      /* 时间窗档位 → 官方 TopArticleListScope days：24小时→1、本周→7、本月→30 */
+      expect(getHotDays('day')).assertEqual('1')
+      expect(getHotDays('week')).assertEqual('7')
+      expect(getHotDays('month')).assertEqual('30')
+      /* 未知档位按 24 小时兜底 */
+      expect(getHotDays('year')).assertEqual('1')
+    })
+
+    it('parsesToppedList', 0, () => {
+      const info: TopicListInfo | null = parseToppedList(
+        createToppedListResponse(), new Set<string>(), [], 1)
+      expect(info).not().assertNull()
+      const list = info as TopicListInfo
+      /* result.data 逐条解析，字段与 subject/list 同构 */
+      expect(list.threadPageList.length).assertEqual(2)
+      expect(list.threadPageList[0].tid).assertEqual(17326655)
+      expect(list.threadPageList[0].subject).assertEqual('[置顶]版头公告与版规')
+      expect(list.threadPageList[0].replies).assertEqual(0)
+      expect(list.threadPageList[1].authorId).assertEqual(64371487)
+      /* 不分页：totalPages=1、totalRows=条目数（无 totalPage 字段） */
+      expect(list.pagination.page).assertEqual(1)
+      expect(list.pagination.totalPages).assertEqual(1)
+      expect(list.pagination.totalRows).assertEqual(2)
+      /* 无 forumname/subForum 字段 */
+      expect(list.name).assertEqual('')
+      expect(list.subBoardList.length).assertEqual(0)
+      /* 业务失败（code!=0）→ null */
+      const failed: Record<string, Object> = {
+        'code': 5,
+        'msg': '签名错误',
+        'result': { 'data': [] },
+      }
+      expect(parseToppedList(failed, new Set<string>(), [], 1)).assertNull()
+      /* result.data 缺失 → null */
+      const noData: Record<string, Object> = {
+        'code': 0,
+        'result': {},
+      }
+      expect(parseToppedList(noData, new Set<string>(), [], 1)).assertNull()
+      /* result.data 空数组 → 非 null 空列表（UI 空态依据），totalPages=0 不诱导翻页 */
+      const empty: Record<string, Object> = {
+        'code': 0,
+        'msg': '操作成功',
+        'result': { 'data': [] },
+      }
+      const emptyInfo: TopicListInfo | null = parseToppedList(empty, new Set<string>(), [], 1)
+      expect(emptyInfo).not().assertNull()
+      const emptyList = emptyInfo as TopicListInfo
+      expect(emptyList.threadPageList.length).assertEqual(0)
+      expect(emptyList.pagination.totalPages).assertEqual(0)
+      /* 单条边界：N=1 → totalPages=1 */
+      const single: Record<string, Object> = {
+        'code': 0,
+        'result': { 'data': [{ 'tid': 1, 'fid': 7, 'subject': '单条置顶', 'replies': 0 }] },
+      }
+      const singleInfo: TopicListInfo | null = parseToppedList(single, new Set<string>(), [], 1)
+      expect(singleInfo).not().assertNull()
+      const singleList = singleInfo as TopicListInfo
+      expect(singleList.threadPageList.length).assertEqual(1)
+      expect(singleList.pagination.totalPages).assertEqual(1)
+      expect(singleList.pagination.totalRows).assertEqual(1)
+    })
+
+    it('parsesHotSubjectList', 0, () => {
+      const info: TopicListInfo | null = parseHotSubjectList(
+        createHotSubjectListResponse(), new Set<string>(), [], 1)
+      expect(info).not().assertNull()
+      const list = info as TopicListInfo
+      /* result 扁平数组逐条解析 */
+      expect(list.threadPageList.length).assertEqual(2)
+      expect(list.threadPageList[0].tid).assertEqual(47442318)
+      expect(list.threadPageList[0].replies).assertEqual(170)
+      expect(list.threadPageList[0].subject).assertEqual('商城新坐骑，有什么好说的，直接冲雷子就对了！')
+      expect(list.threadPageList[1].authorId).assertEqual(100)
+      /* 不分页：totalPages=1、totalRows=条目数 */
+      expect(list.pagination.page).assertEqual(1)
+      expect(list.pagination.totalPages).assertEqual(1)
+      expect(list.pagination.totalRows).assertEqual(2)
+      /* 无 subForum */
+      expect(list.subBoardList.length).assertEqual(0)
+      /* 业务失败（code!=0，hot 响应无 msg）→ null */
+      const failed: Record<string, Object> = {
+        'code': 5,
+        'result': [],
+      }
+      expect(parseHotSubjectList(failed, new Set<string>(), [], 1)).assertNull()
+      /* result 非数组 → null */
+      const wrongShape: Record<string, Object> = {
+        'code': 0,
+        'result': { 'data': [] },
+      }
+      expect(parseHotSubjectList(wrongShape, new Set<string>(), [], 1)).assertNull()
+      /* result 空数组 → 非 null 空列表（UI 空态依据），totalPages=0 不诱导翻页 */
+      const empty: Record<string, Object> = {
+        'code': 0,
+        'result': [],
+      }
+      const emptyInfo: TopicListInfo | null = parseHotSubjectList(empty, new Set<string>(), [], 1)
+      expect(emptyInfo).not().assertNull()
+      const emptyList = emptyInfo as TopicListInfo
+      expect(emptyList.threadPageList.length).assertEqual(0)
+      expect(emptyList.pagination.totalPages).assertEqual(0)
+      /* 关键词过滤在 flat 列表上生效（复用 parseTopicList 链路） */
+      const filtered: Record<string, Object> = {
+        'code': 0,
+        'result': [{ 'tid': 1, 'fid': 7, 'subject': '屏蔽词测试', 'replies': 1 }],
+      }
+      const filteredInfo: TopicListInfo | null = parseHotSubjectList(
+        filtered, new Set<string>(), ['屏蔽词'], 1)
+      expect(filteredInfo).not().assertNull()
+      const filteredList = filteredInfo as TopicListInfo
+      expect(filteredList.threadPageList.length).assertEqual(0)
     })
 
     it('buildsSubscriptionParams', 0, () => {

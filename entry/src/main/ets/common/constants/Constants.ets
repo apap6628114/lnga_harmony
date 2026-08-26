@@ -226,13 +226,14 @@ export interface SortMode {
 }
 
 export const SORT_MODES: SortMode[] = [
-  { key: 'latest', label: '最新' },
-  { key: 'postdate', label: '发帖时间' },
-  { key: 'recommend', label: '推荐' },
+  { key: 'latest', label: '新回复' },
+  { key: 'postdate', label: '新发帖' },
+  { key: 'recommend', label: '精华' },
+  { key: 'topped', label: '置顶' },
   { key: 'hot', label: '热门' },
 ]
 
-/** 热门模式的时间窗档位（模仿 MNGA 的 DAY/WEEK/MONTH）。 */
+/** 热门模式的时间窗档位（对齐官方 TopArticleListScope：24小时/本周/本月）。 */
 export const HOT_RANGES: SortMode[] = [
   { key: 'day', label: '24小时' },
   { key: 'week', label: '7天' },

@@ -38,8 +38,8 @@ import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 import { pidLocateProgress } from '../common/media/PidLocateProgress'
 import { HoldingHandMonitor, HoldingHandStatus } from '../common/managers/HoldingHandMonitor'
 import {
-  getHotFetchPages,
-  getHotWindowSeconds,
+  HOT_RANGE_DAY,
+  getHotDays,
   currentModeKey,
   canManageCurrentBoard
 } from '../common/utils/TopicListUtils'
@@ -54,7 +54,7 @@ class PrefetchPageResult {
 }
 
 /**
- * 排序模式的分页状态快照（模仿 MNGA 每种 order 独立数据源的会话级缓存）。
+ * 排序模式的分页状态快照（每种排序模式独立数据源的会话级缓存）。
  * 切换排序/时间窗时保存，切回时恢复，避免整页重拉。
  */
 class TopicModeState {
@@ -104,8 +104,8 @@ export struct TopicListPanel {
   private pidLocateGeneration: number = -1
 
   @State sortMode: string = 'latest'
-  /** 热门模式的时间窗档位（day/week/month），模仿 MNGA 的 DAY/WEEK/MONTH。 */
-  @State hotRange: string = 'day'
+  /** 热门模式的时间窗档位（day/week/month，对齐官方 TopArticleListScope）。 */
+  @State hotRange: string = HOT_RANGE_DAY
   /** 各排序模式的分页状态缓存，键为模式键（hot 时含时间窗）。 */
   private modeStates: Map<string, TopicModeState> = new Map()
   /** 排序条分段按钮选项（原生 SegmentButton，胶囊单选），文案由 SORT_MODES 生成避免双份维护。 */
@@ -239,7 +239,7 @@ export struct TopicListPanel {
     pidLocateProgress.hide(this.pidLocateGeneration)
     this.pidLocateGeneration = -1
     this.sortMode = 'latest'
-    this.hotRange = 'day'
+    this.hotRange = HOT_RANGE_DAY
     this.sortSelected = [0]
     this.showHotRangeMenu = false
     this.modeStates.clear()
@@ -510,7 +510,17 @@ export struct TopicListPanel {
     if (this.author) params.author = this.author
     if (this.searchpost) params.searchpost = this.searchpost
     if (this.showSort) {
-      if (this.sortMode === 'postdate') {
+      if (this.sortMode === 'topped') {
+        // 置顶模式走官方 subject/topped（topped=fid，与官方 r0 一致）；
+        // boardFid=0（合集场景）时发空串，与官方合集页行为一致，避免 topped=0 误请求
+        params.topped = this.boardFid !== 0 ? String(this.boardFid) : ''
+      } else if (this.sortMode === 'hot') {
+        // 热门模式走官方 subject/hot（days 按时间窗档位映射）
+        params.hotDays = this.getHotDays()
+      } else if (this.sortMode === 'latest') {
+        // 最新（新回复）显式发 order_by=lastpostdesc，对齐官方 W() 的恒发行为
+        params.orderBy = 'lastpostdesc'
+      } else if (this.sortMode === 'postdate') {
         params.orderBy = 'postdatedesc'
       } else if (this.sortMode === 'recommend') {
         params.recommend = '1'
@@ -547,103 +557,34 @@ export struct TopicListPanel {
     const gen: number = this.mgr.getGeneration()
 
     try {
-      const fetchPages: number = this.getHotFetchPages()
-      const pages: number[] = []
-      for (let i = 1; i <= fetchPages; i++) {
-        pages.push(i)
-      }
-      const promises: Promise<TopicListResult>[] = []
-      for (let i = 0; i < pages.length; i++) {
-        const p: number = pages[i]
-        const params: TopicListParams = this.buildTopicParams(p)
-        promises.push(withTimeout<TopicListResult>(getTopicList(appStore.auth.token, params, appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords()), 15000))
-      }
-      // 逐页容错：单页失败/超时不拖垮整批聚合（并发页数随时间窗放大后尤为重要）
-      const settled: Promise<TopicListResult | undefined>[] = []
-      for (let i = 0; i < promises.length; i++) {
-        const p: Promise<TopicListResult> = promises[i]
-        settled.push((async (): Promise<TopicListResult | undefined> => {
-          try {
-            return await p
-          } catch (e) {
-            return undefined
-          }
-        })())
-      }
-      const results: (TopicListResult | undefined)[] = await Promise.all(settled)
-
+      // 官方 subject/hot：一次请求返回该 days 时间窗的完整热度榜
+      // （服务端热度排序，忽略 _page；days=1 约 32 条 / 7 约 230 条 / 30 约 930 条），
+      // 整表缓存后本地切片翻页，不再需要并发拉页/时间窗过滤/回复数排序/截断。
+      const params: TopicListParams = this.buildTopicParams(1)
+      const result: TopicListResult = await withTimeout<TopicListResult>(
+        getTopicList(appStore.auth.token, params, appStore.settingsStore.getBlacklistIds(),
+          appStore.settingsStore.getEnabledKeywords()), 15000)
       if (gen !== this.mgr.getGeneration()) return
 
-      let curTime: number = 0
-      let okCount: number = 0
-      const allThreads: object[] = []
-      const seenTids: Set<number> = new Set()
-      let loadedSubBoards: SubBoard[] = []
-
-      for (let i = 0; i < results.length; i++) {
-        const result: TopicListResult | undefined = results[i]
-        if (result !== undefined && result.ok && result.data) {
-          okCount++
-          if (curTime === 0) {
-            curTime = result.data.curTime
-          }
-          if (loadedSubBoards.length === 0 && result.data.subBoardList.length > 0) {
-            loadedSubBoards = result.data.subBoardList
-          }
-          const list: object[] = result.data.threadPageList
-          for (let j = 0; j < list.length; j++) {
-            const t: object = list[j]
-            const tid: number = Number((t as Record<string, Object>)['tid'] ?? 0)
-            // 跨页按 tid 去重，避免超页返回重复内容导致列表重复
-            if (tid > 0 && seenTids.has(tid)) {
-              continue
-            }
-            if (tid > 0) {
-              seenTids.add(tid)
-            }
-            allThreads.push(t)
-          }
-        }
-      }
-
-      // 全部页都失败时按错误态处理，而非误显空列表
-      if (okCount === 0) {
+      if (!result.ok || !result.data) {
         this.hasError = true
-        this.errorMsg = '加载失败'
+        this.errorMsg = result.error || '加载失败'
         return
       }
 
-      const windowSeconds: number = this.getHotWindowSeconds()
-      const filtered: object[] = []
-      for (let i = 0; i < allThreads.length; i++) {
-        const t: object = allThreads[i]
-        const postDate: number = Number((t as Record<string, Object>)['postDate'] ?? 0)
-        if (curTime - postDate <= windowSeconds) {
-          filtered.push(t)
-        }
-      }
-
-      filtered.sort((a: object, b: object): number => {
-        return Number((b as Record<string, Object>)['replies'] ?? 0) - Number((a as Record<string, Object>)['replies'] ?? 0)
-      })
-
-      const capped: object[] = []
-      const capLen: number = filtered.length > 50 ? 50 : filtered.length
-      for (let i = 0; i < capLen; i++) {
-        capped.push(filtered[i])
-      }
-
-      this.twentyFourCache = capped
+      const all: object[] = result.data.threadPageList
+      this.twentyFourCache = all
       if (this.canManageCurrentBoard()) {
-        this.subBoards = loadedSubBoards
+        // 热门接口不返回 subForum，热门模式下子版块筛选面板不适用
+        this.subBoards = []
       }
 
-      const firstPageLen: number = capped.length > 20 ? 20 : capped.length
+      const firstPageLen: number = all.length > 20 ? 20 : all.length
       const firstPage: object[] = []
       for (let i = 0; i < firstPageLen; i++) {
-        firstPage.push(capped[i])
+        firstPage.push(all[i])
       }
-      this.mgr.replaceWith(firstPage, 1, capped.length > 0 ? Math.ceil(capped.length / 20) : 0)
+      this.mgr.replaceWith(firstPage, 1, all.length > 0 ? Math.ceil(all.length / 20) : 0)
       this.threadsDataSource.replaceAll(firstPage)
       this.saveCurrentModeState()
     } catch (e) {
@@ -774,7 +715,7 @@ export struct TopicListPanel {
   }
 
   /**
-   * 当前排序模式的状态缓存键（热门模式按时间窗细分，模仿 MNGA 的独立数据源隔离）。
+   * 当前排序模式的状态缓存键（热门模式按时间窗细分，独立数据源隔离）。
    *
    * 纯逻辑已下沉至 {@link currentModeKey}，本方法仅转发组件状态。
    *
@@ -814,6 +755,8 @@ export struct TopicListPanel {
     this.mgr.clearPrefetchedPages()
     if (this.sortMode === 'hot') {
       this.twentyFourCache = state.hotCache.slice()
+      // 热门接口不返回 subForum，恢复热门模式时清空上一模式的子版块面板数据
+      this.subBoards = []
     } else {
       this.twentyFourCache = []
     }
@@ -824,8 +767,13 @@ export struct TopicListPanel {
     clearTimeout(this.loadingDelayTimer)
     this.loadingDelayTimer = -1
     this.loadingContentOpacity = 0
-    // 恢复后重新建立预取链（restore 前 clearPrefetchedPages 已清空缓存）
-    this.triggerPrefetch()
+    // 恢复后重新建立预取链（restore 前 clearPrefetchedPages 已清空缓存）。
+    // 热门模式除外：subject/hot 恒返回全量热度榜（服务端忽略 _page），预取
+    // page 2 会重复拉取全量且响应 totalPages=1 覆盖本地切片页数、切断翻页；
+    // 热门模式翻页本就走 twentyFourCache 内存切片，不依赖预取链。
+    if (this.sortMode !== 'hot') {
+      this.triggerPrefetch()
+    }
   }
 
   /**
@@ -905,25 +853,14 @@ export struct TopicListPanel {
   }
 
   /**
-   * 热门模式的并发拉取页数（按时间窗调整，模仿 MNGA 的大窗口下限保护）。
+   * 热门模式的官方 subject/hot days 参数（按时间窗档位）。
    *
-   * 纯逻辑已下沉至 {@link getHotFetchPages}，本方法仅转发时间窗状态。
+   * 纯逻辑已下沉至 {@link getHotDays}，本方法仅转发时间窗状态。
    *
-   * @returns 并发页数
+   * @returns days 参数值（'1' | '7' | '30'）
    */
-  private getHotFetchPages(): number {
-    return getHotFetchPages(this.hotRange)
-  }
-
-  /**
-   * 热门模式的过滤时间窗（秒），以服务端 curTime 为基准。
-   *
-   * 纯逻辑已下沉至 {@link getHotWindowSeconds}，本方法仅转发时间窗状态。
-   *
-   * @returns 时间窗秒数
-   */
-  private getHotWindowSeconds(): number {
-    return getHotWindowSeconds(this.hotRange)
+  private getHotDays(): string {
+    return getHotDays(this.hotRange)
   }
 
   /**

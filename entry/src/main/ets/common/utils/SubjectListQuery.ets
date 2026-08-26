@@ -105,6 +105,70 @@ export function buildSubjectSignParams(params: TopicListParams): string {
 }
 
 /**
+ * 构建 subject/topped 置顶列表的请求参数（POST form body）。
+ *
+ * 对应官方客户端 kt.c.r0（SUBJECT_LIST_TOP）：params 为 topped=fid + page，
+ * 无 order_by/recommend。注意置顶变体不做 fid 归一化（官方 r0 无 356→323
+ * 映射，与 subject/list 的 kt.c.e0 不同）。
+ *
+ * @param fid - 版块 fid（合集场景为空串，恒发，与官方一致）
+ * @param page - 页码（实测服务端忽略 page，恒返回全部置顶帖）
+ * @returns 置顶列表请求参数
+ */
+export function buildToppedQuery(fid: string, page: string): Record<string, string> {
+  return {
+    'topped': fid,
+    'page': page || '1',
+  };
+}
+
+/**
+ * 计算 subject/topped 置顶列表的签名参数值（addSignParams）。
+ *
+ * 官方 r0 中 `.a(str)` 直接拼接 topped 值（fid 原样，不做归一化）。
+ *
+ * @param fid - 版块 fid
+ * @returns signParams 值
+ */
+export function buildToppedSignParams(fid: string): string {
+  return fid;
+}
+
+/**
+ * 构建 subject/hot 热帖列表的请求参数（POST form body）。
+ *
+ * 对应官方客户端 kt.c.O（TOP_ARTICLE）：params 为 fid + days + _page，
+ * signParams=fid+days。days 为时间窗天数（1/7/30，官方 TopArticleListScope）；
+ * 实测服务端忽略 _page（恒返回该时间窗完整热度榜，days=1 约 32 条、
+ * days=7 约 230 条、days=30 约 930 条），请求侧仍按官方形态携带。
+ * 同样不做 fid 归一化（官方 O 无 356→323 映射）。
+ *
+ * @param fid - 版块 fid（合集场景为空串，恒发，与官方一致）
+ * @param days - 时间窗天数（'1' | '7' | '30'）
+ * @returns 热帖列表请求参数
+ */
+export function buildHotQuery(fid: string, days: string): Record<string, string> {
+  return {
+    'fid': fid,
+    'days': days,
+    '_page': '1',
+  };
+}
+
+/**
+ * 计算 subject/hot 热帖列表的签名参数值（addSignParams）。
+ *
+ * 官方 O 中 `.a(str + i2)` 按 fid+days 直接拼接（如 fid=7、days=1 → "71"）。
+ *
+ * @param fid - 版块 fid
+ * @param days - 时间窗天数
+ * @returns signParams 值
+ */
+export function buildHotSignParams(fid: string, days: string): string {
+  return fid + days;
+}
+
+/**
  * 计算子版块订阅操作的 type 参数（官方 subject/subscription）。
  *
  * type=1 订阅（子版块主题混合进父版块列表）、type=2 取消订阅（服务端排除）。
