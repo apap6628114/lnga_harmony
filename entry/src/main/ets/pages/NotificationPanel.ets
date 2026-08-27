@@ -196,9 +196,15 @@ export struct NotificationPanel {
     }
   }
 
-  /** 私信详情页关闭后强制静默刷新会话列表（忽略快照复用窗口，保证回复后列表最新）。 */
+  /**
+   * 私信详情页关闭后强制静默刷新会话列表（忽略快照复用窗口，保证回复后列表最新）。
+   *
+   * 先同步通知快照（含会话行未读刷新）：本地已读状态立即生效，不依赖网络刷新结果；
+   * 再强制拉取会话列表（回复后 lasttime/posts 等字段变化由 mergePrivateSnapshot 落行）。
+   */
   private onMessageVersionChange(): void {
     if (this.activeTab === TAB_PRIVATE) {
+      this.syncMessageNotificationsFromStore()
       this.loadPrivateMessages(this.scope.begin(), true)
     }
   }
@@ -217,7 +223,8 @@ export struct NotificationPanel {
    *
    * 私信会话行的未读点与私信 Tab「全部已读」可用性均由该快照推导；
    * 任何通知版本变化（轮询合并 / 单条已读 / 全部已读）都需刷新它。
-   * 同步时同时重建 mid → 未读 Map，行查询从 O(n) 降为 O(1)。
+   * 同步时同时重建 mid → 未读 Map，行查询从 O(n) 降为 O(1)；
+   * 私信 Tab 下额外强制刷新会话行（unreadByMid 非响应式，见 refreshThreadUnreadRows）。
    */
   private syncMessageNotificationsFromStore(): void {
     const cached: NgaNotification[] = appStore.getCachedNotifications()
@@ -235,6 +242,23 @@ export struct NotificationPanel {
     }
     this.messageNotifications = result
     this.unreadByMid = unreadMap
+    if (this.activeTab === TAB_PRIVATE && this.threadsDataSource.totalCount() > 0) {
+      this.refreshThreadUnreadRows()
+    }
+  }
+
+  /**
+   * 强制刷新私信会话行的未读表现（未读点、标题字色/字重）。
+   *
+   * 行未读状态由 unreadByMid（非响应式 Map）在 build 时推导，重建 Map 本身
+   * 不会驱动 LazyForEach 重算行 key（key 含未读位，见行渲染处）；对每行
+   * updateAt 发出数据变更通知后，未读位发生变化的行才会重建并呈现最新状态。
+   */
+  private refreshThreadUnreadRows(): void {
+    const total: number = this.threadsDataSource.totalCount()
+    for (let index: number = 0; index < total; index++) {
+      this.threadsDataSource.updateAt(index, this.threadsDataSource.getData(index))
+    }
   }
 
   /**
