@@ -10,6 +10,7 @@ import { Logger, DOMAIN_UI, formatError } from '../common/utils/Logger'
 import { KEY_USE_INTERNAL_WEBVIEW } from '../common/constants/AppStorageKeys'
 import { handleForumLink, isNgaDomain, openAppLinkOrFallback, openSystemLink } from '../common/utils/LinkUtils'
 import { extractHostname } from '../common/utils/UrlUtils'
+import { isNgaQrLoginUrl } from '../common/utils/NgaQrLoginUtils'
 import { AppColors } from '../common/constants/Constants'
 import { PageScope } from '../common/concurrency/PageScope'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
@@ -17,6 +18,11 @@ import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 const logger = new Logger(DOMAIN_UI, 'WebViewPanel')
 /** 标题栏高度。 */
 const NAV_BAR_H: number = 44
+/** NGA 官方鸿蒙客户端 WebView 标识，供 H5 选择 app Cookie 分支。 */
+const NGA_HARMONY_USER_AGENT_SUFFIX: string = ' NGA_Harmony/1.0.0'
+/** 普通网页使用的 WebView User-Agent。 */
+const DEFAULT_WEBVIEW_USER_AGENT: string =
+  'Mozilla/5.0 (Linux; Android 10; HarmonyOS) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.144 Mobile Safari/537.36'
 
 @Component
 export struct WebViewPanel {
@@ -34,6 +40,8 @@ export struct WebViewPanel {
   @State canGoForward: boolean = false
   /** 初始 URL 为 NGA 域名时进入 NGA 会话模式，允许 WebView 内自由浏览 NGA 页面而不被拦截回原生 */
   private ngaSession: boolean = false
+  /** 当前 WebView 是否专门用于 NGA 扫码授权。 */
+  private isQrLoginWebView: boolean = false
   /** 已确认没有关联应用、下一次应直接由 WebView 加载的 URL */
   private internalFallbackUrl: string = ''
   /** 页面出现会话作用域，驱动异步回调的存活校验。 */
@@ -41,8 +49,9 @@ export struct WebViewPanel {
 
   aboutToAppear(): void {
     this.scope.begin()
-    this.injectCookies()
     this.ngaSession = isNgaDomain(extractHostname(this.url))
+    this.isQrLoginWebView = isNgaQrLoginUrl(this.url)
+    this.injectCookies()
     this.internalFallbackUrl = this.url
   }
 
@@ -59,10 +68,17 @@ export struct WebViewPanel {
     if (!session) {
       return
     }
-    const baseUrl: string = getActiveDomain()
     try {
-      webview.WebCookieManager.configCookieSync(baseUrl, 'ngaPassportUid=' + session.uid + '; Path=/')
-      webview.WebCookieManager.configCookieSync(baseUrl, 'ngaPassportCid=' + session.cid + '; Path=/')
+      if (this.isQrLoginWebView) {
+        const hostname: string = extractHostname(this.url)
+        const baseUrl: string = 'https://' + hostname
+        webview.WebCookieManager.configCookieSync(baseUrl, 'access_uid=' + session.uid + '; Path=/')
+        webview.WebCookieManager.configCookieSync(baseUrl, 'access_token=' + session.cid + '; Path=/')
+      } else {
+        const baseUrl: string = getActiveDomain()
+        webview.WebCookieManager.configCookieSync(baseUrl, 'ngaPassportUid=' + session.uid + '; Path=/')
+        webview.WebCookieManager.configCookieSync(baseUrl, 'ngaPassportCid=' + session.cid + '; Path=/')
+      }
     } catch (e) {
       logger.error('[WebViewPanel] setCookie failed: %{public}s', formatError(e))
     }
@@ -303,7 +319,10 @@ export struct WebViewPanel {
           .overviewModeAccess(true)
           .onControllerAttached(() => {
             try {
-              this.controller.setCustomUserAgent('Mozilla/5.0 (Linux; Android 10; HarmonyOS) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.144 Mobile Safari/537.36')
+              const userAgent: string = this.isQrLoginWebView
+                ? DEFAULT_WEBVIEW_USER_AGENT + NGA_HARMONY_USER_AGENT_SUFFIX
+                : DEFAULT_WEBVIEW_USER_AGENT
+              this.controller.setCustomUserAgent(userAgent)
             } catch (e) {
               logger.error('setCustomUserAgent failed: %{public}s', formatError(e))
             }

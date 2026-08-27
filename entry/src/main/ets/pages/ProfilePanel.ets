@@ -20,6 +20,8 @@ import { PageScope } from '../common/concurrency/PageScope'
 import { Context } from '@kit.AbilityKit'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
+import { scanBarcode, scanCore } from '@kit.ScanKit'
+import { isNgaQrLoginUrl } from '../common/utils/NgaQrLoginUtils'
 
 /**
  * 个人主页统计项数据模型（驱动 Grid 中的 ForEach）。
@@ -76,6 +78,8 @@ export struct ProfilePanel {
   @State titleScrollEffectProgress: number = 0
   /** 滚动容器当前视口高度。 */
   @State scrollViewportHeight: number = 1
+  /** 扫码页面是否正在打开，避免重复拉起系统扫码界面。 */
+  @State qrScanLoading: boolean = false
 
   @Prop @Watch('onUidChange') uid: string = ''
   private isOwnProfile: boolean = false
@@ -93,6 +97,39 @@ export struct ProfilePanel {
     )
     if (TitleScrollEffect.shouldUpdateProgress(this.titleScrollEffectProgress, progress)) {
       this.titleScrollEffectProgress = progress
+    }
+  }
+
+  /**
+   * 拉起系统二维码扫描界面，并打开 NGA 扫码授权页面。
+   */
+  private async startQrLoginScan(): Promise<void> {
+    if (this.qrScanLoading) {
+      return
+    }
+    if (!appStore.auth.isAuthenticated) {
+      appStore.showToast('请先登录 NGA')
+      return
+    }
+
+    this.qrScanLoading = true
+    try {
+      const context: Context = this.getUIContext().getHostContext() as Context
+      const result: scanBarcode.ScanResult = await scanBarcode.startScanForResult(context, {
+        scanTypes: [scanCore.ScanType.QR_CODE],
+        enableMultiMode: false,
+        enableAlbum: true
+      })
+      const qrUrl: string = result.originalValue.trim()
+      if (!isNgaQrLoginUrl(qrUrl)) {
+        appStore.showToast('请扫描 NGA 登录二维码')
+        return
+      }
+      routerStore.navigateActivity(Screen.webview(qrUrl))
+    } catch (e) {
+      appStore.showToast('扫码已取消或失败')
+    } finally {
+      this.qrScanLoading = false
     }
   }
 
@@ -649,7 +686,13 @@ export struct ProfilePanel {
     .height('100%')
     .backgroundColor(AppColors.bg)
 
-    PanelNavBar({ title: '个人主页', scrollEffectProgress: this.titleScrollEffectProgress })
+    PanelNavBar({
+      title: '个人主页',
+      scrollEffectProgress: this.titleScrollEffectProgress,
+      rightIcon: this.isOwnProfile ? $r('app.media.icon_scan') : '',
+      rightIconAccessibilityText: this.isOwnProfile ? '扫一扫' : '',
+      onRightClick: (): void => { this.startQrLoginScan() }
+    })
       .width('100%').position({ x: 0, y: 0 })
   }
   .width('100%')
