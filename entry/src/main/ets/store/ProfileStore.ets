@@ -39,7 +39,7 @@ export class ProfileStore extends BaseStore<Object> {
   // ============== Cache ==============
 
   private profilesKey(): string {
-    return `cached_profiles_${this.auth.uid}`
+    return `cached_profiles_v2_${this.auth.uid}`
   }
 
   private async loadCachedProfiles(): Promise<void> {
@@ -99,11 +99,14 @@ export class ProfileStore extends BaseStore<Object> {
   ensureProfile(uid: string): void {
     if (this.refreshingUids.has(uid)) return
     this.refreshingUids.add(uid)
-    const hasCache = this.cache.isFresh(uid)
+    const hasFreshCache: boolean = this.cache.isFresh(uid)
+    const cachedProfile: ProfileData | undefined = this.cache.getWithStale(uid).value
+    const cachedLikeCount: string = String(cachedProfile?.likeCount ?? '')
+    const hasLikeCount: boolean = cachedLikeCount.length > 0
     setTimeout(async () => {
       await this.doRefreshProfile(uid)
       this.refreshingUids.delete(uid)
-    }, hasCache ? ProfileStore.REFRESH_DELAY : 0)
+    }, hasFreshCache && hasLikeCount ? ProfileStore.REFRESH_DELAY : 0)
   }
 
   private async doRefreshProfile(uid: string): Promise<ProfileData | null> {

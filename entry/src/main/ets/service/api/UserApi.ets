@@ -25,24 +25,55 @@ const logger = new Logger(DOMAIN_SERVICE, 'UserApi')
  * 通过 NGA 官方 APP 签名接口查询用户对象。
  *
  * ucp/get 使用 POST form，__lib/__act 位于 URL query；uid 查询传 uid，用户名
- * 查询传 username，signParams 为空，输出格式使用官方客户端的 __output=12。
- * 所有昵称、会话校验、用户搜索和用户资料请求都经此入口，避免重新落回网页 GET。
+ * 查询传 username，signParams 为空；轻量查询使用 __output=12，完整资料页使用 __output=14。
+ * 当前用户轻量信息、会话校验、用户搜索经此入口；完整资料页使用官方旧客户端的
+ * user/detail 链路，以取得资料页专有字段。
  *
  * @param cookies - NGA 会话凭据
  * @param lookupKey - 查询字段，uid 或 username
  * @param lookupValue - 查询值
+ * @param output - 响应输出格式，轻量查询为 12，完整资料页为 14
  * @returns NGA 用户对象
  */
 export async function getSignedUser(cookies: Cookies, lookupKey: string,
-  lookupValue: string): Promise<Record<string, Object>> {
+  lookupValue: string, output: string = '12'): Promise<Record<string, Object>> {
   const params: Record<string, string> = {};
   params[lookupKey] = lookupValue;
   const raw: Record<string, Object> = await ngaClient.postSigned(
-    '/nuke.php', 'ucp', 'get', params, cookies, '', '12'
+    '/nuke.php', 'ucp', 'get', params, cookies, '', output
   ) as Record<string, Object>;
   const code: Object | undefined = raw['code'];
   if (code !== undefined && Number(code) !== 0) {
     throw new Error(extractAppUserError(raw, '获取用户信息失败'));
+  }
+  const user: Record<string, Object> | null = extractAppUser(raw);
+  if (user === null) {
+    throw new Error(extractAppUserError(raw, '用户不存在或资料为空'));
+  }
+  return user;
+}
+
+/**
+ * 通过官方客户端资料页使用的 user/detail 接口查询完整用户对象。
+ *
+ * 旧版资料页链路不是 ucp/get，而是 app_api.php 的 user/detail；该接口返回
+ * UserInfoDataBean 的完整字段，其中包含资料页的 count_like。
+ *
+ * @param cookies - NGA 会话凭据
+ * @param lookupKey - 查询字段，uid 或 username
+ * @param lookupValue - 查询值
+ * @returns 官方完整用户对象
+ */
+async function getProfileUser(cookies: Cookies, lookupKey: string,
+  lookupValue: string): Promise<Record<string, Object>> {
+  const params: Record<string, string> = {};
+  params[lookupKey] = lookupValue;
+  const raw: Record<string, Object> = await ngaClient.postSigned(
+    '/app_api.php', 'user', 'detail', params, cookies, lookupValue, '14'
+  ) as Record<string, Object>;
+  const code: Object | undefined = raw['code'];
+  if (code !== undefined && Number(code) !== 0) {
+    throw new Error(extractAppUserError(raw, '获取用户资料失败'));
   }
   const user: Record<string, Object> | null = extractAppUser(raw);
   if (user === null) {
@@ -152,7 +183,7 @@ export async function getUserProfile(token: string, uid: string): Promise<UserPr
   }
 
   try {
-    const d: Record<string, Object> = await getSignedUser(
+    const d: Record<string, Object> = await getProfileUser(
       { uid: session.uid, cid: session.cid }, 'uid', uid
     );
     const regTimestamp = Number(d['regdate']) || 0;
@@ -195,6 +226,7 @@ export async function getUserProfile(token: string, uid: string): Promise<UserPr
     profile.fame = String(d['fame'] ?? '');
     profile.rvrc = String(d['rvrc'] ?? '');
     profile.posts = String(d['posts'] ?? d['postnum'] ?? '');
+    profile.likeCount = String(d['count_like'] ?? '');
     profile.regdate = regTimestamp > 0 ? String(regTimestamp) : '';
     profile.sign = String(d['sign'] ?? d['signature'] ?? '');
     profile.ipLoc = String(d['ipLoc'] ?? '');

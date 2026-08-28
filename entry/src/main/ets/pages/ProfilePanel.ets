@@ -234,7 +234,7 @@ export struct ProfilePanel {
 
   /**
    * 构造个人主页统计项数组（数据驱动 Grid ForEach）。
-   * 当前四项：posts/rvrc 走 fmtNum，money 走 formatMoney；regdate 走 formatTime
+   * 当前核心五项：posts/likeCount/rvrc 走 fmtNum，money 走 formatMoney；regdate 走 formatTime
    * 或兜底「未知」。
    * 按产品需求移除的统计展示（其信息另有落点）：
    * - 会员组：头像区已有 group 徽章（UID 旁）；
@@ -252,6 +252,12 @@ export struct ProfilePanel {
     s1.label = '发帖数'
     s1.value = fmtNum(p.posts)
     items.push(s1)
+
+    const sLike: StatItem = new StatItem()
+    sLike.iconRes = $r('app.media.icon_thumb_up')
+    sLike.label = '获赞'
+    sLike.value = fmtNum(p.likeCount ?? '')
+    items.push(sLike)
 
     const s2: StatItem = new StatItem()
     s2.iconRes = $r('app.media.icon_money')

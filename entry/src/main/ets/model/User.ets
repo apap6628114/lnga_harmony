@@ -30,6 +30,8 @@ export class ProfileData {
   fame: string = '';
   rvrc: string = '';
   posts: string = '';
+  /** 获赞数量（ucp.get 返回 `count_like`，官方口径为本年度所有帖子累计获赞数）。 */
+  likeCount: string = '';
   regdate: string = '';
   sign: string = '';
   ipLoc: string = '';

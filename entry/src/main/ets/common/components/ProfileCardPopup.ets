@@ -340,11 +340,12 @@ export struct ProfileCardPopup {
       .padding({ left: 16, right: 16, top: 16 })
       .alignItems(VerticalAlign.Center)
 
-      if (Number(profile.posts) || Number(profile.rvrc) || Number(profile.money)) {
+      if (Number(profile.posts) || (profile.likeCount ?? '').length > 0 || Number(profile.rvrc) || Number(profile.money)) {
         Row() {
           if (Number(profile.posts)) {
             this.StatItem(fmtNum(profile.posts), '发帖')
           }
+          this.StatItem(fmtNum(profile.likeCount ?? ''), '获赞')
           if (Number(profile.rvrc)) {
             // 威望按官方 App 口径展示 rvrc（ucp.get 实测 rvrc 与 fame 恒等；
             // App 作者信息条「威望」列与威望页均显示 rvrc 直接值）
