@@ -119,6 +119,10 @@ class AppStoreClass {
       await this.authStore.init(this.store, this.writeQueue)
       await this.categoryStore.init(this.store, this.writeQueue, this.authStore.state)
 
+      // 主题为全局设置（不随 uid 隔离）：无论登录与否都加载持久化主题，
+      // 保证未登录用户冷启动后主题/状态栏样式正确（见 docs/THEME_DESIGN.md）
+      await this.settingsStore.initTheme(this.store, this.writeQueue, this.context)
+
       // 用户数据（依赖 uid）
       if (this.authStore.state.uid) {
         await this.loadUserData()

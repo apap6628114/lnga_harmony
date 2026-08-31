@@ -14,7 +14,6 @@ const logger = new Logger(DOMAIN_UI, 'IndexPage')
 @Entry
 @Component
 struct Index {
-  @StorageProp('themeName') themeName: string = 'original'
   /** AppStore 初始化是否失败。 */
   @State initializationFailed: boolean = false
 

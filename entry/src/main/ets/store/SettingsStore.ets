@@ -63,6 +63,19 @@ export class SettingsStore extends BaseStore<SettingsState> {
     this.aiSettings = new AiSettings(this.ctx)
   }
 
+  /**
+   * 初始化主题（全局设置，无条件执行，与账号无关）。
+   *
+   * 主题持久化在全局 key（nga_theme）而非 settings_${uid}：未登录用户同样
+   * 可保存主题并跨冷启动生效。须在 AppStore 初始化阶段、applyCurrentTheme
+   * 之前调用（设计记录见 docs/THEME_DESIGN.md）。
+   */
+  async initTheme(store: PreferencesStore, queue: SerialQueue, ctx?: Context): Promise<void> {
+    this.themeSettings.init(store, queue)
+    this.ctx.context = ctx
+    await this.themeSettings.loadGlobal()
+  }
+
   async init(store: PreferencesStore, queue: SerialQueue, auth: AuthState, ctx?: Context): Promise<void> {
     this.setDeps(store, queue, auth)
     this.context = ctx
@@ -77,6 +90,12 @@ export class SettingsStore extends BaseStore<SettingsState> {
   reset(): void {
     this.state = new SettingsState()
     this.ctx.state = this.state
+    // 主题为全局设置，不随账号重置：恢复全局主题内存真源，
+    // 与登出/切号后 applyCurrentTheme 的取值保持一致。
+    this.themeSettings.restoreGlobal()
+    // clearAuth 的 writeQueue.cancel() 可能丢弃未执行的主题落盘任务，
+    // 重放一次保证 Preferences 与内存一致（幂等无害）。
+    this.themeSettings.repersist()
     this.socialListSettings.reset()
     this.filterKeywordSettings.reset()
     this.noteSettings.reset()
@@ -102,7 +121,7 @@ export class SettingsStore extends BaseStore<SettingsState> {
     if (!this.auth.uid) return
     const saved = await this.store.getJSON<SettingsState>(this.settingsKey())
     if (saved) {
-      this.themeSettings.load(saved)
+      // 主题已全局化（nga_theme key），不随用户设置持久化，此处不再读取
       this.displaySettings.load(saved)
       this.mediaSettings.load(saved)
       this.readingSettings.load(saved)

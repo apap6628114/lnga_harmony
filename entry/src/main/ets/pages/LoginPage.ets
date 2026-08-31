@@ -51,8 +51,6 @@ struct LoginPage {
   @StorageProp('navBarHeight') navBarHeight: number = 0
   /** 当前响应式断点。 */
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
-  /** 当前主题名称。 */
-  @StorageProp('themeName') themeName: string = 'original'
 
   /** 网页登录 WebView 控制器。 */
   private webController: webview.WebviewController = new webview.WebviewController()

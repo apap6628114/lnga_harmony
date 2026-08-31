@@ -16,11 +16,18 @@ export const KEY_NAV_BAR_HEIGHT: string = 'navBarHeight'
 /** 当前断点：sm/md/lg，由 EntryAbility 写入 */
 export const KEY_CURRENT_BREAKPOINT: string = 'currentBreakpoint'
 
-/** 主题名：light/original/... */
+/** 主题名：system/light/dark */
 export const KEY_THEME_NAME: string = 'themeName'
 
 /** 生效的色彩模式：light/dark */
 export const KEY_EFFECTIVE_COLOR_MODE: string = 'effectiveColorMode'
+
+/**
+ * 系统真实颜色模式：light/dark（与应用生效模式不同——应用固定 light/dark 主题时
+ * 两者不一致）。由 EntryAbility 维护：onCreate 初始化 +
+ * onSystemConfigurationUpdated 系统级订阅实时更新，主题跟随系统时使用。
+ */
+export const KEY_SYSTEM_COLOR_MODE: string = 'systemColorMode'
 
 /** 图片加载策略（参见 ImageLoadStrategy） */
 export const KEY_IMAGE_LOAD_STRATEGY: string = 'imageLoadStrategy'

@@ -19,7 +19,6 @@ export class SettingsState {
   fontSize: number = 15
   topicFontSize: number = 15
   domainIndex: number = 0
-  theme: string = 'light'
   autoCheckin: boolean = false
   lastCheckinDate: string = ''
   notes: UserNoteEntry[] = []

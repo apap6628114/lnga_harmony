@@ -36,7 +36,6 @@ const logger = new Logger(DOMAIN_UI, 'MainPage')
 struct MainPage {
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
   @StorageProp('profileVersion') @Watch('onProfileRefresh') profileVersion: number = 0
-  @StorageProp('themeName') themeName: string = 'original'
   @State private router: RouterStoreClass = routerStore
   @State private floating: FloatingLayerStoreClass = floatingLayerStore
 
