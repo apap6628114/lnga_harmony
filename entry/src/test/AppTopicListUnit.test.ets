@@ -640,23 +640,26 @@ export default function appTopicListUnitTest(): void {
       expect(list.name).assertEqual('')
       expect(list.subBoardList.length).assertEqual(0)
       /* 业务失败（code!=0）→ null */
+      const failedData: Record<string, Object> = { 'data': [] }
       const failed: Record<string, Object> = {
         'code': 5,
         'msg': '签名错误',
-        'result': { 'data': [] },
+        'result': failedData,
       }
       expect(parseToppedList(failed, new Set<string>(), [], 1)).assertNull()
       /* result.data 缺失 → null */
+      const noDataResult: Record<string, Object> = {}
       const noData: Record<string, Object> = {
         'code': 0,
-        'result': {},
+        'result': noDataResult,
       }
       expect(parseToppedList(noData, new Set<string>(), [], 1)).assertNull()
       /* result.data 空数组 → 非 null 空列表（UI 空态依据），totalPages=0 不诱导翻页 */
+      const emptyData: Record<string, Object> = { 'data': [] }
       const empty: Record<string, Object> = {
         'code': 0,
         'msg': '操作成功',
-        'result': { 'data': [] },
+        'result': emptyData,
       }
       const emptyInfo: TopicListInfo | null = parseToppedList(empty, new Set<string>(), [], 1)
       expect(emptyInfo).not().assertNull()
@@ -664,9 +667,13 @@ export default function appTopicListUnitTest(): void {
       expect(emptyList.threadPageList.length).assertEqual(0)
       expect(emptyList.pagination.totalPages).assertEqual(0)
       /* 单条边界：N=1 → totalPages=1 */
+      const singleTopic: Record<string, Object> = {
+        'tid': 1, 'fid': 7, 'subject': '单条置顶', 'replies': 0,
+      }
+      const singleData: Record<string, Object> = { 'data': [singleTopic] }
       const single: Record<string, Object> = {
         'code': 0,
-        'result': { 'data': [{ 'tid': 1, 'fid': 7, 'subject': '单条置顶', 'replies': 0 }] },
+        'result': singleData,
       }
       const singleInfo: TopicListInfo | null = parseToppedList(single, new Set<string>(), [], 1)
       expect(singleInfo).not().assertNull()
@@ -700,9 +707,10 @@ export default function appTopicListUnitTest(): void {
       }
       expect(parseHotSubjectList(failed, new Set<string>(), [], 1)).assertNull()
       /* result 非数组 → null */
+      const wrongShapeData: Record<string, Object> = { 'data': [] }
       const wrongShape: Record<string, Object> = {
         'code': 0,
-        'result': { 'data': [] },
+        'result': wrongShapeData,
       }
       expect(parseHotSubjectList(wrongShape, new Set<string>(), [], 1)).assertNull()
       /* result 空数组 → 非 null 空列表（UI 空态依据），totalPages=0 不诱导翻页 */
@@ -716,9 +724,12 @@ export default function appTopicListUnitTest(): void {
       expect(emptyList.threadPageList.length).assertEqual(0)
       expect(emptyList.pagination.totalPages).assertEqual(0)
       /* 关键词过滤在 flat 列表上生效（复用 parseTopicList 链路） */
+      const filteredTopic: Record<string, Object> = {
+        'tid': 1, 'fid': 7, 'subject': '屏蔽词测试', 'replies': 1,
+      }
       const filtered: Record<string, Object> = {
         'code': 0,
-        'result': [{ 'tid': 1, 'fid': 7, 'subject': '屏蔽词测试', 'replies': 1 }],
+        'result': [filteredTopic],
       }
       const filteredInfo: TopicListInfo | null = parseHotSubjectList(
         filtered, new Set<string>(), ['屏蔽词'], 1)

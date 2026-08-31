@@ -27,7 +27,15 @@ function extractPostContent(html: string, lou: number): string {
     return '';
   }
   const contentStart: number = tagEnd + 1;
-  const endIdx: number = html.indexOf('</span>', contentStart);
+  // 主楼正文容器是 <p id='postcontent0'>，其余楼层是 <span id='postcontentN'>。
+  // 取先出现的 </p> / </span> 作为正文结束：主楼若统一按 </span> 截取会把容器收尾的
+  // `</p><br/>` 混入正文，解析后正文末尾残留空行（官方 JSON 主楼 content 无该尾巴）。
+  const pEnd: number = html.indexOf('</p>', contentStart);
+  const spanEnd: number = html.indexOf('</span>', contentStart);
+  let endIdx: number = spanEnd;
+  if (pEnd >= 0 && (spanEnd < 0 || pEnd < spanEnd)) {
+    endIdx = pEnd;
+  }
   if (endIdx < 0) {
     return '';
   }
