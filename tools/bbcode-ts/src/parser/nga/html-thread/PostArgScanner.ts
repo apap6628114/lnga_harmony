@@ -265,8 +265,41 @@ function stripQuotes(s: string): string {
 }
 
 /**
- * 从 commonui.postArg.setDefault(fid,stid,tid,tAid,topicMiscBit1,punUsers,visit,mods,
- * vote,customLevel,tType,tReplies,tLastTime,thisPagePosts) 提取主题投票信息。
+ * 从 commonui.postArg.setDefault(fid,stid,tid,tAid,topicMiscBit1,punUsers,visit,
+ * mods,vote,customLevel,tType,totalReplies,lastPostTs,pageSize?) 提取主题作者 ID。
+ *
+ * tAid 固定为 index 3（与 JSON API `__T.authorid` 同源）。跨页视图下楼主不在
+ * 当前页楼层中，页面仅凭 setDefault 的 tAid 提供主题作者；当前页楼层首楼的
+ * authorid 不能代表主题作者。
+ *
+ * @param html NGA 帖子页 HTML
+ * @returns 主题作者 ID；未找到或参数不足时返回 0
+ */
+function extractTopicAuthorId(html: string): number {
+  const idx: number = html.indexOf(SETDEFAULT_MARKER);
+  if (idx < 0) {
+    return 0;
+  }
+  const openPos: number = idx + SETDEFAULT_MARKER.length - 1;
+  const matched = scanBalanced(html, openPos, '(', ')');
+  if (!matched.value) {
+    return 0;
+  }
+  const argsStr: string = matched.value.substring(1, matched.value.length - 1);
+  const args: string[] = splitTopLevelArgs(argsStr);
+  if (args.length >= 4) {
+    const val: string = args[3].trim();
+    const n: number = parseInt(val, 10);
+    if (!isNaN(n) && n > 0) {
+      return n;
+    }
+  }
+  return 0;
+}
+
+/**
+ * 从 commonui.postArg.setDefault(fid,stid,tid,tAid,topicMiscBit1,punUsers,visit,
+ * mods,vote,customLevel,tType,totalReplies,lastPostTs,pageSize?) 提取主题投票信息。
  *
  * 第 9 个参数（index 8）为 vote 字符串（与 JSON API 楼级 vote / __T.post_misc_var.vote
  * 同格式，实测投票帖 `208214~华为~...~max_select~1~end~<ts>~_208214~170,0,209~...`），
@@ -374,4 +407,4 @@ function unescapeJsString(s: string): string {
   return result;
 }
 
-export { PostArgData, splitTopLevelArgs, parseAllPostArgs, extractUserInfo, extractTotalReplies, extractLastPostTs, extractSetDefaultVote, extractAlertInfo };
+export { PostArgData, splitTopLevelArgs, parseAllPostArgs, extractUserInfo, extractTotalReplies, extractTopicAuthorId, extractLastPostTs, extractSetDefaultVote, extractAlertInfo };

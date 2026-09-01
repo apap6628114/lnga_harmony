@@ -410,7 +410,11 @@ export function analyzePair(data: HtmlPairData, gaps?: PairGaps): PairReport {
     const key: string = louKeys[i]
     const jsonRow: Record<string, unknown> | undefined = rowOf(jsonRows, Number(key))
     if (!jsonRow) continue
-    const lou: number = Number(key)
+    // JSON __R 的键是页内索引（0-19），row.lou 才是真实楼层号；跨页（page>1）时两者
+    // 不同，HTML 侧行号（proc 第一参数，无隐楼时即 lou）必须按 row.lou 对齐。
+    const keyLou: number = Number(key)
+    const rawLou: unknown = jsonRow['lou']
+    const lou: number = typeof rawLou === 'number' && Number.isFinite(rawLou) ? rawLou : keyLou
     const htmlRowLou: number = htmlLouFor(lou, shift)
     const htmlRow: Record<string, unknown> | undefined = rowOf(htmlRows, htmlRowLou)
     const foundInHtml: boolean = htmlRow !== undefined

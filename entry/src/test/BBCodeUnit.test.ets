@@ -402,6 +402,31 @@ export default function bbcodeUnitTest(): void {
       expect(nodes[0].children[1].text).assertEqual('正文')
     })
 
+    it('keepsReplyToPrefixAndBodyBoundaryWhenNoBreak', 0, (): void => {
+      /* 真实形态（tid=47475364 lou=51）：Reply to 引用头与正文之间无 <br/> 分隔，
+       * 且处于引用链（51 回复 43，43 引用 35，35 回复 34，34 引用 28）中。
+       * 头部 "Reply to " 前缀必须保留（文本零丢失），正文不得被吞入引用头。
+       */
+      const nodes: BBNode[] = parseBBCode(
+        '[b]Reply to [pid=880288018,47475364,3]Reply[/pid] Post by [uid=42023922]llllllIl[/uid] ' +
+        '(2026-09-01 12:44)[/b][s:ac:哭笑]我懒得讨论傻逼网易的问题，他到现在还没做说明纯态度问题<br/>纯对是一人月觉得太扯罢了，按这么排期一个游戏百人四五年内容不得玩家玩到撑')
+
+      expect(nodes.length).assertEqual(3)
+      expect(nodes[0].type).assertEqual(BBNodeType.POST_BY)
+      expect(nodes[0].children.length).assertEqual(5)
+      expect(nodes[0].children[0].type).assertEqual(BBNodeType.TEXT)
+      expect(nodes[0].children[0].text).assertEqual('Reply to ')
+      expect(nodes[0].children[1].type).assertEqual(BBNodeType.PID_LINK)
+      expect(nodes[0].children[1].href).assertEqual('#/thread?tid=47475364&pid=880288018&page=3')
+      expect(nodes[0].children[3].type).assertEqual(BBNodeType.UID_LINK)
+      expect(nodes[0].children[3].href).assertEqual('#/profile?uid=42023922')
+      expect(nodes[0].children[4].text).assertEqual(' (2026-09-01 12:44):')
+      expect(nodes[1].type).assertEqual(BBNodeType.EMOTION)
+      expect(nodes[2].type).assertEqual(BBNodeType.TEXT)
+      expect(nodes[2].text.startsWith('我懒得讨论傻逼网易的问题')).assertTrue()
+      expect(nodes[2].text.endsWith('内容不得玩家玩到撑')).assertTrue()
+    })
+
     it('keepsQuoteReplyPageInPidLinkHref', 0, (): void => {
       // NGA 引用头 [pid=pid,tid,page] 携带引用楼层所在页，
       // 链接必须保留 page 供帖子页按页加载整页后定位

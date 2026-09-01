@@ -1,5 +1,5 @@
 import { BBNode, BBNodeType } from '../../../model/BBCodeNode'
-import { createBBNode, indexOfIgnoreCase, matchesIgnoreCaseAt, ParseState } from '../lexer'
+import { createBBNode, indexOfIgnoreCase, matchesIgnoreCaseAt, ParseState, pushTextNode } from '../lexer'
 import { parseInlineInto } from '../inline-parser'
 import { parseBBCode } from '../parser'
 
@@ -30,9 +30,11 @@ export const handlePostBy = (state: ParseState, result: BBNode[]): boolean => {
     const headerEnd: number = P_REPLY_REF.lastIndex
     const n = createBBNode()
     n.type = BBNodeType.POST_BY
-    const headerBody: string = `pid=${rrm[1]},${rrm[2]},${rrm[3]}]Reply[/pid] Post by [uid=${rrm[4]}]${rrm[5]}[/uid] (${rrm[6]}):`
     const childNodes: BBNode[] = []
-    parseInlineInto('[' + headerBody, childNodes)
+    // 原文 "[b]Reply to [pid=...]Reply[/pid] Post by ..." 的 "Reply to " 前缀是回复头
+    // 文本的一部分，必须保留（文本零丢失契约）；仅把 [pid=...] 起的标签部分交给内联解析。
+    pushTextNode(childNodes, 'Reply to ')
+    parseInlineInto(`[pid=${rrm[1]},${rrm[2]},${rrm[3]}]Reply[/pid] Post by [uid=${rrm[4]}]${rrm[5]}[/uid] (${rrm[6]}):`, childNodes)
     n.children = childNodes
     result.push(n)
 

@@ -22,6 +22,7 @@ import appTopicListUnitTest from './AppTopicListUnit.test';
 import appThreadUnitTest from './AppThreadUnit.test';
 import appUserUnitTest from './AppUserUnit.test';
 import reputationParserUnitTest from './ReputationParserUnit.test';
+import quoteInjectionUnitTest from './QuoteInjectionUnit.test';
 
 /**
  * 注册全部本地单元测试。
@@ -51,4 +52,5 @@ export default function testsuite(): void {
   appThreadUnitTest();
   appUserUnitTest();
   reputationParserUnitTest();
+  quoteInjectionUnitTest();
 }

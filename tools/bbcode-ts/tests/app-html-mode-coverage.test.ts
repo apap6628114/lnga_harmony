@@ -54,7 +54,11 @@ for (const name of pairNames) {
 
     it('主题、分页与用户名称一致', () => {
       assert.equal(report.thread.subjectEqual, true)
-      assert.equal(report.thread.authorEqual, true)
+      // authorEqual 为 null 表示 HTML 侧未提供主题作者名（跨页时楼主不在当前页
+      // __U 用户表，页面仅有 tAid 数字），属 Rule 7.3-6「页面未提供字段」；只有
+      // 两侧都有值时必须一致（拒绝 false）。
+      assert.ok(report.thread.authorEqual !== false,
+        `主题作者不一致：JSON="${report.thread.authorJson}" vs HTML="${report.thread.authorHtml}"`)
       assert.equal(report.thread.forumEqual, true)
       assert.equal(report.thread.lastpostHtml, report.thread.lastpostJson)
       assert.equal(report.paging.rowsHtml, report.paging.rowsJson)

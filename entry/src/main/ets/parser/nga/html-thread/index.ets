@@ -10,7 +10,7 @@
  * 组装为 __R/__U/__T/__F/__ROWS/__R__ROWS_PAGE/__PAGE 结构。
  */
 
-import { PostArgData, parseAllPostArgs, extractUserInfo, extractTotalReplies, extractLastPostTs, extractSetDefaultVote, extractAlertInfo } from './PostArgScanner';
+import { PostArgData, parseAllPostArgs, extractUserInfo, extractTotalReplies, extractTopicAuthorId, extractLastPostTs, extractSetDefaultVote, extractAlertInfo } from './PostArgScanner';
 import {
   extractPostContent, extractPostSubject, extractPostDate,
   extractForumName, extractThreadSubject, extractPostAuthorName,
@@ -172,6 +172,14 @@ export function parseHtmlToRawJson(html: string): object {
     }
   }
 
+  // 主题作者以 setDefault 的 tAid 为准（与 JSON __T.authorid 同源）；跨页视图下
+  // 楼主不在当前页楼层中，当前页首楼 authorid 不能代表主题作者，仅作 tAid 缺失回退。
+  // __T.postdate 是主题创建时间（楼主发帖时间戳），只有当前页含 lou=0 时才可恢复；
+  // 跨页时页面未提供该字段，置 0 而非取当前页首楼时间（错误值）。
+  const topicAuthorId: number = extractTopicAuthorId(html);
+  const authorId: number = topicAuthorId > 0 ? topicAuthorId : firstAuthorId;
+  const postdate: number = procKeys.length > 0 && procKeys.includes(0) ? firstPostTs : 0;
+
   const postMiscVar: Record<string, Object> = { 'vote': topicVote as Object };
 
   const __T: Record<string, Object> = {
@@ -180,9 +188,9 @@ export function parseHtmlToRawJson(html: string): object {
     'subject': extractThreadSubject(html) as Object,
     'replies': Math.max(0, totalRows - 1) as Object,
     'this_visit_rows': currentPageRows as Object,
-    'authorid': firstAuthorId as Object,
-    'author': extractPostAuthorName(__U, firstAuthorId) as Object,
-    'postdate': (firstPostTs || 0) as Object,
+    'authorid': authorId as Object,
+    'author': extractPostAuthorName(__U, authorId) as Object,
+    'postdate': postdate as Object,
     'lastpost': (extractLastPostTs(html) || lastPostTs || 0) as Object,
     'lastposter': extractPostAuthorName(__U, lastAuthorId) as Object,
     'post_misc_var': postMiscVar as Object,

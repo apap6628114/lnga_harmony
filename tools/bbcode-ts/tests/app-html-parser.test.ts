@@ -33,6 +33,35 @@ function createAppHtmlFixture(): string {
 }
 
 /**
+ * 构造 APP `__output=17 + __localres=1` 的第 2 页帖子 HTML。
+ *
+ * 跨页视图下楼主（lou=0）不在当前页楼层中，页面仅凭 setDefault 的 tAid
+ * （index 3）提供主题作者；当前页首楼 authorid 不得冒充主题作者，
+ * 主题创建时间（__T.postdate）页面未提供。
+ *
+ * @returns 最小跨页 APP HTML
+ */
+function createAppHtmlPage2Fixture(): string {
+  return `
+    <script>
+      __CURRENT_TID=44191387;
+      __CURRENT_FID=-7;
+      __CURRENT_PAGE=2;
+      __CURRENT_PAGE_POSTS=20;
+      commonui.userInfo.setAll({"999999":{"uid":999999,"username":"page2user"}});
+      commonui.postArg.setDefault(-7,0,44191387,205511,33,"","","","",null,0,540,1787358664);
+    </script>
+    <h2 id='currentForumName'>网事杂谈</h2>
+    <h1 id='currentTopicName'>测试主题</h1>
+    <span id='postdate20'>2025-05-27 10:00</span>
+    <span id='postcontent20'>第 2 页首楼正文</span>
+    <script>
+      commonui.postArg.proc(20,null,null,null,null,null,null,null,null,null,880000001,0,null,'999999',1748350800,'0,0,0',null,'','','8 Android','',null);
+    </script>
+  `
+}
+
+/**
  * APP HTML 页面解释回归。
  */
 describe('APP output=17 HTML 解释', () => {
@@ -54,5 +83,31 @@ describe('APP output=17 HTML 解释', () => {
     assert.equal(data['__ROWS'], 541)
     assert.equal(data['__R__ROWS_PAGE'], 20)
     assert.equal(topic['lastpost'], 1787358664)
+  })
+
+  it('主题作者以 setDefault tAid 为准，含主楼页恢复作者名与主题时间', () => {
+    const parsed: Record<string, Object> = parseHtmlToRawJson(createAppHtmlFixture()) as Record<string, Object>
+    const data: Record<string, Object> = parsed['data'] as Record<string, Object>
+    const topic: Record<string, Object> = data['__T'] as Record<string, Object>
+    assert.equal(topic['authorid'], 205511)
+    assert.equal(topic['author'], 'gerraerd')
+    assert.equal(topic['postdate'], 1748251672)
+  })
+
+  it('跨页视图不把首楼作者冒充主题作者，页面未提供的字段置空', () => {
+    const parsed: Record<string, Object> = parseHtmlToRawJson(createAppHtmlPage2Fixture()) as Record<string, Object>
+    const data: Record<string, Object> = parsed['data'] as Record<string, Object>
+    const topic: Record<string, Object> = data['__T'] as Record<string, Object>
+    // tAid（setDefault index 3）与 JSON __T.authorid 同源，跨页仍可恢复
+    assert.equal(topic['authorid'], 205511)
+    // 楼主不在当前页 __U，页面未提供主题作者名，不得取首楼作者 page2user
+    assert.equal(topic['author'], '')
+    // 主题创建时间仅含主楼页可恢复；跨页置 0 而非取首楼时间
+    assert.equal(topic['postdate'], 0)
+    // 当前页楼层行不受影响
+    const rows: Record<string, Object> = data['__R'] as Record<string, Object>
+    const first: Record<string, Object> = rows['20'] as Record<string, Object>
+    assert.equal(first['authorid'], '999999')
+    assert.equal(first['postdatetimestamp'], 1748350800)
   })
 })
