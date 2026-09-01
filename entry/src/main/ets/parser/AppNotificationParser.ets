@@ -19,6 +19,9 @@
  *   type→type、from_uid→发起人、from_uname→发起人名、time→时间戳、
  *   about_id→tid（私信为 mid）、about_id2→pid/replyPid、about_id3→repliedPid、
  *   about_id4→page、text→标题/摘要、to_uid→被评价用户（点赞）
+ * - 页码实测：仅帖子互动类（回复/评论，type 1/2/7/8）携带 about_id4（=新回复
+ *   pid 所在页）；支持或反对（type 17）恒为 0，无页码线索——打开帖子需先
+ *   pid→页码预查找（见 NotificationPanel.openThreadAfterPidLookup）
  * - 未读提示：result.unread（int）优先，回退 unread_cnt.unread
  *
  * 本地稳定 ID 的构造格式固定（见各构造函数），不随接口通道变化，

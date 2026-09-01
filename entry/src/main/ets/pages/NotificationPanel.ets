@@ -8,6 +8,11 @@
  *   （私信通知 notificationId 内含 mid）精确表达，点击会话标记该会话已读；
  * - 动态：关注动态流，数据来自 FollowActivityStore（轮询/条件抓取/缓存），
  *   已读规则与消息一致：点开帖子才标记已读，右上角「全部已读」作用于当前 Tab 的系统。
+ *
+ * 楼层定位：官方 APP 的支持或反对通知（type=17）不返回页码（about_id4 恒 0），
+ * 关注动态亦无页码字段——这两类入口点击后先经 locatePidPage 二分定位目标楼层
+ * 所在页，再以正确页码打开帖子（openThreadAfterPidLookup，与回帖列表/链接
+ * 入口同一模式）；回复/评论类通知携带服务端页码，直接按页码打开。
  */
 
 import { appStore } from '../store/AppStore'
@@ -23,6 +28,8 @@ import { FollowedActivity, FollowedActivityType } from '../model/Follow'
 import type { MessageThreadInfo } from '../model/Message'
 import type { MessageListResult } from '../model/MessageResult'
 import { getMessageList } from '../service/api/MessageApi'
+import { locatePidPage } from '../service/api/ThreadApi'
+import { pidLocateProgress } from '../common/media/PidLocateProgress'
 import { AppColors, BreakpointType, NOTI_TYPE_MAP, getNotiIcon } from '../common/constants/Constants'
 import { formatTime } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
@@ -131,6 +138,14 @@ export struct NotificationPanel {
   private unreadByMid: Map<string, boolean> = new Map<string, boolean>()
   /** 私信列表最近一次成功刷新时间戳（快照复用窗口判定）。 */
   private lastPrivateRefreshMs: number = 0
+  /**
+   * 楼层定位查找代际：连点多条通知/动态时只执行最新一次跳转；面板离开时自增作废。
+   * 切 Tab（handleTabClicked）刻意不作废：Tab 切换不改变用户点击通知/动态的跳转意图，
+   * 在途查找完成后仍应打开目标帖子（与 TopicListPanel 切版块放弃定位的语义不同）。
+   */
+  private pidLookupGeneration: number = 0
+  /** 当前楼层定位指示器代际（pidLocateProgress.begin() 返回值，-1 表示未接管）。 */
+  private pidLocateGeneration: number = -1
   private scroller: Scroller = new Scroller()
   /** 筛选条在窗口中的底部纵坐标（onAreaChange 实时采集，供状态视图撑满估算）。 */
   private sortBarBottomY: number = 0
@@ -179,6 +194,10 @@ export struct NotificationPanel {
   /** 结束当前页面出现周期，使未完成的异步回调失效。 */
   aboutToDisappear(): void {
     this.scope.end()
+    // 使在途的楼层定位查找失效：面板离开后不得再执行过期跳转
+    this.pidLookupGeneration++
+    pidLocateProgress.hide(this.pidLocateGeneration)
+    this.pidLocateGeneration = -1
   }
 
   /** 通知 Store 发布新版本时同步页面快照（私信通知快照任何 Tab 都同步，供会话行已读索引）。 */
@@ -887,6 +906,71 @@ export struct NotificationPanel {
   }
 
   /**
+   * 服务端提示页码是否可信（正整数）。
+   *
+   * 官方 APP 通知中仅帖子互动类（回复/评论）携带页码；支持或反对（type=17）
+   * 实测 about_id4 恒为 0，不提供页码线索，必须走 pid→页码预查找。
+   *
+   * @param page - 服务端页码字符串
+   * @returns 是否为可信页码
+   */
+  private hasValidPage(page: string): boolean {
+    const parsedPage: number = Number(page)
+    // 与服务端页码语义对齐：仅正整数可信（非整数/科学计数/溢出均不可信，
+    // 避免与 resolvePage 的向下取整产生不一致而重新落入单帖兜底路径）
+    return Number.isInteger(parsedPage) && parsedPage >= 1
+  }
+
+  /**
+   * 仅携带 pid 的通知/动态：先完成 pid→页码数据查找，再以正确页码打开帖子。
+   *
+   * 与回帖列表/链接入口同一模式。官方 APP 的支持或反对通知（about_id4 恒 0）
+   * 与关注动态（无页码字段）不携带楼层页码：若直接按第 1 页打开，ThreadPanel
+   * 页内找不到目标 pid 会触发单帖兜底——服务端单帖视图把 lou 重置为 0，
+   * UI 误标「楼主」并错乱拼接后续相邻页。先二分定位页码即可让整页加载后
+   * 页内正常定位。
+   * 查找失败（楼层已删除/请求异常）时退化为不带定位意图地打开第 1 页。
+   * 带代际防重入：连点多条时只执行最新一次；面板离开后在途查找作废。
+   *
+   * @param tid - 主题 ID
+   * @param pid - 目标楼层 pid（已归一，非 '0'）
+   * @param source - 打开帖子的路由来源（ThreadSource 枚举值；动态入口无对应来源传空串）
+   */
+  private async openThreadAfterPidLookup(tid: string, pid: string, source: string): Promise<void> {
+    const generation: number = ++this.pidLookupGeneration
+    // 接管全局定位指示器：总步数由 locatePidPage 在末页请求后确定（1 + ⌈log₂总页数⌉）
+    const progressGeneration: number = pidLocateProgress.begin()
+    this.pidLocateGeneration = progressGeneration
+    try {
+      const page: number = await locatePidPage(appStore.auth.token, tid, parseInt(pid, 10),
+        (done: number, total: number): void => {
+          // 过期查找的进度回调不得污染最新一次显示（本地代际 + 全局代际双校验）
+          if (generation !== this.pidLookupGeneration) {
+            return
+          }
+          pidLocateProgress.show(progressGeneration, done, total)
+        })
+      if (generation !== this.pidLookupGeneration) {
+        // 已有更新的点击或面板已离开：丢弃过期结果（指示器由最新一次调用接管）
+        return
+      }
+      if (page > 0) {
+        routerStore.navigateActivity(Screen.thread(tid, page, pid, source))
+      } else {
+        // 定位失败（楼层已删除/请求异常）：打开帖子首页并告知
+        appStore.showToast('未能定位到该楼层，已打开帖子首页')
+        routerStore.navigateActivity(Screen.thread(tid, 1, '', source))
+      }
+    } finally {
+      // 无论查找成功/失败/异常，均归还指示器（过期查找由新接管者负责，此处代际校验避免误伤）
+      if (generation === this.pidLookupGeneration) {
+        pidLocateProgress.hide(progressGeneration)
+        this.pidLocateGeneration = -1
+      }
+    }
+  }
+
+  /**
    * 标记并打开一条具体通知。
    *
    * 注意：私信通知（type 10/11）已迁出消息 Tab，`category === 'message'`
@@ -909,10 +993,16 @@ export struct NotificationPanel {
       if (upvote.tid.length > 0) {
         appStore.markNotificationSeen(notification.notificationId)
         this.syncNotificationsFromStore()
-        routerStore.navigateActivity(
-          Screen.thread(upvote.tid, this.resolvePage(upvote.page), this.normalizeTargetPid(upvote.pid),
-            ThreadSource.NOTIFICATION)
-        )
+        const targetPid: string = this.normalizeTargetPid(upvote.pid)
+        if (targetPid.length > 0 && !this.hasValidPage(upvote.page)) {
+          // 官方 APP 支持或反对通知不返回楼层页码：先 pid→页码预查找再打开
+          this.openThreadAfterPidLookup(upvote.tid, targetPid, ThreadSource.NOTIFICATION)
+        } else {
+          routerStore.navigateActivity(
+            Screen.thread(upvote.tid, this.resolvePage(upvote.page), targetPid,
+              ThreadSource.NOTIFICATION)
+          )
+        }
       }
     } else {
       const reply: ReplyNotification = notification as ReplyNotification
@@ -920,8 +1010,13 @@ export struct NotificationPanel {
         const targetPid: string = this.resolveReplyTargetPid(reply)
         appStore.markNotificationSeen(notification.notificationId)
         this.syncNotificationsFromStore()
-        routerStore.navigateActivity(Screen.thread(reply.tid, this.resolvePage(reply.page), targetPid,
-          ThreadSource.NOTIFICATION))
+        if (targetPid.length > 0 && !this.hasValidPage(reply.page)) {
+          // 服务端未提供页码时先 pid→页码预查找，与支持或反对通知同一模式
+          this.openThreadAfterPidLookup(reply.tid, targetPid, ThreadSource.NOTIFICATION)
+        } else {
+          routerStore.navigateActivity(Screen.thread(reply.tid, this.resolvePage(reply.page), targetPid,
+            ThreadSource.NOTIFICATION))
+        }
       }
     }
   }
@@ -986,7 +1081,8 @@ export struct NotificationPanel {
     }
     this.markActivitySeen(activity.id)
     if (activity.pid.length > 0 && activity.pid !== '0') {
-      routerStore.navigateActivity(Screen.thread(activity.tid, 1, activity.pid))
+      // 关注动态不携带楼层页码：先 pid→页码预查找再打开，避免单帖兜底错乱
+      this.openThreadAfterPidLookup(activity.tid, activity.pid, '')
     } else {
       routerStore.navigateActivity(Screen.thread(activity.tid))
     }
