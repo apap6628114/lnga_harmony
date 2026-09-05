@@ -1,153 +1,858 @@
-# 沉浸光感（Immersive Light）设计约束
+# HarmonyOS API 26 沉浸光感与新材质完整指南
 
-本文记录本工程在 API 26（HarmonyOS 6.x）接入沉浸光感（沉浸式系统材质 + 自动反色）的设计契约与故障定位依据，重点是**自动反色（colorInvert）的生效条件**。文中的"必须/不得"表示当前实现依赖的不变量；官方行为说明均可在文末的文档链中指回。
+> 本文是面向 AI、ArkTS 开发者和本工程维护者的沉浸光感知识库。
+>
+> 适用范围：HarmonyOS API 26.0.0 Release，ArkUI 声明式开发，以及 UI Design Kit（HDS）沉浸光感。
+>
+> 官方文档核对时间：2026-09-05。华为官方页面可能继续修订；遇到本文与 SDK 实际行为不一致时，应以当前 SDK API 参考和变更说明为准。
 
-工程目标 SDK 见 [`build-profile.json5`](../build-profile.json5)，`targetSdkVersion` 与 `compatibleSdkVersion` 均为 `26.0.0`，应用级材质开关已在 [`module.json5`](../entry/src/main/module.json5) 中配置为 `enable`。
+## 0. 先记住这一条：Release 的生效范围门禁
 
-## 1. 材质的三层开关体系
+API 26 Beta 阶段，开发者容易形成“只要给任意组件设置 `systemMaterial`，材质就会生效”的认知。API 26 Release 对既有 Beta 接口增加了生效范围约束：**接口仍然存在，但很多组件在错误的页面区域中会静默不生效。**
 
-沉浸光感最终是否生效由三层共同决定，任何一层不满足都可能出现"代码写了但没效果"：
+Release 后的判断规则如下：
 
-| 层 | 配置位置 | 取值 | 说明 |
+| 组件或接口 | 生效范围 |
+| --- | --- |
+| 弹窗类组件 | 页面内全部区域。包括 `AlertDialog`、`ActionSheet`、`CustomDialog`、`CalendarPickerDialog`、`DatePickerDialog`、`TimePickerDialog`、`TextPickerDialog`、`SelectionMenu`、`AlphabetIndexer` 弹窗，以及 `Text` 设置 `copyOption` 后长按或双击产生的文本菜单 |
+| 弹窗类接口 | 页面内全部区域。包括 `PromptAction`、`ArkUI_NativeDialog`、`@ohos.promptAction` 弹窗、Popup 控制、Tips 控制、菜单控制、半模态转场 |
+| `Slider`、`Toggle`、`Select` | 页面内全部区域 |
+| 其他 ArkUI 组件 | 仅在 `Navigation`/`NavDestination` 标题栏，或横向 `Tabs` 中 `barPosition: BarPosition.End` 的底部 `TabBar` 区域 |
+
+因此，以下代码在 Beta 阶段可能有效，在 Release 中可能只显示普通组件样式：
+
+```ts
+Column() {
+  Text('普通组件')
+}
+.width(328)
+.height(56)
+.systemMaterial(new uiMaterial.ImmersiveMaterial({
+  style: uiMaterial.ImmersiveStyle.THIN,
+}))
+```
+
+如果这个 `Column` 不在允许的标题栏或底部 TabBar 区域中，材质不会生效。需要材质时，应把它放入有效区域，或改用 `backgroundColor` 等普通属性实现稳定的降级视觉。
+
+这条门禁是本工程所有材质判断的第一条规则，优先级高于材质参数、设备算力和颜色配置。
+
+## 1. 沉浸光感是什么
+
+沉浸光感从 API 26.0.0 开始由 ArkUI 提供，包含两部分能力：
+
+1. **沉浸式系统材质**：由系统统一处理材质滤镜、折射、高光、背景模糊、阴影和部分交互反馈。
+2. **沉浸式空间动效**：由系统为弹窗、菜单、Slider 等场景提供非线性形变、边缘流光和粒子动画等空间动效。
+
+系统会根据设备材质等级、系统设置中的沉浸光感强弱和深浅色模式自适应效果。应用不应把它当作一个固定颜色或固定透明度的“玻璃背景”，而应把它当作由系统接管的视觉层。
+
+### 1.1 ArkUI 与 HDS 是两套入口
+
+| 入口 | 主要对象 | 适合场景 | 等级控制 |
 | --- | --- | --- | --- |
-| 系统设置 | 用户在系统设置中选择"沉浸光感"强度 | 强 / 均衡 / 弱 | 决定材质模糊、高光、阴影的丰富度；**也是自动反色的触发阈值影响因素** |
-| 设备算力 | 厂商在系统配置文件中分档 | 高 / 中 / 低 | `style`、`colorInvert` 仅在高/中算力设备生效；低算力降级为背景色/边框/阴影 |
-| 应用级状态 | `module.json5` 的 metadata | `default` / `enable` / `disable` | `disable` 时所有组件级材质（含主动设置）全部失效 |
+| ArkUI `uiMaterial` | `uiMaterial.ImmersiveMaterial`、通用属性 `systemMaterial` | 普通 ArkUI 组件、弹窗、局部交互控件 | 设备决定，使用 `uiMaterial.getGlobalMaterialLevel()` 查询，不可由应用设置 |
+| UI Design Kit `hdsMaterial` | `HdsNavigation`、`HdsNavDestination`、`HdsTabs` 的 `systemMaterialEffect` | HDS 导航、HDS 底部页签、空间化首眼和悬浮导航 | 可设置 `ADAPTIVE`，也可在确有必要时指定等级 |
 
-### 1.1 应用级开关
+如果页面使用 HDS 导航和 HDS 底部页签，优先使用 HDS 的 `systemMaterialEffect`，它会跟随 HDS 最新规范。如果页面是普通 ArkUI 组件或弹窗，使用本文的 `uiMaterial` 规则。
+
+## 2. Beta1 到 Release 的行为变化
+
+| 项目 | API 26 Beta 阶段 | API 26 Release 阶段 |
+| --- | --- | --- |
+| `systemMaterial` / `ImmersiveMaterial` | 支持组件接入新材质，很多普通组件在页面任意位置都能看到效果 | 接口仍可调用，但普通组件受生效区域限制 |
+| 弹窗类组件和接口 | 可在页面任意位置使用 | 仍可在页面任意位置使用 |
+| `Slider`、`Toggle`、`Select` | 可在页面任意位置使用 | 仍可在页面任意位置使用 |
+| 其他组件 | 组件级材质通常直接可见 | 只有标题栏或底部 TabBar 区域生效 |
+| 变更性质 | Beta 新增能力 | Release 为性能和功耗增加的行为约束 |
+
+官方变更说明将该行为变更标记为 API 26 Beta 版本新增接口的适配事项，起始 API Level 为 26.0.0。工程中如果 `targetSdkVersion`/`targetAPIVersion` 已进入 26.0.0 适配范围，应按 Release 约束检查全部材质代码，不能只在高性能开发设备上验证。
+
+## 3. 三层开关与优先级
+
+沉浸光感不是单一开关。最终结果由应用配置、组件配置、设备能力和生效区域共同决定。
+
+### 3.1 应用级开关
+
+必须在 `entry` 类型的 module 中配置 metadata：
 
 ```json5
 {
   "module": {
+    "name": "entry",
     "type": "entry",
     "metadata": [
-      { "name": "ohos.arkui.UIMaterial.state", "value": "enable" }
+      {
+        "name": "ohos.arkui.UIMaterial.state",
+        "value": "enable"
+      }
     ]
   }
 }
 ```
 
-- 必须写在 **entry 类型**的 module 中才生效。
-- `targetAPIVersion` 必须不低于 26.0.0。
-- 状态只影响"默认开启"的组件范围（Dialog、Toast、Select、Toggle、Chip 等），**不影响**开发者主动通过 `systemMaterial` 设置的材质（`disable` 模式除外）。
-- 运行时可用 `uiMaterial.getMaterialInfo()` 读取 `MaterialInfo.state`（`DEFAULT`/`ENABLE`/`DISABLE`）辅助诊断。
+`value` 有三种状态：
 
-## 2. 组件级接入与材质参数
-
-通用属性 `systemMaterial(material)` 设置材质，参数收敛在 [`UIMaterialManager`](../entry/src/main/ets/common/managers/UIMaterialManager.ets)：
-
-| 参数 | 取值 | 设计要点 |
+| 值 | `MaterialState` | 行为 |
 | --- | --- | --- |
-| `style` | `ULTRA_THIN` / `THIN` / `REGULAR` / `THICK` / `ULTRA_THICK` | 厚度与通透度；**自动反色只认 THIN 与 ULTRA_THIN** |
-| `materialColor` | 带透明度的 `ResourceColor` | 为材质滤镜再混合一层纯色；**必须带透明度**，纯不透明色会完全遮挡材质滤镜 |
-| `colorInvert` | `boolean` | 子树前景自动反色，见第 3 节 |
-| `applyShadow` | `boolean`（默认 true） | 材质自带阴影。true 时材质阴影**优先于**通用 `shadow` 属性并使其失效；false 时通用 `shadow` 才生效 |
-| `interactive` | `boolean` | 按压形变 |
-| `lightEffect` | `LightEffectOptions \| null` | 触点光感流光，`color` 默认 `Color.White` |
+| 不配置或 `default` | `DEFAULT` | Dialog、Toast、AlphabetIndexer 等在没有冲突样式时按默认规则启用；其他组件通常需要主动设置 |
+| `enable` | `ENABLE` | 批量打开官方支持的默认材质组件；Navigation 标题栏、Chip/ChipGroup、Select、菜单、Toggle、SegmentButton、Slider、SelectionMenu 等按官方清单启用；Tabs 在悬浮样式生效时启用 TabBar 材质 |
+| `disable` | `DISABLE` | 全局禁用沉浸式系统材质；主动设置的组件级材质也不生效 |
 
-- 材质对象是纯配置对象，可跨组件共享复用；不得在运行期频繁替换材质对象或改动其子树结构。
-- 组件背景必须保持 `Color.Transparent`（或不设置），由材质层承载表现；不透明背景色会盖在材质层之上使材质不可见。
+只有 `entry` module 中的 metadata 生效。可用以下代码读取配置：
 
-## 3. 自动反色 colorInvert（本项目最大踩坑点）
+```ts
+import { uiMaterial } from '@kit.ArkUI';
 
-### 3.1 生效条件（缺一不可）
+@Entry
+@Component
+struct MaterialStateDemo {
+  private readonly materialInfo: uiMaterial.MaterialInfo = uiMaterial.getMaterialInfo();
 
-1. **材质样式为 `THIN` 或 `ULTRA_THIN`**（`REGULAR`/`THICK`/`ULTRA_THICK` 不进入反色路径）。
-2. **系统沉浸光感强度**：材质越薄、强度越强，越容易满足反色触发阈值（弱档可能完全不触发）。
-3. **设备为高/中算力档**（低算力下 `colorInvert` 参数不产生效果）。
-4. **颜色必须使用"特殊资源值"**（见 3.2），**不得使用硬编码色值**（`Color.White`、`'#FFFFFFFF'` 等不触发反色）。
-5. **颜色所在的属性接口必须在生效白名单内**（见 3.3）。
-6. 应用级材质状态不是 `disable`。
+  build() {
+    Text(`${this.materialInfo.state}`)
+  }
+}
+```
 
-### 3.2 特殊资源值表（colorInvert 只认这些系统资源）
+### 3.2 组件级开关
 
-> 来源：官方 arkts-apis-uimaterial 的 `colorInvert` 参数说明"表1 特殊资源值对应的深浅色值"。**旧命名体系的 `sys.color.ohos_id_color_*`（如 `ohos_id_color_foreground`）不在表内，设置后不会反色**——本工程曾因此出现"黑字黑底"。
+组件级开启有三种形式：
 
-| 特殊资源值 | 浅色 | 深色 |
+1. 通用属性：`.systemMaterial(new uiMaterial.ImmersiveMaterial({...}))`。
+2. 弹窗 options：例如 `CustomDialogControllerOptions`、`AlertDialogParam`、`ActionSheetOptions`、`ShowToastOptions`、`PopupOptions`、`TipsOptions`、`ContextMenuOptions` 的 `systemMaterial`。
+3. 组件专属接口：例如 `Select.menuSystemMaterial`、Navigation 标题栏 options 的 `systemMaterial`、Tabs `barFloatingStyle` 的 `systemMaterial`。
+
+优先级：
+
+1. 应用级 `disable` 是总禁用，覆盖一切组件配置。
+2. 应用级 `enable` 负责给官方支持的组件提供默认材质。
+3. 组件级材质优先级高于应用级默认效果，可覆盖具体组件的材质参数。
+4. 组件级关闭使用 `uiMaterial.Material.empty`。
+
+`undefined` 和 `Material.empty` 不等价：
+
+```ts
+import { uiMaterial } from '@kit.ArkUI';
+
+Column() {
+  Text('内容')
+}
+.systemMaterial(uiMaterial.Material.empty)
+```
+
+- `undefined`：恢复组件默认的沉浸光感接口行为；在 `ENABLE` 或某些默认场景下，组件可能重新出现材质。
+- `uiMaterial.Material.empty`：明确关闭当前组件的沉浸光感。
+
+### 3.3 开关不是生效保证
+
+即使应用级为 `enable`，或组件设置了 `ImmersiveMaterial`，还必须同时满足：
+
+- 组件属于 Release 允许的全页面清单，或位于允许的标题栏/底部 TabBar 区域。
+- 当前设备支持沉浸式材质，或接受设备不支持时的无效果降级。
+- 组件没有被不透明背景、模糊、内容层背景等样式遮挡。
+- 使用的材质参数在当前设备等级上有效。
+
+## 4. 材质样式与设备等级
+
+### 4.1 `ImmersiveStyle`
+
+| 样式 | 视觉含义 | 推荐场景 | `colorInvert` |
+| --- | --- | --- | --- |
+| `ULTRA_THIN` | 超薄、透明度最高 | 浮动工具栏、圆形操作按钮、轻量提示 | 支持 |
+| `THIN` | 薄、较通透 | 搜索框、轻量操作控件、导航按钮 | 支持 |
+| `REGULAR` | 常规厚度 | 普通卡片、内容面板 | 不支持 |
+| `THICK` | 厚、模糊明显 | 菜单、Toast、AlphabetIndexer 气泡 | 不支持 |
+| `ULTRA_THICK` | 超厚、背景强模糊 | Dialog、CustomDialog、ActionSheet | 不支持 |
+
+`ImmersiveMaterial` 默认参数为：
+
+```ts
+{
+  style: uiMaterial.ImmersiveStyle.REGULAR,
+  materialColor: undefined,
+  colorInvert: false,
+  applyShadow: true,
+  interactive: false,
+  lightEffect: undefined
+}
+```
+
+### 4.2 `MaterialLevel`
+
+ArkUI 的 `MaterialLevel` 由设备定义：
+
+| 等级 | 设备 | 影响 |
 | --- | --- | --- |
-| `$r('sys.color.brand')` | #FF0A59F7 | #FF317AF7 |
-| `$r('sys.color.brand_font')` | #FF0A59F7 | #FF5291FF |
-| `$r('sys.color.warning')` | #FFE84026 | #FFD94838 |
-| `$r('sys.color.font_on_primary')` | #FFFFFFFF | #FFFFFFFF |
-| `$r('sys.color.font_primary')` | #E5000000 | #E5FFFFFF |
-| `$r('sys.color.font_secondary')` | #99000000 | #99FFFFFF |
-| `$r('sys.color.font_tertiary')` | #66000000 | #66FFFFFF |
-| `$r('sys.color.font_fourth')` | #33000000 | #33FFFFFF |
-| `$r('sys.color.font_emphasize')` | #FF0A59F7 | #FF5291FF |
-| `$r('sys.color.icon_primary')` | #E5000000 | #E5FFFFFF |
-| `$r('sys.color.icon_secondary')` | #99000000 | #99FFFFFF |
-| `$r('sys.color.icon_tertiary')` | #66000000 | #66FFFFFF |
-| `$r('sys.color.icon_fourth')` | #33000000 | #33FFFFFF |
-| `$r('sys.color.icon_emphasize')` | #FF0A59F7 | #FF5291FF |
-| `$r('sys.color.icon_sub_emphasize')` | #660A59F7 | #665291FF |
-| `$r('sys.color.comp_background_primary_contrary')` | #FFFFFFFF | #FFE5E5E5 |
-| `$r('sys.color.comp_background_primary_contrary_secondary')` | #FFFFFFFF | #FF666666 |
-| `$r('sys.color.comp_background_secondary')` | #19000000 | #19FFFFFF |
-| `$r('sys.color.comp_background_tertiary')` | #0C000000 | #19FFFFFF |
-| `$r('sys.color.comp_background_emphasize')` | #FF0A59F7 | #FF317AF7 |
-| `$r('sys.color.comp_emphasize_secondary')` | #330A59F7 | #33317AF7 |
-| `$r('sys.color.comp_emphasize_tertiary')` | #190A59F7 | #19317AF7 |
-| `$r('sys.color.comp_divider')` | #33000000 | #33FFFFFF |
-| `$r('sys.color.interactive_hover')` | #0C000000 | #19FFFFFF |
-| `$r('sys.color.interactive_focus')` | #FF0A59F7 | #FF317AF7 |
-| `$r('sys.color.interactive_pressed')` | #19000000 | #26FFFFFF |
+| `EXQUISITE` | 高算力 | 支持完整材质滤镜和更丰富的空间效果 |
+| `GENTLE` | 中算力 | 在视觉效果与性能之间平衡 |
+| `SMOOTH` | 低算力 | 保留降级后的背景、边框、阴影等表现 |
 
-工程约定：`UIMaterialManager.adaptiveForeground` / `adaptiveSecondaryForeground` / `inputForeground` 分别绑定 `font_primary` / `font_secondary` / `font_primary`，与旧 `ohos_id_color_*` 系列取值相同、视觉不变，但可参与反色。**任何新的"材质前景色"必须从表 1 选取，不得引入表外资源。**
+查询方式：
 
-### 3.3 生效属性白名单
+```ts
+import { uiMaterial } from '@kit.ArkUI';
 
-自动反色仅对以下属性接口设置特殊资源时生效：
+const materialLevel: uiMaterial.MaterialLevel = uiMaterial.getGlobalMaterialLevel();
+const materialSupported: boolean = uiMaterial.isImmersiveMaterialSupported();
+```
 
-- `Text.fontColor`、`Button.fontColor`、`SymbolGlyph.fontColor`
-- `Image.fillColor`（本工程关闭按钮反色即走此通道，`icon_close.svg` 为可染色 SVG）
-- `Search`：`placeholderColor`、`fontColor`、`searchIcon`、`cancelButton` 图标色、`caretStyle` 光标色、`searchButton` 按钮色
-- `TabContent.tabBar` 使用 `BottomTabBarStyle` 时的文本与图标色
-- `Chip`：`prefixIcon`/`suffixIcon` 的 `fillColor`、`label.fontColor`；`ChipGroup.itemStyle.fontColor`
-- `TextArea` / `TextInput`：`fontColor`、`placeholderColor`
-- `SegmentButton.fontColor`、`Swiper.fontColor`
+设备差异是系统设计，不应为高、中、低算力设备复制三套 UI。应使用透明背景、合理尺寸和稳定参数，让系统负责降级。
 
-## 4. 属性冲突与性能约束
+在高、中算力设备上，`style` 主要影响材质滤镜和厚薄；在低算力设备上，`style` 与 `colorInvert` 不产生相同的视觉差异，材质主要体现为背景色、边框和阴影等降级效果。
 
-- **`systemMaterial` 必须放在其他样式属性（背景色、边框、阴影等）之后**设置，否则材质效果优先级与预期不符。
-- **不得**同时设置背景色（非透明）、`backgroundBlurStyle`、边框与材质；通用 `shadow` 仅在材质自带阴影开启（`applyShadow: true`，材质阴影优先且使自定义 shadow 失效）时与之冲突。
-- 需要自定义阴影时：`applyShadow: false` + 通用 `shadow` 二选一组合，两套不得同时生效。
-- **不得**在同一子树嵌套/层叠多个材质；材质区域避免大面积、持续动画、视频/动图背景（逐帧重采样开销大）。
-- 自动反色范围应尽量小（子树越大、参与反色的元素越多，计算量越高）。
+## 5. `ImmersiveMaterial` 参数规则
 
-## 5. 项目实践记录
+| 参数 | 默认值 | 规则 |
+| --- | --- | --- |
+| `style` | `REGULAR` | 只有高、中算力设备完整支持样式差异；自动反色仅对 `THIN`、`ULTRA_THIN` 生效 |
+| `materialColor` | `undefined` | 给材质滤镜再混合一层纯色；必须使用带透明度的颜色，纯不透明色会遮挡材质滤镜；低算力设备将其作为背景色 |
+| `colorInvert` | `false` | 对材质节点子树中的支持颜色接口启用自动反色；只在高、中算力、满足薄材质和特殊资源条件时生效 |
+| `applyShadow` | `true` | 使用材质自带阴影；此时通用 `shadow` 不生效 |
+| `interactive` | `false` | 开启按压时的交互形变 |
+| `lightEffect` | `undefined` | 传入对象启用触点流光，`null` 显式关闭；默认流光色为 `Color.White`；该效果主要在高、中算力设备生效 |
 
-### 5.1 材质工厂
+### 5.1 材质赋色
 
-[`UIMaterialManager.ets`](../entry/src/main/ets/common/managers/UIMaterialManager.ets) 按用途收敛材质单例：`fabMaterial`（ULTRA_THIN 玻璃球）、`surfaceMaterial`（REGULAR 面板）、`barMaterial`（栏位）、`neutralActionMaterial`（THIN 中性操作）、`inputMaterial`（THIN 输入）、`closeButtonMaterial`（ULTRA_THIN + colorInvert，严格对齐官方反色示例）。
+正确：
 
-> 主操作按钮**不接入材质**：曾用 `buttonMaterial`（THIN 主题琥珀玻璃）作确认/发送按钮，在材质背景框（弹窗/输入栏）上呈现"浅棕底 + 黑字、按钮背景贴边框"的适配问题。已全部改为**实底主题色 + 白字**（`backgroundColor(AppColors.primary/destructive)` + `fontColor(AppColors.white)`），与「AI 设置-保存」「退出登录」按钮一致；需按压反馈/流光的中性操作仍用 `neutralActionMaterial`（回复/发帖编辑器的发送按钮）。
+```ts
+new uiMaterial.ImmersiveMaterial({
+  style: uiMaterial.ImmersiveStyle.THIN,
+  materialColor: '#33FF0000'
+})
+```
 
-### 5.2 图片查看器案例（自动反色的验证闭环）
+错误：
 
-- 需求：关闭按钮在明/暗图片上都必须可见，分享按钮在黑底上文字可读。
-- 失败路径 1：`ohos_id_color_foreground`（表外资源）→ 反色不触发，浅色主题下解析为黑 → 黑字黑底。
-- 失败路径 2：材质组件叠加 `shadow`/`border`、`systemMaterial` 未放最后 → 属性冲突，材质表现异常。
-- 成功方案（[`ImageViewer.ets`](../entry/src/main/ets/common/components/ImageViewer.ets)）：
-  - 关闭按钮：`Image.fillColor($r('sys.color.font_primary'))` + `Stack` 透明背景 + `closeButtonMaterial`（ULTRA_THIN + colorInvert），`systemMaterial` 为最后一个样式属性，不叠 shadow/border。
-  - 分享按钮：`Button.fontColor(adaptiveForeground)` + `neutralActionMaterial`（THIN + colorInvert），同样满足反色条件。
+```ts
+new uiMaterial.ImmersiveMaterial({
+  style: uiMaterial.ImmersiveStyle.THIN,
+  materialColor: '#FFFF0000'
+})
+```
 
-### 5.3 安全控件（SaveButton）与材质
+`#33FF0000` 带透明度，能在保留材质滤镜的同时增加色调；`#FFFF0000` 完全不透明，会把材质层盖成纯红色。`materialColor` 可以使用应用颜色资源，但它不等价于 `colorInvert` 所要求的“特殊系统资源”。
 
-`SaveButton` 继承 `SecurityComponentMethod`，样式面被严格限制为"背托 + 图标 + 文字"三层（`fontColor`/`iconColor`/`backgroundColor`/`border*`/`padding`/`textIconSpace` 等），**不支持 `systemMaterial` / 阴影 / 模糊**，且样式需通过系统合法性校验（字号过小、颜色与背景相近、过于透明等会导致授权失败）。保存按钮保持固定高对比样式（白字 + 固定背托色）是 API 26 下的正确姿势，不得尝试为其接入沉浸材质。
+### 5.2 交互形变与点光源
 
-## 6. 故障排查清单
+```ts
+Column() {
+  Text('按压我')
+}
+.width(160)
+.height(56)
+.borderRadius(28)
+.backgroundColor(Color.Transparent)
+.systemMaterial(new uiMaterial.ImmersiveMaterial({
+  style: uiMaterial.ImmersiveStyle.THIN,
+  interactive: true,
+  lightEffect: {}
+}))
+```
 
-| 现象 | 排查项 |
+当 `lightEffect` 生效时，部分组件默认的点击态和悬浮态反馈会被材质光感反馈替代。不要在同一控件上叠加一套含义重复的自定义按压动画。
+
+### 5.3 阴影
+
+材质阴影和通用阴影二选一：
+
+```ts
+Column() {
+  Text('自定义阴影')
+}
+.systemMaterial(new uiMaterial.ImmersiveMaterial({
+  style: uiMaterial.ImmersiveStyle.REGULAR,
+  applyShadow: false
+}))
+.shadow({ radius: 20, color: Color.Black })
+```
+
+如果保留 `applyShadow: true`，不要再设置 `shadow`；材质阴影优先，自定义阴影不会生效，还会增加重复绘制。
+
+## 6. 自动反色 `colorInvert`
+
+自动反色用于高透明材质背景下的文字、图标可读性。它不是通用的“把所有颜色取反”，而是系统在材质子树中扫描特定属性接口和特定资源值，按底层背景计算前景色。
+
+### 6.1 必须同时满足的条件
+
+1. `style` 是 `THIN` 或 `ULTRA_THIN`。
+2. 设备是高算力或中算力；低算力设备设置 `colorInvert` 不产生视觉差异。
+3. 系统沉浸光感强度和材质透明度达到系统触发阈值；材质越薄、系统强度越强，越容易触发。
+4. 颜色通过支持的属性接口设置。
+5. 颜色值是官方 API 参考表 1 中的特殊系统资源。
+6. 应用级状态不是 `DISABLE`。
+
+### 6.2 颜色属性白名单
+
+官方 API 参考列出的可反色属性包括：
+
+- `Text.fontColor`、`Button.fontColor`、`SymbolGlyph.fontColor`。
+- `Image.fillColor`。
+- `Search.placeholderColor`、`Search.fontColor`、`searchIcon` 图标色、`cancelButton` 图标色、`caretStyle` 光标色、`searchButton` 按钮色。
+- `TabContent.tabBar` 使用 `BottomTabBarStyle` 时的文字和图标颜色。
+- `Chip.prefixIcon.fillColor`、`Chip.suffixIcon.fillColor`、`Chip.label.fontColor`。
+- `ChipGroup.itemStyle.fontColor`。
+- `TextArea.fontColor`、`TextArea.placeholderColor`、`TextInput.fontColor`、`TextInput.placeholderColor`。
+- `SegmentButton.fontColor`。
+- `Swiper.fontColor`。
+
+错误写法：
+
+```ts
+Text('标题')
+  .fontColor(Color.White)
+```
+
+推荐写法：
+
+```ts
+Text('标题')
+  .fontColor($r('sys.color.font_primary'))
+```
+
+`Color.White`、`'#FFFFFFFF'` 等硬编码色值不会触发自动反色。旧的 `sys.color.ohos_id_color_*` 命名资源也不能作为本工程的自动反色依据；新代码必须从官方表 1 中选择资源。
+
+### 6.3 官方特殊系统资源表
+
+下表是 `colorInvert` 可识别的资源和官方深浅色值。表外资源不得假定能够自动反色。
+
+| 特殊资源 | 浅色 | 深色 |
+| --- | --- | --- |
+| `$r('sys.color.brand')` | `#FF0A59F7` | `#FF317AF7` |
+| `$r('sys.color.brand_font')` | `#FF0A59F7` | `#FF5291FF` |
+| `$r('sys.color.warning')` | `#FFE84026` | `#FFD94838` |
+| `$r('sys.color.font_on_primary')` | `#FFFFFFFF` | `#FFFFFFFF` |
+| `$r('sys.color.font_primary')` | `#E5000000` | `#E5FFFFFF` |
+| `$r('sys.color.font_secondary')` | `#99000000` | `#99FFFFFF` |
+| `$r('sys.color.font_tertiary')` | `#66000000` | `#66FFFFFF` |
+| `$r('sys.color.font_fourth')` | `#33000000` | `#33FFFFFF` |
+| `$r('sys.color.font_emphasize')` | `#FF0A59F7` | `#FF5291FF` |
+| `$r('sys.color.icon_primary')` | `#E5000000` | `#E5FFFFFF` |
+| `$r('sys.color.icon_secondary')` | `#99000000` | `#99FFFFFF` |
+| `$r('sys.color.icon_tertiary')` | `#66000000` | `#66FFFFFF` |
+| `$r('sys.color.icon_fourth')` | `#33000000` | `#33FFFFFF` |
+| `$r('sys.color.icon_emphasize')` | `#FF0A59F7` | `#FF5291FF` |
+| `$r('sys.color.icon_sub_emphasize')` | `#660A59F7` | `#665291FF` |
+| `$r('sys.color.comp_background_primary_contrary')` | `#FFFFFFFF` | `#FFE5E5E5` |
+| `$r('sys.color.comp_background_primary_contrary_secondary')` | `#FFFFFFFF` | `#FF666666` |
+| `$r('sys.color.comp_background_secondary')` | `#19000000` | `#19FFFFFF` |
+| `$r('sys.color.comp_background_tertiary')` | `#0C000000` | `#19FFFFFF` |
+| `$r('sys.color.comp_background_emphasize')` | `#FF0A59F7` | `#FF317AF7` |
+| `$r('sys.color.comp_emphasize_secondary')` | `#330A59F7` | `#33317AF7` |
+| `$r('sys.color.comp_emphasize_tertiary')` | `#190A59F7` | `#19317AF7` |
+| `$r('sys.color.comp_divider')` | `#33000000` | `#33FFFFFF` |
+| `$r('sys.color.interactive_hover')` | `#0C000000` | `#19FFFFFF` |
+| `$r('sys.color.interactive_focus')` | `#FF0A59F7` | `#FF317AF7` |
+| `$r('sys.color.interactive_pressed')` | `#19000000` | `#26FFFFFF` |
+
+### 6.4 最小可验证反色示例
+
+```ts
+import { uiMaterial } from '@kit.ArkUI';
+
+@Entry
+@Component
+struct InvertButtonDemo {
+  build() {
+    Button('操作')
+      .fontColor($r('sys.color.font_primary'))
+      .backgroundColor(Color.Transparent)
+      .systemMaterial(new uiMaterial.ImmersiveMaterial({
+        style: uiMaterial.ImmersiveStyle.THIN,
+        colorInvert: true
+      }))
+  }
+}
+```
+
+注意：在 Release 中，`Button` 必须位于 Navigation 标题栏或横向 Tabs 底部 TabBar，除非它是弹窗内部的按钮；否则 `colorInvert` 条件全部满足也看不到材质。
+
+## 7. 组件适配规则
+
+### 7.1 Navigation 标题栏
+
+- 应用级 `ENABLE` 时，标题栏默认 `ULTRA_THIN`。
+- 组件级通过 `NavigationTitleOptions.systemMaterial` 设置。
+- 通用组件位于标题栏区域内时可生效；标题栏生效范围主要是返回键和非自定义 Menu。
+- 推荐 `barStyle: BarStyle.STACK`，让内容延伸至标题栏下方，材质才能透出内容。
+
+```ts
+import { uiMaterial } from '@kit.ArkUI';
+
+@Entry
+@Component
+struct NavigationMaterialDemo {
+  @Builder
+  titleBar() {
+    Row() {
+      Text('标题')
+        .fontSize(22)
+        .fontColor($r('sys.color.font_primary'))
+      Blank()
+      Button('操作')
+        .backgroundColor(Color.Transparent)
+        .fontColor($r('sys.color.font_primary'))
+        .systemMaterial(new uiMaterial.ImmersiveMaterial({
+          style: uiMaterial.ImmersiveStyle.THIN,
+          colorInvert: true,
+          interactive: true,
+          lightEffect: {}
+        }))
+    }
+    .width('100%')
+    .height(64)
+    .padding({ left: 16, right: 16 })
+  }
+
+  build() {
+    Navigation() {
+      Column() {
+        Text('页面内容')
+      }
+      .width('100%')
+      .height('100%')
+    }
+    .title({ builder: this.titleBar, height: 64 }, { barStyle: BarStyle.STACK })
+  }
+}
+```
+
+### 7.2 底部 Tabs
+
+普通组件要借助底部 TabBar 使材质生效，三个条件必须同时满足：
+
+- `barPosition: BarPosition.End`。
+- `vertical(false)`。
+- `barOverlap(true)`，使 TabBar 使用悬浮样式。
+
+材质设置在 `barFloatingStyle.systemMaterial`，不是 `TabContent` 本身。`TabContent` 不支持直接设置沉浸光感。
+
+```ts
+import { uiMaterial } from '@kit.ArkUI';
+
+@Entry
+@Component
+struct TabsMaterialDemo {
+  build() {
+    Tabs({ barPosition: BarPosition.End }) {
+      TabContent() {
+        Column() {
+          Text('首页')
+        }
+      }.tabBar('首页')
+
+      TabContent() {
+        Column() {
+          Text('设置')
+        }
+      }.tabBar('设置')
+    }
+    .vertical(false)
+    .barOverlap(true)
+    .barFloatingStyle({
+      systemMaterial: new uiMaterial.ImmersiveMaterial({
+        style: uiMaterial.ImmersiveStyle.THIN,
+        colorInvert: true
+      })
+    })
+    .width('100%')
+    .height('100%')
+  }
+}
+```
+
+### 7.3 弹窗、菜单和气泡
+
+弹窗类是 Release 仍允许页面任意区域生效的核心场景。不要用 `Stack` + `Visibility` 自己模拟弹窗并把材质加在外层容器上；这类普通容器仍然受生效范围限制。应使用官方弹窗 API 的 options 设置 `systemMaterial`。
+
+```ts
+import { uiMaterial } from '@kit.ArkUI';
+
+@CustomDialog
+struct MaterialDialog {
+  controller?: CustomDialogController;
+
+  build() {
+    Column() {
+      Text('这是自定义弹窗')
+      Button('关闭')
+        .onClick(() => {
+          this.controller?.close()
+        })
+    }
+    .width(328)
+    .height(216)
+    .padding(24)
+  }
+}
+
+@Entry
+@Component
+struct MaterialDialogPage {
+  private readonly dialogController: CustomDialogController = new CustomDialogController({
+    builder: MaterialDialog(),
+    systemMaterial: new uiMaterial.ImmersiveMaterial({
+      style: uiMaterial.ImmersiveStyle.ULTRA_THICK
+    })
+  })
+
+  build() {
+    Button('打开弹窗')
+      .onClick(() => {
+        this.dialogController.open()
+      })
+  }
+}
+```
+
+Dialog 默认通常使用 `ULTRA_THICK`，Menu/Toast/AlphabetIndexer 通常使用 `THICK`。若主动设置了不透明背景、背景模糊或冲突阴影，默认材质可能不再出现。`CalendarPicker` 拉起的弹窗目前不支持通过通用方式获得弹窗材质，设置在组件本身的通用属性只影响组件本身。
+
+### 7.4 Button、Select、Toggle、Slider
+
+| 组件 | 关键规则 |
 | --- | --- |
-| 组件看不到材质效果 | 应用级状态是否 `disable`；组件是否设置不透明背景色；设备算力/系统强度档位 |
-| 材质有但无反色 | 样式是否 THIN/ULTRA_THIN；颜色是否表 1 特殊资源；属性是否在白名单；是否硬编码色值 |
-| 黑字黑底 / 白字白底 | 先按上行排查，重点检查资源是否误用 `ohos_id_color_*` |
-| 自定义 shadow 不生效 | `applyShadow` 是否为 true（材质阴影优先于通用 shadow） |
-| 背景色/边框显示异常 | `systemMaterial` 是否放在其他样式属性之后；是否与背景色/边框/阴影共存 |
+| `Button` | 应用级 `ENABLE` 不会默认开启；组件级使用 `systemMaterial`。薄材质配合官方系统颜色可自动反色；`lightEffect` 生效后默认点击/悬浮态可能被替代 |
+| `Select` | 下拉按钮和下拉菜单独立控制；按钮默认 `ULTRA_THIN` + `interactive` + `lightEffect`，菜单默认 `THICK`；关闭某一侧使用 `Material.empty`，不要用 `undefined` |
+| `ToggleType.Checkbox` | 当前未适配沉浸光感，设置后无材质效果 |
+| `ToggleType.Switch` | 传入材质主要作为启用标记，实际视觉使用组件内部预设，随算力等级变化 |
+| `ToggleType.Button` | 规则接近 Button，影响背景、边框和阴影 |
+| `Slider` | 材质参数主要是启用标记，实际视觉由 Slider 内部预设；`undefined` 恢复普通样式；只有 `SliderBlockType.DEFAULT` 且 `SliderStyle` 不为 `NONE` 时交互反馈完整 |
 
-## 7. 官方文档链
+### 7.5 ChipGroup 与 SegmentButton
 
-- 沉浸光感开发指导：`arkts-immersive-light-sense`
-- 沉浸光感 FAQ：`arkts-immersive-light-sense-faq`
-- `uiMaterial` API（含 colorInvert 参数说明与表 1）：`arkts-apis-uimaterial`
-- `systemMaterial` 通用属性：`ts-universal-attributes-image-effect`
+- `ChipGroup` 的组件级接口是 `backgroundSystemMaterial`、`selectedBackgroundSystemMaterial`、`iconBackgroundSystemMaterial`；默认样式通常是 `ULTRA_THIN`。
+- `SegmentButton` 使用 `SegmentButtonOptions.backgroundSystemMaterial`；`SegmentButtonV2` 在对应 options 中设置。
+- 胶囊型多选 `SegmentButton`（`type: 'capsule'` 且 `multiply: true`）不支持 `backgroundSystemMaterial`。
+- 自动反色需要将文字和图标颜色设置为官方特殊系统资源。
+- Release 下，这些组件在普通内容区仍受标题栏/底部 TabBar 范围限制，组件 API 支持不等于页面任何位置都生效。
+
+### 7.6 AlphabetIndexer
+
+- `ENABLE` 时默认 `THICK`。
+- `popupBackground` 和 `popupBackgroundBlurStyle` 未主动设置时，提示弹窗可自动使用材质。
+- 主动设置上述任一属性会与沉浸光感互斥。
+- 高、中算力默认显示 `THICK`；低算力降级为白色背景。
+
+### 7.7 其余组件
+
+普通布局容器、滚动容器、Text、Image 等都可能在 API 层面接受 `systemMaterial`，但 Release 后“接受属性”不代表“当前区域生效”。默认判断：
+
+```text
+组件属于弹窗/Slider/Toggle/Select？       -> 页面任意区域可生效
+否则位于 Navigation 标题栏？              -> 可生效
+否则位于横向 Tabs 的 BarPosition.End TabBar？ -> 可生效
+否则                                     -> 材质不生效
+```
+
+## 8. 属性冲突与显示层级
+
+### 8.1 背景必须透明或不设置
+
+材质位于组件背板层；不透明 `backgroundColor`、`backgroundBlurStyle` 或自绘内容层背景可能覆盖材质，使组件看起来仍是纯色。
+
+```ts
+Column() {
+  Text('可见材质')
+}
+.width(328)
+.height(56)
+.borderRadius(28)
+.backgroundColor(Color.Transparent)
+.systemMaterial(new uiMaterial.ImmersiveMaterial({
+  style: uiMaterial.ImmersiveStyle.THIN
+}))
+```
+
+不要在材质上再叠加 `backgroundBlurStyle`、`backgroundEffect` 或重复的背景模糊。材质本身已经包含材质滤镜和模糊能力。
+
+### 8.2 `systemMaterial` 应放在通用样式之后
+
+通用属性写法中，把 `systemMaterial` 放在尺寸、圆角、背景、边框和阴影等样式之后：
+
+```ts
+Column() {
+  Text('推荐顺序')
+}
+.width(328)
+.height(56)
+.borderRadius(28)
+.backgroundColor(Color.Transparent)
+.systemMaterial(new uiMaterial.ImmersiveMaterial({
+  style: uiMaterial.ImmersiveStyle.REGULAR
+}))
+```
+
+通过弹窗 options、组件专属 options 设置的材质不受 ArkUI 通用属性书写顺序影响。
+
+### 8.3 边框的折射表现
+
+薄材质的边框区域可能显示周围背景的颜色，这是折射导致的正常光学表现，不一定是边框失效。需要降低折射时，可选择更厚的样式，或添加半透明 `materialColor`。
+
+### 8.4 材质区域与可视区域
+
+材质渲染区域按组件布局区域计算，不一定等于实际内容的可视区域。例如 Text 的可视区域是文字，但材质按其布局矩形计算。通过显式 `width`、`height`、`borderRadius` 统一两者。Text 本身不能直接为文字内容设置沉浸式系统材质，应给容器设置。
+
+## 9. 功耗与性能约束
+
+沉浸光感会消耗 GPU 资源，性能规则不是可选的视觉建议，而是 Release 收紧范围的直接背景。
+
+### 9.1 面积和层数
+
+- 材质影响区域越大，采样像素越多，功耗越高。
+- 不要给整页背景套材质，也不要给大量小节点重复套材质。
+- 同一子树只在最外层设置一次材质，禁止内外嵌套多个材质。
+- 优先在标题栏、底部悬浮 TabBar、局部操作按钮、必要弹窗使用。
+
+### 9.2 动态内容
+
+不要把材质固定叠在视频、动图、持续动画上方。折射和模糊需要实时采样背景，背景每帧变化会导致材质重新计算。
+
+### 9.3 弹窗尺寸
+
+Dialog/Menu 的空间动效面积越大，绘制开销越高。避免接近全屏的沉浸材质弹窗，优先保持约 328×216 等合理内容尺寸，并让页面内容负责滚动。
+
+### 9.4 自动反色范围
+
+`colorInvert` 会逐个计算材质子树中通过资源接口设置的颜色。不要把它放在包含大列表、大量文本和图标的最外层；仅包住需要保证可读性的局部操作区。
+
+### 9.5 参数和子树稳定
+
+不要在定时器中频繁修改 `style`、`materialColor`，也不要在材质区域内频繁增删子节点。材质参数应在初始化时确定，子树结构应尽量稳定。
+
+## 10. 低版本兼容
+
+沉浸光感从 API 26.0.0 开始支持。兼容低版本时必须同时考虑应用级开启和组件级开启。
+
+### 10.1 应用级开启的兼容
+
+当应用为 `default` 或 `enable` 时，官方默认材质组件可能自动接管背景、模糊、边框和阴影。需要使用 `getMaterialInfo()` 判断当前状态，材质开启时清除会遮挡材质的背景：
+
+```ts
+import { uiMaterial } from '@kit.ArkUI';
+
+@Entry
+@Component
+struct AppLevelCompatibility {
+  private readonly materialInfo: uiMaterial.MaterialInfo = uiMaterial.getMaterialInfo();
+
+  build() {
+    Select([{ value: '选项一' }, { value: '选项二' }])
+      .value('选择')
+      .backgroundColor(this.materialInfo.state === uiMaterial.MaterialState.ENABLE ?
+        undefined : Color.White)
+  }
+}
+```
+
+这个模式让材质启用时不被白色背景遮挡；材质未启用时仍保留原来的白色背景。
+
+### 10.2 组件级开启的兼容
+
+组件级 `systemMaterial` 和 `ImmersiveMaterial` 在 API 26 以下不可用。按运行时系统 API 判断，低版本传 `undefined`，让组件保留原样式：
+
+```ts
+import { uiMaterial } from '@kit.ArkUI';
+import { deviceInfo } from '@kit.BasicServicesKit';
+
+@Entry
+@Component
+struct ComponentLevelCompatibility {
+  build() {
+    Select([{ value: '选项一' }, { value: '选项二' }])
+      .value('选择')
+      .systemMaterial(deviceInfo.sdkApiVersion >= 26 ?
+        new uiMaterial.ImmersiveMaterial({
+          style: uiMaterial.ImmersiveStyle.THIN
+        }) : undefined)
+  }
+}
+```
+
+如果应用整个 module 已固定要求 API 26，可以不写低版本分支；如果需要一个 HAP 兼容旧设备，必须保留这种运行时判断。
+
+## 11. HDS 沉浸光感接入
+
+HDS 是官方为导航和底部页签提供的高层组件。它把材质类型和等级配置收敛到 `systemMaterialEffect`，推荐使用系统自适应等级。
+
+### 11.1 HDS 等级和类型
+
+`hdsMaterial.MaterialType` 主要包含：
+
+- `NONE`：无材质。
+- `ADAPTIVE`：系统自适应材质，默认优先选择。
+- `IMMERSIVE`：沉浸式材质。
+
+`hdsMaterial.MaterialLevel` 包含 `EXQUISITE`、`GENTLE`、`SMOOTH`、`ADAPTIVE`。推荐 `ADAPTIVE`，不要在低端设备上强制 `EXQUISITE`。
+
+### 11.2 HDS Navigation
+
+```ts
+import { HdsNavigation, hdsMaterial } from '@kit.UIDesignKit';
+
+@Entry
+@Component
+struct HdsNavigationDemo {
+  build() {
+    HdsNavigation() {
+      Column() {
+        Text('内容')
+      }
+    }
+    .titleBar({
+      style: {
+        systemMaterialEffect: {
+          materialType: hdsMaterial.MaterialType.ADAPTIVE,
+          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+        }
+      }
+    })
+  }
+}
+```
+
+标题栏滚动效果可以结合 `scrollEffectOpts` 和 `ScrollEffectType.GRADIENT_BLUR` 或 `IMMERSIVE_GRADIENT_BLUR`，但不要在同一区域额外叠加 ArkUI 的重复模糊属性。
+
+### 11.3 HDS Tabs
+
+```ts
+import { HdsTabs, hdsMaterial } from '@kit.UIDesignKit';
+
+@Entry
+@Component
+struct HdsTabsDemo {
+  build() {
+    HdsTabs() {
+      HdsNavDestination() {
+        Text('首页')
+      }
+      HdsNavDestination() {
+        Text('设置')
+      }
+    }
+    .barPosition(BarPosition.End)
+    .vertical(false)
+    .barOverlap(true)
+    .barFloatingStyle({
+      systemMaterialEffect: {
+        materialType: hdsMaterial.MaterialType.ADAPTIVE,
+        materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+      }
+    })
+  }
+}
+```
+
+HDS 的材质类型/等级与 ArkUI 的 `ImmersiveStyle` 不是一一对应关系。不要把 `hdsMaterial.MaterialLevel` 当作 `uiMaterial.MaterialLevel` 使用，也不要期待 HDS 提供 `ULTRA_THIN` 等厚薄枚举。
+
+## 12. 本工程落地契约
+
+本工程是 API 26 Stage 模型单 entry 应用，`build-profile.json5` 的目标 SDK 与兼容 SDK 为 26.0.0，`entry/src/main/module.json5` 已配置：
+
+```json5
+{
+  "name": "ohos.arkui.UIMaterial.state",
+  "value": "enable"
+}
+```
+
+### 12.1 材质工厂
+
+材质统一收敛在 [`UIMaterialManager.ets`](../entry/src/main/ets/common/managers/UIMaterialManager.ets)：
+
+| 工厂材质 | 当前用途 | 约束 |
+| --- | --- | --- |
+| `fabMaterial` | 浮动圆形按钮 | `ULTRA_THIN`、交互形变、流光、自动反色 |
+| `surfaceMaterial` | 面板、浮层和弹窗 | `REGULAR`，使用半透明应用色调 |
+| `barMaterial` | 栏位 | `REGULAR`，避免整块色带 |
+| `neutralActionMaterial` | 中性操作按钮 | `THIN`，自动反色和交互反馈 |
+| `inputMaterial` | 输入框 | `THIN`，透明色调和自动反色 |
+| `closeButtonMaterial` | 图片查看器关闭按钮 | `ULTRA_THIN` + `colorInvert`，不叠加额外阴影和边框 |
+
+材质对象是稳定的只读配置，应跨组件共享，不要在渲染过程中频繁新建或改变对象。
+
+### 12.2 本工程前景色规则
+
+薄材质和自动反色场景中的正文、占位符、图标必须使用官方特殊系统资源：
+
+- 主前景：`$r('sys.color.font_primary')`。
+- 次要前景：`$r('sys.color.font_secondary')`。
+- 图标：`$r('sys.color.icon_primary')`、`$r('sys.color.icon_secondary')`。
+- 主题色：`$r('sys.color.brand')` 或 `$r('sys.color.brand_font')`。
+
+禁止为需要自动反色的文字或图标使用 `Color.White`、硬编码十六进制值或旧的 `ohos_id_color_*` 资源。
+
+### 12.3 主操作按钮
+
+主操作按钮不默认接入玻璃材质。确认、保存、退出、发送等承担明确操作语义的按钮使用实底主题色和高对比文字；需要中性浮动反馈的操作才使用 `neutralActionMaterial`。
+
+原因：主题色玻璃叠在面板材质上容易出现背景贴边、前景对比不稳定和黑字/浅棕底等问题；实底按钮在低算力和不同背景上更可靠。
+
+### 12.4 SaveButton
+
+`SaveButton` 属于安全组件，其样式受到系统合法性校验约束，不支持 `systemMaterial`、材质阴影或模糊。保持系统要求的高对比固定背托，不要尝试给安全按钮接入沉浸式材质。
+
+## 13. AI 和代码审查规则
+
+当 AI 生成或审查沉浸光感代码时，按以下顺序判断：
+
+1. 是否使用 API 26.0.0 的 `uiMaterial` 或 HDS API？低版本是否存在运行时分支？
+2. 目标组件是否属于 Release 全页面例外清单？
+3. 若不是例外，组件是否确实在 `Navigation/NavDestination` 标题栏或横向 `Tabs` 的 `BarPosition.End` 底部 TabBar？
+4. 应用级配置是否位于 `entry` module？是否误用 `disable`？
+5. 是否使用了 `uiMaterial.Material.empty` 明确关闭，而不是用 `undefined` 误关闭？
+6. 是否使用 `ImmersiveMaterial` 的正确样式：浮动控件用薄材质，弹窗用厚材质？
+7. 是否在材质后设置了不透明背景、背景模糊、重复阴影或边框，导致效果被遮挡或冲突？
+8. `materialColor` 是否带透明度？
+9. `colorInvert` 是否同时满足薄材质、高/中算力、特殊系统资源和白名单属性？
+10. 是否把材质套在整页、大列表、视频、动图或持续动画上？是否有嵌套材质？
+11. 是否把自定义弹窗写成普通 Stack 模拟而不是使用 Dialog/Popup/Menu 等官方接口？
+12. 是否需要在设备不支持材质时仍保持可读的普通颜色和背景？
+
+任何一个答案不确定，都不能把“调用成功”描述为“材质一定可见”。
+
+## 14. 故障排查
+
+| 现象 | 首先检查 |
+| --- | --- |
+| 代码无报错但完全没有材质 | Release 生效范围；组件是否在标题栏/底部 TabBar；应用是否为 `DISABLE`；设备是否支持材质 |
+| Beta 有效果，Release 没效果 | 是否把普通组件放在了页面内容区；是否遗漏 `Navigation` 标题栏或 Tabs 三个悬浮条件 |
+| 材质被纯色盖住 | 移除不透明 `backgroundColor`、`backgroundBlurStyle`、`backgroundEffect`；检查自绘内容层背景 |
+| `colorInvert` 不工作 | `THIN`/`ULTRA_THIN`；高/中算力；系统强度；颜色是否是表 1 特殊资源；属性是否在白名单 |
+| 黑字黑底或白字白底 | 检查是否硬编码颜色或误用 `ohos_id_color_*`；改为 `sys.color.font_*`/`icon_*` |
+| `materialColor` 后变纯色 | 颜色不透明；改用带 Alpha 的颜色 |
+| 自定义 `shadow` 不生效 | `applyShadow` 默认是 `true`；需要自定义阴影时设为 `false` |
+| 材质边框颜色像周围背景 | 这是薄材质折射；换厚样式或使用半透明 `materialColor` |
+| Dialog/Toast 默认没有材质 | 是否主动设置了背景、模糊或阴影；`DEFAULT` 模式只有无冲突样式时才默认启用 |
+| 低端设备效果明显不同 | 设备使用 `SMOOTH` 降级；`style` 和 `colorInvert` 本来就可能不生效，属于系统自适应 |
+| 运行旧系统崩溃或样式异常 | `ImmersiveMaterial`/`systemMaterial` 是否按 `deviceInfo.sdkApiVersion` 做了低版本分支 |
+| 页面卡顿或耗电高 | 材质面积过大、嵌套、叠加动态内容、弹窗过大、反色子树过大或参数频繁变更 |
+
+## 15. 发布前检查清单
+
+- [ ] `targetSdkVersion`/`targetAPIVersion` 与 API 26 适配策略一致。
+- [ ] `module.json5` 的材质 metadata 只配置在 `entry` module。
+- [ ] 已按 Release 生效范围逐个检查 `systemMaterial` 调用点。
+- [ ] 普通组件材质全部位于有效标题栏或底部 TabBar 区域。
+- [ ] 弹窗使用官方弹窗接口和 options，不使用普通 Stack 冒充弹窗。
+- [ ] `Tabs` 同时满足 `barPosition: End`、横向、`barOverlap(true)`。
+- [ ] 材质节点没有不透明背景、重复模糊、重复阴影和嵌套材质。
+- [ ] `materialColor` 带透明度。
+- [ ] `colorInvert` 使用 `THIN`/`ULTRA_THIN` 与官方特殊系统资源。
+- [ ] 低算力、不支持材质设备仍然可读、可操作。
+- [ ] 低版本运行时将 `systemMaterial` 设置为 `undefined`。
+- [ ] 已在高、中、低算力设备和深浅色模式验证，不能只在开发机验证。
+- [ ] 已验证动态内容、长列表、大弹窗的 GPU 与帧率表现。
+
+## 16. 官方资料
+
+- [空间化沉浸光感最佳实践](https://developer.huawei.com/consumer/cn/doc/best-practices/bpta-spatiality-immersive)
+- [API 26 Release：针对所有应用的变更](https://developer.huawei.com/consumer/cn/doc/harmonyos-releases/changelogs-for-all-apps-7003#section126372211)
+- [沉浸光感简介](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-immersive-light-sense-overview)
+- [开启沉浸光感](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-immersive-light-sense-enable)
+- [组件适配沉浸光感](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-immersive-light-sense-component-adaptation)
+- [沉浸式系统材质视效](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-immersive-light-sense-common-capability)
+- [沉浸光感功耗优化](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-immersive-light-sense-constraints)
+- [沉浸光感兼容性适配](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-immersive-light-sense-compatibility)
+- [沉浸光感常见问题](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-immersive-light-sense-faq)
+- [沉浸光感典型场景](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-immersive-light-sample)
+- [ArkUI `uiMaterial` API 参考](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/arkts-apis-uimaterial)
+- [HDS `hdsMaterial` API 参考](https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/api/ui-design-hdsmaterial)
