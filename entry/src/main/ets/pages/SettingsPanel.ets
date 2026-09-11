@@ -24,6 +24,7 @@ import { BusinessError } from '@kit.BasicServicesKit'
 import { common, contextConstant } from '@kit.AbilityKit'
 import type { AiProviderProfile } from '../model/AiConfig'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
+import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
 @Component
 export struct SettingsPanel {
@@ -60,6 +61,7 @@ export struct SettingsPanel {
   }
 
   clearCacheDialogController?: CustomDialogController = new CustomDialogController({
+    systemMaterial: UIMaterialManager.dialogMaterial,
     builder: TipsDialog({
       imageRes: $r('app.media.settings_clear_cache'),
       title: '清除缓存',
@@ -84,6 +86,7 @@ export struct SettingsPanel {
   prefetchPageDialogController?: CustomDialogController
   exportCredentialDialogController?: CustomDialogController
   logoutDialogController?: CustomDialogController = new CustomDialogController({
+    systemMaterial: UIMaterialManager.dialogMaterial,
     builder: TipsDialog({
       imageRes: $r('app.media.settings_logout'),
       title: '退出登录',
@@ -246,6 +249,7 @@ export struct SettingsPanel {
 
     this.exportPassword = ''
     this.exportCredentialDialogController = new CustomDialogController({
+      systemMaterial: UIMaterialManager.dialogMaterial,
       builder: CustomContentDialog({
         primaryTitle: '加密导出凭证',
         secondaryTitle: '导出的文件将使用此密码加密，导入时需要再次输入（至少 8 位）。',
@@ -346,6 +350,7 @@ export struct SettingsPanel {
       }
     )
     this.threadNavDialogController = new CustomDialogController({
+      systemMaterial: UIMaterialManager.dialogMaterial,
       builder: SelectDialog({
         title: '帖子楼层导航',
         selectedIndex: radio.selectedIndex,
@@ -385,6 +390,7 @@ export struct SettingsPanel {
       }
     )
     this.prefetchPageDialogController = new CustomDialogController({
+      systemMaterial: UIMaterialManager.dialogMaterial,
       builder: SelectDialog({
         title: '预加载页数',
         selectedIndex: radio.selectedIndex,
@@ -406,6 +412,7 @@ export struct SettingsPanel {
       }
     )
     this.imageStrategyDialogController = new CustomDialogController({
+      systemMaterial: UIMaterialManager.dialogMaterial,
       builder: SelectDialog({
         title: '图片加载模式',
         selectedIndex: radio.selectedIndex,

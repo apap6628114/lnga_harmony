@@ -1822,6 +1822,7 @@ export struct ThreadPanel {
     this.saveStartPage = -1
     this.saveEndPage = -1
     this.saveDialogController = new CustomDialogController({
+      systemMaterial: UIMaterialManager.dialogMaterial,
       builder: CustomContentDialog({
         primaryTitle: '保存帖子',
         contentBuilder: this.saveThreadContent,

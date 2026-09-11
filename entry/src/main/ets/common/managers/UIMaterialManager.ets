@@ -1,14 +1,31 @@
+import { uiMaterial } from '@kit.ArkUI'
+
 /**
- * 磨砂玻璃材质工厂。
+ * 材质工厂：**系统沉浸材质**（官方合规区域）+ **自绘磨砂玻璃**（不合规区域）。
  *
  * 背景：API 26 Release 收紧了沉浸光感（`systemMaterial` / `ImmersiveMaterial`）的生效范围，
- * 页面内容区的普通组件静默失效——组件背景透明、材质消失。本工程不再依赖沉浸光感，
- * 改用自绘磨砂玻璃层：`backgroundEffect` 背景模糊（半径、饱和度、亮度可控）+ 半透明填充 +
- * 厚度渐变（仅大容器）+ 统一描边 + 柔和投影。
+ * 页面内容区的普通组件静默失效——组件背景透明、材质消失。因此材质按**生效区域**分成两条通路：
+ *
+ * 1. **系统沉浸材质**（`dialogMaterial` / `sheetMaterial` / `controlMaterial`）：
+ *    用于 Release 允许「页面内全部区域」生效的组件与接口——弹窗类组件（`CustomDialog`、
+ *    `AlertDialog`、各 Picker 弹窗）、弹窗类接口（`PromptAction`、Popup/Tips/菜单控制、
+ *    **半模态转场**）、以及按钮与选择类组件（`Slider`、`Toggle`、`Select`）。这些位置由系统
+ *    接管材质滤镜、折射、高光、阴影与空间动效，视觉上限最高，**优先使用**。
+ *    接入点：`CustomDialogControllerOptions.systemMaterial`、`SheetOptions.systemMaterial`、
+ *    通用属性 `.systemMaterial(...)`。
+ * 2. **自绘磨砂玻璃**（`GlassModifier` 系列）：用于系统材质不生效的区域——页面内容区的普通
+ *    组件（本工程无 `Navigation`/`Tabs`，内容区没有标题栏或底部 TabBar 可借位）。由
+ *    `backgroundEffect` 背景模糊（半径、饱和度、亮度可控）+ 半透明填充 + 厚度渐变（仅大容器）
+ *    + 统一描边 + 柔和投影自绘，不受 Release 生效范围门禁约束。
+ *    接入点：`.attributeModifier(UIMaterialManager.xxx)`。
+ *
+ * 两条通路的边界（官方 FAQ 的层级模型）：**同一个视觉层不要叠加两种材质**。系统材质渲染在
+ * **背板层**，而 `backgroundColor` 等属性渲染在**内容层**，内容层会盖住背板层——所以接了系统
+ * 材质的弹窗/面板**内部**一律改用 `dialogFieldMaterial`（只给半透明填充与描边、不做背景模糊），
+ * 不要再叠 `GlassModifier` 的模糊玻璃；同理，接了系统材质的位置不要再写 `backgroundColor`。
  *
  * 说明：
- * - 材质对象是稳定的只读配置（`AttributeModifier`），可跨组件共享复用；
- *   调用点通过 `.attributeModifier(UIMaterialManager.xxx)` 绑定，不要再写 `.systemMaterial(...)`。
+ * - 材质对象都是稳定的只读配置，跨组件共享复用，渲染期不新建、不修改。
  * - 玻璃的“透”和“可读”靠三者协同，不能只调其中一个：
  *   ① 填充够透（32%~55%）→ 背后内容能透出来；
  *   ② 模糊半径够大（24vp~72vp）→ 透出来的是柔和色块而不是干扰阅读的字迹；
@@ -74,12 +91,15 @@ export class GlassModifier implements AttributeModifier<CommonAttribute> {
   applyNormalAttribute(instance: CommonAttribute): void {
     // 填充必须走 backgroundColor：它同时负责覆盖 Button/TextInput 等组件的系统默认底色
     instance.backgroundColor(this.spec.fill)
-    // 模糊只负责“磨砂”，不再叠加颜色，避免与上面的填充重复着色
-    instance.backgroundEffect({
-      radius: this.spec.blurRadius,
-      saturation: this.spec.saturation,
-      brightness: this.spec.brightness
-    })
+    if (this.spec.blurRadius > 0) {
+      // 模糊只负责“磨砂”，不再叠加颜色，避免与上面的填充重复着色；
+      // 系统材质背板之上（blurRadius 为 0）不设模糊，避免二次糊化同一层背景
+      instance.backgroundEffect({
+        radius: this.spec.blurRadius,
+        saturation: this.spec.saturation,
+        brightness: this.spec.brightness
+      })
+    }
     const highlight: Resource | undefined = this.spec.highlight
     const highlightFade: Resource | undefined = this.spec.highlightFade
     const shade: Resource | undefined = this.spec.shade
@@ -105,6 +125,49 @@ export class GlassModifier implements AttributeModifier<CommonAttribute> {
 }
 
 export class UIMaterialManager {
+  // ==================== 一、系统沉浸材质（官方合规区域，优先使用） ====================
+
+  /**
+   * 弹窗背板材质：官方 `CustomDialog` 类弹窗（`AlertDialog` / `TipsDialog` / `SelectDialog` /
+   * `CustomContentDialog` 等官方模板都经 `CustomDialogController` 承载）的推荐厚材质。
+   *
+   * 用法：`new CustomDialogController({ builder: ..., systemMaterial: UIMaterialManager.dialogMaterial })`。
+   * 弹窗类组件属于 Release 允许「页面内全部区域」生效的清单，不受内容区生效范围门禁约束；
+   * 系统会接管背景色、边框、阴影（`applyShadow`）与弹出过程的空间动效。
+   *
+   * 注意：材质渲染在**背板层**，弹窗内容里不要再写不透明 `backgroundColor`，否则会把材质盖掉。
+   */
+  static readonly dialogMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+    style: uiMaterial.ImmersiveStyle.ULTRA_THICK,
+    applyShadow: true
+  })
+
+  /**
+   * 半模态面板背板材质：`bindSheet` 面板本体（半模态转场同属弹窗类接口，页面内全区域生效）。
+   *
+   * 用法：`SheetOptions.systemMaterial`。面板形状（圆角、底部/居中形态）由系统给出，
+   * 因此内容容器**不要**再自带 `borderRadius` + `clip`、也不要自绘玻璃，否则会在系统材质的
+   * 底板之外露出一圈内容层圆角。
+   */
+  static readonly sheetMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+    style: uiMaterial.ImmersiveStyle.ULTRA_THICK,
+    applyShadow: true
+  })
+
+  /**
+   * 交互控件材质：官方推荐的「薄材质 + 交互形变 + 点光源反馈」组合，
+   * 用于 `Slider` / `Toggle` 等按钮与选择类组件（同样页面内全区域生效）。
+   *
+   * `interactive` 提供按压形变、`lightEffect` 提供触点流光，二者会**替代**组件默认的点击态与
+   * 悬浮态反馈——不要再给同一个控件叠一套含义重复的自定义按压动画。
+   * `ToggleType.Checkbox` 官方尚未适配沉浸光感，设置后无效果，不要接入。
+   */
+  static readonly controlMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+    style: uiMaterial.ImmersiveStyle.THIN,
+    interactive: true,
+    lightEffect: { color: $r('sys.color.font_on_primary') }
+  })
+
   /** 玻璃层上的主前景色（跟随系统深浅色）。 */
   static readonly adaptiveForeground: ResourceColor = $r('sys.color.font_primary')
 
@@ -197,6 +260,46 @@ export class UIMaterialManager {
     saturation: 1.3,
     brightness: 1.0,
     stroke: $r('app.color.glass_input_stroke'),
+    strokeWidth: 1,
+    shadowColor: $r('app.color.glass_shadow'),
+    shadowRadius: 0,
+    shadowOffsetY: 0
+  })
+
+  /**
+   * 弹窗 / 半模态面板的**内容层**（不做背景模糊）：用于已经接入系统材质的弹窗与面板内部。
+   *
+   * 系统材质已经完成了背景模糊，内容层若再叠 `backgroundEffect`，等于对同一层背景二次糊化：
+   * 视觉发灰、语义重复、还要多付一次采样。因此这里只给半透明填充与极淡描边，让层级保持
+   * 「系统材质（背板层）→ 半透明内容色（内容层）」这种官方两段式。
+   *
+   * 用法与 `inputMaterial` 相同（`.attributeModifier(...)`），区别只在**用在材质背板之上**。
+   */
+  static readonly dialogFieldMaterial: GlassModifier = new GlassModifier({
+    fill: $r('app.color.glass_field_fill'),
+    blurRadius: 0,
+    saturation: 1.0,
+    brightness: 1.0,
+    stroke: $r('app.color.glass_field_stroke'),
+    strokeWidth: 1,
+    shadowColor: $r('app.color.glass_shadow'),
+    shadowRadius: 0,
+    shadowOffsetY: 0
+  })
+
+  /**
+   * 弹窗 / 半模态面板内容层的**中性操作**按钮（不做背景模糊）。
+   *
+   * 与 `dialogFieldMaterial` 同属内容层，只用更实的填充把「可点击」与「输入区」区分开：
+   * 输入框是淡底（12%），中性按钮是实一点的胶囊（32% 暖白/暖灰）+ 一圈描边。
+   * 主操作按钮仍按工程契约走实底主题色（见 §12.5），不套这一层。
+   */
+  static readonly dialogActionMaterial: GlassModifier = new GlassModifier({
+    fill: $r('app.color.glass_neutral_fill'),
+    blurRadius: 0,
+    saturation: 1.0,
+    brightness: 1.0,
+    stroke: $r('app.color.glass_neutral_stroke'),
     strokeWidth: 1,
     shadowColor: $r('app.color.glass_shadow'),
     shadowRadius: 0,

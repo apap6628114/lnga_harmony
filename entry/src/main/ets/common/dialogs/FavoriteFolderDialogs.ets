@@ -28,7 +28,7 @@ export struct FolderNameEditorContent {
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .borderRadius(12)
-        .attributeModifier(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
         .onChange((value: string): void => {
           if (this.onNameChange) {
             this.onNameChange(value)

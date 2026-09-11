@@ -133,6 +133,14 @@
       "value": "#339C7B52"
     },
     {
+      "name": "glass_field_fill",
+      "value": "#1F5A4632"
+    },
+    {
+      "name": "glass_field_stroke",
+      "value": "#2E9C7B52"
+    },
+    {
       "name": "glass_fab_fill",
       "value": "#8CFFFFFF"
     },

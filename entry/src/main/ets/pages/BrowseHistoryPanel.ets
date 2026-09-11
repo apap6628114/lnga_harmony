@@ -10,6 +10,7 @@ import { HistoryItemDataSource } from '../common/datasource/LazyDataSource'
 import { AnonymousName } from '../common/components/AnonymousName'
 import { PageScope } from '../common/concurrency/PageScope'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
+import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
 @Component
 export struct BrowseHistoryPanel {
@@ -36,6 +37,7 @@ export struct BrowseHistoryPanel {
    * 现直接在本面板用官方 `AlertDialog` 承载，确认框状态不再进入浮层栈。
    */
   private clearHistoryDialogController: CustomDialogController = new CustomDialogController({
+    systemMaterial: UIMaterialManager.dialogMaterial,
     builder: AlertDialog({
       primaryTitle: '清空浏览记录',
       content: '确定清空所有浏览记录？此操作不可撤销。',

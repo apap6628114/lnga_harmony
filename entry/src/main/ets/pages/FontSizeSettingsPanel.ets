@@ -9,6 +9,7 @@ import {
   ReadingLineHeightRole,
   ReadingTypography
 } from '../common/typography/ReadingTypography'
+import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
 /**
  * 字体大小设置面板。
@@ -61,6 +62,7 @@ export struct FontSizeSettingsPanel {
                   step: 1,
                   style: SliderStyle.InSet
                 })
+                  .systemMaterial(UIMaterialManager.controlMaterial)
                   .onChange((v: number, mode: SliderChangeMode) => {
                     this.currentContentFontSize = v
                     appStore.settingsStore.setFontSize(v)
@@ -95,6 +97,7 @@ export struct FontSizeSettingsPanel {
                   step: 1,
                   style: SliderStyle.InSet
                 })
+                  .systemMaterial(UIMaterialManager.controlMaterial)
                   .onChange((v: number, mode: SliderChangeMode) => {
                     this.currentTopicFontSize = v
                     appStore.settingsStore.setTopicFontSize(v)

@@ -180,7 +180,7 @@ export struct SaveThreadContent {
               .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
               .caretColor(UIMaterialManager.inputForeground)
               .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-              .attributeModifier(UIMaterialManager.inputMaterial)
+              .attributeModifier(UIMaterialManager.dialogFieldMaterial)
               .onChange((value: string) => {
                 this.startText = value
                 this.syncOutput()
@@ -198,7 +198,7 @@ export struct SaveThreadContent {
               .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
               .caretColor(UIMaterialManager.inputForeground)
               .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-              .attributeModifier(UIMaterialManager.inputMaterial)
+              .attributeModifier(UIMaterialManager.dialogFieldMaterial)
               .onChange((value: string) => {
                 this.endText = value
                 this.syncOutput()

@@ -79,7 +79,7 @@ export struct NoteEditorContent {
         .fontColor(UIMaterialManager.inputForeground)
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
-        .attributeModifier(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
         .onChange((value: string) => {
           if (this.onNoteChange) {
             this.onNoteChange(value)
@@ -114,7 +114,7 @@ export struct KeywordEditorContent {
         .fontColor(UIMaterialManager.inputForeground)
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
-        .attributeModifier(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
         .onChange((value: string) => {
           if (this.onKeywordChange) {
             this.onKeywordChange(value)
@@ -175,7 +175,7 @@ export struct BlacklistEditorContent {
         .fontColor(UIMaterialManager.inputForeground)
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
-        .attributeModifier(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
         .onChange((value: string) => {
           if (this.onUidChange) {
             this.onUidChange(value)
@@ -222,7 +222,7 @@ export struct NoteAddContent {
         .fontColor(UIMaterialManager.inputForeground)
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
-        .attributeModifier(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
         .onChange((value: string) => {
           if (this.onNickNameChange) {
             this.onNickNameChange(value)
@@ -234,7 +234,7 @@ export struct NoteAddContent {
         .fontColor(UIMaterialManager.inputForeground)
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
-        .attributeModifier(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
         .margin({ top: 8 })
         .onChange((value: string) => {
           if (this.onUidChange) {
@@ -270,7 +270,7 @@ export struct CredentialPasswordContent {
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .borderRadius(12)
-        .attributeModifier(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
         .onChange((value: string) => {
           if (this.onPasswordChange) {
             this.onPasswordChange(value)

@@ -6,6 +6,7 @@ import { PanelNavBar } from '../common/components/PanelNavBar'
 import { AlertDialog, CustomContentDialog } from '@kit.ArkUI'
 import { KeywordEditorContent } from '../common/dialogs/Dialogs'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
+import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
 @Component
 export struct FilterKeywordsPanel {
@@ -40,6 +41,7 @@ export struct FilterKeywordsPanel {
   @State addKeywordText: string = ''
 
   deleteDialogController?: CustomDialogController = new CustomDialogController({
+    systemMaterial: UIMaterialManager.dialogMaterial,
     builder: AlertDialog({
       primaryTitle: '删除关键词',
       content: '确定要删除该关键词吗？',
@@ -184,6 +186,7 @@ export struct FilterKeywordsPanel {
         onRightClick: (): void => {
         this.addKeywordText = ''
         this.addDialogController = new CustomDialogController({
+          systemMaterial: UIMaterialManager.dialogMaterial,
           builder: CustomContentDialog({
             primaryTitle: '添加关键词',
             secondaryTitle: '输入需要屏蔽的关键词',

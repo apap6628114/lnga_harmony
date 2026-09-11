@@ -9,6 +9,7 @@ import { AlertDialog, CustomContentDialog } from '@kit.ArkUI'
 import { FolderNameEditorContent } from '../common/dialogs/FavoriteFolderDialogs'
 import { PageScope } from '../common/concurrency/PageScope'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
+import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
 /**
  * NGA 主题收藏夹管理与主题归档选择面板。
@@ -178,6 +179,7 @@ export struct FavoriteFoldersPanel {
   private showCreateFolderDialog(): void {
     this.folderNameInput = ''
     this.nameDialogController = new CustomDialogController({
+      systemMaterial: UIMaterialManager.dialogMaterial,
       builder: CustomContentDialog({
         primaryTitle: '新建收藏夹',
         contentBuilder: this.folderNameContent,
@@ -252,6 +254,7 @@ export struct FavoriteFoldersPanel {
     const folderId: string = folder.id
     this.folderNameInput = folder.name
     this.nameDialogController = new CustomDialogController({
+      systemMaterial: UIMaterialManager.dialogMaterial,
       builder: CustomContentDialog({
         primaryTitle: '重命名收藏夹',
         contentBuilder: this.folderNameContent,
@@ -320,6 +323,7 @@ export struct FavoriteFoldersPanel {
     const folderId: string = folder.id
     const folderName: string = folder.name
     this.deleteDialogController = new CustomDialogController({
+      systemMaterial: UIMaterialManager.dialogMaterial,
       builder: AlertDialog({
         primaryTitle: '删除收藏夹',
         content: `确定删除“${folderName}”以及其中的全部收藏关系吗？`,

@@ -1406,6 +1406,7 @@ export struct TopicListPanel {
                     .onChange((show: boolean): void => {
                       this.handleSubBoardFilterChange(subBoard, show)
                     })
+                    .systemMaterial(UIMaterialManager.controlMaterial)
                 }
               }
               .width('100%')

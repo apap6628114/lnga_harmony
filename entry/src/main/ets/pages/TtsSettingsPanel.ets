@@ -6,6 +6,7 @@ import { PanelNavBar } from '../common/components/PanelNavBar'
 import { TtsPlayer } from '../common/media/TtsPlayer'
 import { PageScope } from '../common/concurrency/PageScope'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
+import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
 const VOICE_OPTIONS: VoiceOption[] = [
   { person: 13, label: '聆小珊', lang: '中文' },
@@ -183,6 +184,7 @@ export struct TtsSettingsPanel {
                   step: 0.1,
                   style: SliderStyle.InSet
                 })
+                  .systemMaterial(UIMaterialManager.controlMaterial)
                   .onChange((v: number, mode: SliderChangeMode) => {
                     this.currentSpeed = v
                     appStore.settingsStore.setTtsSpeed(v)
@@ -205,6 +207,7 @@ export struct TtsSettingsPanel {
                   step: 0.1,
                   style: SliderStyle.InSet
                 })
+                  .systemMaterial(UIMaterialManager.controlMaterial)
                   .onChange((v: number, mode: SliderChangeMode) => {
                     this.currentVolume = v
                     appStore.settingsStore.setTtsVolume(v)
@@ -227,6 +230,7 @@ export struct TtsSettingsPanel {
                   step: 0.1,
                   style: SliderStyle.InSet
                 })
+                  .systemMaterial(UIMaterialManager.controlMaterial)
                   .onChange((v: number, mode: SliderChangeMode) => {
                     this.currentPitch = v
                     appStore.settingsStore.setTtsPitch(v)

@@ -6,11 +6,15 @@
 >
 > 官方文档核对时间：2026-09-05。华为官方页面可能继续修订；遇到本文与 SDK 实际行为不一致时，应以当前 SDK API 参考和变更说明为准。
 
-> **本工程当前状态（API 26 Release 迁移已完成）**：Release 收紧生效范围后，本工程页面内容区的
-> 自绘沉浸光感材质全部静默失效（组件背景透明、材质消失）。现已整体迁移到**系统磨砂玻璃**方案：
-> 不再有任何 `systemMaterial` 调用点，玻璃层由 `backgroundBlurStyle` + 半透明填充 + 高光描边 +
-> 柔和投影自绘，不受 Release 生效范围门禁约束。落地契约见第 12 节；本文其余章节保留为沉浸光感
-> 契约与踩坑记录，仅在需要重新评估系统材质时参考。
+> **本工程当前状态（双通路：官方系统材质 + 自绘磨砂玻璃）**：Release 收紧生效范围后，本工程页面
+> 内容区的沉浸光感材质曾整体静默失效（组件背景透明、材质消失），当时的处置是全部改为自绘磨砂玻璃。
+> 随后工程把全部手搓浮层迁移到**官方弹窗 / 半模态组件**，这些位置重新落回 Release 的
+> 「页面内全部区域生效」清单，于是**系统沉浸材质重新接回来了**——`dialogMaterial`（弹窗）、
+> `sheetMaterial`（半模态面板）、`controlMaterial`（`Slider` / `Toggle`）。
+>
+> 现在的分界：**弹窗类组件与接口 + `Slider` / `Toggle` → 系统沉浸材质**；
+> **页面内容区（面板、列表、`PanelNavBar` 标题栏、图片查看器、资料卡、`Toast`）→ 自绘磨砂玻璃**。
+> 分流表、落地契约与接入清单见第 12 节；本文其余章节保留为沉浸光感契约与踩坑记录。
 
 ## 0. 先记住这一条：Release 的生效范围门禁
 
@@ -752,9 +756,26 @@ HDS 的材质类型/等级与 ArkUI 的 `ImmersiveStyle` 不是一一对应关�
 ## 12. 本工程落地契约
 
 本工程是 API 26 Stage 模型单 entry 应用，`build-profile.json5` 的目标 SDK 与兼容 SDK 为 26.0.0。
-**页面内容区的玻璃视觉已全部由系统磨砂玻璃自绘承担**（见 12.1），沉浸光感只保留应用级开关（见 12.4）。
+材质按**生效区域**分两条通路，判断顺序固定为「先看能不能用系统材质，不能才自绘」：
 
-### 12.1 磨砂玻璃工厂（替代材质工厂）
+| 位置 | 通路 | 工厂 |
+| --- | --- | --- |
+| 官方弹窗（`CustomDialogController`，含 `AlertDialog` / `TipsDialog` / `SelectDialog` / `CustomContentDialog`） | 系统沉浸材质 | `dialogMaterial`（`ULTRA_THICK`） |
+| 半模态面板（`bindSheet`） | 系统沉浸材质 | `sheetMaterial`（`ULTRA_THICK`） |
+| `Slider` / `Toggle` | 系统沉浸材质 | `controlMaterial`（`THIN` + 交互形变 + 点光源） |
+| 页面内容区（面板、列表、`PanelNavBar` 标题栏、`Toast`、资料卡） | 自绘磨砂玻璃 | `surfaceMaterial` / `barMaterial` / `fabMaterial` / … |
+| 图片查看器（`bindContentCover` 全屏模态、固定暗场景） | 自绘磨砂玻璃 | `darkOverlayMaterial` / `closeButtonMaterial` |
+
+判定依据就是本文 §0 的生效范围门禁：本工程没有 `Navigation` / `Tabs`，**内容区没有任何标题栏或
+底部 TabBar 可以借位**，所以内容区只能用自绘玻璃；而弹窗类组件与接口（含半模态转场）以及
+`Slider` / `Toggle` 在 Release 下允许「页面内全部区域」生效，因此这些位置一律优先用系统材质。
+弹窗 / 面板**内部**的内容层同理不能自绘模糊，改用 `dialogFieldMaterial` / `dialogActionMaterial`。
+
+两条通路的衔接铁律：**同一个视觉层不叠加两种材质**。系统材质渲染在**背板层**、`backgroundColor`
+等属性渲染在**内容层**，内容层会盖住背板层（官方 FAQ 明确此层级模型）。所以接了系统材质的
+位置不要再写不透明 `backgroundColor`，内部输入框 / 中性按钮也不要用带模糊的 `GlassModifier`。
+
+### 12.1 磨砂玻璃工厂（页面内容区）
 
 材质统一收敛在 [`UIMaterialManager.ets`](../entry/src/main/ets/common/managers/UIMaterialManager.ets)：
 成员是 `GlassModifier implements AttributeModifier<CommonAttribute>` 的只读单例，调用点用
@@ -825,8 +846,13 @@ HDS 的材质类型/等级与 ArkUI 的 `ImmersiveStyle` 不是一一对应关�
 ```
 
 该开关只影响系统官方清单组件（Navigation 标题栏、Select、Toggle、Slider、菜单等）的默认材质，
-与本工程自绘磨砂玻璃无关；改玻璃参数不需要动它。若将来发现官方组件默认材质与磨砂玻璃视觉冲突，
-再评估是否改为 `disable`。
+与本工程自绘磨砂玻璃无关；改玻璃参数不需要动它。
+
+**但它现在是弹窗 / 面板系统材质的前提**：应用级 `disable` 是总禁用，会连组件级
+`systemMaterial` 一起压掉（§3.2 优先级 1）。因此接了 `dialogMaterial` / `sheetMaterial` /
+`controlMaterial` 之后**不要改成 `disable`**；`default` 会丢掉官方清单组件的默认材质，
+组件级配置仍在，但没必要退到 `default`。维持 `enable` 即可——组件级材质优先级更高，
+会覆盖应用级默认效果，所以调材质参数同样不需要动它。
 
 ### 12.5 主操作按钮
 
@@ -837,6 +863,37 @@ HDS 的材质类型/等级与 ArkUI 的 `ImmersiveStyle` 不是一一对应关�
 ### 12.6 SaveButton
 
 `SaveButton` 属于安全组件，其样式受到系统合法性校验约束，不支持 `systemMaterial`、材质阴影或模糊。保持系统要求的高对比固定背托，不要尝试给安全按钮接入沉浸式材质。
+
+### 12.7 系统沉浸材质接入清单（弹窗 + 交互控件）
+
+材质工厂在 [`UIMaterialManager.ets`](../entry/src/main/ets/common/managers/UIMaterialManager.ets)：
+
+| 工厂 | 材质 | 接入点 |
+| --- | --- | --- |
+| `dialogMaterial` | `ImmersiveMaterial`：`ULTRA_THICK` + `applyShadow` | `new CustomDialogController({ builder: …, systemMaterial: UIMaterialManager.dialogMaterial })` |
+| `sheetMaterial` | `ImmersiveMaterial`：`ULTRA_THICK` + `applyShadow` | `SheetOptions.systemMaterial` |
+| `controlMaterial` | `ImmersiveMaterial`：`THIN` + `interactive` + `lightEffect` | 通用属性 `.systemMaterial(...)`，用于 `Slider` / `Toggle` |
+| `dialogFieldMaterial` | `GlassModifier`：填充 12% + 极淡描边，**不做背景模糊** | `.attributeModifier(...)`，材质背板之上的输入框 |
+| `dialogActionMaterial` | `GlassModifier`：填充 32% + 描边，**不做背景模糊** | `.attributeModifier(...)`，材质背板之上的中性按钮 |
+
+三条落地要点（官方声明 + 本工程结论）：
+
+1. **弹窗材质写在承载接口的 options 上，不是内容组件的通用属性。** 官方高级模板
+   （`@ohos.arkui.advanced.Dialog` 的 `AlertDialog` / `TipsDialog` / `SelectDialog` /
+   `CustomContentDialog`）的 options **没有** `backgroundColor` / `systemMaterial` 字段，
+   材质只能写在外层 `CustomDialogController` 的 options 上。
+2. **半模态面板必须保留 `backgroundColor: Color.Transparent`。** `SheetOptions` 继承
+   `BindOptions`，其 `backgroundColor` 默认值是 `Color.White`——这层白色内容会盖住背板材质。
+   同理内容容器不要再自带 `borderRadius` + `clip`：面板形状（圆角、底部/居中形态）由系统给出，
+   自带圆角会在系统材质底板上露出一圈内容层圆角。
+3. **`controlMaterial` 只给 `Slider` / `Toggle`。** `ToggleType.Checkbox` 官方明确未适配沉浸光感，
+   设置后无效果；`ToggleType.Switch` 的材质参数只作启用标记，视觉走组件内部预设。自定义配色的
+   功能型进度条（`AudioPlayer`，`SliderStyle.OutSet` + 显式 `blockColor` / `trackColor` /
+   `selectedColor`）不接入，避免与材质内部预设冲突。
+
+`colorInvert` 只在 `THIN` / `ULTRA_THIN` 下生效，且要求颜色走官方特殊系统资源（§6.3）。
+`dialogMaterial` / `sheetMaterial` 是 `ULTRA_THICK`，**不触发自动反色**，因此弹窗内容的前景色
+仍按 §12.3 用 `sys.color.font_*` / `icon_*` 保证深浅色可读性。
 
 ## 13. AI 和代码审查规则
 

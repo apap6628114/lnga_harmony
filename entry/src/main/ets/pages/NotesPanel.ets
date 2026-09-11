@@ -9,6 +9,7 @@ import { PanelNavBar } from '../common/components/PanelNavBar'
 import { NoteEditorContent, NoteAddContent } from '../common/dialogs/Dialogs'
 import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
+import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
 @Component
 export struct NotesPanel {
@@ -47,6 +48,7 @@ export struct NotesPanel {
   addDialogController?: CustomDialogController
 
   deleteDialogController?: CustomDialogController = new CustomDialogController({
+    systemMaterial: UIMaterialManager.dialogMaterial,
     builder: AlertDialog({
       primaryTitle: '删除备注',
       content: '确定要删除该用户的备注吗？',
@@ -97,6 +99,7 @@ export struct NotesPanel {
     this.editTarget = entry
     this.noteDialogText = entry.note
     this.noteDialogController = new CustomDialogController({
+      systemMaterial: UIMaterialManager.dialogMaterial,
       builder: CustomContentDialog({
         primaryTitle: '编辑备注',
         contentBuilder: this.noteEditorContent,
@@ -265,6 +268,7 @@ export struct NotesPanel {
         this.addNoteNickName = ''
         this.addNoteUid = ''
         this.addDialogController = new CustomDialogController({
+          systemMaterial: UIMaterialManager.dialogMaterial,
           builder: CustomContentDialog({
             primaryTitle: '添加备注',
             contentBuilder: this.addNoteContent,

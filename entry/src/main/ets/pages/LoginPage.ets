@@ -418,6 +418,7 @@ struct LoginPage {
       this.pendingCredentialContent = content
       this.importPassword = ''
       this.importCredentialDialogController = new CustomDialogController({
+        systemMaterial: UIMaterialManager.dialogMaterial,
         builder: CustomContentDialog({
           primaryTitle: '导入加密凭证',
           secondaryTitle: '请输入导出时设置的加密密码（至少 8 位）。',

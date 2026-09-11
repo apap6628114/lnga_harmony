@@ -1,5 +1,6 @@
 import { floatingLayerStore, FloatingLayerStoreClass, FloatingPage } from '../../store/FloatingLayerStore'
 import { AppColors } from '../constants/Constants'
+import { UIMaterialManager } from '../managers/UIMaterialManager'
 import { ImageViewer } from './ImageViewer'
 import { ProfileCardPopup } from './ProfileCardPopup'
 import { ReplyDialog } from './ReplyDialog'
@@ -18,9 +19,15 @@ import { NewTopicDialog } from './NewTopicDialog'
  * 确认类弹窗（通用确认、放弃编辑确认）已迁出本组件，改由各调用点的官方高级对话框
  * 模板（`@ohos.arkui.advanced.Dialog` 的 `AlertDialog`）承载。
  *
- * 视觉不变的关键：半模态 / 全屏模态自身背景一律置透明、系统模糊关闭并把蒙层色对齐
- * `AppColors.overlay`，弹层外观继续由内容容器的 `UIMaterialManager` 磨砂玻璃承担
- * （见 docs/IMMERSIVE_LIGHT_DESIGN.md §12）。
+ * 视觉：半模态面板的**背板**交由系统沉浸材质承担（`SheetOptions.systemMaterial`）——半模态转场
+ * 属于 API 26 Release 允许「页面内全部区域」生效的弹窗类接口，模糊、折射、高光、阴影与弹出
+ * 空间动效都由系统接管；面板**内容层**只保留半透明内容色（`UIMaterialManager.dialogFieldMaterial`），
+ * 不再自绘玻璃，避免对同一层背景二次糊化。内容层背景仍需显式置 `Color.Transparent`
+ * （`BindOptions.backgroundColor` 默认 `Color.White`，会盖住背板材质），蒙层色对齐
+ * `AppColors.overlay`。
+ * 图片查看器是固定暗场景的全屏模态（`ContentCoverOptions` 没有材质字段，且整页不宜套材质），
+ * 继续由 `UIMaterialManager` 的暗场景玻璃承担。
+ * 详见 docs/IMMERSIVE_LIGHT_DESIGN.md §12。
  */
 @Component
 export struct FloatingLayerComponent {
@@ -49,7 +56,12 @@ export struct FloatingLayerComponent {
       height: SheetSize.FIT_CONTENT,
       dragBar: false,
       showClose: false,
+      // 内容层一律让位给系统材质：BindOptions.backgroundColor 默认是 Color.White，
+      // 不显式置透明的话，这层白色内容会盖住背板层的沉浸材质。
       backgroundColor: Color.Transparent,
+      // 背板材质：半模态转场属于 Release 允许「页面内全部区域」生效的弹窗类接口，
+      // 面板本体由系统接管模糊、折射、边框、阴影与弹出动效（含空间形变）。
+      systemMaterial: UIMaterialManager.sheetMaterial,
       maskColor: AppColors.overlay,
       preferType: this.currentBreakpoint === 'sm' ? SheetType.BOTTOM : SheetType.CENTER,
       shouldDismiss: (sheetDismiss: SheetDismiss) => {

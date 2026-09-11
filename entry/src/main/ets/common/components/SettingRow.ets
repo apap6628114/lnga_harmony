@@ -1,4 +1,5 @@
 import { AppColors } from '../constants/Constants'
+import { UIMaterialManager } from '../managers/UIMaterialManager'
 
 
 /**
@@ -94,6 +95,7 @@ export struct SettingToggleRow {
 
       Toggle({ type: ToggleType.Switch, isOn: this.isOn })
         .onChange(this.onChange)
+        .systemMaterial(UIMaterialManager.controlMaterial)
     }
     .width('100%').height(44).padding({ left: 16, right: 16 }).alignItems(VerticalAlign.Center)
   }

@@ -240,6 +240,7 @@ export struct AiSettingsPanel {
    */
   private showDiscardConfirm(onConfirm: () => void): void {
     this.discardConfirmController = new CustomDialogController({
+      systemMaterial: UIMaterialManager.dialogMaterial,
       builder: AlertDialog({
         primaryTitle: '放弃修改',
         content: '当前编辑的内容尚未保存，确定要放弃吗？',
@@ -373,6 +374,7 @@ export struct AiSettingsPanel {
     const name: string = profile ? profile.name : '此配置'
 
     this.deleteConfirmController = new CustomDialogController({
+      systemMaterial: UIMaterialManager.dialogMaterial,
       builder: TipsDialog({
         imageRes: $r('app.media.icon_delete'),
         title: '删除 AI 配置',
@@ -429,6 +431,7 @@ export struct AiSettingsPanel {
     }
 
     this.providerPickerController = new CustomDialogController({
+      systemMaterial: UIMaterialManager.dialogMaterial,
       builder: SelectDialog({
         title: '选择 AI 平台',
         selectedIndex: 0,
@@ -1230,6 +1233,7 @@ export struct AiSettingsPanel {
               step: 0.1,
               style: SliderStyle.InSet
             })
+              .systemMaterial(UIMaterialManager.controlMaterial)
               .onChange((value: number, mode: SliderChangeMode): void => {
                 this.editTemperatureInput = clampTemperature(value)
               })
@@ -1263,6 +1267,7 @@ export struct AiSettingsPanel {
               step: 100,
               style: SliderStyle.InSet
             })
+              .systemMaterial(UIMaterialManager.controlMaterial)
               .onChange((value: number, mode: SliderChangeMode): void => {
                 this.editMaxTokensInput = clampMaxTokens(value)
               })

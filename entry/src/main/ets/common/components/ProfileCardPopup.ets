@@ -132,6 +132,7 @@ export struct ProfileCardPopup {
   private showNoteDialog(): void {
     this.noteDialogText = appStore.settingsStore.getNote(this.targetUid)
     this.noteDialogController = new CustomDialogController({
+      systemMaterial: UIMaterialManager.dialogMaterial,
       builder: CustomContentDialog({
         primaryTitle: '编辑备注',
         contentBuilder: this.noteEditorContent,

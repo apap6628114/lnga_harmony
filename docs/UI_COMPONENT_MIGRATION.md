@@ -123,3 +123,44 @@ ProfileCardPopup）、`NoteAddContent`（NotesPanel）、`KeywordEditorContent`�
 - 部署：HAP 安装到模拟器 `Huawei_TripleFold`（`hdc install -r`）→ `install bundle successfully`。
 - 启动：`hdc shell aa start -a EntryAbility -b com.example.nga_oh` → `start ability successfully`，进程存在。
 - 交互与视觉的逐项确认需在模拟器/真机上手动操作（本次未做 UI 自动化）。
+
+---
+
+## 7. 后继：迁移带来的沉浸光感合规化（系统材质接入）
+
+迁移到官方组件后，这些位置重新获得了**系统沉浸材质**资格——这是迁移当时没有兑现、随后补上的收益。
+
+### 7.1 为什么迁移之后才合规
+
+API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普通组件只在
+`Navigation`/`NavDestination` 标题栏或横向 `Tabs` 的 `BarPosition.End` 底部 TabBar 生效；
+但**弹窗类组件与弹窗类接口（含半模态转场），以及 `Slider`/`Toggle`/`Select`，可在页面内全部区域生效**。
+
+本工程没有 `Navigation`/`Tabs`，内容区无从借位；而迁移后的承载方式正是 `CustomDialogController`
+（官方弹窗）与 `bindSheet`（半模态转场）——两者都在「全区域生效」清单内。**所以「迁移到官方组件」
+这一步本身就是材质合规化的前提**：手搓 `Stack` 浮层即使把材质写在外层容器上也不生效，
+写在官方弹窗接口的 options 上就生效。
+
+### 7.2 本轮接入
+
+| 位置 | 接入点 | 材质 |
+| --- | --- | --- |
+| 32 处官方对话框（`AlertDialog` / `TipsDialog` / `SelectDialog` / `CustomContentDialog`） | `CustomDialogControllerOptions.systemMaterial` | `dialogMaterial`（`ULTRA_THICK`） |
+| 2 处半模态面板（回复 / 发新主题编辑器、写私信） | `SheetOptions.systemMaterial` | `sheetMaterial`（`ULTRA_THICK`） |
+| 7 处设置类 `Slider` + 2 处 `Toggle(Switch)` | 通用属性 `.systemMaterial(...)` | `controlMaterial`（`THIN` + 交互形变 + 点光源） |
+
+配套改动：
+
+- 面板 / 弹窗**内容层**从自绘模糊玻璃切到无模糊的内容层材质（`dialogFieldMaterial` 输入框、
+  `dialogActionMaterial` 中性按钮）——系统材质已经糊过背景，再叠 `backgroundEffect` 是二次糊化。
+- 半模态面板内容容器移除 `borderRadius` + `clip` + `surfaceMaterial`，形状交给系统面板。
+- `SheetOptions.backgroundColor` **保留** `Color.Transparent`：`BindOptions` 的默认值是
+  `Color.White`，不显式置透明会盖住背板材质。
+- 继续自绘玻璃的位置：页面内容区、`PanelNavBar`、`Toast`、资料卡、图片查看器，
+  以及 `AudioPlayer` 的自定义配色进度条（`SliderStyle.OutSet` + 显式 block/track 色）。
+
+### 7.3 仍未覆盖的位置（需要结构变更才能拿到材质）
+
+`PanelNavBar` 标题栏是内容区自绘栏位，**不在** `Navigation` 标题栏内，因此拿不到系统材质。
+要接入需把面板栈改造成 `Navigation`/`NavDestination` + `barStyle: BarStyle.STACK`，
+属于导航模型重构（本轮范围外，需要时另立目标评估）。

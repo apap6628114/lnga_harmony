@@ -7,7 +7,11 @@
  *
  * 承载方式为官方半模态面板（`bindSheet`）：进出场动效、下拉手势、键盘避让由系统承担；
  * 系统附属元素（拖动条 / 关闭叉）关闭，改用内容自带的指示条与既有交互；
- * 面板自身背景透明、蒙层色对齐应用遮罩色，外观继续由内容容器的磨砂玻璃承担。
+ * 面板**背板**由系统沉浸材质承担（`SheetOptions.systemMaterial`——半模态转场属于 Release 允许
+ * 「页面内全部区域」生效的弹窗类接口），内容层只保留半透明内容色
+ * （`UIMaterialManager.dialogFieldMaterial`），不再自绘玻璃。
+ * 内容层背景必须显式置 `Color.Transparent`：`BindOptions.backgroundColor` 默认是
+ * `Color.White`，这层白色会盖住背板材质。
  */
 
 import { appStore } from '../../store/AppStore'
@@ -55,6 +59,7 @@ export struct ComposeMessageSheet {
       dragBar: false,
       showClose: false,
       backgroundColor: Color.Transparent,
+      systemMaterial: UIMaterialManager.sheetMaterial,
       maskColor: AppColors.overlay,
       preferType: SheetType.BOTTOM,
       onDisappear: () => {
@@ -108,7 +113,7 @@ export struct ComposeMessageSheet {
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .margin({ top: 12 })
-        .attributeModifier(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
         .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
         .onChange((value: string) => { this.composeTo = value })
 
@@ -118,7 +123,7 @@ export struct ComposeMessageSheet {
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .margin({ top: 8 })
-        .attributeModifier(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
         .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
         .onChange((value: string) => { this.composeSubject = value })
 
@@ -128,7 +133,7 @@ export struct ComposeMessageSheet {
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .margin({ top: 8 })
-        .attributeModifier(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
         .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
         .onChange((value: string) => { this.composeContent = value })
 
@@ -142,9 +147,8 @@ export struct ComposeMessageSheet {
         .onClick(() => this.handleSend())
     }
     .width('100%')
-    .borderRadius(14).alignItems(HorizontalAlign.Center)
+    .alignItems(HorizontalAlign.Center)
     .padding({ bottom: this.navBarHeight })
-    .attributeModifier(UIMaterialManager.surfaceMaterial)
   }
 
   build() {

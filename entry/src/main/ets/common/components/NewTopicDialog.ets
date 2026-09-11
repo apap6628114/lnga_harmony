@@ -98,6 +98,7 @@ export struct NewTopicDialog {
    * 用 `Stack` + 遮罩手搓，现改用官方 `AlertDialog` 承载，浮层栈不再保存确认框状态。
    */
   private abandonDialogController: CustomDialogController = new CustomDialogController({
+    systemMaterial: UIMaterialManager.dialogMaterial,
     builder: AlertDialog({
       primaryTitle: '放弃编辑？',
       content: '已保存为草稿，下次编辑可恢复',
@@ -315,7 +316,7 @@ export struct NewTopicDialog {
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(UIMaterialManager.adaptiveForeground)
-          .attributeModifier(UIMaterialManager.inputMaterial)
+          .attributeModifier(UIMaterialManager.dialogFieldMaterial)
           .padding({ left: 16, right: 16 })
           .onClick(() => { this.requestClose() })
       }
@@ -333,7 +334,7 @@ export struct NewTopicDialog {
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .borderRadius(14)
-        .attributeModifier(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
         .maxLength(60)
         .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
         .onChange((value: string) => { this.subject = value })
@@ -380,7 +381,7 @@ export struct NewTopicDialog {
         .width('100%')
         .padding({ left: 8, right: 8, top: 8, bottom: 8 })
         .borderRadius(14)
-        .attributeModifier(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
         .margin({ bottom: 10 })
       }
 
@@ -438,7 +439,7 @@ export struct NewTopicDialog {
       .width('100%')
       .padding({ left: 8, right: 8, top: 8, bottom: 8 })
       .borderRadius(14)
-      .attributeModifier(UIMaterialManager.inputMaterial)
+      .attributeModifier(UIMaterialManager.dialogFieldMaterial)
       .margin({ bottom: 10 })
 
       if (this.showEmojiPanel && !this.previewMode) {
@@ -500,7 +501,7 @@ export struct NewTopicDialog {
         .width('100%')
         .padding(10)
         .borderRadius(16)
-        .attributeModifier(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
         .margin({ bottom: 10 })
       }
 
@@ -519,7 +520,7 @@ export struct NewTopicDialog {
           .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
           .caretColor(UIMaterialManager.inputForeground)
           .borderRadius(16)
-          .attributeModifier(UIMaterialManager.inputMaterial)
+          .attributeModifier(UIMaterialManager.dialogFieldMaterial)
           .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
           .onChange((value: string) => { this.content = value })
           .onTextSelectionChange((start: number, end: number) => {
@@ -574,7 +575,7 @@ export struct NewTopicDialog {
           .height(42)
           .constraintSize({ minWidth: 104 })
           .fontColor(UIMaterialManager.adaptiveForeground)
-          .attributeModifier(UIMaterialManager.neutralActionMaterial)
+          .attributeModifier(UIMaterialManager.dialogActionMaterial)
           .padding({ left: 20, right: 20 })
           .enabled(!this.sending && this.subject.trim().length > 0 && this.content.trim().length > 0)
           .onClick(() => { this.doSend() })
@@ -586,8 +587,5 @@ export struct NewTopicDialog {
     .width('100%')
     .constraintSize({ maxWidth: 600 })
     .padding({ left: 16, right: 16, bottom: 16 })
-    .borderRadius(24)
-    .clip(true)
-    .attributeModifier(UIMaterialManager.surfaceMaterial)
   }
 }

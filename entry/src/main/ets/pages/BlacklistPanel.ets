@@ -15,6 +15,7 @@ import { BlacklistEditorContent } from '../common/dialogs/Dialogs'
 import { normalizeBlacklistUserId } from '../common/utils/BlacklistUtils'
 import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
+import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
 @Component
 export struct BlacklistPanel {
@@ -51,6 +52,7 @@ export struct BlacklistPanel {
   @State addBlacklistUid: string = ''
 
   deleteDialogController?: CustomDialogController = new CustomDialogController({
+    systemMaterial: UIMaterialManager.dialogMaterial,
     builder: AlertDialog({
       primaryTitle: '移除黑名单',
       content: '确定要将其从黑名单中移除吗？',
@@ -77,6 +79,7 @@ export struct BlacklistPanel {
 
   /** 清空黑名单确认对话框。 */
   clearDialogController?: CustomDialogController = new CustomDialogController({
+    systemMaterial: UIMaterialManager.dialogMaterial,
     builder: AlertDialog({
       primaryTitle: '清空黑名单',
       content: '确定要清空全部黑名单吗？此操作无法撤销。',
@@ -265,6 +268,7 @@ export struct BlacklistPanel {
         onRightClick: (): void => {
         this.addBlacklistUid = ''
         this.addDialogController = new CustomDialogController({
+          systemMaterial: UIMaterialManager.dialogMaterial,
           builder: CustomContentDialog({
             primaryTitle: '添加黑名单',
             contentBuilder: this.addBlacklistContent,
