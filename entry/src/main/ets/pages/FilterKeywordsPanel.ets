@@ -192,7 +192,7 @@ export struct FilterKeywordsPanel {
           builder: CustomContentDialog({
             primaryTitle: '添加关键词',
             secondaryTitle: '输入需要屏蔽的关键词',
-            contentBuilder: this.addKeywordContent,
+            contentBuilder: (): void => { this.addKeywordContent() },
             buttons: [
               { value: '取消' },
               {

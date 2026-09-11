@@ -1826,7 +1826,7 @@ export struct ThreadPanel {
       systemMaterial: UIMaterialManager.dialogMaterial,
       builder: CustomContentDialog({
         primaryTitle: '保存帖子',
-        contentBuilder: this.saveThreadContent,
+        contentBuilder: (): void => { this.saveThreadContent() },
         buttons: [
           { value: '取消' },
           {

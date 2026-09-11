@@ -71,7 +71,7 @@ export struct ProfilePanel {
       systemMaterial: UIMaterialManager.dialogMaterial,
       builder: CustomContentDialog({
         primaryTitle: '编辑备注',
-        contentBuilder: this.noteEditorContent,
+        contentBuilder: (): void => { this.noteEditorContent() },
         buttons: [
           { value: '取消' },
           {

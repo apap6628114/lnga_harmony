@@ -8,6 +8,10 @@
  * **参数用 `@Prop` + 回调，禁止用 `@Link`**：官方 `contentBuilder` 是 `@BuilderParam`，
  * 传进去的 @Builder 在**对话框组件内部**执行，调用方的 `$变量` 在那一层解析不到源状态，
  * 打开对话框时会抛 `source variable in parent/ancestor @Component must be defined` 并崩溃（实测）。
+ *
+ * **调用方传 `contentBuilder` 必须写箭头函数**（`contentBuilder: (): void => { this.folderNameContent() }`），
+ * 不能写 `contentBuilder: this.folderNameContent`：方法引用方式赋值时 @Builder 内的 `this`
+ * 指向对话框组件实例，`name` 会读成 undefined、输入回写也会丢失（详见 `Dialogs.ets` 头部说明）。
  */
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 

@@ -19,6 +19,14 @@
  * `SyntaxError: undefined 'xxx': constructor: source variable in parent/ancestor @Component
  * must be defined` 并直接崩溃。改为「父组件 @State --@Prop 单向传入--> 子组件」+
  * 「子组件回调 --> 父组件写回」后不再有跨层绑定。
+ *
+ * **调用方传 `contentBuilder` 必须用箭头函数包装**（`contentBuilder: (): void => { this.xxxContent() }`），
+ * **禁止**写成 `contentBuilder: this.xxxContent`（实测踩坑，勿改回）：@BuilderParam 以「方法引用」
+ * 方式赋值时，@Builder 内部的 `this` 指向**对话框组件实例**而不是调用方页面
+ * （官方文档《@BuilderParam装饰器：引用@Builder函数》「改变内容UI不刷新」一节）。
+ * 症状是静默的：弹窗能打开、输入框能打字，但内容构件读到的父状态全是 undefined，
+ * 回调写回也落在对话框实例上，父组件状态永远是初值——表现为「输入了 8 位密码仍提示
+ * 密码至少 8 位」「编辑备注时原有内容为空」。
  */
 import { AppColors } from '../constants/Constants'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
@@ -247,10 +255,14 @@ export struct NoteAddContent {
 }
 
 /**
- * 加密密码输入内容（导出凭证口令）。
+ * 加密密码输入内容（导出 / 导入凭证口令）。
  *
- * 对应原 CredentialPasswordDialog 的输入区。迁移前按钮按密码长度做半透明禁用，
- * 官方模板的按钮不支持动态 disabled，改为在确认回调里校验并以 Toast 提示。
+ * 对应原 CredentialPasswordDialog 的「输入区 + 按钮行」。**按钮必须自绘在内容区**：
+ * 官方 `CustomContentDialog` 的 `buttons` 是普通可选参数（`ButtonOptions` 只有
+ * value / action / background / fontColor / buttonStyle / role / defaultFocus / textAlign，
+ * 没有 enabled 之类的状态字段），且只在 `open()` 时求值一次——弹窗打开后不随输入刷新，
+ * 因此官方按钮区做不出「未达位数 → 未激活」的即时反馈。`contentBuilder` 是 @BuilderParam，
+ * 其内容在调用方的响应式依赖里，能随父状态实时刷新，所以按钮放这里。
  */
 @Component
 export struct CredentialPasswordContent {
@@ -258,8 +270,19 @@ export struct CredentialPasswordContent {
   @Prop password: string = ''
   /** 最少位数。 */
   @Prop minLength: number = 8
+  /** 主按钮文案。 */
+  @Prop confirmLabel: string = '确定'
   /** 文本变化回调（回写父组件状态）。 */
   onPasswordChange?: (value: string) => void
+  /** 主按钮回调（密码达到最少位数时才触发，调用方负责关闭对话框）。 */
+  onConfirm?: (password: string) => void
+  /** 取消回调（调用方负责关闭对话框）。 */
+  onCancel?: () => void
+
+  /** 密码是否达到最少位数——决定主按钮的激活 / 未激活外观。 */
+  private isActive(): boolean {
+    return this.password.trim().length >= this.minLength
+  }
 
   build() {
     Column() {
@@ -281,6 +304,39 @@ export struct CredentialPasswordContent {
         .fontSize(11).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
         .margin({ top: 6 })
         .alignSelf(ItemAlign.Start)
+
+      Divider().color(AppColors.separator).margin({ top: 12 })
+
+      Row() {
+        Button('取消')
+          .layoutWeight(1).height(44).fontSize(16)
+          .backgroundColor(Color.Transparent)
+          .fontColor(AppColors.primary)
+          .onClick(() => {
+            if (this.onCancel) {
+              this.onCancel()
+            }
+          })
+
+        // 主按钮走实底主题色（材质契约 §12.5）；未达位数时降到 45% 亮度表达未激活。
+        Button(this.confirmLabel)
+          .layoutWeight(1).height(44).fontSize(16)
+          .margin({ left: 12 })
+          .backgroundColor(AppColors.primary)
+          .fontColor(AppColors.white)
+          .fontWeight(FontWeight.Bold)
+          .opacity(this.isActive() ? 1 : 0.45)
+          .onClick(() => {
+            if (!this.isActive()) {
+              return
+            }
+            if (this.onConfirm) {
+              this.onConfirm(this.password)
+            }
+          })
+      }
+      .width('100%')
+      .margin({ top: 12 })
     }
     .width('100%')
   }

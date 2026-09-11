@@ -183,7 +183,7 @@ export struct FavoriteFoldersPanel {
       systemMaterial: UIMaterialManager.dialogMaterial,
       builder: CustomContentDialog({
         primaryTitle: '新建收藏夹',
-        contentBuilder: this.folderNameContent,
+        contentBuilder: (): void => { this.folderNameContent() },
         buttons: [
           { value: '取消' },
           {
@@ -259,7 +259,7 @@ export struct FavoriteFoldersPanel {
       systemMaterial: UIMaterialManager.dialogMaterial,
       builder: CustomContentDialog({
         primaryTitle: '重命名收藏夹',
-        contentBuilder: this.folderNameContent,
+        contentBuilder: (): void => { this.folderNameContent() },
         buttons: [
           { value: '取消' },
           {

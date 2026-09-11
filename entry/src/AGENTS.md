@@ -108,6 +108,13 @@
 - 典型教训：PanelNavBar.iconPod 曾按值传 icon，切 Tab 后图标固化为
   首次渲染值（如「全部已读」双勾替代「写私信」铅笔）；修复后统一走
   `this.resolveIcon(isBack, isSecondary)`，与颜色/角标同一模式
+- **`@BuilderParam` 传 @Builder 必须用箭头函数包装**：`xxxBuilder: this.myBuilder`
+  （方法引用）会让 @Builder 内部的 `this` 指向**接收方组件**而不是本组件
+  （官方文档《@BuilderParam装饰器》「改变内容UI不刷新」一节的官方反例），
+  于是读父状态得到 `undefined`、回调写回也落到接收方实例上，且**不报错**。
+  正确写法：`xxxBuilder: (): void => { this.myBuilder() }`。本工程官方
+  `CustomContentDialog` 的 `contentBuilder` 全部走此写法（详见
+  `docs/UI_COMPONENT_MIGRATION.md` §3.2）
 
 
 

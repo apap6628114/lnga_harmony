@@ -75,13 +75,19 @@ struct LoginPage {
   /** 凭证导入弹窗的密码输入（供 CustomContentDialog 内容构件双向绑定）。 */
   @State importPassword: string = ''
 
-  /** 凭证导入弹窗的自定义内容。 */
+  /** 凭证导入弹窗的自定义内容（按钮随密码位数切换激活态，故自绘在内容区）。 */
   @Builder
   importPasswordContent() {
     CredentialPasswordContent({
       password: this.importPassword,
       minLength: 8,
-      onPasswordChange: (value: string): void => { this.importPassword = value }
+      confirmLabel: '导入',
+      onPasswordChange: (value: string): void => { this.importPassword = value },
+      onConfirm: (password: string): void => {
+        this.importCredentialDialogController?.close()
+        this.importEncryptedCredential(password)
+      },
+      onCancel: (): void => { this.importCredentialDialogController?.close() }
     })
   }
   /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
@@ -423,23 +429,9 @@ struct LoginPage {
         builder: CustomContentDialog({
           primaryTitle: '导入加密凭证',
           secondaryTitle: '请输入导出时设置的加密密码（至少 8 位）。',
-          contentBuilder: this.importPasswordContent,
-          buttons: [
-            { value: '取消' },
-            {
-              value: '导入',
-              fontColor: AppColors.white,
-              background: AppColors.primary,
-              action: (): void => {
-                const password: string = this.importPassword
-                if (password.trim().length < 8) {
-                  appStore.showToast('密码至少 8 位')
-                  return
-                }
-                this.importEncryptedCredential(password)
-              }
-            }
-          ]
+          contentBuilder: (): void => { this.importPasswordContent() }
+          // 不传 buttons：官方按钮区不支持动态激活态（见 CredentialPasswordContent 说明），
+          // 「取消 / 导入」由内容区自绘。
         }),
         autoCancel: true
       })

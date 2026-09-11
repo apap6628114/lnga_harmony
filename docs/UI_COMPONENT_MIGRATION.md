@@ -82,9 +82,36 @@ ProfileCardPopup）、`NoteAddContent`（NotesPanel）、`KeywordEditorContent`�
 `BlacklistEditorContent`（BlacklistPanel）、`CredentialPasswordContent`（SettingsPanel / LoginPage）、
 `FolderNameEditorContent`（FavoriteFoldersPanel / FavoriteSavedPanel）、`SaveThreadContent`（ThreadPanel）。
 
-**行为差异（有意为之）**：官方对话框模板的按钮不支持动态 `disabled`，原先「校验不通过时确认按钮半透明」
-的即时反馈改为**提交时校验 + Toast 提示**（`NotesPanel` / `FilterKeywordsPanel` / `BlacklistPanel` /
-`SettingsPanel` / `LoginPage` / `ProfilePanel` / `ProfileCardPopup` / `ThreadPanel` 均如此）。
+**传 `contentBuilder` 必须写箭头函数包装，禁止写成方法引用**（2026-09 修复，勿改回）：
+`@BuilderParam` 以「方法引用」方式赋值（`contentBuilder: this.exportPasswordContent`）时，
+@Builder 内部的 `this` 指向**对话框组件实例**而不是调用方页面——官方文档
+《@BuilderParam装饰器：引用@Builder函数》「改变内容UI不刷新」一节给出的反例正是这种写法
+（正例是 `(): void => { this.customChangeThisBuilder() }`）。后果是**静默失效**：
+弹窗照常打开、输入框照常能打字（`@Prop` 收不到值时回落到默认值），但
+1）内容构件读到的父状态全是 `undefined`（编辑备注打开时原内容为空、保存帖子弹窗拿不到 `tid`）；
+2）回调写回落在对话框实例上，父组件状态永远是初值——**凭证导出/导入因此恒判「密码至少 8 位」**。
+
+因此 13 处调用点统一写成 `contentBuilder: (): void => { this.xxxContent() }`
+（`SettingsPanel`、`LoginPage`、`NotesPanel` ×2、`ProfilePanel`、`ProfileCardPopup`、
+`FilterKeywordsPanel`、`BlacklistPanel`、`FavoriteFoldersPanel` ×2、`FavoriteSavedPanel` ×2、`ThreadPanel`）。
+
+**官方按钮区的能力边界（凭证两处已改回自绘按钮）**：官方模板的按钮做不出「未达位数 → 未激活」的
+即时反馈，原因有两条（本地 SDK 声明为准，`@ohos.arkui.advanced.Dialog.d.ets`）：
+
+1. `ButtonOptions` 只有 `value` / `action` / `background` / `fontColor` / `buttonStyle` / `role` /
+   `defaultFocus` / `textAlign`，**没有 `enabled` 之类的状态字段**；
+2. `buttons?: ButtonOptions[]` 是普通可选参数（不是 `@Prop`），而对话框 `builder` 只在 `open()` 时
+   执行一次——**弹窗打开后不会随输入重新求值**，即使有状态字段也刷不出来。
+
+`contentBuilder` 是 `@BuilderParam`，其内容挂在调用方的响应式依赖里，能随父 `@State` 实时刷新。
+所以凭证导出 / 导入两处（`CredentialPasswordContent`）**改为不传官方 `buttons`，由内容区自绘
+「取消 + 导出/导入」**：主按钮实底主题色（材质契约 §12.5），未达位数时降到 45% 亮度表示未激活，
+与迁移前 `CredentialPasswordDialog` 的观感一致。
+
+其余输入类弹窗（`NotesPanel` / `FilterKeywordsPanel` / `BlacklistPanel` / `ProfilePanel` /
+`ProfileCardPopup` / `ThreadPanel` / `FavoriteFoldersPanel` / `FavoriteSavedPanel`）**仍是**
+官方按钮 + 提交时校验 + Toast 提示；如需同样的激活态，套用 `CredentialPasswordContent` 的模式即可
+（不传 `buttons`，把按钮行放进内容构件）。
 
 ### 3.3 写私信表单（`ComposeMessageSheet`）
 

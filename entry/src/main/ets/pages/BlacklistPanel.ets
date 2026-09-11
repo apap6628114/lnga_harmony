@@ -274,7 +274,7 @@ export struct BlacklistPanel {
           systemMaterial: UIMaterialManager.dialogMaterial,
           builder: CustomContentDialog({
             primaryTitle: '添加黑名单',
-            contentBuilder: this.addBlacklistContent,
+            contentBuilder: (): void => { this.addBlacklistContent() },
             buttons: [
               { value: '取消' },
               {

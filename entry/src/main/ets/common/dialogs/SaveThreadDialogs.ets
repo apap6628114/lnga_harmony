@@ -13,6 +13,10 @@
  * 传进去的 @Builder 在**对话框组件内部**执行，调用方的 `$变量` 在那一层解析不到源状态，
  * 打开对话框时会抛 `source variable in parent/ancestor @Component must be defined` 并崩溃（实测）。
  *
+ * **调用方传 `contentBuilder` 必须写箭头函数**（`contentBuilder: (): void => { this.saveThreadContent() }`），
+ * 不能写 `contentBuilder: this.saveThreadContent`：方法引用方式赋值时 @Builder 内的 `this`
+ * 指向对话框组件实例，`tid` / `initialSubject` 都会读成 undefined（详见 `Dialogs.ets` 头部说明）。
+ *
  * 确认后由调用方启动 `SavedThreadService` 后台保存（进度由全局指示组件展示）。
  */
 

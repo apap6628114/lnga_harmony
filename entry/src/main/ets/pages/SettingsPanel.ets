@@ -108,13 +108,19 @@ export struct SettingsPanel {
     autoCancel: true
   })
 
-  /** 凭证导出弹窗的自定义内容。 */
+  /** 凭证导出弹窗的自定义内容（按钮随密码位数切换激活态，故自绘在内容区）。 */
   @Builder
   exportPasswordContent() {
     CredentialPasswordContent({
       password: this.exportPassword,
       minLength: 8,
-      onPasswordChange: (value: string): void => { this.exportPassword = value }
+      confirmLabel: '导出',
+      onPasswordChange: (value: string): void => { this.exportPassword = value },
+      onConfirm: (password: string): void => {
+        this.exportCredentialDialogController?.close()
+        this.exportEncryptedCredential(password)
+      },
+      onCancel: (): void => { this.exportCredentialDialogController?.close() }
     })
   }
 
@@ -256,23 +262,9 @@ export struct SettingsPanel {
       builder: CustomContentDialog({
         primaryTitle: '加密导出凭证',
         secondaryTitle: '导出的文件将使用此密码加密，导入时需要再次输入（至少 8 位）。',
-        contentBuilder: this.exportPasswordContent,
-        buttons: [
-          { value: '取消' },
-          {
-            value: '导出',
-            fontColor: AppColors.white,
-            background: AppColors.primary,
-            action: (): void => {
-              const password: string = this.exportPassword
-              if (password.trim().length < 8) {
-                appStore.showToast('密码至少 8 位')
-                return
-              }
-              this.exportEncryptedCredential(password)
-            }
-          }
-        ]
+        contentBuilder: (): void => { this.exportPasswordContent() }
+        // 不传 buttons：官方按钮区不支持动态激活态（见 CredentialPasswordContent 说明），
+        // 「取消 / 导出」由内容区自绘。
       }),
       autoCancel: true
     })
