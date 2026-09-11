@@ -150,7 +150,7 @@ export class UIMaterialManager {
    * 接近不透明的白板，与背景是否透明无关（两张不同配置的截图逐像素相同）。
    */
   static readonly dialogMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-    style: uiMaterial.ImmersiveStyle.REGULAR,
+    style: uiMaterial.ImmersiveStyle.THIN,
     materialColor: $r('app.color.material_surface_tint'),
     applyShadow: true
   })
@@ -165,7 +165,7 @@ export class UIMaterialManager {
    * （`dialogFieldMaterial` / `dialogActionMaterial`），不要再给它们接系统材质。
    */
   static readonly sheetMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-    style: uiMaterial.ImmersiveStyle.REGULAR,
+    style: uiMaterial.ImmersiveStyle.THIN,
     materialColor: $r('app.color.material_surface_tint'),
     applyShadow: true
   })
