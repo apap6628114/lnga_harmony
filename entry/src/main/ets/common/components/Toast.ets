@@ -1,25 +1,18 @@
 /**
  * Toast 提示组件
  * 通过 AppStorage 驱动显示
+ *
+ * 保留自研而不迁到官方 `promptAction.showToast` 的原因（见 docs/UI_COMPONENT_MIGRATION.md §4）：
+ * 1. 官方 toast 不支持动作按钮，而工程有「回复成功 → 前往查看」这类带回调的 toast
+ *    （`appStore.showToastAction`）；
+ * 2. 官方 toast 无法承载现有玻璃底色与「有动作按钮时独占拦截、纯文本时穿透」的命中测试策略。
+ *
+ * 迁移期间删除的同文件死代码：未使用的 `@CustomDialog ToastOverlay`（自绘弹窗外壳，
+ * 全工程无引用）。
  */
 
 import { appStore } from '../../store/AppStore'
 import { AppColors, TOAST_BOTTOM_MARGIN } from '../constants/Constants'
-
-@CustomDialog
-export struct ToastOverlay {
-  controller: CustomDialogController
-  @State message: string = ''
-
-  build() {
-    Text(this.message)
-      .fontSize(14)
-      .fontColor(AppColors.white)
-      .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-      .borderRadius(20)
-      .backgroundColor(AppColors.toastBg)
-  }
-}
 
 /**
  * 全局 Toast 组件，需要在页面根部挂载

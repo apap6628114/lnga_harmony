@@ -4,14 +4,15 @@
 
 import { appStore } from '../store/AppStore'
 import type { BlacklistEntry } from '../model/SocialEntries'
-import { display } from '@kit.ArkUI'
+import { display, AlertDialog, CustomContentDialog } from '@kit.ArkUI'
 import { AppColors } from '../common/constants/Constants'
 import { escHtml } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { BlacklistDataSource } from '../common/datasource/LazyDataSource'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { EmptyStateView } from '../common/components/PageStateView'
-import { ConfirmDialog, AddBlacklistDialog } from '../common/dialogs/Dialogs'
+import { BlacklistEditorContent } from '../common/dialogs/Dialogs'
+import { normalizeBlacklistUserId } from '../common/utils/BlacklistUtils'
 import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
@@ -46,43 +47,94 @@ export struct BlacklistPanel {
 
   addDialogController?: CustomDialogController
 
+  /** 添加黑名单弹窗的 UID 输入（供 CustomContentDialog 内容构件双向绑定）。 */
+  @State addBlacklistUid: string = ''
+
   deleteDialogController?: CustomDialogController = new CustomDialogController({
-    builder: ConfirmDialog({
-      title: '移除黑名单',
-      message: '确定要将其从黑名单中移除吗？',
-      confirmLabel: '移除',
-      destructive: true,
-      onConfirm: () => {
-        if (this.removeTarget) {
-          appStore.settingsStore.removeBlacklist(this.removeTarget.userId)
-          this.removeTarget = null
+    builder: AlertDialog({
+      primaryTitle: '移除黑名单',
+      content: '确定要将其从黑名单中移除吗？',
+      primaryButton: {
+        value: '移除',
+        fontColor: AppColors.white,
+        background: AppColors.destructive,
+        action: () => {
+          if (this.removeTarget) {
+            appStore.settingsStore.removeBlacklist(this.removeTarget.userId)
+            this.removeTarget = null
+          }
         }
       },
-      onCancel: () => {
-        this.removeTarget = null
+      secondaryButton: {
+        value: '取消',
+        action: () => {
+          this.removeTarget = null
+        }
       }
     }),
-    autoCancel: true,
-    customStyle: true
+    autoCancel: true
   })
 
   /** 清空黑名单确认对话框。 */
   clearDialogController?: CustomDialogController = new CustomDialogController({
-    builder: ConfirmDialog({
-      title: '清空黑名单',
-      message: '确定要清空全部黑名单吗？此操作无法撤销。',
-      confirmLabel: '清空',
-      destructive: true,
-      onConfirm: () => {
-        if (appStore.settingsStore.removeAllBlacklist()) {
-          appStore.showToast('已清空黑名单')
+    builder: AlertDialog({
+      primaryTitle: '清空黑名单',
+      content: '确定要清空全部黑名单吗？此操作无法撤销。',
+      primaryButton: {
+        value: '清空',
+        fontColor: AppColors.white,
+        background: AppColors.destructive,
+        action: () => {
+          if (appStore.settingsStore.removeAllBlacklist()) {
+            appStore.showToast('已清空黑名单')
+          }
         }
       },
-      onCancel: () => {}
+      secondaryButton: {
+        value: '取消'
+      }
     }),
-    autoCancel: true,
-    customStyle: true
+    autoCancel: true
   })
+
+  /** 添加黑名单弹窗的自定义内容。 */
+  @Builder
+  addBlacklistContent() {
+    BlacklistEditorContent({
+      uid: this.addBlacklistUid,
+      currentUserId: appStore.auth.uid,
+      existingUserIds: appStore.settings.blacklist.map((entry: BlacklistEntry): string => entry.userId),
+      onUidChange: (value: string): void => { this.addBlacklistUid = value }
+    })
+  }
+
+  /**
+   * 提交新增黑名单。
+   *
+   * 官方对话框模板的按钮不支持动态禁用，原先「校验不通过时按钮半透明」的即时反馈
+   * 改为提交时校验并以 Toast 提示；校验规则与迁移前一致。
+   */
+  private submitAddBlacklist(): void {
+    const normalizedUserId: string | null = normalizeBlacklistUserId(this.addBlacklistUid)
+    if (normalizedUserId === null) {
+      appStore.showToast('UID 必须是大于 0 的整数')
+      return
+    }
+    if (normalizedUserId === normalizeBlacklistUserId(appStore.auth.uid)) {
+      appStore.showToast('不能将自己加入黑名单')
+      return
+    }
+    const existing: string[] = appStore.settings.blacklist.map((entry: BlacklistEntry): string => entry.userId)
+    if (existing.indexOf(normalizedUserId) >= 0) {
+      appStore.showToast('该用户已在黑名单中')
+      return
+    }
+    if (appStore.settingsStore.addBlacklist({ userId: normalizedUserId, nickName: `User${normalizedUserId}` })) {
+      appStore.showToast('已加入黑名单')
+    } else {
+      appStore.showToast('该用户无法加入黑名单')
+    }
+  }
 
   aboutToDisappear(): void {
     this.deleteDialogController = undefined
@@ -211,21 +263,22 @@ export struct BlacklistPanel {
       PanelNavBar({ title: '黑名单管理', rightIcon: $r('app.media.icon_nav_add'),
         rightIconAccessibilityText: '添加黑名单', scrollEffectProgress: this.titleScrollEffectProgress,
         onRightClick: (): void => {
+        this.addBlacklistUid = ''
         this.addDialogController = new CustomDialogController({
-          builder: AddBlacklistDialog({
-            currentUserId: appStore.auth.uid,
-            existingUserIds: appStore.settings.blacklist.map((entry: BlacklistEntry): string => entry.userId),
-            onConfirm: (uid: string): void => {
-              if (appStore.settingsStore.addBlacklist({ userId: uid, nickName: `User${uid}` })) {
-                appStore.showToast('已加入黑名单')
-              } else {
-                appStore.showToast('该用户无法加入黑名单')
+          builder: CustomContentDialog({
+            primaryTitle: '添加黑名单',
+            contentBuilder: this.addBlacklistContent,
+            buttons: [
+              { value: '取消' },
+              {
+                value: '确定添加',
+                fontColor: AppColors.white,
+                background: AppColors.primary,
+                action: (): void => { this.submitAddBlacklist() }
               }
-            }
+            ]
           }),
-          autoCancel: true,
-          customStyle: true,
-          alignment: DialogAlignment.Center
+          autoCancel: true
         })
         this.addDialogController.open()
         } })

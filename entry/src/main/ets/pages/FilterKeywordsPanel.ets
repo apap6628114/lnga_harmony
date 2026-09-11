@@ -3,7 +3,8 @@ import { FilterKeyword } from '../model/FilterKeyword'
 import { AppColors } from '../common/constants/Constants'
 import { FilterKeywordDataSource } from '../common/datasource/LazyDataSource'
 import { PanelNavBar } from '../common/components/PanelNavBar'
-import { ConfirmDialog, AddKeywordDialog } from '../common/dialogs/Dialogs'
+import { AlertDialog, CustomContentDialog } from '@kit.ArkUI'
+import { KeywordEditorContent } from '../common/dialogs/Dialogs'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
 @Component
@@ -35,26 +36,43 @@ export struct FilterKeywordsPanel {
 
   addDialogController?: CustomDialogController
 
+  /** 添加关键词弹窗的输入（供 CustomContentDialog 内容构件双向绑定）。 */
+  @State addKeywordText: string = ''
+
   deleteDialogController?: CustomDialogController = new CustomDialogController({
-    builder: ConfirmDialog({
-      title: '删除关键词',
-      message: '确定要删除该关键词吗？',
-      confirmLabel: '删除',
-      destructive: true,
-      onConfirm: () => {
-        if (this.removeTarget) {
-          appStore.settingsStore.removeKeyword(this.removeTarget)
-          this.refreshKeywords()
-          this.removeTarget = ''
+    builder: AlertDialog({
+      primaryTitle: '删除关键词',
+      content: '确定要删除该关键词吗？',
+      primaryButton: {
+        value: '删除',
+        fontColor: AppColors.white,
+        background: AppColors.destructive,
+        action: () => {
+          if (this.removeTarget) {
+            appStore.settingsStore.removeKeyword(this.removeTarget)
+            this.refreshKeywords()
+            this.removeTarget = ''
+          }
         }
       },
-      onCancel: () => {
-        this.removeTarget = ''
+      secondaryButton: {
+        value: '取消',
+        action: () => {
+          this.removeTarget = ''
+        }
       }
     }),
-    autoCancel: true,
-    customStyle: true
+    autoCancel: true
   })
+
+  /** 添加关键词弹窗的自定义内容。 */
+  @Builder
+  addKeywordContent() {
+    KeywordEditorContent({
+      keyword: this.addKeywordText,
+      onKeywordChange: (value: string): void => { this.addKeywordText = value }
+    })
+  }
 
   aboutToDisappear(): void {
     this.deleteDialogController = undefined
@@ -164,17 +182,32 @@ export struct FilterKeywordsPanel {
       PanelNavBar({ title: '关键词屏蔽', rightIcon: $r('app.media.icon_nav_add'),
         rightIconAccessibilityText: '添加关键词', scrollEffectProgress: this.titleScrollEffectProgress,
         onRightClick: (): void => {
+        this.addKeywordText = ''
         this.addDialogController = new CustomDialogController({
-          builder: AddKeywordDialog({
-            onConfirm: (keyword: string): void => {
-              appStore.settingsStore.addKeyword(keyword)
-              this.refreshKeywords()
-              appStore.showToast('已添加关键词')
-            }
+          builder: CustomContentDialog({
+            primaryTitle: '添加关键词',
+            secondaryTitle: '输入需要屏蔽的关键词',
+            contentBuilder: this.addKeywordContent,
+            buttons: [
+              { value: '取消' },
+              {
+                value: '确定添加',
+                fontColor: AppColors.white,
+                background: AppColors.primary,
+                action: (): void => {
+                  const keyword: string = this.addKeywordText.trim()
+                  if (keyword.length > 0) {
+                    appStore.settingsStore.addKeyword(keyword)
+                    this.refreshKeywords()
+                    appStore.showToast('已添加关键词')
+                  } else {
+                    appStore.showToast('请输入关键词')
+                  }
+                }
+              }
+            ]
           }),
-          autoCancel: true,
-          customStyle: true,
-          alignment: DialogAlignment.Center
+          autoCancel: true
         })
         this.addDialogController.open()
         } })

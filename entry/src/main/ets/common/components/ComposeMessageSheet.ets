@@ -1,9 +1,13 @@
 /**
  * 写私信底部面板（共享组件）。
  *
- * 由通知面板私信 Tab 与私信列表面板复用：系统材质底部 sheet，
- * 收件人 / 主题 / 内容 / 发送；发送成功后通过 onSent 通知父组件刷新会话列表。
+ * 由通知面板私信 Tab 与私信列表面板复用：收件人 / 主题 / 内容 / 发送；
+ * 发送成功后通过 onSent 通知父组件刷新会话列表。
  * 支持 composeToInit 直达（如他人主页「发私信」跳转时自动弹出并预填收件人）。
+ *
+ * 承载方式为官方半模态面板（`bindSheet`）：进出场动效、下拉手势、键盘避让由系统承担；
+ * 系统附属元素（拖动条 / 关闭叉）关闭，改用内容自带的指示条与既有交互；
+ * 面板自身背景透明、蒙层色对齐应用遮罩色，外观继续由内容容器的磨砂玻璃承担。
  */
 
 import { appStore } from '../../store/AppStore'
@@ -40,6 +44,27 @@ export struct ComposeMessageSheet {
     this.composeContent = ''
   }
 
+  /**
+   * 半模态面板选项。
+   *
+   * @returns 半模态面板选项
+   */
+  private composeSheetOptions(): SheetOptions {
+    const options: SheetOptions = {
+      height: SheetSize.FIT_CONTENT,
+      dragBar: false,
+      showClose: false,
+      backgroundColor: Color.Transparent,
+      maskColor: AppColors.overlay,
+      preferType: SheetType.BOTTOM,
+      onDisappear: () => {
+        // 系统关闭（下滑 / 点击蒙层）后回写可见性，保证 @Link 状态与面板一致
+        this.showCompose = false
+      }
+    }
+    return options
+  }
+
   private async handleSend(): Promise<void> {
     const to: string = this.composeTo.trim()
     const subject: string = this.composeSubject.trim()
@@ -66,67 +91,66 @@ export struct ComposeMessageSheet {
     this.sending = false
   }
 
-  build() {
-    if (this.showCompose) {
-      Column() {
-      }
-      .width('100%').height('100%')
-      .position({ x: 0, y: 0 })
-      .backgroundColor(AppColors.overlay)
-      .onClick(() => { this.showCompose = false })
+  /** 半模态面板内容。 */
+  @Builder
+  ComposeSheetContent() {
+    Column() {
+      Divider().width(36).height(4).borderRadius(2).color(AppColors.sheetIndicator).margin({ top: 8, bottom: 12 })
+      Row() {
+        Text('写私信').fontSize(17).fontWeight(FontWeight.Bold).layoutWeight(1)
+        Text('✕').fontSize(20).fontColor(AppColors.textTertiary)
+          .onClick(() => { this.showCompose = false })
+      }.width('100%').padding({ left: 16, right: 16 })
 
-      Column() {
-        Divider().width(36).height(4).borderRadius(2).color(AppColors.sheetIndicator).margin({ top: 8, bottom: 12 })
-        Row() {
-          Text('写私信').fontSize(17).fontWeight(FontWeight.Bold).layoutWeight(1)
-          Text('✕').fontSize(20).fontColor(AppColors.textTertiary)
-            .onClick(() => { this.showCompose = false })
-        }.width('100%').padding({ left: 16, right: 16 })
+      TextInput({ text: this.composeTo, placeholder: '收件人（用户名）' })
+        .width('92%').height(44).fontSize(15).borderRadius(12)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
+        .margin({ top: 12 })
+        .attributeModifier(UIMaterialManager.inputMaterial)
+        .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+        .onChange((value: string) => { this.composeTo = value })
 
-        TextInput({ text: this.composeTo, placeholder: '收件人（用户名）' })
-          .width('92%').height(44).fontSize(15).borderRadius(12)
-          .fontColor(UIMaterialManager.inputForeground)
-          .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
-          .caretColor(UIMaterialManager.inputForeground)
-          .margin({ top: 12 })
-          .attributeModifier(UIMaterialManager.inputMaterial)
-          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-          .onChange((value: string) => { this.composeTo = value })
+      TextInput({ text: this.composeSubject, placeholder: '主题' })
+        .width('92%').height(44).fontSize(15).borderRadius(12)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
+        .margin({ top: 8 })
+        .attributeModifier(UIMaterialManager.inputMaterial)
+        .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+        .onChange((value: string) => { this.composeSubject = value })
 
-        TextInput({ text: this.composeSubject, placeholder: '主题' })
-          .width('92%').height(44).fontSize(15).borderRadius(12)
-          .fontColor(UIMaterialManager.inputForeground)
-          .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
-          .caretColor(UIMaterialManager.inputForeground)
-          .margin({ top: 8 })
-          .attributeModifier(UIMaterialManager.inputMaterial)
-          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-          .onChange((value: string) => { this.composeSubject = value })
+      TextArea({ text: this.composeContent, placeholder: '内容' })
+        .width('92%').height(100).fontSize(15).borderRadius(12)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
+        .margin({ top: 8 })
+        .attributeModifier(UIMaterialManager.inputMaterial)
+        .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+        .onChange((value: string) => { this.composeContent = value })
 
-        TextArea({ text: this.composeContent, placeholder: '内容' })
-          .width('92%').height(100).fontSize(15).borderRadius(12)
-          .fontColor(UIMaterialManager.inputForeground)
-          .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
-          .caretColor(UIMaterialManager.inputForeground)
-          .margin({ top: 8 })
-          .attributeModifier(UIMaterialManager.inputMaterial)
-          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-          .onChange((value: string) => { this.composeContent = value })
-
-        Button(this.sending ? '发送中...' : '发送')
-          .width('92%').height(44).fontSize(16)
-          .fontColor(AppColors.white)
-          .backgroundColor(AppColors.primary)
-          .borderRadius(12).margin({ top: 12, bottom: 20 })
-          .enabled(!this.sending && this.composeTo.trim().length > 0 &&
-            this.composeSubject.trim().length > 0 && this.composeContent.trim().length > 0)
-          .onClick(() => this.handleSend())
-      }
-      .width('100%')
-      .borderRadius(14).alignItems(HorizontalAlign.Center)
-      .padding({ bottom: this.navBarHeight })
-      .attributeModifier(UIMaterialManager.surfaceMaterial)
-      .position({ x: 0, y: '40%' })
+      Button(this.sending ? '发送中...' : '发送')
+        .width('92%').height(44).fontSize(16)
+        .fontColor(AppColors.white)
+        .backgroundColor(AppColors.primary)
+        .borderRadius(12).margin({ top: 12, bottom: 20 })
+        .enabled(!this.sending && this.composeTo.trim().length > 0 &&
+          this.composeSubject.trim().length > 0 && this.composeContent.trim().length > 0)
+        .onClick(() => this.handleSend())
     }
+    .width('100%')
+    .borderRadius(14).alignItems(HorizontalAlign.Center)
+    .padding({ bottom: this.navBarHeight })
+    .attributeModifier(UIMaterialManager.surfaceMaterial)
+  }
+
+  build() {
+    // 零尺寸锚点：只作为官方半模态面板的宿主，不参与布局与命中测试
+    Column()
+      .width(0).height(0)
+      .bindSheet(this.showCompose, this.ComposeSheetContent(), this.composeSheetOptions())
   }
 }

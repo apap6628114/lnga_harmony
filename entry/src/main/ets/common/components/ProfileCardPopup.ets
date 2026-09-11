@@ -5,7 +5,8 @@ import { AppColors } from '../constants/Constants'
 import { formatTime, fmtNum, formatMoney, escHtml, getAvatarUrl } from '../utils/Utils'
 import { unescapeHtml } from '../../parser/_shared/HtmlEntityCodec'
 import { Avatar } from './Avatar'
-import { MakeNoteDialog } from '../dialogs/Dialogs'
+import { CustomContentDialog } from '@kit.ArkUI'
+import { NoteEditorContent } from '../dialogs/Dialogs'
 import { PageScope } from '../concurrency/PageScope'
 import { openImageViewer } from '../utils/LinkUtils'
 
@@ -36,8 +37,20 @@ export struct ProfileCardPopup {
   onClose: () => void = () => {}
   noteDialogController?: CustomDialogController
   @State isAnalyzing: boolean = false
+  /** 备注弹窗的备注输入（供 CustomContentDialog 内容构件双向绑定）。 */
+  @State noteDialogText: string = ''
   /** 组件存活会话作用域，驱动异步回调的存活与代际校验。 */
   private scope: PageScope = new PageScope()
+
+  /** 备注弹窗的自定义内容。 */
+  @Builder
+  noteEditorContent() {
+    NoteEditorContent({
+      noteText: this.noteDialogText,
+      userName: this.profile ? this.profile.userName : '',
+      onNoteChange: (value: string): void => { this.noteDialogText = value }
+    })
+  }
 
   /** 组件消失时结束会话，使未完成的异步回调失效。 */
   aboutToDisappear(): void {
@@ -117,19 +130,31 @@ export struct ProfileCardPopup {
   }
 
   private showNoteDialog(): void {
+    this.noteDialogText = appStore.settingsStore.getNote(this.targetUid)
     this.noteDialogController = new CustomDialogController({
-      builder: MakeNoteDialog({
-        userName: this.profile?.userName ?? '',
-        uid: this.targetUid,
-        currentNote: appStore.settingsStore.getNote(this.targetUid),
-        onConfirm: (note: string, uid: string, userName: string): void => {
-          appStore.settingsStore.addOrUpdateNote(uid, userName, note)
-          appStore.showToast('备注已保存')
-        }
+      builder: CustomContentDialog({
+        primaryTitle: '编辑备注',
+        contentBuilder: this.noteEditorContent,
+        buttons: [
+          { value: '取消' },
+          {
+            value: '确认',
+            fontColor: AppColors.white,
+            background: AppColors.primary,
+            action: (): void => {
+              const note: string = this.noteDialogText
+              if (note.length >= 1 && note.length <= 20) {
+                appStore.settingsStore.addOrUpdateNote(this.targetUid,
+                  this.profile ? this.profile.userName : '', note)
+                appStore.showToast('备注已保存')
+              } else {
+                appStore.showToast('备注需 1~20 字')
+              }
+            }
+          }
+        ]
       }),
-      autoCancel: true,
-      customStyle: true,
-      alignment: DialogAlignment.Center
+      autoCancel: true
     })
     this.noteDialogController.open()
   }

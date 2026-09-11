@@ -1,321 +1,145 @@
 /**
- * 确认对话框 + ActionSheet 组件 + 备注编辑对话框
+ * 对话框内容构件集（配合官方高级对话框模板使用）。
+ *
+ * 迁移说明：本文件原先定义 7 个 `@CustomDialog` 自绘弹窗
+ * （ConfirmDialog / ActionSheetDialog / CredentialPasswordDialog / MakeNoteDialog /
+ * AddBlacklistDialog / AddKeywordDialog / AddNoteDialog），现按官方建议改为
+ * 「官方高级对话框模板 + 自定义内容」：
+ *
+ * - 确认类 → `@ohos.arkui.advanced.Dialog` 的 `AlertDialog`（无图标）/ `TipsDialog`（带图标）。
+ *   **不要用 `ConfirmDialog`**：它带 `checkTips` / `isChecked` 复选框字段，即使不传 `checkTips`
+ *   也会渲染一个没有文字的孤立复选框（实测截图确认），语义上不合理。
+ * - 选项列表 → `SelectDialog`（单选项 + 确认按钮）
+ * - 输入类 → `CustomContentDialog`（官方模板中唯一支持自定义内容的），
+ *   本文件只保留其内容构件，标题与按钮由官方模板统一渲染
+ *
+ * **参数一律用 `@Prop` + 回调，禁止用 `@Link`**（实测踩坑，勿改回）：
+ * 官方 `contentBuilder` 是 `@BuilderParam`，传进去的 @Builder 是在**对话框组件内部**执行的，
+ * 调用方的 `$变量` 语法在那一层解析不到源状态，打开对话框时会抛
+ * `SyntaxError: undefined 'xxx': constructor: source variable in parent/ancestor @Component
+ * must be defined` 并直接崩溃。改为「父组件 @State --@Prop 单向传入--> 子组件」+
+ * 「子组件回调 --> 父组件写回」后不再有跨层绑定。
  */
 import { AppColors } from '../constants/Constants'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 import { normalizeBlacklistUserId } from '../utils/BlacklistUtils'
 
-// 确认对话框
-@CustomDialog
-export struct ConfirmDialog {
-  controller: CustomDialogController
-  @Prop title: string = ''
-  @Prop message: string = ''
-  @Prop confirmLabel: string = '确定'
-  @Prop destructive: boolean = false
-  onConfirm?: () => void
-  onCancel?: () => void
-  icon?: Resource
-
-  build() {
-    Column() {
-      if (this.icon !== undefined) {
-        Image(this.icon).width(36).height(36).fillColor(AppColors.destructive)
-          .margin({ top: 24, bottom: 12 })
-      }
-
-      Text(this.title)
-        .fontSize(17)
-        .fontColor(AppColors.textPrimary)
-        .fontWeight(FontWeight.Bold)
-        .margin({ top: this.icon !== undefined ? 0 : 20, bottom: 8 })
-
-      Text(this.message)
-        .fontSize(14)
-        .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .margin({ bottom: 20 })
-        .textAlign(TextAlign.Center)
-
-      Divider().color(AppColors.separator)
-
-      Row() {
-        Button('取消')
-          .layoutWeight(1)
-          .height(44)
-          .backgroundColor(Color.Transparent)
-          .fontColor(AppColors.primary)
-          .onClick(() => {
-            this.controller.close()
-            if (this.onCancel) this.onCancel()
-          })
-
-        Button(this.confirmLabel)
-          .layoutWeight(1)
-          .height(44)
-          .margin({ left: 12 })
-          .backgroundColor(this.destructive ? AppColors.destructive : AppColors.primary)
-          .fontColor(AppColors.white)
-          .fontWeight(FontWeight.Bold)
-          .onClick(() => {
-            this.controller.close()
-            if (this.onConfirm) this.onConfirm()
-          })
-      }
-    }
-    .constraintSize({ maxWidth: 340, minWidth: 260 })
-    .padding({ left: 20, right: 20, bottom: 12 })
-    .borderRadius(14)
-    .alignItems(HorizontalAlign.Center)
-    .attributeModifier(UIMaterialManager.surfaceMaterial)
-  }
-}
-
-// ActionSheet 选项接口
+/**
+ * 单选条目。
+ *
+ * 供调用方构造选项表并映射为官方 `SelectDialog` 的 `radioContent`（`SheetInfo[]`）：
+ * 保留此结构可以让「选项生成」与「选中值 → 下标」的换算留在调用方，
+ * 与迁移前的 ActionSheetDialog 用法保持一致。
+ */
 export interface ActionOption {
+  /** 选项显示文案。 */
   label: string
+  /** 选项取值。 */
   value: number
 }
 
-// ActionSheet
-@CustomDialog
-export struct ActionSheetDialog {
-  controller: CustomDialogController
-  @Prop title: string = ''
-  options: ActionOption[] = []
-  selected: number = 0
-  onSelect?: (value: number) => void
-  onCancel?: () => void
-  getLabelFontSize?: (value: number) => number
-
-  build() {
-    Column() {
-      // 拖拽指示条
-      Divider()
-        .width(36)
-        .height(4)
-        .borderRadius(2)
-        .color(AppColors.sheetIndicator)
-        .margin({ top: 8, bottom: 12 })
-
-      Text(this.title)
-        .fontSize(15)
-        .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .margin({ bottom: 4 })
-
-      // 选项列表
-      List() {
-        ForEach(this.options, (opt: ActionOption) => {
-          ListItem() {
-            Row() {
-              Text(opt.label)
-                .fontSize(this.getLabelFontSize ? this.getLabelFontSize(opt.value) : 17)
-                .fontColor(AppColors.textPrimary)
-                .fontWeight(opt.value === this.selected ? FontWeight.Medium : FontWeight.Regular)
-                .layoutWeight(1)
-
-              if (opt.value === this.selected) {
-                Image($r('app.media.icon_checkmark'))
-                  .width(18).height(18).fillColor(AppColors.primary)
-              }
-            }
-            .width('100%')
-            .height(52)
-            .padding({ left: 20, right: 20 })
-            .backgroundColor(opt.value === this.selected ? AppColors.selectionTint : Color.Transparent)
-            .onClick(() => {
-              this.controller.close()
-              if (this.onSelect) this.onSelect(opt.value)
-            })
-          }
-        })
-      }
-      .width('100%')
-      .divider({ strokeWidth: 0.5, color: AppColors.separator })
-
-      // 取消按钮
-      Divider().color(AppColors.separator).margin({ top: 8 })
-      Button('取消')
-        .width('100%')
-        .height(50)
-        .backgroundColor(Color.Transparent)
-        .fontColor(AppColors.primary)
-        .fontWeight(FontWeight.Bold)
-        .onClick(() => {
-          this.controller.close()
-          if (this.onCancel) this.onCancel()
-        })
-    }
-    .width('100%').constraintSize({ maxWidth: 420 })
-    .borderRadius(16)
-    .padding({ bottom: 20 })
-    .attributeModifier(UIMaterialManager.surfaceMaterial)
-  }
+/**
+ * 官方 `SelectDialog` 的单选内容与初始选中下标。
+ *
+ * `items` 的形状即官方 `SheetInfo[]`（`title` + `action`），
+ * 单独包一个类是因为 ArkTS 不支持返回多个值的元组解构。
+ */
+export class SelectRadioResult {
+  /** 单选列表内容。 */
+  items: SheetInfo[] = []
+  /** 初始选中下标。 */
+  selectedIndex: number = 0
 }
 
-// 备注编辑对话框
-@CustomDialog
-export struct CredentialPasswordDialog {
-  controller: CustomDialogController
-  @Prop title: string = ''
-  @Prop message: string = ''
-  @Prop confirmLabel: string = '确定'
-  @Prop minLength: number = 8
-  @State password: string = ''
-  onConfirm?: (password: string) => void
-  onCancel?: () => void
-
-  build() {
-    Column() {
-      Text(this.title)
-        .fontSize(17)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(AppColors.textPrimary)
-        .margin({ top: 20, bottom: 8 })
-        .alignSelf(ItemAlign.Center)
-
-      Text(this.message)
-        .fontSize(13)
-        .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .textAlign(TextAlign.Center)
-        .margin({ bottom: 12 })
-
-      TextInput({ text: this.password, placeholder: '输入加密密码' })
-        .type(InputType.Password)
-        .height(44)
-        .fontSize(15)
-        .fontColor(UIMaterialManager.inputForeground)
-        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .caretColor(UIMaterialManager.inputForeground)
-        .borderRadius(12)
-        .attributeModifier(UIMaterialManager.inputMaterial)
-        .onChange((value: string) => { this.password = value })
-
-      Text('至少 ' + this.minLength + ' 位，请妥善保存')
-        .fontSize(11)
-        .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .margin({ top: 6 })
-        .alignSelf(ItemAlign.Start)
-
-      Divider().color(AppColors.separator).margin({ top: 12 })
-
-      Row() {
-        Button('取消')
-          .layoutWeight(1)
-          .height(44)
-          .backgroundColor(Color.Transparent)
-          .fontColor(AppColors.primary)
-          .fontSize(16)
-          .onClick(() => {
-            this.controller.close()
-            if (this.onCancel) this.onCancel()
-          })
-
-        Button(this.confirmLabel)
-          .layoutWeight(1)
-          .height(44)
-          .margin({ left: 12 })
-          .backgroundColor(AppColors.primary)
-          .fontColor(AppColors.white)
-          .fontWeight(FontWeight.Bold)
-          .fontSize(16)
-          .opacity(this.password.trim().length >= this.minLength ? 1 : 0.45)
-          .onClick(() => {
-            if (this.password.trim().length >= this.minLength) {
-              const password = this.password
-              this.controller.close()
-              if (this.onConfirm) this.onConfirm(password)
-            }
-          })
-      }
-    }
-    .constraintSize({ maxWidth: 340 })
-    .padding({ left: 20, right: 20, bottom: 12 })
-    .borderRadius(14)
-    .attributeModifier(UIMaterialManager.surfaceMaterial)
-  }
-}
-
-@CustomDialog
-export struct MakeNoteDialog {
-  controller: CustomDialogController
+/**
+ * 备注编辑内容（1~20 字）。
+ *
+ * 对应原 MakeNoteDialog 的输入区；标题与按钮交给 `CustomContentDialog`。
+ */
+@Component
+export struct NoteEditorContent {
+  /** 备注文本（父组件 @State 单向传入）。 */
+  @Prop noteText: string = ''
+  /** 目标用户名（作为副标题展示）。 */
   @Prop userName: string = ''
-  @Prop uid: string = ''
-  @Prop currentNote: string = ''
-  @State noteText: string = ''
-  onConfirm?: (note: string, uid: string, userName: string) => void
-
-  aboutToAppear(): void {
-    this.noteText = this.currentNote
-  }
+  /** 文本变化回调（回写父组件状态）。 */
+  onNoteChange?: (value: string) => void
 
   build() {
     Column() {
-      Text('编辑备注')
-        .fontSize(17).fontWeight(FontWeight.Bold).fontColor(AppColors.textPrimary)
-        .margin({ top: 20, bottom: 4 })
-        .alignSelf(ItemAlign.Center)
-
-      Text(this.userName)
-        .fontSize(13).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .margin({ bottom: 12 })
-        .alignSelf(ItemAlign.Center)
+      if (this.userName.length > 0) {
+        Text(this.userName)
+          .fontSize(13).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+          .margin({ bottom: 8 })
+          .alignSelf(ItemAlign.Center)
+      }
 
       TextInput({ text: this.noteText, placeholder: '输入备注内容(1-20字)' })
-        .height(44).fontSize(15).borderRadius(12)
+        .width('100%').height(44).fontSize(15).borderRadius(12)
         .fontColor(UIMaterialManager.inputForeground)
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .attributeModifier(UIMaterialManager.inputMaterial)
-        .onChange((value: string) => { this.noteText = value })
+        .onChange((value: string) => {
+          if (this.onNoteChange) {
+            this.onNoteChange(value)
+          }
+        })
 
       Text(String(this.noteText.length) + '/20')
         .fontSize(11).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .margin({ top: 4 })
+        .margin({ top: 6 })
         .alignSelf(ItemAlign.End)
-
-      Divider().color(AppColors.separator).margin({ top: 12 })
-
-      Row() {
-        Button('取消')
-          .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
-          .fontColor(AppColors.primary).fontSize(16)
-          .onClick(() => { this.controller.close() })
-
-        Button('确认')
-          .layoutWeight(1).height(44).margin({ left: 12 })
-          .backgroundColor(AppColors.primary)
-          .fontColor(AppColors.white)
-          .fontWeight(FontWeight.Bold).fontSize(16)
-          .opacity(this.noteText.length >= 1 && this.noteText.length <= 20 ? 1 : 0.45)
-          .onClick(() => {
-            if (this.noteText.length >= 1 && this.noteText.length <= 20) {
-              if (this.onConfirm) this.onConfirm(this.noteText, this.uid, this.userName)
-              this.controller.close()
-            }
-          })
-      }
     }
-    .constraintSize({ maxWidth: 340 })
-    .padding({ left: 20, right: 20, bottom: 12 })
-    .borderRadius(14)
-    .attributeModifier(UIMaterialManager.surfaceMaterial)
+    .width('100%')
   }
 }
 
-// 添加黑名单对话框
-@CustomDialog
-export struct AddBlacklistDialog {
-  controller: CustomDialogController
-  /** 当前输入的 UID。 */
-  @State uid: string = ''
-  /** 当前输入校验错误。 */
-  @State validationError: string = ''
-  /** 当前登录用户 UID。 */
+/**
+ * 关键词输入内容。
+ *
+ * 对应原 AddKeywordDialog 的输入区。
+ */
+@Component
+export struct KeywordEditorContent {
+  /** 关键词文本（父组件 @State 单向传入）。 */
+  @Prop keyword: string = ''
+  /** 文本变化回调（回写父组件状态）。 */
+  onKeywordChange?: (value: string) => void
+
+  build() {
+    Column() {
+      TextInput({ text: this.keyword, placeholder: '输入关键词' })
+        .width('100%').height(44).fontSize(15).borderRadius(12)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
+        .attributeModifier(UIMaterialManager.inputMaterial)
+        .onChange((value: string) => {
+          if (this.onKeywordChange) {
+            this.onKeywordChange(value)
+          }
+        })
+    }
+    .width('100%')
+  }
+}
+
+/**
+ * 黑名单 UID 输入内容（含实时校验提示）。
+ *
+ * 对应原 AddBlacklistDialog 的输入与校验区；校验规则与迁移前一致。
+ */
+@Component
+export struct BlacklistEditorContent {
+  /** 输入的 UID（父组件 @State 单向传入）。 */
+  @Prop uid: string = ''
+  /** 当前登录用户 UID（用于「不能加自己」校验）。 */
   @Prop currentUserId: string = ''
-  /** 已存在的黑名单 UID。 */
+  /** 已存在的黑名单 UID（用于重复校验）。 */
   @Prop existingUserIds: string[] = []
-  /** UID 校验通过后的确认回调。 */
-  onConfirm?: (uid: string) => void
+  /** 文本变化回调（回写父组件状态）。 */
+  onUidChange?: (value: string) => void
 
   /**
    * 获取当前 UID 输入的校验错误。
@@ -339,201 +163,125 @@ export struct AddBlacklistDialog {
     return ''
   }
 
-  /**
-   * 判断当前输入是否可以提交。
-   *
-   * @returns 是否可以提交
-   */
-  private canSubmit(): boolean {
-    return this.uid.trim().length > 0 && this.getValidationError().length === 0
-  }
-
   build() {
     Column() {
-      Text('添加黑名单')
-        .fontSize(17).fontWeight(FontWeight.Bold).fontColor(AppColors.textPrimary)
-        .margin({ top: 20, bottom: 4 })
-        .alignSelf(ItemAlign.Center)
-
       Text('输入用户 UID')
         .fontSize(13).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .margin({ bottom: 12 })
+        .margin({ bottom: 8 })
         .alignSelf(ItemAlign.Center)
 
       TextInput({ text: this.uid, placeholder: '输入 UID' })
-        .height(44).fontSize(15).borderRadius(12)
+        .width('100%').height(44).fontSize(15).borderRadius(12)
         .fontColor(UIMaterialManager.inputForeground)
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .attributeModifier(UIMaterialManager.inputMaterial)
         .onChange((value: string) => {
-          this.uid = value
-          this.validationError = ''
+          if (this.onUidChange) {
+            this.onUidChange(value)
+          }
         })
 
-      if (this.validationError.length > 0) {
-        Text(this.validationError)
+      if (this.getValidationError().length > 0) {
+        Text(this.getValidationError())
           .fontSize(12)
           .fontColor(AppColors.destructive)
           .margin({ top: 6 })
           .alignSelf(ItemAlign.Start)
       }
-
-      Divider().color(AppColors.separator).margin({ top: 12 })
-
-      Row() {
-        Button('取消')
-          .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
-          .fontColor(AppColors.primary).fontSize(16)
-          .onClick(() => { this.controller.close() })
-
-        Button('确定添加')
-          .layoutWeight(1).height(44).margin({ left: 12 })
-          .backgroundColor(AppColors.primary)
-          .fontColor(AppColors.white)
-          .fontWeight(FontWeight.Bold).fontSize(16)
-          .opacity(this.canSubmit() ? 1 : 0.45)
-          .onClick(() => {
-            const validationError: string = this.getValidationError()
-            if (validationError.length > 0 || this.uid.trim().length === 0) {
-              this.validationError = validationError || '请输入用户 UID'
-              return
-            }
-            const normalizedUserId: string | null = normalizeBlacklistUserId(this.uid)
-            if (normalizedUserId !== null) {
-              if (this.onConfirm) this.onConfirm(normalizedUserId)
-              this.controller.close()
-            }
-          })
-      }
     }
-    .constraintSize({ maxWidth: 340 })
-    .padding({ left: 20, right: 20, bottom: 12 })
-    .borderRadius(14)
-    .attributeModifier(UIMaterialManager.surfaceMaterial)
+    .width('100%')
   }
 }
 
-// 添加关键词对话框
-@CustomDialog
-export struct AddKeywordDialog {
-  controller: CustomDialogController
-  @State keyword: string = ''
-  onConfirm?: (keyword: string) => void
+/**
+ * 新增备注内容（用户昵称 + UID）。
+ *
+ * 对应原 AddNoteDialog 的双输入区。
+ */
+@Component
+export struct NoteAddContent {
+  /** 用户昵称（父组件 @State 单向传入）。 */
+  @Prop nickName: string = ''
+  /** 用户 UID（父组件 @State 单向传入）。 */
+  @Prop uid: string = ''
+  /** 昵称变化回调（回写父组件状态）。 */
+  onNickNameChange?: (value: string) => void
+  /** UID 变化回调（回写父组件状态）。 */
+  onUidChange?: (value: string) => void
 
   build() {
     Column() {
-      Text('添加关键词')
-        .fontSize(17).fontWeight(FontWeight.Bold).fontColor(AppColors.textPrimary)
-        .margin({ top: 20, bottom: 4 })
-        .alignSelf(ItemAlign.Center)
-
-      Text('输入需要屏蔽的关键词')
-        .fontSize(13).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .margin({ bottom: 12 })
-        .alignSelf(ItemAlign.Center)
-
-      TextInput({ text: this.keyword, placeholder: '输入关键词' })
-        .height(44).fontSize(15).borderRadius(12)
-        .fontColor(UIMaterialManager.inputForeground)
-        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .caretColor(UIMaterialManager.inputForeground)
-        .attributeModifier(UIMaterialManager.inputMaterial)
-        .onChange((value: string) => { this.keyword = value })
-
-      Divider().color(AppColors.separator).margin({ top: 12 })
-
-      Row() {
-        Button('取消')
-          .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
-          .fontColor(AppColors.primary).fontSize(16)
-          .onClick(() => { this.controller.close() })
-
-        Button('确定添加')
-          .layoutWeight(1).height(44).margin({ left: 12 })
-          .backgroundColor(AppColors.primary)
-          .fontColor(AppColors.white)
-          .fontWeight(FontWeight.Bold).fontSize(16)
-          .opacity(this.keyword.trim().length > 0 ? 1 : 0.45)
-          .onClick(() => {
-            if (this.keyword.trim()) {
-              if (this.onConfirm) this.onConfirm(this.keyword.trim())
-              this.controller.close()
-            }
-          })
-      }
-    }
-    .constraintSize({ maxWidth: 340 })
-    .padding({ left: 20, right: 20, bottom: 12 })
-    .borderRadius(14)
-    .attributeModifier(UIMaterialManager.surfaceMaterial)
-  }
-}
-
-// 添加备注对话框
-@CustomDialog
-export struct AddNoteDialog {
-  controller: CustomDialogController
-  @State nickName: string = ''
-  @State uid: string = ''
-  onConfirm?: (nickName: string, uid: string) => void
-
-  build() {
-    Column() {
-      Text('添加备注')
-        .fontSize(17).fontWeight(FontWeight.Bold).fontColor(AppColors.textPrimary)
-        .margin({ top: 20, bottom: 4 })
-        .alignSelf(ItemAlign.Center)
-
       Text('输入用户昵称和 UID')
         .fontSize(13).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .margin({ bottom: 12 })
+        .margin({ bottom: 8 })
         .alignSelf(ItemAlign.Center)
 
       TextInput({ text: this.nickName, placeholder: '输入用户昵称' })
-        .height(44).fontSize(15).borderRadius(12)
+        .width('100%').height(44).fontSize(15).borderRadius(12)
         .fontColor(UIMaterialManager.inputForeground)
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .attributeModifier(UIMaterialManager.inputMaterial)
-        .onChange((value: string) => { this.nickName = value })
+        .onChange((value: string) => {
+          if (this.onNickNameChange) {
+            this.onNickNameChange(value)
+          }
+        })
 
       TextInput({ text: this.uid, placeholder: '输入用户 UID' })
-        .height(44).fontSize(15).borderRadius(12)
+        .width('100%').height(44).fontSize(15).borderRadius(12)
         .fontColor(UIMaterialManager.inputForeground)
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .attributeModifier(UIMaterialManager.inputMaterial)
         .margin({ top: 8 })
-        .onChange((value: string) => { this.uid = value })
-
-      Divider().color(AppColors.separator).margin({ top: 12 })
-
-      Row() {
-        Button('取消')
-          .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
-          .fontColor(AppColors.primary).fontSize(16)
-          .onClick(() => { this.controller.close() })
-
-        Button('确定添加')
-          .layoutWeight(1).height(44).margin({ left: 12 })
-          .backgroundColor(AppColors.primary)
-          .fontColor(AppColors.white)
-          .fontWeight(FontWeight.Bold).fontSize(16)
-          .opacity(this.uid.trim().length > 0 && this.nickName.trim().length > 0 ? 1 : 0.45)
-          .onClick(() => {
-            if (this.uid.trim() && this.nickName.trim()) {
-              if (this.onConfirm) this.onConfirm(this.nickName.trim(), this.uid.trim())
-              this.controller.close()
-            }
-          })
-      }
+        .onChange((value: string) => {
+          if (this.onUidChange) {
+            this.onUidChange(value)
+          }
+        })
     }
-    .constraintSize({ maxWidth: 340 })
-    .padding({ left: 20, right: 20, bottom: 12 })
-    .borderRadius(14)
-    .attributeModifier(UIMaterialManager.surfaceMaterial)
+    .width('100%')
   }
 }
 
+/**
+ * 加密密码输入内容（导出凭证口令）。
+ *
+ * 对应原 CredentialPasswordDialog 的输入区。迁移前按钮按密码长度做半透明禁用，
+ * 官方模板的按钮不支持动态 disabled，改为在确认回调里校验并以 Toast 提示。
+ */
+@Component
+export struct CredentialPasswordContent {
+  /** 密码文本（父组件 @State 单向传入）。 */
+  @Prop password: string = ''
+  /** 最少位数。 */
+  @Prop minLength: number = 8
+  /** 文本变化回调（回写父组件状态）。 */
+  onPasswordChange?: (value: string) => void
 
+  build() {
+    Column() {
+      TextInput({ text: this.password, placeholder: '输入加密密码' })
+        .width('100%').height(44).fontSize(15)
+        .type(InputType.Password)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
+        .borderRadius(12)
+        .attributeModifier(UIMaterialManager.inputMaterial)
+        .onChange((value: string) => {
+          if (this.onPasswordChange) {
+            this.onPasswordChange(value)
+          }
+        })
+
+      Text('至少 ' + String(this.minLength) + ' 位，请妥善保存')
+        .fontSize(11).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .margin({ top: 6 })
+        .alignSelf(ItemAlign.Start)
+    }
+    .width('100%')
+  }
+}

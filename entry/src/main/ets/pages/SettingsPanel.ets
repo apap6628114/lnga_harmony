@@ -14,7 +14,8 @@ import {
   THEME_OPTIONS,
   ThemeOption
 } from '../common/constants/Constants'
-import { ConfirmDialog, ActionSheetDialog, ActionOption, CredentialPasswordDialog } from '../common/dialogs/Dialogs'
+import { TipsDialog, SelectDialog, CustomContentDialog } from '@kit.ArkUI'
+import { ActionOption, CredentialPasswordContent, SelectRadioResult } from '../common/dialogs/Dialogs'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { SettingRow, SettingToggleRow, SettingPickerRow } from '../common/components/SettingRow'
 import { serializeCredentialExport } from '../common/security/CredentialExportCrypto'
@@ -41,6 +42,8 @@ export struct SettingsPanel {
   @State titleScrollEffectProgress: number = 0
   /** 滚动容器当前视口高度。 */
   @State scrollViewportHeight: number = 1
+  /** 凭证导出弹窗的密码输入（供 CustomContentDialog 内容构件双向绑定）。 */
+  @State exportPassword: string = ''
 
   /** 设置页滚动控制器。 */
   private scroller: Scroller = new Scroller()
@@ -57,19 +60,23 @@ export struct SettingsPanel {
   }
 
   clearCacheDialogController?: CustomDialogController = new CustomDialogController({
-    builder: ConfirmDialog({
+    builder: TipsDialog({
+      imageRes: $r('app.media.settings_clear_cache'),
       title: '清除缓存',
-      message: '确定要清除所有缓存吗？\n清除后图片等资源需要重新加载',
-      confirmLabel: '清除',
-      destructive: true,
-      icon: $r('app.media.settings_clear_cache'),
-      onConfirm: () => {
-        this.clearCache()
+      content: '确定要清除所有缓存吗？\n清除后图片等资源需要重新加载',
+      primaryButton: {
+        value: '清除',
+        fontColor: AppColors.white,
+        background: AppColors.destructive,
+        action: () => {
+          this.clearCache()
+        }
       },
-      onCancel: () => {}
+      secondaryButton: {
+        value: '取消'
+      }
     }),
-    autoCancel: true,
-    customStyle: true
+    autoCancel: true
   })
 
   imageStrategyDialogController?: CustomDialogController
@@ -77,20 +84,62 @@ export struct SettingsPanel {
   prefetchPageDialogController?: CustomDialogController
   exportCredentialDialogController?: CustomDialogController
   logoutDialogController?: CustomDialogController = new CustomDialogController({
-    builder: ConfirmDialog({
+    builder: TipsDialog({
+      imageRes: $r('app.media.settings_logout'),
       title: '退出登录',
-      message: '确定要退出登录吗？\n退出后需要重新输入账号密码登录',
-      confirmLabel: '退出',
-      destructive: true,
-      icon: $r('app.media.settings_logout'),
-      onConfirm: async () => {
-        await logoutOrchestrator.logout(this.getUIContext())
+      content: '确定要退出登录吗？\n退出后需要重新输入账号密码登录',
+      primaryButton: {
+        value: '退出',
+        fontColor: AppColors.white,
+        background: AppColors.destructive,
+        action: async () => {
+          await logoutOrchestrator.logout(this.getUIContext())
+        }
       },
-      onCancel: () => {}
+      secondaryButton: {
+        value: '取消'
+      }
     }),
-    autoCancel: true,
-    customStyle: true
+    autoCancel: true
   })
+
+  /** 凭证导出弹窗的自定义内容。 */
+  @Builder
+  exportPasswordContent() {
+    CredentialPasswordContent({
+      password: this.exportPassword,
+      minLength: 8,
+      onPasswordChange: (value: string): void => { this.exportPassword = value }
+    })
+  }
+
+  /**
+   * 构造选项类对话框的 radioContent。
+   *
+   * 官方 `SelectDialog` 的选项是 `SheetInfo[]`，选中即触发该项 action；
+   * 这里把「选中 → 应用设置」的回调直接挂在每一项上，交互与迁移前的
+   * ActionSheetDialog（点选项立即生效）保持一致。
+   *
+   * @param options - 选项表
+   * @param current - 当前生效取值（用于换算初始选中下标）
+   * @param onPick - 选中回调
+   * @returns 官方单选列表内容与初始下标
+   */
+  private buildRadioContent(options: ActionOption[], current: number,
+    onPick: (value: number) => void): SelectRadioResult {
+    const result: SelectRadioResult = new SelectRadioResult()
+    for (let i = 0; i < options.length; i++) {
+      const opt: ActionOption = options[i]
+      if (opt.value === current) {
+        result.selectedIndex = i
+      }
+      result.items.push({
+        title: opt.label,
+        action: (): void => { onPick(opt.value) }
+      })
+    }
+    return result
+  }
 
   aboutToAppear(): void {
     this.refreshCacheSize()
@@ -195,18 +244,30 @@ export struct SettingsPanel {
       return
     }
 
+    this.exportPassword = ''
     this.exportCredentialDialogController = new CustomDialogController({
-      builder: CredentialPasswordDialog({
-        title: '加密导出凭证',
-        message: '导出的文件将使用此密码加密，导入时需要再次输入。',
-        confirmLabel: '导出',
-        minLength: 8,
-        onConfirm: (password: string): void => {
-          this.exportEncryptedCredential(password)
-        }
+      builder: CustomContentDialog({
+        primaryTitle: '加密导出凭证',
+        secondaryTitle: '导出的文件将使用此密码加密，导入时需要再次输入（至少 8 位）。',
+        contentBuilder: this.exportPasswordContent,
+        buttons: [
+          { value: '取消' },
+          {
+            value: '导出',
+            fontColor: AppColors.white,
+            background: AppColors.primary,
+            action: (): void => {
+              const password: string = this.exportPassword
+              if (password.trim().length < 8) {
+                appStore.showToast('密码至少 8 位')
+                return
+              }
+              this.exportEncryptedCredential(password)
+            }
+          }
+        ]
       }),
-      autoCancel: true,
-      customStyle: true
+      autoCancel: true
     })
     this.exportCredentialDialogController?.open()
   }
@@ -276,18 +337,22 @@ export struct SettingsPanel {
   }
 
   private showThreadNavPicker(): void {
+    const radio: SelectRadioResult = this.buildRadioContent(
+      this.threadNavOptions(),
+      parseInt(appStore.settings.threadNavMode),
+      (v: number): void => {
+        appStore.settingsStore.setThreadNavMode(String(v))
+        this.threadNavBadge = this.threadNavLabel(String(v))
+      }
+    )
     this.threadNavDialogController = new CustomDialogController({
-      builder: ActionSheetDialog({
+      builder: SelectDialog({
         title: '帖子楼层导航',
-        options: this.threadNavOptions(),
-        selected: parseInt(appStore.settings.threadNavMode),
-        onSelect: (v: number): void => {
-          appStore.settingsStore.setThreadNavMode(String(v))
-          this.threadNavBadge = this.threadNavLabel(String(v))
-        }
+        selectedIndex: radio.selectedIndex,
+        radioContent: radio.items,
+        confirm: { value: '确定' }
       }),
-      autoCancel: true,
-      customStyle: true
+      autoCancel: true
     })
     this.threadNavDialogController?.open()
   }
@@ -311,35 +376,43 @@ export struct SettingsPanel {
   }
 
   private showPrefetchPagePicker(): void {
+    const radio: SelectRadioResult = this.buildRadioContent(
+      this.prefetchPageOptions(),
+      appStore.settings.prefetchPageCount,
+      (v: number): void => {
+        appStore.settingsStore.setPrefetchPageCount(v)
+        this.prefetchPageBadge = this.prefetchPageLabel(v)
+      }
+    )
     this.prefetchPageDialogController = new CustomDialogController({
-      builder: ActionSheetDialog({
+      builder: SelectDialog({
         title: '预加载页数',
-        options: this.prefetchPageOptions(),
-        selected: appStore.settings.prefetchPageCount,
-        onSelect: (v: number): void => {
-          appStore.settingsStore.setPrefetchPageCount(v)
-          this.prefetchPageBadge = this.prefetchPageLabel(v)
-        }
+        selectedIndex: radio.selectedIndex,
+        radioContent: radio.items,
+        confirm: { value: '确定' }
       }),
-      autoCancel: true,
-      customStyle: true
+      autoCancel: true
     })
     this.prefetchPageDialogController?.open()
   }
 
   private showImageStrategyPicker(): void {
+    const radio: SelectRadioResult = this.buildRadioContent(
+      this.imageStrategyOptions(),
+      parseInt(appStore.settings.imageLoadStrategy),
+      (v: number): void => {
+        appStore.settingsStore.setImageLoadStrategy(String(v))
+        this.imageStrategyBadge = this.imageStrategyLabel(String(v))
+      }
+    )
     this.imageStrategyDialogController = new CustomDialogController({
-      builder: ActionSheetDialog({
+      builder: SelectDialog({
         title: '图片加载模式',
-        options: this.imageStrategyOptions(),
-        selected: parseInt(appStore.settings.imageLoadStrategy),
-        onSelect: (v: number): void => {
-          appStore.settingsStore.setImageLoadStrategy(String(v))
-          this.imageStrategyBadge = this.imageStrategyLabel(String(v))
-        }
+        selectedIndex: radio.selectedIndex,
+        radioContent: radio.items,
+        confirm: { value: '确定' }
       }),
-      autoCancel: true,
-      customStyle: true
+      autoCancel: true
     })
     this.imageStrategyDialogController?.open()
   }

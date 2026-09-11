@@ -1,56 +1,27 @@
-import { AppColors } from '../constants/Constants'
+/**
+ * 收藏夹名称编辑对话框的内容构件。
+ *
+ * 迁移说明：原先这里是 `@CustomDialog` 的 `FavoriteFolderNameDialog`（自绘标题、按钮与玻璃面板），
+ * 现改为官方 `CustomContentDialog` 的自定义内容构件——标题与按钮由官方模板渲染，
+ * 本组件只保留名称输入。
+ *
+ * **参数用 `@Prop` + 回调，禁止用 `@Link`**：官方 `contentBuilder` 是 `@BuilderParam`，
+ * 传进去的 @Builder 在**对话框组件内部**执行，调用方的 `$变量` 在那一层解析不到源状态，
+ * 打开对话框时会抛 `source variable in parent/ancestor @Component must be defined` 并崩溃（实测）。
+ */
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 
-/**
- * 收藏夹名称编辑对话框。
- */
-@CustomDialog
-export struct FavoriteFolderNameDialog {
-  /**
-   * 自定义对话框控制器。
-   */
-  controller: CustomDialogController
-  /**
-   * 对话框标题。
-   */
-  @Prop title: string = '新建收藏夹'
-  /**
-   * 初始收藏夹名称。
-   */
-  @Prop initialName: string = ''
-  /**
-   * 确认按钮文字。
-   */
-  @Prop confirmLabel: string = '完成'
-  /**
-   * 当前输入名称。
-   */
-  @State name: string = ''
-  /**
-   * 名称确认回调。
-   */
-  onConfirm?: (name: string) => void
+@Component
+export struct FolderNameEditorContent {
+  /** 当前名称（父组件 @State 单向传入）。 */
+  @Prop name: string = ''
+  /** 名称变化回调（回写父组件状态）。 */
+  onNameChange?: (value: string) => void
 
-  /**
-   * 将传入名称同步到输入框。
-   */
-  aboutToAppear(): void {
-    this.name = this.initialName
-  }
-
-  /**
-   * 构建收藏夹名称编辑对话框。
-   */
   build() {
     Column() {
-      Text(this.title)
-        .fontSize(17)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(AppColors.textPrimary)
-        .margin({ top: 20, bottom: 12 })
-        .alignSelf(ItemAlign.Center)
-
       TextInput({ text: this.name, placeholder: '输入收藏夹名称' })
+        .width('100%')
         .height(44)
         .fontSize(15)
         .fontColor(UIMaterialManager.inputForeground)
@@ -59,44 +30,11 @@ export struct FavoriteFolderNameDialog {
         .borderRadius(12)
         .attributeModifier(UIMaterialManager.inputMaterial)
         .onChange((value: string): void => {
-          this.name = value
+          if (this.onNameChange) {
+            this.onNameChange(value)
+          }
         })
-
-      Divider().color(AppColors.separator).margin({ top: 12 })
-
-      Row() {
-        Button('取消')
-          .layoutWeight(1)
-          .height(44)
-          .backgroundColor(Color.Transparent)
-          .fontColor(AppColors.primary)
-          .fontSize(16)
-          .onClick((): void => {
-            this.controller.close()
-          })
-
-        Button(this.confirmLabel)
-          .layoutWeight(1)
-          .height(44)
-          .margin({ left: 12 })
-          .backgroundColor(AppColors.primary)
-          .fontColor(AppColors.white)
-          .fontWeight(FontWeight.Bold)
-          .fontSize(16)
-          .opacity(this.name.trim().length > 0 ? 1 : 0.45)
-          .onClick((): void => {
-            const normalizedName: string = this.name.trim()
-            if (normalizedName.length === 0) {
-              return
-            }
-            this.onConfirm?.(normalizedName)
-            this.controller.close()
-          })
-      }
     }
-    .constraintSize({ maxWidth: 340, minWidth: 280 })
-    .padding({ left: 20, right: 20, bottom: 12 })
-    .borderRadius(14)
-    .attributeModifier(UIMaterialManager.surfaceMaterial)
+    .width('100%')
   }
 }

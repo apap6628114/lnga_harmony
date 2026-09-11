@@ -1,12 +1,12 @@
 import { appStore } from '../store/AppStore'
 import type { UserNoteEntry } from '../model/NoteInfo'
-import { display } from '@kit.ArkUI'
+import { display, AlertDialog, CustomContentDialog } from '@kit.ArkUI'
 import { AppColors } from '../common/constants/Constants'
 import { escHtml } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { NotesDataSource } from '../common/datasource/LazyDataSource'
 import { PanelNavBar } from '../common/components/PanelNavBar'
-import { ConfirmDialog, MakeNoteDialog, AddNoteDialog } from '../common/dialogs/Dialogs'
+import { NoteEditorContent, NoteAddContent } from '../common/dialogs/Dialogs'
 import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
@@ -26,6 +26,12 @@ export struct NotesPanel {
   private scroller: Scroller = new Scroller()
   private notesDataSource: NotesDataSource = new NotesDataSource()
 
+  /** 编辑备注弹窗的备注输入（供 CustomContentDialog 内容构件双向绑定）。 */
+  @State noteDialogText: string = ''
+  /** 新增备注弹窗的昵称与 UID 输入。 */
+  @State addNoteNickName: string = ''
+  @State addNoteUid: string = ''
+
   /** 按列表绝对滚动偏移同步标题栏视觉效果。 */
   private syncTitleScrollEffect(): void {
     const progress: number = TitleScrollEffect.getProgress(
@@ -41,43 +47,80 @@ export struct NotesPanel {
   addDialogController?: CustomDialogController
 
   deleteDialogController?: CustomDialogController = new CustomDialogController({
-    builder: ConfirmDialog({
-      title: '删除备注',
-      message: '确定要删除该用户的备注吗？',
-      confirmLabel: '删除',
-      destructive: true,
-      onConfirm: () => {
-        if (this.removeTarget) {
-          appStore.settingsStore.removeNote(this.removeTarget.userId)
-          this.refreshNotes()
-          this.removeTarget = null
+    builder: AlertDialog({
+      primaryTitle: '删除备注',
+      content: '确定要删除该用户的备注吗？',
+      primaryButton: {
+        value: '删除',
+        fontColor: AppColors.white,
+        background: AppColors.destructive,
+        action: () => {
+          if (this.removeTarget) {
+            appStore.settingsStore.removeNote(this.removeTarget.userId)
+            this.refreshNotes()
+            this.removeTarget = null
+          }
         }
       },
-      onCancel: () => {
-        this.removeTarget = null
+      secondaryButton: {
+        value: '取消',
+        action: () => {
+          this.removeTarget = null
+        }
       }
     }),
-    autoCancel: true,
-    customStyle: true
+    autoCancel: true
   })
+
+  /** 编辑备注弹窗的自定义内容（官方 CustomContentDialog 的 contentBuilder）。 */
+  @Builder
+  noteEditorContent() {
+    NoteEditorContent({
+      noteText: this.noteDialogText,
+      userName: this.editTarget ? this.editTarget.nickName : '',
+      onNoteChange: (value: string): void => { this.noteDialogText = value }
+    })
+  }
+
+  /** 新增备注弹窗的自定义内容。 */
+  @Builder
+  addNoteContent() {
+    NoteAddContent({
+      nickName: this.addNoteNickName,
+      uid: this.addNoteUid,
+      onNickNameChange: (value: string): void => { this.addNoteNickName = value },
+      onUidChange: (value: string): void => { this.addNoteUid = value }
+    })
+  }
 
   private showEditNote(entry: UserNoteEntry): void {
     this.editTarget = entry
+    this.noteDialogText = entry.note
     this.noteDialogController = new CustomDialogController({
-      builder: MakeNoteDialog({
-        userName: entry.nickName,
-        uid: entry.userId,
-        currentNote: entry.note,
-        onConfirm: (note: string, uid: string, userName: string): void => {
-          appStore.settingsStore.addOrUpdateNote(uid, userName, note)
-          appStore.showToast('备注已保存')
-          this.editTarget = null
-          this.refreshNotes()
-        }
+      builder: CustomContentDialog({
+        primaryTitle: '编辑备注',
+        contentBuilder: this.noteEditorContent,
+        buttons: [
+          { value: '取消' },
+          {
+            value: '确认',
+            fontColor: AppColors.white,
+            background: AppColors.primary,
+            action: (): void => {
+              const note: string = this.noteDialogText
+              if (note.length >= 1 && note.length <= 20) {
+                appStore.settingsStore.addOrUpdateNote(entry.userId, entry.nickName, note)
+                appStore.showToast('备注已保存')
+                this.editTarget = null
+                this.refreshNotes()
+              } else {
+                appStore.showToast('备注需 1~20 字')
+              }
+            }
+          }
+        ]
       }),
-      autoCancel: true,
-      customStyle: true,
-      alignment: DialogAlignment.Center
+      autoCancel: true
     })
     this.noteDialogController.open()
   }
@@ -219,17 +262,33 @@ export struct NotesPanel {
       PanelNavBar({ title: '用户备注', rightIcon: $r('app.media.icon_nav_add'),
         rightIconAccessibilityText: '添加用户备注', scrollEffectProgress: this.titleScrollEffectProgress,
         onRightClick: (): void => {
+        this.addNoteNickName = ''
+        this.addNoteUid = ''
         this.addDialogController = new CustomDialogController({
-          builder: AddNoteDialog({
-            onConfirm: (nickName: string, uid: string): void => {
-              appStore.settingsStore.addOrUpdateNote(uid, nickName, '')
-              this.refreshNotes()
-              appStore.showToast('已添加备注')
-            }
+          builder: CustomContentDialog({
+            primaryTitle: '添加备注',
+            contentBuilder: this.addNoteContent,
+            buttons: [
+              { value: '取消' },
+              {
+                value: '确定添加',
+                fontColor: AppColors.white,
+                background: AppColors.primary,
+                action: (): void => {
+                  const nickName: string = this.addNoteNickName.trim()
+                  const uid: string = this.addNoteUid.trim()
+                  if (nickName.length > 0 && uid.length > 0) {
+                    appStore.settingsStore.addOrUpdateNote(uid, nickName, '')
+                    this.refreshNotes()
+                    appStore.showToast('已添加备注')
+                  } else {
+                    appStore.showToast('请填写昵称与 UID')
+                  }
+                }
+              }
+            ]
           }),
-          autoCancel: true,
-          customStyle: true,
-          alignment: DialogAlignment.Center
+          autoCancel: true
         })
         this.addDialogController.open()
         } })

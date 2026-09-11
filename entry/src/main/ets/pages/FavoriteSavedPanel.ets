@@ -17,8 +17,8 @@ import { common } from '@kit.AbilityKit'
 import { AppColors } from '../common/constants/Constants'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/components/PageStateView'
-import { ConfirmDialog } from '../common/dialogs/Dialogs'
-import { FavoriteFolderNameDialog } from '../common/dialogs/FavoriteFolderDialogs'
+import { AlertDialog, TipsDialog, CustomContentDialog } from '@kit.ArkUI'
+import { FolderNameEditorContent } from '../common/dialogs/FavoriteFolderDialogs'
 import { PageScope } from '../common/concurrency/PageScope'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 import { formatTime } from '../common/utils/Utils'
@@ -252,19 +252,43 @@ export struct FavoriteSavedPanel {
   }
 
   private showCreateFolderDialog(): void {
+    this.folderNameInput = ''
     this.nameDialogController = new CustomDialogController({
-      builder: FavoriteFolderNameDialog({
-        title: '新建收藏夹',
-        confirmLabel: '创建',
-        onConfirm: (name: string): void => {
-          this.createFolder(name)
-        }
+      builder: CustomContentDialog({
+        primaryTitle: '新建收藏夹',
+        contentBuilder: this.folderNameContent,
+        buttons: [
+          { value: '取消' },
+          {
+            value: '创建',
+            fontColor: AppColors.white,
+            background: AppColors.primary,
+            action: (): void => {
+              const name: string = this.folderNameInput.trim()
+              if (name.length === 0) {
+                appStore.showToast('请输入收藏夹名称')
+                return
+              }
+              this.createFolder(name)
+            }
+          }
+        ]
       }),
-      autoCancel: true,
-      customStyle: true,
-      alignment: DialogAlignment.Center
+      autoCancel: true
     })
     this.nameDialogController.open()
+  }
+
+  /** 收藏夹名称输入（供 CustomContentDialog 内容构件双向绑定）。 */
+  @State folderNameInput: string = ''
+
+  /** 收藏夹名称弹窗的自定义内容。 */
+  @Builder
+  folderNameContent() {
+    FolderNameEditorContent({
+      name: this.folderNameInput,
+      onNameChange: (value: string): void => { this.folderNameInput = value }
+    })
   }
 
   /**
@@ -296,18 +320,29 @@ export struct FavoriteSavedPanel {
    */
   private showRenameFolderDialog(folder: FavoriteTopicFolder): void {
     const folderId: string = folder.id
+    this.folderNameInput = folder.name
     this.nameDialogController = new CustomDialogController({
-      builder: FavoriteFolderNameDialog({
-        title: '重命名收藏夹',
-        initialName: folder.name,
-        confirmLabel: '保存',
-        onConfirm: (name: string): void => {
-          this.renameFolder(folderId, name)
-        }
+      builder: CustomContentDialog({
+        primaryTitle: '重命名收藏夹',
+        contentBuilder: this.folderNameContent,
+        buttons: [
+          { value: '取消' },
+          {
+            value: '保存',
+            fontColor: AppColors.white,
+            background: AppColors.primary,
+            action: (): void => {
+              const name: string = this.folderNameInput.trim()
+              if (name.length === 0) {
+                appStore.showToast('请输入收藏夹名称')
+                return
+              }
+              this.renameFolder(folderId, name)
+            }
+          }
+        ]
       }),
-      autoCancel: true,
-      customStyle: true,
-      alignment: DialogAlignment.Center
+      autoCancel: true
     })
     this.nameDialogController.open()
   }
@@ -343,18 +378,22 @@ export struct FavoriteSavedPanel {
     const folderId: string = folder.id
     const folderName: string = folder.name
     this.folderDeleteDialogController = new CustomDialogController({
-      builder: ConfirmDialog({
-        title: '删除收藏夹',
-        message: '确定删除“' + folderName + '”以及其中的全部收藏关系吗？',
-        confirmLabel: '删除',
-        destructive: true,
-        onConfirm: (): void => {
-          this.deleteFolder(folderId)
+      builder: AlertDialog({
+        primaryTitle: '删除收藏夹',
+        content: '确定删除“' + folderName + '”以及其中的全部收藏关系吗？',
+        primaryButton: {
+          value: '删除',
+          fontColor: AppColors.white,
+          background: AppColors.destructive,
+          action: (): void => {
+            this.deleteFolder(folderId)
+          }
+        },
+        secondaryButton: {
+          value: '取消'
         }
       }),
-      autoCancel: true,
-      customStyle: true,
-      alignment: DialogAlignment.Center
+      autoCancel: true
     })
     this.folderDeleteDialogController.open()
   }
@@ -671,22 +710,26 @@ export struct FavoriteSavedPanel {
 
   private showClearConfirm(): void {
     this.clearDialogController = new CustomDialogController({
-      builder: ConfirmDialog({
+      builder: TipsDialog({
+        imageRes: $r('app.media.icon_delete'),
         title: '清空存档',
-        message: '确定要删除全部保存的帖子吗？\n此操作不可恢复',
-        confirmLabel: '清空',
-        destructive: true,
-        icon: $r('app.media.icon_delete'),
-        onConfirm: () => {
-          // 存储层已 bump savedThreadVersion，刷新由 onSavedThreadVersionChange 驱动
-          appStore.savedThreadStore.clear().then((): void => {
-            appStore.showToast('已清空存档')
-          })
+        content: '确定要删除全部保存的帖子吗？\n此操作不可恢复',
+        primaryButton: {
+          value: '清空',
+          fontColor: AppColors.white,
+          background: AppColors.destructive,
+          action: () => {
+            // 存储层已 bump savedThreadVersion，刷新由 onSavedThreadVersionChange 驱动
+            appStore.savedThreadStore.clear().then((): void => {
+              appStore.showToast('已清空存档')
+            })
+          }
         },
-        onCancel: () => {}
+        secondaryButton: {
+          value: '取消'
+        }
       }),
-      autoCancel: true,
-      customStyle: true
+      autoCancel: true
     })
     this.clearDialogController?.open()
   }
@@ -811,30 +854,35 @@ export struct FavoriteSavedPanel {
                     .onClick(() => {
                       this.removeTarget = item
                       this.savedDeleteDialogController = new CustomDialogController({
-                        builder: ConfirmDialog({
+                        builder: TipsDialog({
+                          imageRes: $r('app.media.icon_delete'),
                           title: '删除存档',
-                          message: '确定要删除该帖子的存档吗？',
-                          confirmLabel: '删除',
-                          destructive: true,
-                          icon: $r('app.media.icon_delete'),
-                          onConfirm: () => {
-                            const tid: string = this.removeTarget ? this.removeTarget.tid : ''
-                            this.removeTarget = null
-                            if (tid.length > 0) {
-                              // 存储层已 bump savedThreadVersion，刷新由 onSavedThreadVersionChange 驱动
-                              appStore.savedThreadStore.remove(tid).then((): void => {
-                                appStore.showToast('已删除存档')
-                              }).catch((e: Error) => {
-                                appStore.showToast(e.message || '删除失败')
-                              })
+                          content: '确定要删除该帖子的存档吗？',
+                          primaryButton: {
+                            value: '删除',
+                            fontColor: AppColors.white,
+                            background: AppColors.destructive,
+                            action: () => {
+                              const tid: string = this.removeTarget ? this.removeTarget.tid : ''
+                              this.removeTarget = null
+                              if (tid.length > 0) {
+                                // 存储层已 bump savedThreadVersion，刷新由 onSavedThreadVersionChange 驱动
+                                appStore.savedThreadStore.remove(tid).then((): void => {
+                                  appStore.showToast('已删除存档')
+                                }).catch((e: Error) => {
+                                  appStore.showToast(e.message || '删除失败')
+                                })
+                              }
                             }
                           },
-                          onCancel: () => {
-                            this.removeTarget = null
+                          secondaryButton: {
+                            value: '取消',
+                            action: () => {
+                              this.removeTarget = null
+                            }
                           }
                         }),
-                        autoCancel: true,
-                        customStyle: true
+                        autoCancel: true
                       })
                       this.savedDeleteDialogController?.open()
                     })

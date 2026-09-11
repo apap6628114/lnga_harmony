@@ -4,7 +4,7 @@ import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { appStore } from '../store/AppStore'
 import { BrowseHistoryEntry } from '../store/HistoryStore'
 import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
-import { floatingLayerStore } from '../store/FloatingLayerStore'
+import { AlertDialog } from '@kit.ArkUI'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { HistoryItemDataSource } from '../common/datasource/LazyDataSource'
 import { AnonymousName } from '../common/components/AnonymousName'
@@ -28,6 +28,32 @@ export struct BrowseHistoryPanel {
   private historyDataSource: HistoryItemDataSource = new HistoryItemDataSource()
   /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
   private scope: PageScope = new PageScope()
+
+  /**
+   * 清空浏览记录确认框（官方高级对话框模板）。
+   *
+   * 迁移前经 `floatingLayerStore.showConfirm` 由全局浮层 `Stack` 手搓，
+   * 现直接在本面板用官方 `AlertDialog` 承载，确认框状态不再进入浮层栈。
+   */
+  private clearHistoryDialogController: CustomDialogController = new CustomDialogController({
+    builder: AlertDialog({
+      primaryTitle: '清空浏览记录',
+      content: '确定清空所有浏览记录？此操作不可撤销。',
+      primaryButton: {
+        value: '清空',
+        fontColor: AppColors.white,
+        background: AppColors.destructive,
+        action: () => {
+          this.clearAll()
+          appStore.showToast('已清空浏览记录')
+        }
+      },
+      secondaryButton: {
+        value: '取消'
+      }
+    }),
+    autoCancel: true
+  })
 
   /** 按列表绝对滚动偏移同步标题栏视觉效果。 */
   private syncTitleScrollEffect(): void {
@@ -195,16 +221,7 @@ export struct BrowseHistoryPanel {
         rightIconColor: AppColors.destructive,
         rightIconAccessibilityText: '清空浏览历史',
         onRightClick: (): void => {
-          floatingLayerStore.showConfirm(
-            '清空浏览记录',
-            '确定清空所有浏览记录？此操作不可撤销。',
-            '清空',
-            true,
-            () => {
-              this.clearAll()
-              appStore.showToast('已清空浏览记录')
-            }
-          )
+          this.clearHistoryDialogController.open()
         }
       })
       .width('100%').position({ x: 0, y: 0 })

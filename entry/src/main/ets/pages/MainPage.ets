@@ -62,8 +62,6 @@ struct MainPage {
       if (this.floating.top === FloatingPage.REPLY_DIALOG ||
         this.floating.top === FloatingPage.NEW_TOPIC_DIALOG) {
         this.floating.notifyReplyCloseRequested()
-      } else if (this.floating.top === FloatingPage.CONFIRM_DIALOG) {
-        this.floating.hideConfirm()
       } else {
         this.floating.pop()
       }

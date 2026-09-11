@@ -7,7 +7,8 @@ import { loginStep1, loginStep2, injectCredentials } from '../service/api/AuthAp
 import { getActiveDomain } from '../service/api/MiscApi'
 import { appStore } from '../store/AppStore'
 import { AppColors } from '../common/constants/Constants'
-import { CredentialPasswordDialog } from '../common/dialogs/Dialogs'
+import { CustomContentDialog } from '@kit.ArkUI'
+import { CredentialPasswordContent } from '../common/dialogs/Dialogs'
 import { deserializeCredentialExport, isEncryptedCredentialExport } from '../common/security/CredentialExportCrypto'
 import { picker, fileIo } from '@kit.CoreFileKit'
 import { common } from '@kit.AbilityKit'
@@ -70,6 +71,19 @@ struct LoginPage {
   private pendingCredentialContent: string = ''
   /** 凭据文件密码弹窗控制器。 */
   private importCredentialDialogController?: CustomDialogController
+
+  /** 凭证导入弹窗的密码输入（供 CustomContentDialog 内容构件双向绑定）。 */
+  @State importPassword: string = ''
+
+  /** 凭证导入弹窗的自定义内容。 */
+  @Builder
+  importPasswordContent() {
+    CredentialPasswordContent({
+      password: this.importPassword,
+      minLength: 8,
+      onPasswordChange: (value: string): void => { this.importPassword = value }
+    })
+  }
   /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
   private scope: PageScope = new PageScope()
 
@@ -402,18 +416,30 @@ struct LoginPage {
       }
 
       this.pendingCredentialContent = content
+      this.importPassword = ''
       this.importCredentialDialogController = new CustomDialogController({
-        builder: CredentialPasswordDialog({
-          title: '导入加密凭证',
-          message: '请输入导出时设置的加密密码。',
-          confirmLabel: '导入',
-          minLength: 8,
-          onConfirm: (password: string): void => {
-            this.importEncryptedCredential(password)
-          }
+        builder: CustomContentDialog({
+          primaryTitle: '导入加密凭证',
+          secondaryTitle: '请输入导出时设置的加密密码（至少 8 位）。',
+          contentBuilder: this.importPasswordContent,
+          buttons: [
+            { value: '取消' },
+            {
+              value: '导入',
+              fontColor: AppColors.white,
+              background: AppColors.primary,
+              action: (): void => {
+                const password: string = this.importPassword
+                if (password.trim().length < 8) {
+                  appStore.showToast('密码至少 8 位')
+                  return
+                }
+                this.importEncryptedCredential(password)
+              }
+            }
+          ]
         }),
-        autoCancel: true,
-        customStyle: true
+        autoCancel: true
       })
       this.importCredentialDialogController?.open()
     } catch (e) {

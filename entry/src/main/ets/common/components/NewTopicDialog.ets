@@ -20,6 +20,7 @@ import {
   isEmotionCategoryNeedDarkBg
 } from '../media/EmotionResources'
 import fileIo from '@ohos.file.fs'
+import { AlertDialog } from '@kit.ArkUI'
 import { photoAccessHelper } from '@kit.MediaLibraryKit'
 import { Logger, DOMAIN_UI } from '../utils/Logger'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
@@ -90,6 +91,28 @@ export struct NewTopicDialog {
   /** 正文输入框控制器。 */
   private textAreaController: TextAreaController = new TextAreaController()
 
+  /**
+   * 「放弃编辑」确认框（官方高级对话框模板）。
+   *
+   * 迁移前由 `floatingLayerStore.showReplyConfirm()` 驱动 `FloatingLayerComponent`
+   * 用 `Stack` + 遮罩手搓，现改用官方 `AlertDialog` 承载，浮层栈不再保存确认框状态。
+   */
+  private abandonDialogController: CustomDialogController = new CustomDialogController({
+    builder: AlertDialog({
+      primaryTitle: '放弃编辑？',
+      content: '已保存为草稿，下次编辑可恢复',
+      primaryButton: {
+        value: '放弃',
+        fontColor: AppColors.destructive,
+        action: () => { this.onClose() }
+      },
+      secondaryButton: {
+        value: '继续编辑'
+      }
+    }),
+    autoCancel: true
+  })
+
   /** 组件是否已销毁（防止异步回调在销毁后写 @State）。 */
   private disposed: boolean = false
 
@@ -124,7 +147,7 @@ export struct NewTopicDialog {
   private requestClose(): void {
     if (this.subject.trim().length > 0 || this.content.trim().length > 0) {
       newTopicManager.saveDraft(this.subject, this.content)
-      floatingLayerStore.showReplyConfirm()
+      this.abandonDialogController.open()
     } else {
       // 内容为空时清掉残留草稿，避免下次打开又恢复旧内容
       newTopicManager.clearDraft()

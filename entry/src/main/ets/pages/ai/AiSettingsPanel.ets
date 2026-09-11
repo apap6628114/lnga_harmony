@@ -12,7 +12,7 @@ import { routerStore } from '../../store/RouterStore'
 import { AppColors } from '../../common/constants/Constants'
 import { UIMaterialManager } from '../../common/managers/UIMaterialManager'
 import { PanelNavBar } from '../../common/components/PanelNavBar'
-import { ConfirmDialog, ActionSheetDialog } from '../../common/dialogs/Dialogs'
+import { TipsDialog, AlertDialog, SelectDialog } from '@kit.ArkUI'
 import {
   AiProviderProfile,
   DEFAULT_AI_MAX_TOKENS,
@@ -32,7 +32,6 @@ import {
   getModelPlaceholder,
   getApiKeyPlaceholder
 } from '../../service/ai/AiConfigFormLogic'
-import type { ActionOption } from '../../common/dialogs/Dialogs'
 import type { AiTestResult } from '../../model/AiConfig'
 import type { AiProviderPreset } from '../../service/ai/AiModelPresets'
 import {
@@ -241,16 +240,20 @@ export struct AiSettingsPanel {
    */
   private showDiscardConfirm(onConfirm: () => void): void {
     this.discardConfirmController = new CustomDialogController({
-      builder: ConfirmDialog({
-        title: '放弃修改',
-        message: '当前编辑的内容尚未保存，确定要放弃吗？',
-        confirmLabel: '放弃',
-        destructive: false,
-        onConfirm: onConfirm,
-        onCancel: (): void => {}
+      builder: AlertDialog({
+        primaryTitle: '放弃修改',
+        content: '当前编辑的内容尚未保存，确定要放弃吗？',
+        primaryButton: {
+          value: '放弃',
+          fontColor: AppColors.white,
+          background: AppColors.primary,
+          action: onConfirm
+        },
+        secondaryButton: {
+          value: '取消'
+        }
       }),
-      autoCancel: true,
-      customStyle: true
+      autoCancel: true
     })
     this.discardConfirmController.open()
   }
@@ -370,59 +373,69 @@ export struct AiSettingsPanel {
     const name: string = profile ? profile.name : '此配置'
 
     this.deleteConfirmController = new CustomDialogController({
-      builder: ConfirmDialog({
+      builder: TipsDialog({
+        imageRes: $r('app.media.icon_delete'),
         title: '删除 AI 配置',
-        message: this.isActiveProfile(id)
+        content: this.isActiveProfile(id)
           ? '你将删除当前正在使用的配置「' + name + '」。\n删除后会自动切换到剩余配置；若没有其他配置，AI 功能需要重新添加配置后使用。'
           : '确定要删除配置「' + name + '」吗？\n删除后该配置将从列表中移除。',
-        confirmLabel: '删除',
-        destructive: true,
-        icon: $r('app.media.icon_delete'),
-        onConfirm: (): void => {
-          appStore.settingsStore.deleteAiProfile(id)
-          this.syncProfiles()
-          if (this.expandedProfileId === id) {
-            this.doCollapse()
+        primaryButton: {
+          value: '删除',
+          fontColor: AppColors.white,
+          background: AppColors.destructive,
+          action: (): void => {
+            appStore.settingsStore.deleteAiProfile(id)
+            this.syncProfiles()
+            if (this.expandedProfileId === id) {
+              this.doCollapse()
+            }
           }
         },
-        onCancel: (): void => {}
+        secondaryButton: {
+          value: '取消'
+        }
       }),
-      autoCancel: true,
-      customStyle: true
+      autoCancel: true
     })
     this.deleteConfirmController.open()
   }
 
+  /**
+   * 应用服务商预设到编辑表单。
+   *
+   * @param index - 预设下标（PROVIDER_PRESETS 索引）
+   */
+  private applyProviderPreset(index: number): void {
+    this.invalidatePendingRequests()
+    const preset: AiProviderPreset = PROVIDER_PRESETS[index]
+    this.editNameInput = preset.name
+    this.editEndpointInput = DEFAULT_DEEPSEEK_ENDPOINT
+    this.editApiKeyInput = ''
+    this.editModelInput = preset.defaultModelName
+    this.testResultMessage = ''
+    this.testSuccess = false
+    this.expandedProfileId = NEW_ID
+  }
+
   /** 显示服务商预设选择弹窗。 */
   showProviderPresetPicker(): void {
-    const options: ActionOption[] = []
+    const items: SheetInfo[] = []
     for (let i = 0; i < PROVIDER_PRESETS.length; i++) {
-      const opt: ActionOption = {
-        label: PROVIDER_PRESETS[i].name + ' - ' + PROVIDER_PRESETS[i].description,
-        value: i
-      }
-      options.push(opt)
+      const presetIndex: number = i
+      items.push({
+        title: PROVIDER_PRESETS[i].name + ' - ' + PROVIDER_PRESETS[i].description,
+        action: (): void => { this.applyProviderPreset(presetIndex) }
+      })
     }
 
     this.providerPickerController = new CustomDialogController({
-      builder: ActionSheetDialog({
+      builder: SelectDialog({
         title: '选择 AI 平台',
-        options: options,
-        selected: -1,
-        onSelect: (v: number): void => {
-          this.invalidatePendingRequests()
-          const preset: AiProviderPreset = PROVIDER_PRESETS[v]
-          this.editNameInput = preset.name
-          this.editEndpointInput = DEFAULT_DEEPSEEK_ENDPOINT
-          this.editApiKeyInput = ''
-          this.editModelInput = preset.defaultModelName
-          this.testResultMessage = ''
-          this.testSuccess = false
-          this.expandedProfileId = NEW_ID
-        }
+        selectedIndex: 0,
+        radioContent: items,
+        confirm: { value: '确定' }
       }),
-      autoCancel: true,
-      customStyle: true
+      autoCancel: true
     })
     this.providerPickerController.open()
   }

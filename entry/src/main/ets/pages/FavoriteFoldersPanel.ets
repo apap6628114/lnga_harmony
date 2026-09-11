@@ -5,8 +5,8 @@ import { ApiResult, TopicFavoriteResult } from '../model/NgaApiResults'
 import { AppColors } from '../common/constants/Constants'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { EmptyStateView, ErrorStateView, LoadingStateView } from '../common/components/PageStateView'
-import { ConfirmDialog } from '../common/dialogs/Dialogs'
-import { FavoriteFolderNameDialog } from '../common/dialogs/FavoriteFolderDialogs'
+import { AlertDialog, CustomContentDialog } from '@kit.ArkUI'
+import { FolderNameEditorContent } from '../common/dialogs/FavoriteFolderDialogs'
 import { PageScope } from '../common/concurrency/PageScope'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
@@ -176,17 +176,29 @@ export struct FavoriteFoldersPanel {
    * 打开新建收藏夹对话框。
    */
   private showCreateFolderDialog(): void {
+    this.folderNameInput = ''
     this.nameDialogController = new CustomDialogController({
-      builder: FavoriteFolderNameDialog({
-        title: '新建收藏夹',
-        confirmLabel: this.topicId.length > 0 ? '创建并收藏' : '创建',
-        onConfirm: (name: string): void => {
-          this.createFolder(name)
-        }
+      builder: CustomContentDialog({
+        primaryTitle: '新建收藏夹',
+        contentBuilder: this.folderNameContent,
+        buttons: [
+          { value: '取消' },
+          {
+            value: this.topicId.length > 0 ? '创建并收藏' : '创建',
+            fontColor: AppColors.white,
+            background: AppColors.primary,
+            action: (): void => {
+              const name: string = this.folderNameInput.trim()
+              if (name.length === 0) {
+                appStore.showToast('请输入收藏夹名称')
+                return
+              }
+              this.createFolder(name)
+            }
+          }
+        ]
       }),
-      autoCancel: true,
-      customStyle: true,
-      alignment: DialogAlignment.Center
+      autoCancel: true
     })
     this.nameDialogController.open()
   }
@@ -238,20 +250,43 @@ export struct FavoriteFoldersPanel {
    */
   private showRenameFolderDialog(folder: FavoriteTopicFolder): void {
     const folderId: string = folder.id
+    this.folderNameInput = folder.name
     this.nameDialogController = new CustomDialogController({
-      builder: FavoriteFolderNameDialog({
-        title: '重命名收藏夹',
-        initialName: folder.name,
-        confirmLabel: '保存',
-        onConfirm: (name: string): void => {
-          this.renameFolder(folderId, name)
-        }
+      builder: CustomContentDialog({
+        primaryTitle: '重命名收藏夹',
+        contentBuilder: this.folderNameContent,
+        buttons: [
+          { value: '取消' },
+          {
+            value: '保存',
+            fontColor: AppColors.white,
+            background: AppColors.primary,
+            action: (): void => {
+              const name: string = this.folderNameInput.trim()
+              if (name.length === 0) {
+                appStore.showToast('请输入收藏夹名称')
+                return
+              }
+              this.renameFolder(folderId, name)
+            }
+          }
+        ]
       }),
-      autoCancel: true,
-      customStyle: true,
-      alignment: DialogAlignment.Center
+      autoCancel: true
     })
     this.nameDialogController.open()
+  }
+
+  /** 收藏夹名称输入（供 CustomContentDialog 内容构件双向绑定）。 */
+  @State folderNameInput: string = ''
+
+  /** 收藏夹名称弹窗的自定义内容。 */
+  @Builder
+  folderNameContent() {
+    FolderNameEditorContent({
+      name: this.folderNameInput,
+      onNameChange: (value: string): void => { this.folderNameInput = value }
+    })
   }
 
   /**
@@ -285,18 +320,22 @@ export struct FavoriteFoldersPanel {
     const folderId: string = folder.id
     const folderName: string = folder.name
     this.deleteDialogController = new CustomDialogController({
-      builder: ConfirmDialog({
-        title: '删除收藏夹',
-        message: `确定删除“${folderName}”以及其中的全部收藏关系吗？`,
-        confirmLabel: '删除',
-        destructive: true,
-        onConfirm: (): void => {
-          this.deleteFolder(folderId)
+      builder: AlertDialog({
+        primaryTitle: '删除收藏夹',
+        content: `确定删除“${folderName}”以及其中的全部收藏关系吗？`,
+        primaryButton: {
+          value: '删除',
+          fontColor: AppColors.white,
+          background: AppColors.destructive,
+          action: (): void => {
+            this.deleteFolder(folderId)
+          }
+        },
+        secondaryButton: {
+          value: '取消'
         }
       }),
-      autoCancel: true,
-      customStyle: true,
-      alignment: DialogAlignment.Center
+      autoCancel: true
     })
     this.deleteDialogController.open()
   }

@@ -1,9 +1,19 @@
 /**
- * 保存帖子对话框：选择保存的页范围（1~x 页）。
+ * 保存帖子对话框内容构件：选择保存的页范围（1~x 页）。
  *
- * 打开时先拉取第一页确认帖子有效性并取得总页数；帖子无效（被删除/过期）
- * 或拉取失败时显示错误并禁止保存。确认后由调用方关闭对话框并启动
- * SavedThreadService 后台保存（进度由全局指示组件展示）。
+ * 迁移说明：原先这里是 `@CustomDialog` 的 `SaveThreadDialog`（自绘标题、按钮与玻璃面板），
+ * 现改为官方 `CustomContentDialog` 的自定义内容构件——标题与按钮由官方模板渲染，
+ * 本组件只负责「拉取帖子信息 + 页范围输入与校验」。
+ *
+ * 与调用方的契约：模型在 `aboutToAppear` 时先拉取第一页确认帖子有效性并取得总页数，
+ * 帖子无效（被删除/过期）或拉取失败时显示错误并禁止保存；页范围的合法性、起始页与结束页
+ * 经 `onRangeChange` 回调回写调用方，调用方在官方模板的确认按钮回调里读取。
+ *
+ * **参数用 `@Prop` + 回调，禁止用 `@Link`**：官方 `contentBuilder` 是 `@BuilderParam`，
+ * 传进去的 @Builder 在**对话框组件内部**执行，调用方的 `$变量` 在那一层解析不到源状态，
+ * 打开对话框时会抛 `source variable in parent/ancestor @Component must be defined` 并崩溃（实测）。
+ *
+ * 确认后由调用方启动 `SavedThreadService` 后台保存（进度由全局指示组件展示）。
  */
 
 import { getThread } from '../../service/api/ThreadApi'
@@ -11,27 +21,33 @@ import { appStore } from '../../store/AppStore'
 import { AppColors } from '../constants/Constants'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 
-@CustomDialog
-export struct SaveThreadDialog {
-  controller: CustomDialogController
+@Component
+export struct SaveThreadContent {
   /** NGA 主题 ID。 */
   @Prop tid: string = ''
   /** 调用方提供的主题标题（加载失败时的兜底展示）。 */
   @Prop initialSubject: string = ''
+  /**
+   * 页范围变化回调（回写调用方）。
+   *
+   * @param canSave - 当前页范围是否可提交
+   * @param startPage - 起始页；非法时为 -1
+   * @param endPage - 结束页；非法时为 -1
+   */
+  onRangeChange?: (canSave: boolean, startPage: number, endPage: number) => void
+
   /** 是否正在拉取帖子信息。 */
-  @State loading: boolean = true
+  @State private loading: boolean = true
   /** 拉取失败原因（空串表示成功）。 */
-  @State loadError: string = ''
+  @State private loadError: string = ''
   /** 主题标题。 */
-  @State subject: string = ''
+  @State private subject: string = ''
   /** 服务端总页数。 */
-  @State totalPages: number = 0
+  @State private totalPages: number = 0
   /** 起始页输入。 */
-  @State startText: string = '1'
+  @State private startText: string = '1'
   /** 结束页输入。 */
-  @State endText: string = ''
-  /** 确认保存回调（页范围已校验）。 */
-  onSave?: (tid: string, startPage: number, endPage: number) => void
+  @State private endText: string = ''
 
   aboutToAppear(): void {
     this.fetchThreadInfo()
@@ -43,6 +59,7 @@ export struct SaveThreadDialog {
   private async fetchThreadInfo(): Promise<void> {
     this.loading = true
     this.loadError = ''
+    this.syncOutput()
     try {
       const result = await getThread(appStore.auth.token, this.tid, '', '', '1')
       if (!result.ok || result.error.length > 0) {
@@ -62,11 +79,14 @@ export struct SaveThreadDialog {
       this.loadError = '无法加载该帖子'
     } finally {
       this.loading = false
+      this.syncOutput()
     }
   }
 
   /**
-   * 起始页输入是否合法。
+   * 解析起始页输入。
+   *
+   * @returns 合法页码；非法时为 -1
    */
   private parseStart(): number {
     const raw: string = this.startText.trim()
@@ -78,7 +98,9 @@ export struct SaveThreadDialog {
   }
 
   /**
-   * 结束页输入是否合法。
+   * 解析结束页输入。
+   *
+   * @returns 合法页码；非法时为 -1
    */
   private parseEnd(): number {
     const raw: string = this.endText.trim()
@@ -90,19 +112,26 @@ export struct SaveThreadDialog {
   }
 
   /**
-   * 是否可以提交保存（加载完成、无错误、页范围合法）。
+   * 重算页范围并把结果回写给调用方。
+   *
+   * 官方对话框模板的按钮不支持动态 disabled，因此「能否保存」由调用方在
+   * 确认回调里读取回写值判定，而不是靠按钮灰化表达。
    */
-  private canSave(): boolean {
-    if (this.loading || this.loadError.length > 0 || this.totalPages <= 0) {
-      return false
-    }
+  private syncOutput(): void {
     const start: number = this.parseStart()
     const end: number = this.parseEnd()
-    return start >= 1 && end >= start && end <= this.totalPages
+    const rangeValid: boolean = start >= 1 && end >= start && end <= this.totalPages
+    const canSave: boolean = !this.loading && this.loadError.length === 0 &&
+      this.totalPages > 0 && rangeValid
+    if (this.onRangeChange) {
+      this.onRangeChange(canSave, rangeValid ? start : -1, rangeValid ? end : -1)
+    }
   }
 
   /**
    * 当前选择的保存页数；起始/结束页输入非法或结束页超出总页数时返回 0。
+   *
+   * @returns 页数
    */
   private pageCount(): number {
     const start: number = this.parseStart()
@@ -115,37 +144,29 @@ export struct SaveThreadDialog {
 
   build() {
     Column() {
-      Text('保存帖子')
-        .fontSize(17).fontWeight(FontWeight.Bold).fontColor(AppColors.textPrimary)
-        .margin({ top: 20, bottom: 4 })
-        .alignSelf(ItemAlign.Center)
-
       if (this.loading) {
         Row({ space: 10 }) {
           LoadingProgress().width(22).height(22).color(AppColors.primary)
           Text('正在确认帖子信息…').fontSize(13).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
         }
-        .margin({ top: 24, bottom: 28 })
+        .margin({ top: 8, bottom: 12 })
       } else if (this.loadError.length > 0) {
         Text(this.loadError)
           .fontSize(13).fontColor(AppColors.destructive)
-          .margin({ top: 16, bottom: 8 })
-          .alignSelf(ItemAlign.Center)
+          .alignSelf(ItemAlign.Start)
         Text('该帖子可能已被删除或已过期，无法保存。')
           .fontSize(12).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-          .margin({ bottom: 20 })
-          .alignSelf(ItemAlign.Center)
+          .margin({ top: 4 })
+          .alignSelf(ItemAlign.Start)
       } else {
         Text(this.subject)
-          .fontSize(14).fontColor(AppColors.textPrimary).maxLines(2)
+          .fontSize(14).fontColor(UIMaterialManager.adaptiveForeground).maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .margin({ top: 8, bottom: 2 })
-          .padding({ left: 4, right: 4 })
           .alignSelf(ItemAlign.Start)
 
         Text('共 ' + String(this.totalPages) + ' 页，请选择要保存的页范围')
           .fontSize(12).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-          .margin({ bottom: 14 })
+          .margin({ top: 2, bottom: 14 })
           .alignSelf(ItemAlign.Start)
 
         Row({ space: 10 }) {
@@ -160,7 +181,10 @@ export struct SaveThreadDialog {
               .caretColor(UIMaterialManager.inputForeground)
               .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
               .attributeModifier(UIMaterialManager.inputMaterial)
-              .onChange((value: string) => { this.startText = value })
+              .onChange((value: string) => {
+                this.startText = value
+                this.syncOutput()
+              })
           }
           .layoutWeight(1)
 
@@ -175,7 +199,10 @@ export struct SaveThreadDialog {
               .caretColor(UIMaterialManager.inputForeground)
               .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
               .attributeModifier(UIMaterialManager.inputMaterial)
-              .onChange((value: string) => { this.endText = value })
+              .onChange((value: string) => {
+                this.endText = value
+                this.syncOutput()
+              })
           }
           .layoutWeight(1)
         }
@@ -195,38 +222,7 @@ export struct SaveThreadDialog {
           }
         }
       }
-
-      Divider().color(AppColors.separator).margin({ top: 14 })
-
-      Row() {
-        Button('取消')
-          .layoutWeight(1).height(44).backgroundColor(Color.Transparent)
-          .fontColor(AppColors.primary).fontSize(16)
-          .onClick(() => { this.controller.close() })
-
-        Button('保存')
-          .layoutWeight(1).height(44).margin({ left: 12 })
-          .backgroundColor(AppColors.primary)
-          .fontColor(AppColors.white)
-          .fontWeight(FontWeight.Bold).fontSize(16)
-          .opacity(this.canSave() ? 1 : 0.45)
-          .enabled(this.canSave())
-          .onClick(() => {
-            const start: number = this.parseStart()
-            const end: number = this.parseEnd()
-            if (start >= 1 && end >= start && end <= this.totalPages) {
-              if (this.onSave) this.onSave(this.tid, start, end)
-              this.controller.close()
-            }
-          })
-      }
     }
-    // 显式固定对话框宽度（customStyle 模式下内容区默认占满屏幕宽，
-    // 若无固定宽度，输入区的 width('100%') 会撑满整个屏幕）
-    .width(300)
-    .constraintSize({ maxWidth: 340 })
-    .padding({ left: 20, right: 20, bottom: 12 })
-    .borderRadius(14)
-    .attributeModifier(UIMaterialManager.surfaceMaterial)
+    .width('100%')
   }
 }

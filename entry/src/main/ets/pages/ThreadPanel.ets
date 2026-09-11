@@ -1,4 +1,4 @@
-import { display, LengthMetrics } from '@kit.ArkUI'
+import { display, LengthMetrics, CustomContentDialog } from '@kit.ArkUI'
 import { common, Context } from '@kit.AbilityKit'
 import { taskpool } from '@kit.ArkTS'
 
@@ -30,7 +30,7 @@ import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { TtsMediaMetadata } from '../common/media/TtsAvSessionController'
 import { TtsPlayer } from '../common/media/TtsPlayer'
 import { shareThread, sharePost } from '../common/utils/ShareUtils'
-import { SaveThreadDialog } from '../common/dialogs/SaveThreadDialogs'
+import { SaveThreadContent } from '../common/dialogs/SaveThreadDialogs'
 import { savedThreadService, SaveThreadOutcome, getSavedThreadResult } from '../service/SavedThreadService'
 import { openImageViewer as sharedOpenImageViewer, handleForumLink } from '../common/utils/LinkUtils'
 import { ThreadPaginationManager, MergePageResult } from '../common/managers/ThreadPaginationManager'
@@ -142,6 +142,12 @@ export struct ThreadPanel {
   @State showPagePicker: boolean = false
   /** 保存帖子对话框控制器（更多菜单「保存帖子」入口）。 */
   private saveDialogController?: CustomDialogController
+  /** 保存帖子弹窗：页范围是否合法（由 SaveThreadContent 回写）。 */
+  @State private saveRangeValid: boolean = false
+  /** 保存帖子弹窗：选定起始页（由 SaveThreadContent 回写，非法为 -1）。 */
+  @State private saveStartPage: number = -1
+  /** 保存帖子弹窗：选定结束页（由 SaveThreadContent 回写，非法为 -1）。 */
+  @State private saveEndPage: number = -1
   private pagePickerTotalPages: number = 0
   private pagePickerCurrentPage: number = 0
   private pagePickerOnSelect: ((page: number) => void) | null = null
@@ -1812,19 +1818,47 @@ export struct ThreadPanel {
       return
     }
     this.showMoreMenu = false
+    this.saveRangeValid = false
+    this.saveStartPage = -1
+    this.saveEndPage = -1
     this.saveDialogController = new CustomDialogController({
-      builder: SaveThreadDialog({
-        tid: this.threadTid,
-        initialSubject: this.threadSubject,
-        onSave: (tid: string, startPage: number, endPage: number): void => {
-          this.startSaveThread(tid, startPage, endPage)
-        }
+      builder: CustomContentDialog({
+        primaryTitle: '保存帖子',
+        contentBuilder: this.saveThreadContent,
+        buttons: [
+          { value: '取消' },
+          {
+            value: '保存',
+            fontColor: AppColors.white,
+            background: AppColors.primary,
+            action: (): void => {
+              // 官方对话框模板的按钮不支持动态 disabled，页范围合法性在提交时判定
+              if (!this.saveRangeValid || this.saveStartPage < 1 || this.saveEndPage < this.saveStartPage) {
+                appStore.showToast('页范围无效')
+                return
+              }
+              this.startSaveThread(this.threadTid, this.saveStartPage, this.saveEndPage)
+            }
+          }
+        ]
       }),
-      autoCancel: true,
-      customStyle: true,
-      alignment: DialogAlignment.Center
+      autoCancel: true
     })
     this.saveDialogController?.open()
+  }
+
+  /** 保存帖子弹窗的自定义内容（官方 CustomContentDialog 的 contentBuilder）。 */
+  @Builder
+  saveThreadContent() {
+    SaveThreadContent({
+      tid: this.threadTid,
+      initialSubject: this.threadSubject,
+      onRangeChange: (canSave: boolean, startPage: number, endPage: number): void => {
+        this.saveRangeValid = canSave
+        this.saveStartPage = startPage
+        this.saveEndPage = endPage
+      }
+    })
   }
 
   /**
