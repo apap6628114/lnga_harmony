@@ -34,10 +34,12 @@ jobs:
     timeout-minutes: 45
     env:
       GH_TOKEN: ${{ github.token }}
-      HARMONY_CLI_VERSION: 26.0.0.621
-      HARMONY_CLI_ARCHIVE: commandline-tools-linux-x64-26.0.0.621.zip
-      HARMONY_CLI_SHA256: 0cea7ad6cc1af98ac701b9c61b7c9aae2d0f2104749a80ae84c1f6ca0fc17555
-      HARMONY_CLI_URL: https://contentcenter-vali-drcn.dbankcdn.cn/pvt_2/DeveloperAlliance_package_901_9/95/v3/ksUKbWstTiqarw0qRRlIXQ/commandline-tools-linux-x64-26.0.0.621.zip?HW-CC-KV=V1&HW-CC-Date=20260809T124905Z&HW-CC-Expire=315360000&HW-CC-Sign=BE9B7BE8C24924FB98759EE199DA7188B881F4ABD19CE254F29E554AEC7E358B
+      # Command Line Tools 26.0.0 Release（内嵌 SDK: HarmonyOS 26.0.0 Release / 26.0.0.105）
+      # 来源：华为开发者联盟下载中心 → Command Line Tools → Linux(x86) 26.0.0.821
+      HARMONY_CLI_VERSION: 26.0.0.821
+      HARMONY_CLI_ARCHIVE: commandline-tools-linux-x64-26.0.0.821.zip
+      HARMONY_CLI_SHA256: 58da7359019e9360a8bb82da0cd1d3b3b26fedc338379f257849f2162e3ac1fc
+      HARMONY_CLI_URL: https://contentcenter-vali-drcn.dbankcdn.cn/pvt_2/DeveloperAlliance_package_901_9/d1/v3/PCx_dpJhQG63WXNUPT30vg/commandline-tools-linux-x64-26.0.0.821.zip?HW-CC-KV=V1&HW-CC-Date=20260911T194309Z&HW-CC-Expire=315360000&HW-CC-Sign=3DB31575DB2B7D734B702811DD4737C04CB4CEE100F2FA0B421E49F258DF7850
       HARMONY_CLI_DIR: ${{ github.workspace }}/.harmony-cli
       HARMONY_CLI_HOME: ${{ github.workspace }}/.harmony-cli/command-line-tools
 
