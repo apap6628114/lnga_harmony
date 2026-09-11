@@ -131,10 +131,16 @@ export class UIMaterialManager {
    * 弹窗背板材质：官方 `CustomDialog` 类弹窗（`AlertDialog` / `TipsDialog` / `SelectDialog` /
    * `CustomContentDialog` 都经 `CustomDialogController` 承载）。
    *
-   * 参数是 **API 26 Beta1 时期实测有效的原始配方**（git `0df06e94`）：`REGULAR` + 45% 主题暖白
-   * tint + **关闭材质自带阴影**（`applyShadow: false`，浮起感交给组件自定义 `shadow`，否则材质
-   * 阴影会盖掉自绘阴影）。Beta1 时同一套参数在自绘浮层上呈现「背景可见 + 柔和模糊」的高透玻璃，
-   * 正是本工程要复刻的观感。
+   * 参数基础是 **API 26 Beta1 时期实测有效的原配方**（git `0df06e94`）：`REGULAR` 档 +
+   * `materialColor` 赋色 + 材质自带阴影。两处按真机实测校准过：
+   *
+   * 1. **`materialColor` 必须与页面底色拉开明度差。** 亮色主题原先用暖白 `#73FEFAF6`，与页面
+   *    底色 `#FEFAF6` 几乎同色，玻璃"溶解"在背景里、只剩边缘一点折射，看起来就是一块平白板；
+   *    现改为偏暗的 `#4D5A4632`，玻璃成为比底色更深的一块面板，层次才立得住。
+   *    暗色主题的 `#73121214` 本来就比深色底色更暗——**这正是暗色模式观感更好的根本原因**。
+   * 2. **`applyShadow: true`。** Beta1 时容器自带 `shadow`，所以材质阴影是关的；现在容器的形状
+   *    装饰归面板本体（见 `sheetMaterial`），阴影改由材质自带的那套承担——实测亮色模式下没有
+   *    阴影时，面板会"贴"在背景上、缺少浮起感。
    *
    * 用法：`new CustomDialogController({ backgroundColor: Color.Transparent, builder: ...,
    * systemMaterial: UIMaterialManager.dialogMaterial })`——`backgroundColor` 必须显式置透明：
@@ -146,7 +152,7 @@ export class UIMaterialManager {
   static readonly dialogMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
     style: uiMaterial.ImmersiveStyle.REGULAR,
     materialColor: $r('app.color.material_surface_tint'),
-    applyShadow: false
+    applyShadow: true
   })
 
   /**
@@ -161,7 +167,7 @@ export class UIMaterialManager {
   static readonly sheetMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
     style: uiMaterial.ImmersiveStyle.REGULAR,
     materialColor: $r('app.color.material_surface_tint'),
-    applyShadow: false
+    applyShadow: true
   })
 
   /**
