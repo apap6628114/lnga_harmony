@@ -52,6 +52,7 @@ export struct BlacklistPanel {
   @State addBlacklistUid: string = ''
 
   deleteDialogController?: CustomDialogController = new CustomDialogController({
+    backgroundColor: Color.Transparent,
     systemMaterial: UIMaterialManager.dialogMaterial,
     builder: AlertDialog({
       primaryTitle: '移除黑名单',
@@ -79,6 +80,7 @@ export struct BlacklistPanel {
 
   /** 清空黑名单确认对话框。 */
   clearDialogController?: CustomDialogController = new CustomDialogController({
+    backgroundColor: Color.Transparent,
     systemMaterial: UIMaterialManager.dialogMaterial,
     builder: AlertDialog({
       primaryTitle: '清空黑名单',
@@ -268,6 +270,7 @@ export struct BlacklistPanel {
         onRightClick: (): void => {
         this.addBlacklistUid = ''
         this.addDialogController = new CustomDialogController({
+          backgroundColor: Color.Transparent,
           systemMaterial: UIMaterialManager.dialogMaterial,
           builder: CustomContentDialog({
             primaryTitle: '添加黑名单',

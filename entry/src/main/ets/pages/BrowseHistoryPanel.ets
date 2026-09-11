@@ -37,6 +37,7 @@ export struct BrowseHistoryPanel {
    * 现直接在本面板用官方 `AlertDialog` 承载，确认框状态不再进入浮层栈。
    */
   private clearHistoryDialogController: CustomDialogController = new CustomDialogController({
+    backgroundColor: Color.Transparent,
     systemMaterial: UIMaterialManager.dialogMaterial,
     builder: AlertDialog({
       primaryTitle: '清空浏览记录',

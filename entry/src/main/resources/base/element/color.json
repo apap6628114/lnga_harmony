@@ -134,11 +134,15 @@
     },
     {
       "name": "glass_field_fill",
-      "value": "#1F5A4632"
+      "value": "#3DFEFAF6"
     },
     {
       "name": "glass_field_stroke",
       "value": "#2E9C7B52"
+    },
+    {
+      "name": "material_surface_tint",
+      "value": "#73FEFAF6"
     },
     {
       "name": "glass_fab_fill",

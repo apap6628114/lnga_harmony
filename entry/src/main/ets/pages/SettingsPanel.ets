@@ -61,6 +61,7 @@ export struct SettingsPanel {
   }
 
   clearCacheDialogController?: CustomDialogController = new CustomDialogController({
+    backgroundColor: Color.Transparent,
     systemMaterial: UIMaterialManager.dialogMaterial,
     builder: TipsDialog({
       imageRes: $r('app.media.settings_clear_cache'),
@@ -86,6 +87,7 @@ export struct SettingsPanel {
   prefetchPageDialogController?: CustomDialogController
   exportCredentialDialogController?: CustomDialogController
   logoutDialogController?: CustomDialogController = new CustomDialogController({
+    backgroundColor: Color.Transparent,
     systemMaterial: UIMaterialManager.dialogMaterial,
     builder: TipsDialog({
       imageRes: $r('app.media.settings_logout'),
@@ -249,6 +251,7 @@ export struct SettingsPanel {
 
     this.exportPassword = ''
     this.exportCredentialDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
       builder: CustomContentDialog({
         primaryTitle: '加密导出凭证',
@@ -350,6 +353,7 @@ export struct SettingsPanel {
       }
     )
     this.threadNavDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
       builder: SelectDialog({
         title: '帖子楼层导航',
@@ -390,6 +394,7 @@ export struct SettingsPanel {
       }
     )
     this.prefetchPageDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
       builder: SelectDialog({
         title: '预加载页数',
@@ -412,6 +417,7 @@ export struct SettingsPanel {
       }
     )
     this.imageStrategyDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
       builder: SelectDialog({
         title: '图片加载模式',

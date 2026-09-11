@@ -145,9 +145,16 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
 
 | 位置 | 接入点 | 材质 |
 | --- | --- | --- |
-| 32 处官方对话框（`AlertDialog` / `TipsDialog` / `SelectDialog` / `CustomContentDialog`） | `CustomDialogControllerOptions.systemMaterial` | `dialogMaterial`（`ULTRA_THICK`） |
-| 2 处半模态面板（回复 / 发新主题编辑器、写私信） | `SheetOptions.systemMaterial` | `sheetMaterial`（`ULTRA_THICK`） |
+| 32 处官方对话框（`AlertDialog` / `TipsDialog` / `SelectDialog` / `CustomContentDialog`） | `CustomDialogControllerOptions.systemMaterial` | `dialogMaterial`（Beta1 原配方） |
+| 2 处半模态面板（回复 / 发新主题编辑器、写私信） | `SheetOptions.systemMaterial` | `sheetMaterial`（同配方） |
 | 7 处设置类 `Slider` + 2 处 `Toggle(Switch)` | 通用属性 `.systemMaterial(...)` | `controlMaterial`（`THIN` + 交互形变 + 点光源） |
+
+**材质参数在真机上实测校准过**（详见 `IMMERSIVE_LIGHT_DESIGN.md` §12.7）：弹窗 / 面板用
+`REGULAR` + 45% 暖白 `materialColor` + `applyShadow: false`——即 API 26 Beta1 时期本工程实测有效的
+原配方（git `0df06e94`）。官方文档给 Dialog 推荐的 `ULTRA_THICK` 在真机上就是一块**不透的白板**
+（与背景是否透明无关），`ULTRA_THIN` / `THIN` 又太透导致背景文字穿透。同时实测确认：
+**Release 下浮层内部的普通组件写 `.systemMaterial(...)` 不生效**，材质只在面板本体那一层参与渲染，
+所以面板内部控件（工具条、输入框、中性按钮）仍走自绘内容层材质。
 
 配套改动：
 

@@ -870,37 +870,75 @@ HDS 的材质类型/等级与 ArkUI 的 `ImmersiveStyle` 不是一一对应关�
 
 | 工厂 | 材质 | 接入点 |
 | --- | --- | --- |
-| `dialogMaterial` | `ImmersiveMaterial`：`ULTRA_THICK` + `applyShadow` | `new CustomDialogController({ builder: …, systemMaterial: UIMaterialManager.dialogMaterial })` |
-| `sheetMaterial` | `ImmersiveMaterial`：`ULTRA_THICK` + `applyShadow` | `SheetOptions.systemMaterial` |
+| `dialogMaterial` | `ImmersiveMaterial`：`REGULAR` + 45% 暖白 tint + `applyShadow: false` | `new CustomDialogController({ backgroundColor: Color.Transparent, builder: …, systemMaterial: … })` |
+| `sheetMaterial` | 同上（Beta1 原配方） | `SheetOptions.systemMaterial` |
 | `controlMaterial` | `ImmersiveMaterial`：`THIN` + `interactive` + `lightEffect` | 通用属性 `.systemMaterial(...)`，用于 `Slider` / `Toggle` |
-| `dialogFieldMaterial` | `GlassModifier`：填充 12% + 极淡描边，**不做背景模糊** | `.attributeModifier(...)`，材质背板之上的输入框 |
+| `dialogFieldMaterial` | `GlassModifier`：暖白填充 + 极淡描边，**不做背景模糊** | `.attributeModifier(...)`，材质背板之上的输入框 |
 | `dialogActionMaterial` | `GlassModifier`：填充 32% + 描边，**不做背景模糊** | `.attributeModifier(...)`，材质背板之上的中性按钮 |
 
-三条落地要点（官方声明 + 本工程结论）：
+#### 材质参数：回到 Beta1 原配方（真机实测结论）
+
+弹窗 / 面板的材质参数**不是**官方文档给 Dialog 推荐的 `ULTRA_THICK`，而是 API 26 Beta1 时期本工程
+实测有效的原配方（git `0df06e94`）：
+
+```ts
+new uiMaterial.ImmersiveMaterial({
+  style: uiMaterial.ImmersiveStyle.REGULAR,
+  materialColor: $r('app.color.material_surface_tint'),  // 亮 #73FEFAF6 / 暗 #73121214
+  applyShadow: false                                      // 浮起感交给组件自定义 shadow
+})
+```
+
+在真机上逐轮替换参数、截图对比得到的事实：
+
+| 参数 | 实测表现 |
+| --- | --- |
+| `ULTRA_THICK`（官方对 Dialog 的推荐值） | **就是一块不透的白板**，与背景是否透明无关（两张不同配置的截图逐像素完全相同）——这是"没有高透玻璃感"的直接原因 |
+| `ULTRA_THIN` | 几乎全透，背景文字与前景文字重叠，可读性崩 |
+| `THIN` | 仍偏透，背景彩色图标形成干扰 |
+| `REGULAR` + 45% 暖白 tint + `applyShadow: false` | 背景可见且柔和、色调统一、前景清晰——**即 Beta1 的"高透玻璃"观感** |
+
+系统材质**没有模糊半径参数**："又透又柔"靠的是 `REGULAR` 档位的模糊 + `materialColor` 赋色压住
+背景杂色。想把背景糊成更柔和的色块，只有自绘 `backgroundEffect`（大半径）能做到。
+
+#### 生效边界：只有「面板本体」能拿到材质
+
+真机实测确认（输入框设了 `.systemMaterial(...)` 后完全没有背景、只剩文字）：
+**Release 下浮层内部的普通组件写 `.systemMaterial(...)` 不生效**。材质只在弹窗 / 面板本体那一层
+（`SheetOptions` / `CustomDialogControllerOptions` 的 `systemMaterial`）参与渲染。因此：
+
+- 面板**本体** → 系统沉浸材质（`sheetMaterial` / `dialogMaterial`）。
+- 面板**内部**（工具条按钮、输入框、中性按钮）→ 只能用自绘内容层材质
+  （`dialogFieldMaterial` / `dialogActionMaterial`）。Beta1 时这些控件能直接吃系统材质，Release 收紧
+  生效范围后不行了——**这是与 Beta1 截图唯一的观感差距来源**。
+
+#### 三条落地要点
 
 1. **弹窗材质写在承载接口的 options 上，不是内容组件的通用属性。** 官方高级模板
    （`@ohos.arkui.advanced.Dialog` 的 `AlertDialog` / `TipsDialog` / `SelectDialog` /
    `CustomContentDialog`）的 options **没有** `backgroundColor` / `systemMaterial` 字段，
    材质只能写在外层 `CustomDialogController` 的 options 上。
-2. **半模态面板必须保留 `backgroundColor: Color.Transparent`。** `SheetOptions` 继承
-   `BindOptions`，其 `backgroundColor` 默认值是 `Color.White`——这层白色内容会盖住背板材质。
-   同理内容容器不要再自带 `borderRadius` + `clip`：面板形状（圆角、底部/居中形态）由系统给出，
-   自带圆角会在系统材质底板上露出一圈内容层圆角。
+2. **弹窗与面板都必须显式 `Color.Transparent` 背景。** `CustomDialogControllerOptions.backgroundColor`
+   与 `SheetOptions.backgroundColor`（继承 `BindOptions`）默认都不透明 / 白色，会作为**内容层**盖住
+   背板材质——实测不置透明时弹窗就是白板。半模态这一项走
+   `UIMaterialManager.sheetContentBackdrop`，兼顾不支持材质的设备。
 3. **`controlMaterial` 只给 `Slider` / `Toggle`。** `ToggleType.Checkbox` 官方明确未适配沉浸光感，
    设置后无效果；`ToggleType.Switch` 的材质参数只作启用标记，视觉走组件内部预设。自定义配色的
    功能型进度条（`AudioPlayer`，`SliderStyle.OutSet` + 显式 `blockColor` / `trackColor` /
    `selectedColor`）不接入，避免与材质内部预设冲突。
 
+半模态面板容器保留 Beta1 的自绘装饰：`borderRadius` + `clip(true)` + 1px `#52FFFFFF` 描边 +
+`shadow({ radius: 28, offsetY: 12 })`（材质已关自带阴影，两者不冲突）。
+
 `colorInvert` 只在 `THIN` / `ULTRA_THIN` 下生效，且要求颜色走官方特殊系统资源（§6.3）。
-`dialogMaterial` / `sheetMaterial` 是 `ULTRA_THICK`，**不触发自动反色**，因此弹窗内容的前景色
+`dialogMaterial` / `sheetMaterial` 是 `REGULAR`，**不触发自动反色**，因此弹窗内容的前景色
 仍按 §12.3 用 `sys.color.font_*` / `icon_*` 保证深浅色可读性。
 
 **设备不支持材质时的兜底**：`uiMaterial.isImmersiveMaterialSupported()` 返回 `false` 时，
 `systemMaterial` 上的 `ImmersiveMaterial` 完全不生效（官方声明原文）。此时半模态面板若仍把
 `SheetOptions.backgroundColor` 置为 `Color.Transparent`，内容就会直接浮在蒙层上、失去可读背景。
 因此这一项走 `UIMaterialManager.sheetContentBackdrop`：支持材质时是 `Color.Transparent`，
-不支持时回退为半透明玻璃填充。弹窗（`CustomDialogController`）不需要这层兜底——官方模板
-自带背景处理。
+不支持时回退为半透明玻璃填充。
 
 ## 13. AI 和代码审查规则
 

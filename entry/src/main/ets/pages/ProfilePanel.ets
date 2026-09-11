@@ -67,6 +67,7 @@ export struct ProfilePanel {
   private showNoteDialog(): void {
     this.noteDialogText = appStore.settingsStore.getNote(this.uid)
     this.noteDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
       builder: CustomContentDialog({
         primaryTitle: '编辑备注',

@@ -179,6 +179,7 @@ export struct FavoriteFoldersPanel {
   private showCreateFolderDialog(): void {
     this.folderNameInput = ''
     this.nameDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
       builder: CustomContentDialog({
         primaryTitle: '新建收藏夹',
@@ -254,6 +255,7 @@ export struct FavoriteFoldersPanel {
     const folderId: string = folder.id
     this.folderNameInput = folder.name
     this.nameDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
       builder: CustomContentDialog({
         primaryTitle: '重命名收藏夹',
@@ -323,6 +325,7 @@ export struct FavoriteFoldersPanel {
     const folderId: string = folder.id
     const folderName: string = folder.name
     this.deleteDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
       builder: AlertDialog({
         primaryTitle: '删除收藏夹',

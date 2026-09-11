@@ -48,6 +48,7 @@ export struct NotesPanel {
   addDialogController?: CustomDialogController
 
   deleteDialogController?: CustomDialogController = new CustomDialogController({
+    backgroundColor: Color.Transparent,
     systemMaterial: UIMaterialManager.dialogMaterial,
     builder: AlertDialog({
       primaryTitle: '删除备注',
@@ -99,6 +100,7 @@ export struct NotesPanel {
     this.editTarget = entry
     this.noteDialogText = entry.note
     this.noteDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
       builder: CustomContentDialog({
         primaryTitle: '编辑备注',
@@ -268,6 +270,7 @@ export struct NotesPanel {
         this.addNoteNickName = ''
         this.addNoteUid = ''
         this.addDialogController = new CustomDialogController({
+          backgroundColor: Color.Transparent,
           systemMaterial: UIMaterialManager.dialogMaterial,
           builder: CustomContentDialog({
             primaryTitle: '添加备注',

@@ -418,6 +418,7 @@ struct LoginPage {
       this.pendingCredentialContent = content
       this.importPassword = ''
       this.importCredentialDialogController = new CustomDialogController({
+        backgroundColor: Color.Transparent,
         systemMaterial: UIMaterialManager.dialogMaterial,
         builder: CustomContentDialog({
           primaryTitle: '导入加密凭证',

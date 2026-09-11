@@ -129,29 +129,39 @@ export class UIMaterialManager {
 
   /**
    * 弹窗背板材质：官方 `CustomDialog` 类弹窗（`AlertDialog` / `TipsDialog` / `SelectDialog` /
-   * `CustomContentDialog` 等官方模板都经 `CustomDialogController` 承载）的推荐厚材质。
+   * `CustomContentDialog` 都经 `CustomDialogController` 承载）。
    *
-   * 用法：`new CustomDialogController({ builder: ..., systemMaterial: UIMaterialManager.dialogMaterial })`。
-   * 弹窗类组件属于 Release 允许「页面内全部区域」生效的清单，不受内容区生效范围门禁约束；
-   * 系统会接管背景色、边框、阴影（`applyShadow`）与弹出过程的空间动效。
+   * 参数是 **API 26 Beta1 时期实测有效的原始配方**（git `0df06e94`）：`REGULAR` + 45% 主题暖白
+   * tint + **关闭材质自带阴影**（`applyShadow: false`，浮起感交给组件自定义 `shadow`，否则材质
+   * 阴影会盖掉自绘阴影）。Beta1 时同一套参数在自绘浮层上呈现「背景可见 + 柔和模糊」的高透玻璃，
+   * 正是本工程要复刻的观感。
    *
-   * 注意：材质渲染在**背板层**，弹窗内容里不要再写不透明 `backgroundColor`，否则会把材质盖掉。
+   * 用法：`new CustomDialogController({ backgroundColor: Color.Transparent, builder: ...,
+   * systemMaterial: UIMaterialManager.dialogMaterial })`——`backgroundColor` 必须显式置透明：
+   * 它默认不透明，会作为**内容层**盖住背板层的材质（实测：不置透明时弹窗就是一块白板）。
+   *
+   * 反例（实测不要走）：把 `style` 提到 `ULTRA_THICK` 并不能得到高透玻璃——那一档本身就是
+   * 接近不透明的白板，与背景是否透明无关（两张不同配置的截图逐像素相同）。
    */
   static readonly dialogMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-    style: uiMaterial.ImmersiveStyle.ULTRA_THICK,
-    applyShadow: true
+    style: uiMaterial.ImmersiveStyle.REGULAR,
+    materialColor: $r('app.color.material_surface_tint'),
+    applyShadow: false
   })
 
   /**
-   * 半模态面板背板材质：`bindSheet` 面板本体（半模态转场同属弹窗类接口，页面内全区域生效）。
+   * 半模态面板背板材质：`SheetOptions.systemMaterial`（半模态转场属弹窗类接口，页面内全区域生效），
+   * 参数与 `dialogMaterial` 相同（Beta1 原配方）。
    *
-   * 用法：`SheetOptions.systemMaterial`。面板形状（圆角、底部/居中形态）由系统给出，
-   * 因此内容容器**不要**再自带 `borderRadius` + `clip`、也不要自绘玻璃，否则会在系统材质的
-   * 底板之外露出一圈内容层圆角。
+   * **面板本体这一层是 Release 下唯一能拿到材质的位置**：真机逐轮截图实测证明，浮层**内部**的
+   * 普通组件写 `.systemMaterial(...)` 不生效——输入框设了材质后完全没有背景、只剩文字。
+   * 所以面板内部的工具条 / 输入框 / 中性按钮一律走自绘内容层材质
+   * （`dialogFieldMaterial` / `dialogActionMaterial`），不要再给它们接系统材质。
    */
   static readonly sheetMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-    style: uiMaterial.ImmersiveStyle.ULTRA_THICK,
-    applyShadow: true
+    style: uiMaterial.ImmersiveStyle.REGULAR,
+    materialColor: $r('app.color.material_surface_tint'),
+    applyShadow: false
   })
 
   /**

@@ -240,6 +240,7 @@ export struct AiSettingsPanel {
    */
   private showDiscardConfirm(onConfirm: () => void): void {
     this.discardConfirmController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
       builder: AlertDialog({
         primaryTitle: '放弃修改',
@@ -374,6 +375,7 @@ export struct AiSettingsPanel {
     const name: string = profile ? profile.name : '此配置'
 
     this.deleteConfirmController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
       builder: TipsDialog({
         imageRes: $r('app.media.icon_delete'),
@@ -431,6 +433,7 @@ export struct AiSettingsPanel {
     }
 
     this.providerPickerController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
       builder: SelectDialog({
         title: '选择 AI 平台',

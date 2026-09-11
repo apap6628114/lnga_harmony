@@ -98,6 +98,7 @@ export struct NewTopicDialog {
    * 用 `Stack` + 遮罩手搓，现改用官方 `AlertDialog` 承载，浮层栈不再保存确认框状态。
    */
   private abandonDialogController: CustomDialogController = new CustomDialogController({
+    backgroundColor: Color.Transparent,
     systemMaterial: UIMaterialManager.dialogMaterial,
     builder: AlertDialog({
       primaryTitle: '放弃编辑？',
@@ -587,5 +588,10 @@ export struct NewTopicDialog {
     .width('100%')
     .constraintSize({ maxWidth: 600 })
     .padding({ left: 16, right: 16, bottom: 16 })
+    .backgroundColor(Color.Transparent)
+    .borderRadius(24)
+    .border({ width: 1, color: '#52FFFFFF' })
+    .shadow({ radius: 28, color: AppColors.shadow, offsetY: 12 })
+    .clip(true)
   }
 }

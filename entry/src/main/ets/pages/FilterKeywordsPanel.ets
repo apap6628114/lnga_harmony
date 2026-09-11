@@ -41,6 +41,7 @@ export struct FilterKeywordsPanel {
   @State addKeywordText: string = ''
 
   deleteDialogController?: CustomDialogController = new CustomDialogController({
+    backgroundColor: Color.Transparent,
     systemMaterial: UIMaterialManager.dialogMaterial,
     builder: AlertDialog({
       primaryTitle: '删除关键词',
@@ -186,6 +187,7 @@ export struct FilterKeywordsPanel {
         onRightClick: (): void => {
         this.addKeywordText = ''
         this.addDialogController = new CustomDialogController({
+          backgroundColor: Color.Transparent,
           systemMaterial: UIMaterialManager.dialogMaterial,
           builder: CustomContentDialog({
             primaryTitle: '添加关键词',
