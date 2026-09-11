@@ -150,10 +150,6 @@ export struct ComposeMessageSheet {
     .alignItems(HorizontalAlign.Center)
     .padding({ bottom: this.navBarHeight })
     .backgroundColor(Color.Transparent)
-    .borderRadius(14)
-    .border({ width: 1, color: '#52FFFFFF' })
-    .shadow({ radius: 28, color: AppColors.shadow, offsetY: 12 })
-    .clip(true)
   }
 
   build() {

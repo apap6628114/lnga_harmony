@@ -608,9 +608,5 @@ export struct ReplyDialog {
     .constraintSize({ maxWidth: 600 })
     .padding({ left: 16, right: 16, bottom: 16 })
     .backgroundColor(Color.Transparent)
-    .borderRadius(24)
-    .border({ width: 1, color: '#52FFFFFF' })
-    .shadow({ radius: 28, color: AppColors.shadow, offsetY: 12 })
-    .clip(true)
   }
 }
