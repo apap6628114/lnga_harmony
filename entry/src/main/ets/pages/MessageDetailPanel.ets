@@ -345,9 +345,8 @@ export struct MessageDetailPanel {
               .fontColor(UIMaterialManager.inputForeground)
               .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
               .caretColor(UIMaterialManager.inputForeground)
-              .backgroundColor(Color.Transparent)
               .height(40).padding({ left: 12, right: 12 })
-              .systemMaterial(UIMaterialManager.inputMaterial)
+              .attributeModifier(UIMaterialManager.inputMaterial)
               .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
               .onChange((value: string) => { this.replyText = value })
               .onSubmit(() => this.handleReply())
@@ -359,10 +358,8 @@ export struct MessageDetailPanel {
               .onClick(() => this.handleReply())
           }
           .width('100%').padding({ left: 12, right: 12, top: 8, bottom: 8 + this.navBarHeight })
-          .backgroundColor(Color.Transparent)
-          .border({ width: { top: 0.5 }, color: AppColors.separator })
           .alignItems(VerticalAlign.Center)
-          .systemMaterial(UIMaterialManager.barMaterial)
+          .attributeModifier(UIMaterialManager.barMaterial)
         }
       }
       .width('100%').height('100%').backgroundColor(AppColors.bg)

@@ -147,9 +147,9 @@ export struct FloatingLayerComponent {
             }.height(44)
           }
           .width(300).padding({ left: 20, right: 20, bottom: 12 })
-          .backgroundColor(Color.Transparent).borderRadius(14)
+          .borderRadius(14)
           .alignItems(HorizontalAlign.Center)
-          .systemMaterial(UIMaterialManager.surfaceMaterial)
+          .attributeModifier(UIMaterialManager.surfaceMaterial)
         }
         .width('100%').height('100%')
       }
@@ -182,13 +182,10 @@ export struct FloatingLayerComponent {
             .border({ width: { top: 0.5 }, color: AppColors.separator })
           }
           .width(270)
-          .backgroundColor(Color.Transparent)
           .borderRadius(20)
-          .border({ width: 1, color: '#52FFFFFF' })
-          .shadow({ radius: 24, color: AppColors.shadow, offsetY: 10 })
           .clip(true)
           .alignItems(HorizontalAlign.Center)
-          .systemMaterial(UIMaterialManager.surfaceMaterial)
+          .attributeModifier(UIMaterialManager.surfaceMaterial)
         }
         .width('100%').height('100%')
       }

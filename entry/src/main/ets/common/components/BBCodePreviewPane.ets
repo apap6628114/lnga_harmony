@@ -107,9 +107,7 @@ export struct BBCodePreviewPane {
     .height(this.viewportHeight)
     .padding(14)
     .borderRadius(16)
-    .backgroundColor(Color.Transparent)
-    .border({ width: 0.5, color: AppColors.separator })
-    .systemMaterial(UIMaterialManager.inputMaterial)
+    .attributeModifier(UIMaterialManager.inputMaterial)
     .align(Alignment.TopStart)
   }
 }

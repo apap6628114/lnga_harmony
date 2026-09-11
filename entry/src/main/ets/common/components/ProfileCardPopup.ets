@@ -259,11 +259,9 @@ export struct ProfileCardPopup {
       }
     }
     .width(280)
-    .backgroundColor(Color.Transparent)
     .borderRadius(14)
-    .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
     .clip(true)
-    .systemMaterial(UIMaterialManager.surfaceMaterial)
+    .attributeModifier(UIMaterialManager.surfaceMaterial)
   }
 
   @Builder
@@ -356,11 +354,10 @@ export struct ProfileCardPopup {
           }
         }
         .width('100%')
-        .backgroundColor(Color.Transparent)
         .borderRadius(8)
         .padding(6)
         .margin({ top: 12 })
-        .systemMaterial(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.inputMaterial)
       }
 
       Column() {

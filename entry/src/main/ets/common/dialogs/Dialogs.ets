@@ -64,10 +64,9 @@ export struct ConfirmDialog {
     }
     .constraintSize({ maxWidth: 340, minWidth: 260 })
     .padding({ left: 20, right: 20, bottom: 12 })
-      .backgroundColor(Color.Transparent)
     .borderRadius(14)
     .alignItems(HorizontalAlign.Center)
-    .systemMaterial(UIMaterialManager.surfaceMaterial)
+    .attributeModifier(UIMaterialManager.surfaceMaterial)
   }
 }
 
@@ -147,10 +146,9 @@ export struct ActionSheetDialog {
         })
     }
     .width('100%').constraintSize({ maxWidth: 420 })
-      .backgroundColor(Color.Transparent)
     .borderRadius(16)
     .padding({ bottom: 20 })
-    .systemMaterial(UIMaterialManager.surfaceMaterial)
+    .attributeModifier(UIMaterialManager.surfaceMaterial)
   }
 }
 
@@ -189,8 +187,7 @@ export struct CredentialPasswordDialog {
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .borderRadius(12)
-        .backgroundColor(Color.Transparent)
-        .systemMaterial(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.inputMaterial)
         .onChange((value: string) => { this.password = value })
 
       Text('至少 ' + this.minLength + ' 位，请妥善保存')
@@ -233,9 +230,8 @@ export struct CredentialPasswordDialog {
     }
     .constraintSize({ maxWidth: 340 })
     .padding({ left: 20, right: 20, bottom: 12 })
-    .backgroundColor(Color.Transparent)
     .borderRadius(14)
-    .systemMaterial(UIMaterialManager.surfaceMaterial)
+    .attributeModifier(UIMaterialManager.surfaceMaterial)
   }
 }
 
@@ -269,8 +265,7 @@ export struct MakeNoteDialog {
         .fontColor(UIMaterialManager.inputForeground)
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
-        .backgroundColor(Color.Transparent)
-        .systemMaterial(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.inputMaterial)
         .onChange((value: string) => { this.noteText = value })
 
       Text(String(this.noteText.length) + '/20')
@@ -302,9 +297,8 @@ export struct MakeNoteDialog {
     }
     .constraintSize({ maxWidth: 340 })
     .padding({ left: 20, right: 20, bottom: 12 })
-    .backgroundColor(Color.Transparent)
     .borderRadius(14)
-    .systemMaterial(UIMaterialManager.surfaceMaterial)
+    .attributeModifier(UIMaterialManager.surfaceMaterial)
   }
 }
 
@@ -371,8 +365,7 @@ export struct AddBlacklistDialog {
         .fontColor(UIMaterialManager.inputForeground)
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
-        .backgroundColor(Color.Transparent)
-        .systemMaterial(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.inputMaterial)
         .onChange((value: string) => {
           this.uid = value
           this.validationError = ''
@@ -416,9 +409,8 @@ export struct AddBlacklistDialog {
     }
     .constraintSize({ maxWidth: 340 })
     .padding({ left: 20, right: 20, bottom: 12 })
-    .backgroundColor(Color.Transparent)
     .borderRadius(14)
-    .systemMaterial(UIMaterialManager.surfaceMaterial)
+    .attributeModifier(UIMaterialManager.surfaceMaterial)
   }
 }
 
@@ -446,8 +438,7 @@ export struct AddKeywordDialog {
         .fontColor(UIMaterialManager.inputForeground)
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
-        .backgroundColor(Color.Transparent)
-        .systemMaterial(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.inputMaterial)
         .onChange((value: string) => { this.keyword = value })
 
       Divider().color(AppColors.separator).margin({ top: 12 })
@@ -474,9 +465,8 @@ export struct AddKeywordDialog {
     }
     .constraintSize({ maxWidth: 340 })
     .padding({ left: 20, right: 20, bottom: 12 })
-    .backgroundColor(Color.Transparent)
     .borderRadius(14)
-    .systemMaterial(UIMaterialManager.surfaceMaterial)
+    .attributeModifier(UIMaterialManager.surfaceMaterial)
   }
 }
 
@@ -505,8 +495,7 @@ export struct AddNoteDialog {
         .fontColor(UIMaterialManager.inputForeground)
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
-        .backgroundColor(Color.Transparent)
-        .systemMaterial(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.inputMaterial)
         .onChange((value: string) => { this.nickName = value })
 
       TextInput({ text: this.uid, placeholder: '输入用户 UID' })
@@ -514,8 +503,7 @@ export struct AddNoteDialog {
         .fontColor(UIMaterialManager.inputForeground)
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
-        .backgroundColor(Color.Transparent)
-        .systemMaterial(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.inputMaterial)
         .margin({ top: 8 })
         .onChange((value: string) => { this.uid = value })
 
@@ -543,9 +531,8 @@ export struct AddNoteDialog {
     }
     .constraintSize({ maxWidth: 340 })
     .padding({ left: 20, right: 20, bottom: 12 })
-    .backgroundColor(Color.Transparent)
     .borderRadius(14)
-    .systemMaterial(UIMaterialManager.surfaceMaterial)
+    .attributeModifier(UIMaterialManager.surfaceMaterial)
   }
 }
 

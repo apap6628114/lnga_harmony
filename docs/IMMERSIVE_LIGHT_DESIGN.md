@@ -6,6 +6,12 @@
 >
 > 官方文档核对时间：2026-09-05。华为官方页面可能继续修订；遇到本文与 SDK 实际行为不一致时，应以当前 SDK API 参考和变更说明为准。
 
+> **本工程当前状态（API 26 Release 迁移已完成）**：Release 收紧生效范围后，本工程页面内容区的
+> 自绘沉浸光感材质全部静默失效（组件背景透明、材质消失）。现已整体迁移到**系统磨砂玻璃**方案：
+> 不再有任何 `systemMaterial` 调用点，玻璃层由 `backgroundBlurStyle` + 半透明填充 + 高光描边 +
+> 柔和投影自绘，不受 Release 生效范围门禁约束。落地契约见第 12 节；本文其余章节保留为沉浸光感
+> 契约与踩坑记录，仅在需要重新评估系统材质时参考。
+
 ## 0. 先记住这一条：Release 的生效范围门禁
 
 API 26 Beta 阶段，开发者容易形成“只要给任意组件设置 `systemMaterial`，材质就会生效”的认知。API 26 Release 对既有 Beta 接口增加了生效范围约束：**接口仍然存在，但很多组件在错误的页面区域中会静默不生效。**
@@ -745,7 +751,71 @@ HDS 的材质类型/等级与 ArkUI 的 `ImmersiveStyle` 不是一一对应关�
 
 ## 12. 本工程落地契约
 
-本工程是 API 26 Stage 模型单 entry 应用，`build-profile.json5` 的目标 SDK 与兼容 SDK 为 26.0.0，`entry/src/main/module.json5` 已配置：
+本工程是 API 26 Stage 模型单 entry 应用，`build-profile.json5` 的目标 SDK 与兼容 SDK 为 26.0.0。
+**页面内容区的玻璃视觉已全部由系统磨砂玻璃自绘承担**（见 12.1），沉浸光感只保留应用级开关（见 12.4）。
+
+### 12.1 磨砂玻璃工厂（替代材质工厂）
+
+材质统一收敛在 [`UIMaterialManager.ets`](../entry/src/main/ets/common/managers/UIMaterialManager.ets)：
+成员是 `GlassModifier implements AttributeModifier<CommonAttribute>` 的只读单例，调用点用
+`.attributeModifier(UIMaterialManager.xxx)` 绑定，**不再写 `.systemMaterial(...)`**。
+
+| 工厂材质 | 用途 | 磨砂参数（模糊半径 / 饱和度 / 填充不透明度） |
+| --- | --- | --- |
+| `fabMaterial` | 浮动圆形/胶囊按钮 | 36vp、1.4、55% + 极淡整圈描边 + 下沉投影（不设渐变） |
+| `surfaceMaterial` | 面板、浮层、弹窗 | 72vp、1.5、42% + 描边 + 强投影 |
+| `barMaterial` | 标题栏、消息页栏位 | 56vp、1.4、42% + 描边，不投影 |
+| `neutralActionMaterial` | 弹窗内的中性次要操作 | 32vp、1.4、32% + 细描边，不投影 |
+| `inputMaterial` | 输入框 | 24vp、1.3、32% + 低透明描边，不投影 |
+| `darkOverlayMaterial` | 图片查看器等固定暗场景浮层 | 48vp、1.2、固定深色填充 32% |
+| `closeButtonMaterial` | 图片查看器关闭按钮 | 同暗场景玻璃 + 轻投影 |
+
+玻璃的立体感由两层叠加表达：`backgroundColor` 半透明填充之上，再叠一条
+`linearGradient`（顶部受光高光 → 中部透明 → 底部微暗），描边统一为一条极淡的整圈线。
+
+两条边界约束（实测踩坑结论）：
+
+- **描边禁止按边分色**（`border.color` 用 `EdgeColors` 顶亮底暗）：玻璃组件大多是圆角或正圆，
+  所谓"顶边"在圆弧上会被渲染成一道突兀的白色弧线（按钮顶部尤其刺眼）。厚度感交给渐变表达，
+  描边只负责极淡的整圈轮廓。
+- **纵向渐变只给高度足够的容器**（面板、栏位）。胶囊按钮、圆形按钮高度小，矩形渐变会被压成
+  "顶部亮带 + 底部暗带"，因此 `fabMaterial`、`neutralActionMaterial`、`inputMaterial`、
+  `darkOverlayMaterial`、`closeButtonMaterial` 一律不设渐变，只靠模糊 + 描边 + 投影成形。
+
+玻璃对象是稳定的只读配置，跨组件共享，渲染期不新建、不修改。
+
+### 12.2 磨砂玻璃四条硬规则
+
+1. **同名属性不得与 `attributeModifier` 重复**。官方明确「在 attributeModifier 中设置的属性尽量
+   不要与其他方法设置的属性相同，避免在页面刷新时 attributeModifier 不生效」——属性方法的优先级
+   高于 `attributeModifier`。因此玻璃组件上**禁止**再出现 `.backgroundColor(...)`（尤其是
+   `Color.Transparent`，它会把玻璃填充整层抹掉）、`.backgroundEffect(...)`、`.border(...)`、
+   `.shadow(...)`；确实需要偏离默认玻璃时，就在这些属性上显式写值（即用属性方法覆盖玻璃层）。
+2. **填充走 `backgroundColor`，磨砂走 `backgroundEffect`**。`backgroundColor` 还负责覆盖 Button、
+   TextInput 等组件的系统默认底色；若只用 `backgroundEffect({ color })` 承载填充，Button 会露出
+   系统默认蓝底（本工程实测踩过）。两者分工后不重复着色：`backgroundColor(fill)` +
+   `backgroundEffect({ radius, saturation, brightness })`。
+3. **透度按“填充 / 半径 / 饱和度”三者协同调**：填充 32%~55%（`$r('app.color.glass_*')` 的 8 位
+   ARGB 色），半径 24vp~72vp，饱和度 1.3~1.6。只顾降 alpha、不同步加大半径，背景文字会直接干扰
+   正文；只顾加大半径、不同步提饱和度，玻璃会发灰。填充接近不透明则模糊层被盖住、玻璃退化成
+   纯色卡片——"看不到透明性"通常就是这个原因。另外背景模糊只有在**背后确有内容**时才可见；
+   叠在纯色页面底上的玻璃只能靠描边、受光渐变和阴影表达层次。
+4. **前景色跟随主题**：玻璃层上的正文用 `UIMaterialManager.adaptiveForeground`
+   （`sys.color.font_primary`）、次要文字用 `adaptiveSecondaryForeground`；固定暗场景（图片查看器）
+   用 `onDarkForeground` 配合 `darkOverlayMaterial`。禁止在玻璃上使用硬编码黑/白文字色。
+
+### 12.3 本工程前景色规则
+
+- 主前景：`$r('sys.color.font_primary')`（`UIMaterialManager.adaptiveForeground`）。
+- 次要前景：`$r('sys.color.font_secondary')`（`UIMaterialManager.adaptiveSecondaryForeground`）。
+- 图标：`$r('sys.color.icon_primary')`、`$r('sys.color.icon_secondary')`。
+- 主题色：`AppColors.primary`（应用琥珀主题）或 `$r('sys.color.brand')`。
+- 深浅色一律走 `$r('app.color.*')` 资源限定词（`base/`=亮色、`dark/`=暗色），由 `setColorMode`
+  联动解析，不要在代码里判断 `effectiveColorMode` 来切玻璃颜色。
+
+### 12.4 应用级材质开关
+
+`entry/src/main/module.json5` 保留：
 
 ```json5
 {
@@ -754,39 +824,17 @@ HDS 的材质类型/等级与 ArkUI 的 `ImmersiveStyle` 不是一一对应关�
 }
 ```
 
-### 12.1 材质工厂
+该开关只影响系统官方清单组件（Navigation 标题栏、Select、Toggle、Slider、菜单等）的默认材质，
+与本工程自绘磨砂玻璃无关；改玻璃参数不需要动它。若将来发现官方组件默认材质与磨砂玻璃视觉冲突，
+再评估是否改为 `disable`。
 
-材质统一收敛在 [`UIMaterialManager.ets`](../entry/src/main/ets/common/managers/UIMaterialManager.ets)：
-
-| 工厂材质 | 当前用途 | 约束 |
-| --- | --- | --- |
-| `fabMaterial` | 浮动圆形按钮 | `ULTRA_THIN`、交互形变、流光、自动反色 |
-| `surfaceMaterial` | 面板、浮层和弹窗 | `REGULAR`，使用半透明应用色调 |
-| `barMaterial` | 栏位 | `REGULAR`，避免整块色带 |
-| `neutralActionMaterial` | 中性操作按钮 | `THIN`，自动反色和交互反馈 |
-| `inputMaterial` | 输入框 | `THIN`，透明色调和自动反色 |
-| `closeButtonMaterial` | 图片查看器关闭按钮 | `ULTRA_THIN` + `colorInvert`，不叠加额外阴影和边框 |
-
-材质对象是稳定的只读配置，应跨组件共享，不要在渲染过程中频繁新建或改变对象。
-
-### 12.2 本工程前景色规则
-
-薄材质和自动反色场景中的正文、占位符、图标必须使用官方特殊系统资源：
-
-- 主前景：`$r('sys.color.font_primary')`。
-- 次要前景：`$r('sys.color.font_secondary')`。
-- 图标：`$r('sys.color.icon_primary')`、`$r('sys.color.icon_secondary')`。
-- 主题色：`$r('sys.color.brand')` 或 `$r('sys.color.brand_font')`。
-
-禁止为需要自动反色的文字或图标使用 `Color.White`、硬编码十六进制值或旧的 `ohos_id_color_*` 资源。
-
-### 12.3 主操作按钮
+### 12.5 主操作按钮
 
 主操作按钮不默认接入玻璃材质。确认、保存、退出、发送等承担明确操作语义的按钮使用实底主题色和高对比文字；需要中性浮动反馈的操作才使用 `neutralActionMaterial`。
 
 原因：主题色玻璃叠在面板材质上容易出现背景贴边、前景对比不稳定和黑字/浅棕底等问题；实底按钮在低算力和不同背景上更可靠。
 
-### 12.4 SaveButton
+### 12.6 SaveButton
 
 `SaveButton` 属于安全组件，其样式受到系统合法性校验约束，不支持 `systemMaterial`、材质阴影或模糊。保持系统要求的高对比固定背托，不要尝试给安全按钮接入沉浸式材质。
 

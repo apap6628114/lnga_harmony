@@ -1174,9 +1174,7 @@ export struct TopicListPanel {
             .fillColor(UIMaterialManager.adaptiveForeground)
         }
         .width(44).height(44).borderRadius(22)
-        .backgroundColor(Color.Transparent)
-        .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
-        .systemMaterial(UIMaterialManager.fabMaterial)
+        .attributeModifier(UIMaterialManager.fabMaterial)
         .onClick(() => this.openNewTopic())
       }
       Stack() {
@@ -1185,9 +1183,7 @@ export struct TopicListPanel {
           .fillColor(UIMaterialManager.adaptiveForeground)
       }
       .width(44).height(44).borderRadius(22)
-      .backgroundColor(Color.Transparent)
-      .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
-      .systemMaterial(UIMaterialManager.fabMaterial)
+      .attributeModifier(UIMaterialManager.fabMaterial)
       .onClick(() => this.loadTopics(1))
     }.width('100%').justifyContent(this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? FlexAlign.Start : FlexAlign.End)
     .padding({ left: this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? 16 : 0, right: this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? 0 : 16, bottom: 16 + this.navBarHeight })
@@ -1250,10 +1246,8 @@ export struct TopicListPanel {
         .width('100%')
       }
       .width(170)
-      .backgroundColor(Color.Transparent)
       .borderRadius(10)
-      .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
-      .systemMaterial(UIMaterialManager.surfaceMaterial)
+      .attributeModifier(UIMaterialManager.surfaceMaterial)
       .position({ top: this.statusBarHeight + 50, right: 12 })
     }
     .width('100%').height('100%')
@@ -1303,10 +1297,8 @@ export struct TopicListPanel {
         })
       }
       .width(150)
-      .backgroundColor(Color.Transparent)
       .borderRadius(10)
-      .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
-      .systemMaterial(UIMaterialManager.surfaceMaterial)
+      .attributeModifier(UIMaterialManager.surfaceMaterial)
       .position({ top: this.sortBarBottomY + 6, right: '4%' })
     }
     .width('100%').height('100%')
@@ -1434,10 +1426,8 @@ export struct TopicListPanel {
       }
       .width('88%')
       .height('70%')
-      .backgroundColor(Color.Transparent)
       .borderRadius(16)
-      .shadow({ radius: 24, color: AppColors.shadow, offsetY: 6 })
-      .systemMaterial(UIMaterialManager.surfaceMaterial)
+      .attributeModifier(UIMaterialManager.surfaceMaterial)
     }
     .width('100%').height('100%')
     .transition(TransitionEffect.OPACITY.animation({ duration: 180 }))

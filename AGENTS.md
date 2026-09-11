@@ -54,9 +54,18 @@ skill：**`bbcode-ts`**（加载后按其操作；Rule 0–9 完整规则已并�
   帖子特定入口仍是 bbcode-ts 的 `npm run inspect:json` / `inspect:html`
   （均在 `tools/bbcode-ts` 下执行，命令不变）
 
-## 沉浸光感（Immersive Light）情报文档
+## 玻璃材质（磨砂玻璃）与沉浸光感情报文档
 
-凡处理涉及沉浸光感的内容——`systemMaterial`、`ImmersiveMaterial`/`uiMaterial`、`colorInvert` 自动反色、
-材质按钮/面板/弹窗的适配与可视性问题——**必须先读取 `docs/IMMERSIVE_LIGHT_DESIGN.md` 再动手**。
-该文档是 API 26 沉浸光感的契约与踩坑结论：三层开关体系、自动反色特殊资源值表（表 1，`ohos_id_color_*`
-不生效）、生效属性白名单、属性冲突约束与故障排查清单。
+凡处理涉及玻璃/材质视觉的内容——`attributeModifier(UIMaterialManager.*)` 磨砂玻璃工厂、
+`backgroundBlurStyle` / `backgroundEffect` 背景模糊、`systemMaterial`、`ImmersiveMaterial`/`uiMaterial`、
+`colorInvert` 自动反色、材质按钮/面板/弹窗的适配与可视性问题——**必须先读取
+`docs/IMMERSIVE_LIGHT_DESIGN.md` 再动手**。
+
+常驻要点（完整契约见该文档第 12 节）：
+
+- API 26 Release 收紧了沉浸光感的生效范围，本工程页面内容区的 `systemMaterial` 已**整体替换**为
+  系统磨砂玻璃（`UIMaterialManager` 的 `GlassModifier` 单例 + `.attributeModifier(...)`）。
+- 玻璃组件的**同名属性会覆盖 `attributeModifier`**：不要在其上再写 `backgroundColor(...)`
+  （尤其 `Color.Transparent`）、`border(...)`、`shadow(...)`；需要偏离默认玻璃时直接写属性覆盖。
+- 玻璃填充必须是 `$r('app.color.glass_*')` 半透明资源；前景用 `adaptiveForeground` 系列，
+  固定暗场景（图片查看器）用 `onDarkForeground` + `darkOverlayMaterial`。

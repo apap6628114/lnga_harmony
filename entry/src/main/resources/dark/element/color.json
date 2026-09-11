@@ -117,16 +117,68 @@
       "value": "#00121214"
     },
     {
-      "name": "material_surface_tint",
-      "value": "#73121214"
+      "name": "glass_surface_fill",
+      "value": "#6B2A2A32"
     },
     {
-      "name": "material_input_tint",
-      "value": "#4D1C1C20"
+      "name": "glass_surface_stroke",
+      "value": "#40FFFFFF"
     },
     {
-      "name": "material_accent_tint",
-      "value": "#52D4A85A"
+      "name": "glass_input_fill",
+      "value": "#521C1C20"
+    },
+    {
+      "name": "glass_input_stroke",
+      "value": "#33FFFFFF"
+    },
+    {
+      "name": "glass_fab_fill",
+      "value": "#8C2E2E36"
+    },
+    {
+      "name": "glass_fab_stroke",
+      "value": "#33FFFFFF"
+    },
+    {
+      "name": "glass_bar_fill",
+      "value": "#6B26262C"
+    },
+    {
+      "name": "glass_neutral_fill",
+      "value": "#5226262A"
+    },
+    {
+      "name": "glass_neutral_stroke",
+      "value": "#2EFFFFFF"
+    },
+    {
+      "name": "glass_dark_fill",
+      "value": "#52101418"
+    },
+    {
+      "name": "glass_dark_stroke",
+      "value": "#40FFFFFF"
+    },
+    {
+      "name": "glass_highlight",
+      "value": "#33FFFFFF"
+    },
+    {
+      "name": "glass_highlight_fade",
+      "value": "#00FFFFFF"
+    },
+    {
+      "name": "glass_shade",
+      "value": "#1A000000"
+    },
+    {
+      "name": "glass_shadow",
+      "value": "#73000000"
+    },
+    {
+      "name": "glass_shadow_strong",
+      "value": "#99000000"
     },
     {
       "name": "selection_tint",

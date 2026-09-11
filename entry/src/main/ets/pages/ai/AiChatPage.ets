@@ -656,13 +656,10 @@ struct AiChatPage {
           .fontColor(UIMaterialManager.inputForeground)
           .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
           .caretColor(UIMaterialManager.inputForeground)
-          .backgroundColor(Color.Transparent)
           .height(44)
           .padding({ left: 16, right: 16 })
           .borderRadius(22)
-          .border({ width: 1, color: '#52FFFFFF' })
-          .shadow({ radius: 12, color: AppColors.shadowLight, offsetY: 3 })
-          .systemMaterial(UIMaterialManager.inputMaterial)
+          .attributeModifier(UIMaterialManager.inputMaterial)
           .enterKeyType(EnterKeyType.Send)
           .onChange((value: string): void => {
             this.inputText = value

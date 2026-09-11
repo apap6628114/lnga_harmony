@@ -292,8 +292,7 @@ export struct NewTopicDialog {
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(UIMaterialManager.adaptiveForeground)
-          .backgroundColor(Color.Transparent)
-          .systemMaterial(UIMaterialManager.inputMaterial)
+          .attributeModifier(UIMaterialManager.inputMaterial)
           .padding({ left: 16, right: 16 })
           .onClick(() => { this.requestClose() })
       }
@@ -311,9 +310,7 @@ export struct NewTopicDialog {
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .borderRadius(14)
-        .backgroundColor(Color.Transparent)
-        .border({ width: 0.5, color: AppColors.separator })
-        .systemMaterial(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.inputMaterial)
         .maxLength(60)
         .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
         .onChange((value: string) => { this.subject = value })
@@ -360,8 +357,7 @@ export struct NewTopicDialog {
         .width('100%')
         .padding({ left: 8, right: 8, top: 8, bottom: 8 })
         .borderRadius(14)
-        .backgroundColor(Color.Transparent)
-        .systemMaterial(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.inputMaterial)
         .margin({ bottom: 10 })
       }
 
@@ -419,8 +415,7 @@ export struct NewTopicDialog {
       .width('100%')
       .padding({ left: 8, right: 8, top: 8, bottom: 8 })
       .borderRadius(14)
-      .backgroundColor(Color.Transparent)
-      .systemMaterial(UIMaterialManager.inputMaterial)
+      .attributeModifier(UIMaterialManager.inputMaterial)
       .margin({ bottom: 10 })
 
       if (this.showEmojiPanel && !this.previewMode) {
@@ -482,8 +477,7 @@ export struct NewTopicDialog {
         .width('100%')
         .padding(10)
         .borderRadius(16)
-        .backgroundColor(Color.Transparent)
-        .systemMaterial(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.inputMaterial)
         .margin({ bottom: 10 })
       }
 
@@ -502,9 +496,7 @@ export struct NewTopicDialog {
           .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
           .caretColor(UIMaterialManager.inputForeground)
           .borderRadius(16)
-          .backgroundColor(Color.Transparent)
-          .border({ width: 0.5, color: AppColors.separator })
-          .systemMaterial(UIMaterialManager.inputMaterial)
+          .attributeModifier(UIMaterialManager.inputMaterial)
           .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
           .onChange((value: string) => { this.content = value })
           .onTextSelectionChange((start: number, end: number) => {
@@ -559,9 +551,7 @@ export struct NewTopicDialog {
           .height(42)
           .constraintSize({ minWidth: 104 })
           .fontColor(UIMaterialManager.adaptiveForeground)
-          .backgroundColor(Color.Transparent)
-          .systemMaterial(UIMaterialManager.neutralActionMaterial)
-          .border({ width: 1, color: '#52FFFFFF' })
+          .attributeModifier(UIMaterialManager.neutralActionMaterial)
           .padding({ left: 20, right: 20 })
           .enabled(!this.sending && this.subject.trim().length > 0 && this.content.trim().length > 0)
           .onClick(() => { this.doSend() })
@@ -573,11 +563,8 @@ export struct NewTopicDialog {
     .width('100%')
     .constraintSize({ maxWidth: 600 })
     .padding({ left: 16, right: 16, bottom: 16 })
-    .backgroundColor(Color.Transparent)
     .borderRadius(24)
-    .border({ width: 1, color: '#52FFFFFF' })
-    .shadow({ radius: 28, color: AppColors.shadow, offsetY: 12 })
     .clip(true)
-    .systemMaterial(UIMaterialManager.surfaceMaterial)
+    .attributeModifier(UIMaterialManager.surfaceMaterial)
   }
 }

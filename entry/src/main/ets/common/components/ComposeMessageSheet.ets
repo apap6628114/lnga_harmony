@@ -88,8 +88,8 @@ export struct ComposeMessageSheet {
           .fontColor(UIMaterialManager.inputForeground)
           .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
           .caretColor(UIMaterialManager.inputForeground)
-          .backgroundColor(Color.Transparent).margin({ top: 12 })
-          .systemMaterial(UIMaterialManager.inputMaterial)
+          .margin({ top: 12 })
+          .attributeModifier(UIMaterialManager.inputMaterial)
           .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
           .onChange((value: string) => { this.composeTo = value })
 
@@ -98,8 +98,8 @@ export struct ComposeMessageSheet {
           .fontColor(UIMaterialManager.inputForeground)
           .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
           .caretColor(UIMaterialManager.inputForeground)
-          .backgroundColor(Color.Transparent).margin({ top: 8 })
-          .systemMaterial(UIMaterialManager.inputMaterial)
+          .margin({ top: 8 })
+          .attributeModifier(UIMaterialManager.inputMaterial)
           .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
           .onChange((value: string) => { this.composeSubject = value })
 
@@ -108,8 +108,8 @@ export struct ComposeMessageSheet {
           .fontColor(UIMaterialManager.inputForeground)
           .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
           .caretColor(UIMaterialManager.inputForeground)
-          .backgroundColor(Color.Transparent).margin({ top: 8 })
-          .systemMaterial(UIMaterialManager.inputMaterial)
+          .margin({ top: 8 })
+          .attributeModifier(UIMaterialManager.inputMaterial)
           .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
           .onChange((value: string) => { this.composeContent = value })
 
@@ -122,10 +122,10 @@ export struct ComposeMessageSheet {
             this.composeSubject.trim().length > 0 && this.composeContent.trim().length > 0)
           .onClick(() => this.handleSend())
       }
-      .width('100%').backgroundColor(Color.Transparent)
+      .width('100%')
       .borderRadius(14).alignItems(HorizontalAlign.Center)
       .padding({ bottom: this.navBarHeight })
-      .systemMaterial(UIMaterialManager.surfaceMaterial)
+      .attributeModifier(UIMaterialManager.surfaceMaterial)
       .position({ x: 0, y: '40%' })
     }
   }

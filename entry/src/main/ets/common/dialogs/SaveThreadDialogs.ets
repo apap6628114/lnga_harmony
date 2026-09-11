@@ -159,8 +159,7 @@ export struct SaveThreadDialog {
               .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
               .caretColor(UIMaterialManager.inputForeground)
               .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-              .backgroundColor(Color.Transparent)
-              .systemMaterial(UIMaterialManager.inputMaterial)
+              .attributeModifier(UIMaterialManager.inputMaterial)
               .onChange((value: string) => { this.startText = value })
           }
           .layoutWeight(1)
@@ -175,8 +174,7 @@ export struct SaveThreadDialog {
               .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
               .caretColor(UIMaterialManager.inputForeground)
               .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-              .backgroundColor(Color.Transparent)
-              .systemMaterial(UIMaterialManager.inputMaterial)
+              .attributeModifier(UIMaterialManager.inputMaterial)
               .onChange((value: string) => { this.endText = value })
           }
           .layoutWeight(1)
@@ -228,8 +226,7 @@ export struct SaveThreadDialog {
     .width(300)
     .constraintSize({ maxWidth: 340 })
     .padding({ left: 20, right: 20, bottom: 12 })
-    .backgroundColor(Color.Transparent)
     .borderRadius(14)
-    .systemMaterial(UIMaterialManager.surfaceMaterial)
+    .attributeModifier(UIMaterialManager.surfaceMaterial)
   }
 }

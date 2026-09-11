@@ -276,10 +276,8 @@ export struct WebViewPanel {
         .width('100%')
       }
       .width(150)
-      .backgroundColor(Color.Transparent)
       .borderRadius(10)
-      .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
-      .systemMaterial(UIMaterialManager.surfaceMaterial)
+      .attributeModifier(UIMaterialManager.surfaceMaterial)
       .position({ top: this.statusBarHeight + NAV_BAR_H + 6, right: 16 })
     }
     .width('100%').height('100%')
@@ -385,9 +383,7 @@ export struct WebViewPanel {
             .fillColor(UIMaterialManager.adaptiveForeground)
         }
         .width(44).height(44).borderRadius(22)
-        .backgroundColor(Color.Transparent)
-        .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
-        .systemMaterial(UIMaterialManager.fabMaterial)
+        .attributeModifier(UIMaterialManager.fabMaterial)
         .opacity(this.canGoBackward ? 1 : 0.45)
         .enabled(this.canGoBackward)
         .accessibilityText('网页后退')
@@ -402,9 +398,7 @@ export struct WebViewPanel {
             .rotate({ angle: 180 })
         }
         .width(44).height(44).borderRadius(22)
-        .backgroundColor(Color.Transparent)
-        .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
-        .systemMaterial(UIMaterialManager.fabMaterial)
+        .attributeModifier(UIMaterialManager.fabMaterial)
         .opacity(this.canGoForward ? 1 : 0.45)
         .enabled(this.canGoForward)
         .accessibilityText('网页前进')

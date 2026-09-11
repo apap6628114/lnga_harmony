@@ -602,8 +602,7 @@ export struct SearchPanel {
                 .fillColor(UIMaterialManager.adaptiveForeground)
             }
             .width(36).height(36).borderRadius(18)
-            .backgroundColor(Color.Transparent)
-            .systemMaterial(UIMaterialManager.fabMaterial)
+            .attributeModifier(UIMaterialManager.fabMaterial)
             .accessibilityText('返回')
             .onClick(() => routerStore.back())
           }
@@ -637,9 +636,9 @@ export struct SearchPanel {
                 })
             }
           }.layoutWeight(1).height(44).padding({ left: 14, right: 14 })
-          .backgroundColor(Color.Transparent).borderRadius(22).alignItems(VerticalAlign.Center)
-          // 不设 border：材质与边框同设违反沉浸光感契约（IMMERSIVE_LIGHT_DESIGN 第 4 节）
-          .systemMaterial(UIMaterialManager.inputMaterial)
+          .borderRadius(22).alignItems(VerticalAlign.Center)
+          // 不设 backgroundColor / border：同名属性会覆盖 attributeModifier 的磨砂玻璃层
+          .attributeModifier(UIMaterialManager.inputMaterial)
           .margin({ right: 16 })
         }.width('100%').padding({ top: 8 + this.statusBarHeight, bottom: 8 }).alignItems(VerticalAlign.Center)
 

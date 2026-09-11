@@ -85,8 +85,7 @@ export struct PanelNavBar {
     }
     .width(36).height(36).borderRadius(18)
     .alignContent(Alignment.Center)
-    .backgroundColor(Color.Transparent)
-    .systemMaterial(UIMaterialManager.fabMaterial)
+    .attributeModifier(UIMaterialManager.fabMaterial)
     .accessibilityText(accessibilityText)
     .onClick(onTap)
   }

@@ -57,8 +57,7 @@ export struct FavoriteFolderNameDialog {
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .borderRadius(12)
-        .backgroundColor(Color.Transparent)
-        .systemMaterial(UIMaterialManager.inputMaterial)
+        .attributeModifier(UIMaterialManager.inputMaterial)
         .onChange((value: string): void => {
           this.name = value
         })
@@ -97,8 +96,7 @@ export struct FavoriteFolderNameDialog {
     }
     .constraintSize({ maxWidth: 340, minWidth: 280 })
     .padding({ left: 20, right: 20, bottom: 12 })
-    .backgroundColor(Color.Transparent)
     .borderRadius(14)
-    .systemMaterial(UIMaterialManager.surfaceMaterial)
+    .attributeModifier(UIMaterialManager.surfaceMaterial)
   }
 }

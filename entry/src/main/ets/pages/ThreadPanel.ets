@@ -2246,10 +2246,8 @@ export struct ThreadPanel {
 
       }
       .width(150)
-      .backgroundColor(Color.Transparent)
       .borderRadius(10)
-      .shadow({ radius: 16, color: AppColors.shadowLight, offsetY: 4 })
-      .systemMaterial(UIMaterialManager.surfaceMaterial)
+      .attributeModifier(UIMaterialManager.surfaceMaterial)
       .position({ top: this.statusBarHeight + NAV_BAR_H + 6, right: 16 })
     }
     .width('100%').height('100%')
@@ -2316,9 +2314,8 @@ export struct ThreadPanel {
         }
       }
       .width(220).height(180).padding({ left: 10, right: 10, bottom: 8 })
-      .backgroundColor(Color.Transparent).borderRadius(12)
-      .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
-      .systemMaterial(UIMaterialManager.surfaceMaterial)
+      .borderRadius(12)
+      .attributeModifier(UIMaterialManager.surfaceMaterial)
       .position(
         this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD
           ? { bottom: 64 + this.navBarHeight, left: 16 }
@@ -2432,9 +2429,8 @@ export struct ThreadPanel {
         }
         .padding({ left: 8, right: 8, top: 0, bottom: 0 })
         .height(40).alignItems(VerticalAlign.Center)
-        .backgroundColor(Color.Transparent).borderRadius(20)
-        .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
-        .systemMaterial(UIMaterialManager.fabMaterial)
+        .borderRadius(20)
+        .attributeModifier(UIMaterialManager.fabMaterial)
         .margin({ right: 8 })
       }
 
@@ -2443,9 +2439,7 @@ export struct ThreadPanel {
           .width(20).height(20).fillColor(UIMaterialManager.adaptiveForeground)
       }
       .width(40).height(40).borderRadius(20)
-      .backgroundColor(Color.Transparent)
-      .shadow({ radius: 16, color: AppColors.shadow, offsetY: 4 })
-      .systemMaterial(UIMaterialManager.fabMaterial)
+      .attributeModifier(UIMaterialManager.fabMaterial)
       .onClick(() => {
         replyManager.startThreadReply(Number(this.threadTid), this.threadFid)
         floatingLayerStore.replyDialogTitle = replyManager.dialogTitle
