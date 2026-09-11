@@ -62,7 +62,7 @@
     },
     {
       "name": "overlay",
-      "value": "#33000000"
+      "value": "#4D000000"
     },
     {
       "name": "overlay_strong",
@@ -142,7 +142,7 @@
     },
     {
       "name": "material_surface_tint",
-      "value": "#4D5A4632"
+      "value": "#73FEFAF6"
     },
     {
       "name": "glass_fab_fill",
