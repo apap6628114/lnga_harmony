@@ -168,6 +168,25 @@ export class UIMaterialManager {
     lightEffect: { color: $r('sys.color.font_on_primary') }
   })
 
+  /**
+   * 当前设备是否支持沉浸式系统材质（官方兼容性接口）。
+   *
+   * 返回 `false` 时，`systemMaterial` 上的 `ImmersiveMaterial` **完全不产生视觉效果**
+   * （官方声明原文：setting the ImmersiveMaterial object in the systemMaterial attribute will
+   * not take effect）。低算力设备不属于此类：它们由系统降级为背景色 / 边框 / 阴影表现。
+   */
+  static readonly immersiveMaterialSupported: boolean = uiMaterial.isImmersiveMaterialSupported()
+
+  /**
+   * 半模态面板的**内容层背景**（`SheetOptions.backgroundColor`）。
+   *
+   * 设备支持材质时置 `Color.Transparent`，把背景完全让给背板材质；
+   * 设备不支持材质时 `Transparent` 会让面板内容直接浮在蒙层上、失去可读背景，
+   * 因此回退成半透明玻璃填充兜底。
+   */
+  static readonly sheetContentBackdrop: ResourceColor =
+    uiMaterial.isImmersiveMaterialSupported() ? Color.Transparent : $r('app.color.glass_surface_fill')
+
   /** 玻璃层上的主前景色（跟随系统深浅色）。 */
   static readonly adaptiveForeground: ResourceColor = $r('sys.color.font_primary')
 

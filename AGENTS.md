@@ -73,7 +73,8 @@ skill：**`bbcode-ts`**（加载后按其操作；Rule 0–9 完整规则已并�
 - 系统材质在**背板层**、`backgroundColor` 在**内容层**，内容层会盖住材质：接了系统材质的位置
   不要再写不透明背景色；其内部输入框 / 中性按钮改用 `dialogFieldMaterial` / `dialogActionMaterial`
   （半透明填充 + 描边、**不做背景模糊**，避免对同一层背景二次糊化）。半模态面板的
-  `SheetOptions.backgroundColor` 必须保留 `Color.Transparent`（`BindOptions` 默认是 `Color.White`）。
+  `SheetOptions.backgroundColor` 必须用 `UIMaterialManager.sheetContentBackdrop`
+  （`BindOptions` 默认 `Color.White` 会盖住材质；设备不支持材质时它回退为半透明填充兜底）。
 - 自绘玻璃组件的**同名属性会覆盖 `attributeModifier`**：不要在其上再写 `backgroundColor(...)`
   （尤其 `Color.Transparent`）、`border(...)`、`shadow(...)`；需要偏离默认玻璃时直接写属性覆盖。
 - 玻璃填充必须是 `$r('app.color.glass_*')` 半透明资源；前景用 `adaptiveForeground` 系列，

@@ -57,8 +57,9 @@ export struct FloatingLayerComponent {
       dragBar: false,
       showClose: false,
       // 内容层一律让位给系统材质：BindOptions.backgroundColor 默认是 Color.White，
-      // 不显式置透明的话，这层白色内容会盖住背板层的沉浸材质。
-      backgroundColor: Color.Transparent,
+      // 不显式置透明的话，这层白色内容会盖住背板层的沉浸材质；
+      // 设备不支持沉浸材质时该常量回退为半透明填充兜底（见 UIMaterialManager）。
+      backgroundColor: UIMaterialManager.sheetContentBackdrop,
       // 背板材质：半模态转场属于 Release 允许「页面内全部区域」生效的弹窗类接口，
       // 面板本体由系统接管模糊、折射、边框、阴影与弹出动效（含空间形变）。
       systemMaterial: UIMaterialManager.sheetMaterial,

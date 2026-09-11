@@ -58,7 +58,7 @@ export struct ComposeMessageSheet {
       height: SheetSize.FIT_CONTENT,
       dragBar: false,
       showClose: false,
-      backgroundColor: Color.Transparent,
+      backgroundColor: UIMaterialManager.sheetContentBackdrop,
       systemMaterial: UIMaterialManager.sheetMaterial,
       maskColor: AppColors.overlay,
       preferType: SheetType.BOTTOM,

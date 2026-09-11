@@ -895,6 +895,13 @@ HDS 的材质类型/等级与 ArkUI 的 `ImmersiveStyle` 不是一一对应关�
 `dialogMaterial` / `sheetMaterial` 是 `ULTRA_THICK`，**不触发自动反色**，因此弹窗内容的前景色
 仍按 §12.3 用 `sys.color.font_*` / `icon_*` 保证深浅色可读性。
 
+**设备不支持材质时的兜底**：`uiMaterial.isImmersiveMaterialSupported()` 返回 `false` 时，
+`systemMaterial` 上的 `ImmersiveMaterial` 完全不生效（官方声明原文）。此时半模态面板若仍把
+`SheetOptions.backgroundColor` 置为 `Color.Transparent`，内容就会直接浮在蒙层上、失去可读背景。
+因此这一项走 `UIMaterialManager.sheetContentBackdrop`：支持材质时是 `Color.Transparent`，
+不支持时回退为半透明玻璃填充。弹窗（`CustomDialogController`）不需要这层兜底——官方模板
+自带背景处理。
+
 ## 13. AI 和代码审查规则
 
 当 AI 生成或审查沉浸光感代码时，按以下顺序判断：

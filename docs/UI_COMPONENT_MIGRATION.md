@@ -154,8 +154,9 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
 - 面板 / 弹窗**内容层**从自绘模糊玻璃切到无模糊的内容层材质（`dialogFieldMaterial` 输入框、
   `dialogActionMaterial` 中性按钮）——系统材质已经糊过背景，再叠 `backgroundEffect` 是二次糊化。
 - 半模态面板内容容器移除 `borderRadius` + `clip` + `surfaceMaterial`，形状交给系统面板。
-- `SheetOptions.backgroundColor` **保留** `Color.Transparent`：`BindOptions` 的默认值是
-  `Color.White`，不显式置透明会盖住背板材质。
+- `SheetOptions.backgroundColor` 走 `UIMaterialManager.sheetContentBackdrop`：设备支持材质时是
+  `Color.Transparent`（`BindOptions` 的默认值是 `Color.White`，不显式置透明会盖住背板材质）；
+  `isImmersiveMaterialSupported()` 为 `false` 时回退为半透明玻璃填充，避免内容直接浮在蒙层上。
 - 继续自绘玻璃的位置：页面内容区、`PanelNavBar`、`Toast`、资料卡、图片查看器，
   以及 `AudioPlayer` 的自定义配色进度条（`SliderStyle.OutSet` + 显式 block/track 色）。
 
