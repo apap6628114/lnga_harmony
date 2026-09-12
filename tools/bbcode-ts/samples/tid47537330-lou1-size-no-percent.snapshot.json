@@ -1,0 +1,25 @@
+[
+ {
+  "type": "TEXT",
+  "text": "我也准备买了"
+ },
+ {
+  "type": "EMOTION",
+  "emotionCat": "ac",
+  "emotionCode": "哭笑"
+ },
+ {
+  "type": "TEXT",
+  "text": "\n\n"
+ },
+ {
+  "type": "SIZE",
+  "size": 50,
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "Re:Source"
+   }
+  ]
+ }
+]

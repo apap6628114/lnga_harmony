@@ -1,6 +1,7 @@
 import { BBNode, BBNodeType } from '../../../model/BBCodeNode'
 import { ReadingFontRole, ReadingTypography } from '../../typography/ReadingTypography'
 import { decodeAnonymousName } from '../../../parser/AnonymousParser'
+import { parseSizePercent } from '../../../parser/bbcode/inline-tag-policy'
 
 /**
  * CSS 命名色与 NGA 官方编辑器色板到十六进制颜色的映射。
@@ -508,8 +509,8 @@ export function applyInlineFormatTags(tags: string[], inherited: InlineTextStyle
     if (name === 'sub') style.baseline = InlineBaseline.SUBSCRIPT
     if (name === 'sup') style.baseline = InlineBaseline.SUPERSCRIPT
     if (name === 'size') {
-      const sizeMatch: RegExpExecArray | null = /^(\d+)%$/.exec(value.trim())
-      if (sizeMatch) style.scalePercent = combineScalePercent(style.scalePercent, parseInt(sizeMatch[1], 10))
+      const percent: number | null = parseSizePercent(value)
+      if (percent !== null) style.scalePercent = combineScalePercent(style.scalePercent, percent)
     }
   }
   return style

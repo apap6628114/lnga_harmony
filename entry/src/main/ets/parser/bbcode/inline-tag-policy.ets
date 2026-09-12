@@ -14,6 +14,21 @@ export function isInlineStyleTagName(name: string): boolean {
 }
 
 /**
+ * 解析 size 标签属性为百分比数值。
+ *
+ * 对齐官方 js_bbscode_core.js 的 `opt.match(/^(\d{1,3})%?\s*$/i)`：百分号可省略，
+ * `[size=150]` 与 `[size=150%]` 语义相同（官方均渲染为 `font-size:150%`）；
+ * 无属性、非数字、超过 3 位数字（如 `[size=1000]`）为非法。
+ *
+ * @param rawAttribute 等号后的原始属性；无属性时为空字符串
+ * @returns 解析出的百分比数值；非法时返回 null
+ */
+export function parseSizePercent(rawAttribute: string): number | null {
+  const match: RegExpExecArray | null = /^(\d{1,3})%?$/.exec(decodeHtmlEntities(rawAttribute).trim())
+  return match ? parseInt(match[1], 10) : null
+}
+
+/**
  * 按内联解析器的既有规则校验文字样式标签属性。
  *
  * @param name 已解析的标签名
@@ -25,7 +40,7 @@ export function isValidInlineStyleTag(name: string, rawAttribute: string): boole
   if (!isInlineStyleTagName(normalized)) return false
   const attribute: string = decodeHtmlEntities(rawAttribute).trim()
   if (normalized === 'color') return /^(?:#[0-9a-fA-F]{3,8}|[a-zA-Z]+)$/.test(attribute)
-  if (normalized === 'size') return /^(\d+)%$/.test(attribute)
+  if (normalized === 'size') return parseSizePercent(rawAttribute) !== null
   if (normalized === 'font') return attribute.length > 0 && attribute.length <= 64
   return true
 }

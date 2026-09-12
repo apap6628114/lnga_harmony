@@ -2,7 +2,7 @@ import { BBNode, BBNodeType } from '../../model/BBCodeNode'
 import { decodeHtmlEntities } from '../_shared/HtmlEntityCodec'
 import { resolveAttachBBCodeUrl } from '../_shared/AttachUrl'
 import { createBBNode, isSafeUrl, pushTextNode } from './lexer'
-import { isInlineStyleTagName, isValidInlineStyleTag } from './inline-tag-policy'
+import { isInlineStyleTagName, isValidInlineStyleTag, parseSizePercent } from './inline-tag-policy'
 
 /** 可作为视频播放的常见文件扩展名。 */
 const MEDIA_VIDEO_EXTS: string[] = ['mp4', 'webm', 'ogg', 'mov', '3gp']
@@ -162,9 +162,10 @@ function applyStyleAttribute(node: BBNode, tag: InlineTagToken): boolean {
     if (!/^(?:#[0-9a-fA-F]{3,8}|[a-zA-Z]+)$/.test(color)) return false
     node.color = color
   } else if (node.type === BBNodeType.SIZE) {
-    const sizeMatch: RegExpExecArray | null = /^(\d+)%$/.exec(tag.attribute)
-    if (!sizeMatch) return false
-    node.size = Math.min(300, Math.max(50, parseInt(sizeMatch[1], 10)))
+    /* 官方属性规则（百分号可省略）集中在 inline-tag-policy，避免与校验分支漂移 */
+    const percent: number | null = parseSizePercent(tag.attribute)
+    if (percent === null) return false
+    node.size = Math.min(300, Math.max(50, percent))
   } else if (node.type === BBNodeType.FONT) {
     const family: string = decodeHtmlEntities(tag.attribute).trim()
     if (family.length === 0 || family.length > 64) return false

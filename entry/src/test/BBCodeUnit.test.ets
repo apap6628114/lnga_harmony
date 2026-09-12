@@ -383,6 +383,37 @@ export default function bbcodeUnitTest(): void {
       expect(crossingRuns[1].text).assertEqual('[/i]')
     })
 
+    it('parsesSizeWithoutPercentSuffix', 0, (): void => {
+      /*
+       * 官方 ubbcode 的 size 属性正则为 `^(\d{1,3})%?$`，百分号可省略：
+       * 线上样本 tid=47537330 第 2 楼 `[size=1]Re:Source[/size]` 旧规则下退化为原文
+       */
+      const nodes: BBNode[] = parseBBCode('[size=1]Re:Source[/size]')
+      const runs: InlineRun[] = flattenInlineNodes(nodes)
+
+      expect(nodes.length).assertEqual(1)
+      expect(nodes[0].type).assertEqual(BBNodeType.SIZE)
+      expect(nodes[0].size).assertEqual(50)
+      expect(runs.length).assertEqual(1)
+      expect(runs[0].text).assertEqual('Re:Source')
+      expect(runs[0].style.scalePercent).assertEqual(50)
+    })
+
+    it('treatsSizeWithoutPercentAsPercentValue', 0, (): void => {
+      const runs: InlineRun[] = flattenInlineNodes(parseBBCode('[size=150]大[/size]'))
+
+      expect(runs.length).assertEqual(1)
+      expect(runs[0].style.scalePercent).assertEqual(150)
+    })
+
+    it('keepsOverLongSizeAttributeAsText', 0, (): void => {
+      /* 官方 `\d{1,3}` 上限：4 位数字不是合法 size 属性，保持原文可见 */
+      const runs: InlineRun[] = flattenInlineNodes(parseBBCode('[size=1000]超大[/size]'))
+
+      expect(runs.length).assertEqual(1)
+      expect(runs[0].text).assertEqual('[size=1000]超大[/size]')
+    })
+
     it('keepsTagHeavyContentOnTheNormalInlinePath', 0, (): void => {
       const runs: InlineRun[] = flattenInlineNodes(parseBBCode('[b]x[/b]'.repeat(1200)))
 

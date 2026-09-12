@@ -173,6 +173,68 @@ describe('真实样本结构（demo2.txt）', () => {
   })
 })
 
+describe('真实样本结构（tid47537330-lou1-size-no-percent.txt）', () => {
+  // 线上异常：tid=47537330 第 2 楼 `[size=1]Re:Source[/size]`（无百分号）在旧规则下
+  // 未识别为 SIZE 标签，Run 直接把 BBCode 原文输出到界面。官方 ubbcode 的 size
+  // 属性正则为 `^(\d{1,3})%?\s*$`，百分号可省略，此处以真实正文固化回归。
+  const content: string = loadSampleContent('tid47537330-lou1-size-no-percent.txt')
+  const nodes: BBNode[] = parseBBCode(content)
+
+  it('无百分号的 [size=1] 识别为 SIZE 节点（下限 clamp 到 50%）', () => {
+    const sizes: BBNode[] = []
+    collectType(nodes, BBNodeType.SIZE, sizes)
+    assert.equal(sizes.length, 1, `SIZE 节点应为 1 个，实际 ${sizes.length}`)
+    assert.equal(sizes[0].size, 50, '官方的 1% 应被客户端下限 clamp 到 50')
+    assert.equal(concatTextNodes(sizes[0].children), 'Re:Source')
+  })
+
+  it('Run 不再泄漏 BBCode 原文，正文文字完整', () => {
+    const runs: InlineRun[] = flattenInlineNodes(nodes)
+    const text: string = runs.map((run: InlineRun) => run.text).join('')
+    assert.ok(!text.includes('[size'), `存在退化标签文本: ${JSON.stringify(text)}`)
+    assert.ok(text.includes('Re:Source'), `正文文字缺失: ${JSON.stringify(text)}`)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// size 属性边界（对齐官方 js_bbscode_core.js：^(\d{1,3})%?$）
+// ---------------------------------------------------------------------------
+
+describe('size 属性规则（官方 \\d{1,3} 可选百分号）', () => {
+  /** 解析单个片段并取首个 SIZE 节点的字号；无 SIZE 节点返回 0。 */
+  function firstSize(input: string): number {
+    const sizes: BBNode[] = []
+    collectType(parseBBCode(input), BBNodeType.SIZE, sizes)
+    return sizes.length > 0 ? sizes[0].size : 0
+  }
+
+  it('百分号可省略：[size=150] 与 [size=150%] 等价', () => {
+    assert.equal(firstSize('[size=150%]大[/size]'), 150)
+    assert.equal(firstSize('[size=150]大[/size]'), 150, '官方对无百分号形式同样按百分比解释')
+  })
+
+  it('非数字、无属性与超过 3 位数字退化为可见原文', () => {
+    const cases: string[] = ['[size=1000]超大[/size]', '[size=abc]文字[/size]', '[size]文字[/size]']
+    for (const input of cases) {
+      const nodes: BBNode[] = parseBBCode(input)
+      assert.equal(countType(nodes, BBNodeType.SIZE), 0, `不应识别为 SIZE: ${input}`)
+      assert.ok(concatTextNodes(nodes).includes('[size'), `原文应保留为可见文字: ${input}`)
+    }
+  })
+
+  it('跨块标签栈：[size=1] 越过 [img] 后继续生效', () => {
+    const input: string =
+      '[size=1]小字[img]https://img.nga.cn/attachments/mon_202609/11/a.jpg[/img]尾[/size]'
+    const runs: InlineRun[] = flattenInlineNodes(parseBBCode(input))
+    const textRuns: InlineRun[] = runs.filter((run: InlineRun) => run.kind === InlineRunKind.TEXT)
+    // 图片把文字切成两段，Run 层同样式相邻文字会合并，按拼接结果断言文字零丢失
+    assert.equal(textRuns.map((run: InlineRun) => run.text).join(''), '小字尾', '两段文字都应保留')
+    for (const run of textRuns) {
+      assert.equal(run.style.scalePercent, 50, `跨块 size 未生效: ${run.text}`)
+    }
+  })
+})
+
 // ---------------------------------------------------------------------------
 // 教学文档语法覆盖（guide-bbcode.txt：源自 .wiki/NGA-BBS代码教学整理.html 21 节语法）
 // ---------------------------------------------------------------------------
