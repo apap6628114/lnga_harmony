@@ -1,9 +1,25 @@
 /**
  * 发新主题编辑器浮层。
  *
- * 与 ReplyDialog 同族：标题输入 + 主题分类（对应官方客户端 TopicPostModel
- * 的 loadTopicCategory/insertTopicCategory 行为，分类以文本形式进入标题）+
- * BBCode 正文编辑器 + 图片上传 + 匿名开关 + 草稿。
+ * 与 `ReplyDialog` 同族，布局取向一致——**纵向尽量矮**，且不减少任何既有能力：
+ * 标题输入 + 主题分类（对应官方客户端 TopicPostModel 的 loadTopicCategory /
+ * insertTopicCategory 行为，分类以文本形式进入标题）+ BBCode 正文编辑器 + 图片上传 +
+ * 匿名开关 + 草稿 + 发布预览 + 表情面板。
+ *
+ * 1. 正文输入区高度在历史值（190 / 240）基础上下调 30%（133 / 168），标题输入框随整体
+ *    收紧到 42；表情面板展开时正文进一步收缩，把纵向空间让给表情区。
+ * 2. 移除「内容将发布为新的主题帖 + 字数」提示行。
+ * 3. 格式工具区从正文区上方移到**下方**（拇指可达区），与回复编辑器共用
+ *    `EditorFormatBar`：第一行常显「表情 / 图片 / 超链接」并在其后放折叠按钮，右端固定
+ *    「匿名 / 预览」；粗体以后的插入型格式收在折叠按钮之后、展开时另起一行。
+ * 4. 取消按钮移除（下拉手势 / 点击蒙层 / 系统返回都能关闭），主操作按钮接管其右上角位置。
+ * 5. 主题分类默认折叠，入口是标题输入框**内右端**的标签按钮（激活态为主题色），展开后 chips
+ *    落在标题正下方——折叠态不再为分类单独占一行高度。
+ *
+ * 视觉契约（docs/IMMERSIVE_LIGHT_DESIGN.md §12）：面板本体是系统沉浸材质
+ * （`SheetOptions.systemMaterial`），本组件属**内容层**——只用 `dialogFieldMaterial`
+ * 这类「半透明填充 + 极淡描边、不做背景模糊」的玻璃表达层级；主操作按钮按 §12.5
+ * 走实底主题色 + 高对比文字，是画面上唯一的视觉重点。
  */
 
 import { AppColors } from '../constants/Constants'
@@ -24,33 +40,34 @@ import { AlertDialog } from '@kit.ArkUI'
 import { photoAccessHelper } from '@kit.MediaLibraryKit'
 import { Logger, DOMAIN_UI } from '../utils/Logger'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
+import { EditorFormatBar } from './EditorFormatBar'
 
 const logger = new Logger(DOMAIN_UI, 'NewTopicDialog')
+
+/** 发帖标题输入框的组件标识：打开编辑器后自动聚焦它（发布前必须先有标题）。 */
+const NEW_TOPIC_SUBJECT_ID: string = 'new-topic-editor-subject'
 
 /** 发帖正文输入框的组件标识，用于通过 UIContext 恢复焦点并拉起软键盘。 */
 const NEW_TOPIC_TEXT_AREA_ID: string = 'new-topic-editor-text-area'
 
-/** 发帖编辑器格式操作。 */
-interface FormatAction {
-  /** 显示文案。 */
-  label: string
+/**
+ * 打开编辑器后补一次焦点请求的延时（ms）。
+ *
+ * 面板刚打开时半模态转场尚未结束，转场期间系统会忽略焦点请求——因此组件挂载后先试一次，
+ * 转场结束再补一次，保证软键盘一定被拉起；两次请求都是幂等的，重复请求不会重弹键盘。
+ */
+const AUTO_FOCUS_RETRY_DELAY_MS: number = 260
 
-  /** BBCode 标签。 */
-  tag: string
-}
+/** 正文输入区高度（vp）：历史值 190 / 240 的 70%，用于压低整面板高度。 */
+const EDITOR_HEIGHT_SM: number = 133
+const EDITOR_HEIGHT_MD: number = 168
 
-/** 发帖编辑器支持的格式操作。 */
-const FORMAT_ACTIONS: FormatAction[] = [
-  { label: '表情', tag: 'emoticon' },
-  { label: '粗体', tag: 'b' },
-  { label: '斜体', tag: 'i' },
-  { label: '下划线', tag: 'u' },
-  { label: '删除线', tag: 'del' },
-  { label: '引用', tag: 'quote' },
-  { label: '链接', tag: 'url' },
-  { label: '@', tag: 'at' },
-  { label: '图片', tag: 'img' },
-]
+/** 表情面板展开时的正文输入区高度（vp）：把纵向空间让给表情区。 */
+const EDITOR_HEIGHT_EMOJI_SM: number = 96
+const EDITOR_HEIGHT_EMOJI_MD: number = 118
+
+/** 标题输入框高度（vp）：随整体压缩收紧，仍保持单行输入的舒适高度。 */
+const SUBJECT_HEIGHT: number = 42
 
 /** 使用沉浸光感材质承载发新主题操作。 */
 @Component
@@ -84,6 +101,9 @@ export struct NewTopicDialog {
 
   /** 是否处于发布预览模式（以 BBCode 渲染结果替换正文输入区）。 */
   @State previewMode: boolean = false
+
+  /** 主题分类是否展开（默认折叠，入口是标题输入框内右端的标签按钮）。 */
+  @State categoryExpanded: boolean = false
 
   /** 当前表情分类。 */
   @State selectedCatKey: string = 'ac'
@@ -141,6 +161,31 @@ export struct NewTopicDialog {
     }).catch(() => {
       logger.verbose('[NTCAT] load categories failed')
     })
+    this.autoFocusEditor()
+  }
+
+  /**
+   * 打开编辑器后自动聚焦标题输入框，由系统拉起软键盘。
+   *
+   * 与 `ReplyDialog` 同一套时序处理：输入框挂载后立即请求一次（多数情况这一步就够），
+   * 半模态转场结束后再补一次，避免转场期间请求被系统忽略而键盘不弹。
+   * 聚焦标题而不是正文，因为「先有标题才能发布」，标题是发布流程的第一步。
+   */
+  private autoFocusEditor(): void {
+    setTimeout((): void => { this.focusSubject() }, 0)
+    setTimeout((): void => { this.focusSubject() }, AUTO_FOCUS_RETRY_DELAY_MS)
+  }
+
+  /** 聚焦标题输入框；用户已经切到表情面板或预览态时跳过，避免把系统键盘抢回来。 */
+  private focusSubject(): void {
+    if (this.showEmojiPanel || this.previewMode) {
+      return
+    }
+    try {
+      this.getUIContext().getFocusController().requestFocus(NEW_TOPIC_SUBJECT_ID)
+    } catch (error) {
+      logger.verbose('[IME] auto focus subject failed: %{public}s', String(error))
+    }
   }
 
   /** 标记组件已销毁。 */
@@ -221,9 +266,12 @@ export struct NewTopicDialog {
     this.showEmojiPanel = false
   }
 
-  /** 将选定格式应用到当前正文选区。 */
-  private applyFormat(action: FormatAction): void {
-    const tag: string = action.tag
+  /**
+   * 将工具行选定的格式应用到当前正文选区。
+   *
+   * 匿名开关由工具行内部处理（见 `EditorFormatBar`），这里只处理插入型格式与表情面板切换。
+   */
+  private applyFormatTag(tag: string): void {
     if (tag === 'emoticon') {
       this.toggleEmotionKeyboard()
     } else if (tag === 'url') {
@@ -306,9 +354,9 @@ export struct NewTopicDialog {
     })
   }
 
-  /** 获取当前主操作文案。 */
+  /** 获取当前主操作文案。头部按钮空间有限，取最短的可辨识写法。 */
   private getSubmitLabel(): string {
-    return this.sending ? '发布中…' : '发布主题'
+    return this.sending ? '发布中' : '发布'
   }
 
   /** 构建发帖编辑界面。 */
@@ -342,40 +390,70 @@ export struct NewTopicDialog {
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
-        .margin({ right: 12 })
+        .margin({ right: 10 })
 
-        Button('取消')
+        // 主操作：实底主题色 + 高对比文字，成为画面上唯一的视觉重点（§12.5）。
+        // 「取消」已移除——下拉手势、点击蒙层、系统返回都能关闭。
+        Button(this.getSubmitLabel())
           .type(ButtonType.Capsule)
           .height(36)
           .fontSize(14)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(UIMaterialManager.adaptiveForeground)
-          .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-          .padding({ left: 16, right: 16 })
-          .onClick(() => { this.requestClose() })
+          .fontWeight(FontWeight.Bold)
+          .fontColor(AppColors.white)
+          .backgroundColor(AppColors.primary)
+          .padding({ left: 18, right: 18 })
+          .enabled(!this.sending &&
+            this.subject.trim().length > 0 && this.content.trim().length > 0)
+          .onClick(() => { this.doSend() })
       }
       .width('100%')
-      .padding({ bottom: 12 })
+      .padding({ bottom: 10 })
       .alignItems(VerticalAlign.Center)
 
-      TextInput({ text: this.subject, placeholder: '输入标题…' })
-        .width('100%')
-        .height(48)
-        .padding({ left: 14, right: 14 })
-        .fontSize(16)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(UIMaterialManager.inputForeground)
-        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .caretColor(UIMaterialManager.inputForeground)
-        .borderRadius(14)
-        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-        .maxLength(60)
-        .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-        .onFocus(() => { this.onEditorFocus() })
-        .onChange((value: string) => { this.subject = value })
-        .margin({ bottom: 10 })
+      // 标题输入框：右端内嵌「主题分类」折叠入口——折叠态不额外占一行高度，
+      // 展开后分类 chips 出现在标题正下方（见下一个区块）。版块没有分类时不显示入口。
+      Stack({ alignContent: Alignment.End }) {
+        TextInput({ text: this.subject, placeholder: '输入标题…' })
+          .id(NEW_TOPIC_SUBJECT_ID)
+          .width('100%')
+          .height(SUBJECT_HEIGHT)
+          .padding({ left: 14, right: this.categories.length > 0 ? 46 : 14 })
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(UIMaterialManager.inputForeground)
+          .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+          .caretColor(UIMaterialManager.inputForeground)
+          .borderRadius(14)
+          .attributeModifier(UIMaterialManager.dialogFieldMaterial)
+          .maxLength(60)
+          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .onFocus(() => { this.onEditorFocus() })
+          .onChange((value: string) => { this.subject = value })
 
-      if (this.categories.length > 0) {
+        if (this.categories.length > 0) {
+          Column() {
+            Image($r('app.media.icon_category'))
+              .width(17)
+              .height(17)
+              .fillColor(this.categoryExpanded
+                ? AppColors.primary
+                : UIMaterialManager.adaptiveSecondaryForeground)
+          }
+          .width(32)
+          .height(SUBJECT_HEIGHT - 10)
+          .justifyContent(FlexAlign.Center)
+          .alignItems(HorizontalAlign.Center)
+          .borderRadius(9)
+          .backgroundColor(this.categoryExpanded ? AppColors.selectionTint : Color.Transparent)
+          .margin({ right: 5 })
+          .accessibilityText(this.categoryExpanded ? '收起主题分类' : '展开主题分类')
+          .onClick(() => { this.categoryExpanded = !this.categoryExpanded })
+        }
+      }
+      .width('100%')
+      .margin({ bottom: 10 })
+
+      if (this.categoryExpanded && this.categories.length > 0) {
         Column() {
           Row() {
             Text('主题分类')
@@ -420,63 +498,48 @@ export struct NewTopicDialog {
         .margin({ bottom: 10 })
       }
 
-      Column() {
-        Row() {
-          Text(this.previewMode ? '发布预览' : '格式工具')
-            .fontSize(11)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-          Blank().layoutWeight(1)
-          if (!this.previewMode) {
-            Text(this.showEmojiPanel ? '表情面板已展开' : '左右滑动查看更多')
-              .fontSize(10)
-              .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-              .margin({ right: 10 })
-          }
-          Text(this.previewMode ? '返回编辑' : '预览')
-            .fontSize(11)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(AppColors.primary)
-            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-            .borderRadius(10)
-            .backgroundColor(AppColors.selectionTint)
-            .onClick(() => { this.togglePreview() })
-        }
-        .width('100%')
-        .padding({ left: 4, right: 4, bottom: 6 })
-
-        if (!this.previewMode) {
-          Scroll() {
-            Row({ space: 6 }) {
-              ForEach(FORMAT_ACTIONS, (action: FormatAction) => {
-                Text(action.label)
-                  .fontSize(13)
-                  .fontColor(action.tag === 'emoticon' && this.showEmojiPanel
-                    ? AppColors.primary : UIMaterialManager.adaptiveForeground)
-                  .fontWeight(action.tag === 'emoticon' && this.showEmojiPanel
-                    ? FontWeight.Bold : FontWeight.Medium)
-                  .height(32)
-                  .padding({ left: 12, right: 12 })
-                  .borderRadius(10)
-                  .backgroundColor(action.tag === 'emoticon' && this.showEmojiPanel
-                    ? AppColors.selectionTint : Color.Transparent)
-                  .border({ width: 0.5, color: AppColors.separator })
-                  .onClick(() => { this.applyFormat(action) })
-              }, (action: FormatAction) => action.tag)
-            }
-            .padding({ left: 2, right: 2 })
-          }
+      if (this.previewMode) {
+        BBCodePreviewPane({
+          content: this.content,
+          viewportHeight: this.currentBreakpoint === 'sm' ? EDITOR_HEIGHT_SM : EDITOR_HEIGHT_MD
+        })
+      } else {
+        TextArea({ text: this.content, placeholder: '写下正文…', controller: this.textAreaController })
+          .id(NEW_TOPIC_TEXT_AREA_ID)
           .width('100%')
-          .scrollable(ScrollDirection.Horizontal)
-          .scrollBar(BarState.Off)
-        }
+          .height(this.showEmojiPanel
+            ? (this.currentBreakpoint === 'sm' ? EDITOR_HEIGHT_EMOJI_SM : EDITOR_HEIGHT_EMOJI_MD)
+            : (this.currentBreakpoint === 'sm' ? EDITOR_HEIGHT_SM : EDITOR_HEIGHT_MD))
+          .padding(14)
+          .fontSize(15)
+          .fontColor(UIMaterialManager.inputForeground)
+          .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+          .caretColor(UIMaterialManager.inputForeground)
+          .borderRadius(16)
+          .attributeModifier(UIMaterialManager.dialogFieldMaterial)
+          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .onFocus(() => { this.onEditorFocus() })
+          .onChange((value: string) => { this.content = value })
+          .onTextSelectionChange((start: number, end: number) => {
+            if (this.previewMode) {
+              return
+            }
+            this.selStart = start
+            this.selEnd = end
+          })
       }
-      .width('100%')
-      .padding({ left: 8, right: 8, top: 8, bottom: 8 })
-      .borderRadius(14)
-      .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-      .margin({ bottom: 10 })
 
+      // 格式工具行：紧贴正文区下方（拇指可达区），与回复编辑器共用同一套工具行。
+      // 第一行常显格式 + 右端「匿名 / 预览」，高级格式收在折叠按钮之后、展开时另起一行。
+      EditorFormatBar({
+        isAnonymous: $isAnonymous,
+        previewMode: this.previewMode,
+        emojiPanelOpen: this.showEmojiPanel,
+        onFormat: (tag: string): void => { this.applyFormatTag(tag) },
+        onTogglePreview: (): void => { this.togglePreview() }
+      })
+
+      // 表情面板：与系统键盘互斥，展开时正文区同步收缩（见上面的高度三元表达式）
       if (this.showEmojiPanel && !this.previewMode) {
         Column() {
           Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
@@ -537,89 +600,8 @@ export struct NewTopicDialog {
         .padding(10)
         .borderRadius(16)
         .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-        .margin({ bottom: 10 })
+        .margin({ top: 8 })
       }
-
-      if (this.previewMode) {
-        BBCodePreviewPane({
-          content: this.content,
-          viewportHeight: this.currentBreakpoint === 'sm' ? 190 : 240
-        })
-      } else {
-        TextArea({ text: this.content, placeholder: '写下正文…', controller: this.textAreaController })
-          .id(NEW_TOPIC_TEXT_AREA_ID)
-          .width('100%')
-          .height(this.showEmojiPanel ? 120 : (this.currentBreakpoint === 'sm' ? 190 : 240))
-          .padding(14)
-          .fontSize(15)
-          .fontColor(UIMaterialManager.inputForeground)
-          .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
-          .caretColor(UIMaterialManager.inputForeground)
-          .borderRadius(16)
-          .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-          .onFocus(() => { this.onEditorFocus() })
-          .onChange((value: string) => { this.content = value })
-          .onTextSelectionChange((start: number, end: number) => {
-            if (this.previewMode) {
-              return
-            }
-            this.selStart = start
-            this.selEnd = end
-          })
-      }
-
-      Row() {
-        Text('内容将发布为新的主题帖')
-          .fontSize(10)
-          .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-        Blank().layoutWeight(1)
-        Text(this.content.trim().length.toString() + ' 字')
-          .fontSize(11)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-      }
-      .width('100%')
-      .padding({ left: 4, right: 4, top: 7 })
-
-      Row() {
-        Row() {
-          Toggle({ type: ToggleType.Checkbox, isOn: this.isAnonymous })
-            .width(20)
-            .height(20)
-            .onChange((value: boolean) => { this.isAnonymous = value })
-          Column() {
-            Text('匿名发布')
-              .fontSize(12)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(UIMaterialManager.adaptiveForeground)
-            Text('隐藏账号信息')
-              .fontSize(9)
-              .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-              .margin({ top: 1 })
-          }
-          .alignItems(HorizontalAlign.Start)
-          .margin({ left: 6 })
-        }
-        .alignItems(VerticalAlign.Center)
-
-        Blank().layoutWeight(1)
-
-        Button(this.getSubmitLabel())
-          .type(ButtonType.Capsule)
-          .fontSize(14)
-          .fontWeight(FontWeight.Bold)
-          .height(42)
-          .constraintSize({ minWidth: 104 })
-          .fontColor(UIMaterialManager.adaptiveForeground)
-          .attributeModifier(UIMaterialManager.dialogActionMaterial)
-          .padding({ left: 20, right: 20 })
-          .enabled(!this.sending && this.subject.trim().length > 0 && this.content.trim().length > 0)
-          .onClick(() => { this.doSend() })
-      }
-      .width('100%')
-      .margin({ top: 10 })
-      .alignItems(VerticalAlign.Center)
     }
     .width('100%')
     .constraintSize({ maxWidth: 600 })
