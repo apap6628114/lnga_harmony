@@ -27,6 +27,9 @@ import { UIMaterialManager } from '../managers/UIMaterialManager'
 
 const logger = new Logger(DOMAIN_UI, 'NewTopicDialog')
 
+/** 发帖正文输入框的组件标识，用于通过 UIContext 恢复焦点并拉起软键盘。 */
+const NEW_TOPIC_TEXT_AREA_ID: string = 'new-topic-editor-text-area'
+
 /** 发帖编辑器格式操作。 */
 interface FormatAction {
   /** 显示文案。 */
@@ -176,23 +179,53 @@ export struct NewTopicDialog {
   private togglePreview(): void {
     if (this.previewMode) {
       this.previewMode = false
-      setTimeout((): void => {
-        this.textAreaController.caretPosition(this.selStart)
-      }, 0)
+      this.showSystemKeyboard()
     } else {
       this.showEmojiPanel = false
+      this.getUIContext().getFocusController().clearFocus()
       this.previewMode = true
     }
+  }
+
+  /** 关闭表情面板并在 TextArea 重建后恢复焦点，由系统拉起软键盘。 */
+  private showSystemKeyboard(): void {
+    this.showEmojiPanel = false
+    setTimeout((): void => {
+      try {
+        this.getUIContext().getFocusController().requestFocus(NEW_TOPIC_TEXT_AREA_ID)
+        this.textAreaController.caretPosition(this.selStart)
+      } catch (error) {
+        logger.verbose('[IME] request new-topic editor focus failed: %{public}s', String(error))
+      }
+    }, 0)
+  }
+
+  /** 清除正文焦点以关闭软键盘，再展示与软键盘互斥的表情面板。 */
+  private showEmotionKeyboard(): void {
+    this.textAreaController.caretPosition(this.selStart)
+    this.getUIContext().getFocusController().clearFocus()
+    this.showEmojiPanel = true
+  }
+
+  /** 在表情面板与系统软键盘之间互斥切换。 */
+  private toggleEmotionKeyboard(): void {
+    if (this.showEmojiPanel) {
+      this.showSystemKeyboard()
+    } else {
+      this.showEmotionKeyboard()
+    }
+  }
+
+  /** 任一文本输入框获得焦点时收起表情面板，保证两种输入面板不会同时显示。 */
+  private onEditorFocus(): void {
+    this.showEmojiPanel = false
   }
 
   /** 将选定格式应用到当前正文选区。 */
   private applyFormat(action: FormatAction): void {
     const tag: string = action.tag
     if (tag === 'emoticon') {
-      this.showEmojiPanel = !this.showEmojiPanel
-      if (this.showEmojiPanel) {
-        this.textAreaController.caretPosition(this.selStart)
-      }
+      this.toggleEmotionKeyboard()
     } else if (tag === 'url') {
       this.content = ReplyManagerClass.insertUrl(this.content, this.selStart, this.selEnd)
     } else if (tag === 'at') {
@@ -338,6 +371,7 @@ export struct NewTopicDialog {
         .attributeModifier(UIMaterialManager.dialogFieldMaterial)
         .maxLength(60)
         .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+        .onFocus(() => { this.onEditorFocus() })
         .onChange((value: string) => { this.subject = value })
         .margin({ bottom: 10 })
 
@@ -513,6 +547,7 @@ export struct NewTopicDialog {
         })
       } else {
         TextArea({ text: this.content, placeholder: '写下正文…', controller: this.textAreaController })
+          .id(NEW_TOPIC_TEXT_AREA_ID)
           .width('100%')
           .height(this.showEmojiPanel ? 120 : (this.currentBreakpoint === 'sm' ? 190 : 240))
           .padding(14)
@@ -523,6 +558,7 @@ export struct NewTopicDialog {
           .borderRadius(16)
           .attributeModifier(UIMaterialManager.dialogFieldMaterial)
           .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .onFocus(() => { this.onEditorFocus() })
           .onChange((value: string) => { this.content = value })
           .onTextSelectionChange((start: number, end: number) => {
             if (this.previewMode) {

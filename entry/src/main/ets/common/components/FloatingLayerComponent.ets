@@ -1,10 +1,15 @@
+import { window } from '@kit.ArkUI'
 import { floatingLayerStore, FloatingLayerStoreClass, FloatingPage } from '../../store/FloatingLayerStore'
 import { AppColors } from '../constants/Constants'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
+import { DOMAIN_UI, formatError, Logger } from '../utils/Logger'
 import { ImageViewer } from './ImageViewer'
 import { ProfileCardPopup } from './ProfileCardPopup'
 import { ReplyDialog } from './ReplyDialog'
 import { NewTopicDialog } from './NewTopicDialog'
+
+/** 浮层组件日志。 */
+const logger = new Logger(DOMAIN_UI, 'FloatingLayerComponent')
 
 /**
  * 全局浮层承载：图片预览、资料卡、回复编辑器与发新主题。
@@ -40,6 +45,59 @@ export struct FloatingLayerComponent {
   /** 应用导航栏高度。 */
   @StorageProp('navBarHeight') navBarHeight: number = 0
 
+  /** 当前固定态软键盘的实际高度，单位 vp。 */
+  @State private keyboardHeightVp: number = 0
+
+  /** 当前应用主窗口，用于管理软键盘高度监听。 */
+  private hostWindow: window.Window | undefined = undefined
+
+  /**
+   * 软键盘高度变化回调。
+   *
+   * 系统事件返回 px；布局属性使用 vp，因此通过当前 UIContext 完成单位转换。
+   */
+  private readonly keyboardHeightChangeCallback: (height: number) => void = (height: number): void => {
+    this.keyboardHeightVp = this.getUIContext().px2vp(height)
+  }
+
+  /** 组件显示时订阅主窗口软键盘高度变化。 */
+  aboutToAppear(): void {
+    this.subscribeKeyboardHeightChange()
+  }
+
+  /** 组件消失时注销监听，避免组件销毁后继续接收窗口事件。 */
+  aboutToDisappear(): void {
+    this.unsubscribeKeyboardHeightChange()
+  }
+
+  /** 获取主窗口并订阅软键盘高度变化。 */
+  private async subscribeKeyboardHeightChange(): Promise<void> {
+    try {
+      const hostContext = this.getUIContext().getHostContext()
+      if (hostContext === undefined) {
+        return
+      }
+      const hostWindow = await window.getLastWindow(hostContext)
+      this.hostWindow = hostWindow
+      hostWindow.on('keyboardHeightChange', this.keyboardHeightChangeCallback)
+    } catch (error) {
+      logger.warn('subscribe keyboard height change failed: %{public}s', formatError(error))
+    }
+  }
+
+  /** 注销软键盘高度变化监听并清空避让高度。 */
+  private unsubscribeKeyboardHeightChange(): void {
+    if (this.hostWindow !== undefined) {
+      try {
+        this.hostWindow.off('keyboardHeightChange', this.keyboardHeightChangeCallback)
+      } catch (error) {
+        logger.warn('unsubscribe keyboard height change failed: %{public}s', formatError(error))
+      }
+      this.hostWindow = undefined
+    }
+    this.keyboardHeightVp = 0
+  }
+
   /**
    * 编辑器半模态面板选项（回复与发新主题共用）。
    *
@@ -48,6 +106,8 @@ export struct FloatingLayerComponent {
    * 交互式关闭（下拉手势 / 点击蒙层）统一转到 `notifyReplyCloseRequested`：
    * 先保存草稿，有正文时弹出放弃确认；不调用 `dismiss`，由浮层状态驱动真正的关闭，
    * 保证「状态单一真源在 store」这一前提不被系统的自行关闭打破。
+   * 关闭 `bindSheet` 默认的局部避让，防止它只滚动到焦点输入项并与外层的整面板避让叠加；
+   * 回复与发帖内容通过窗口上报的完整键盘高度在底部占位，从而整体位于输入法上方。
    *
    * @returns 半模态面板选项
    */
@@ -65,12 +125,12 @@ export struct FloatingLayerComponent {
       systemMaterial: UIMaterialManager.sheetMaterial,
       maskColor: AppColors.overlay,
       preferType: this.currentBreakpoint === 'sm' ? SheetType.BOTTOM : SheetType.CENTER,
+      keyboardAvoidMode: SheetKeyboardAvoidMode.NONE,
       shouldDismiss: (sheetDismiss: SheetDismiss) => {
         this.floating.notifyReplyCloseRequested()
       }
     }
     if (this.currentBreakpoint !== 'sm') {
-      // 居中形态下由内容宽度决定面板宽度（原实现的 600 + 左右 24 内边距）
       options.width = 648
     }
     return options
@@ -112,7 +172,7 @@ export struct FloatingLayerComponent {
     .padding({
       left: this.currentBreakpoint === 'sm' ? 10 : 24,
       right: this.currentBreakpoint === 'sm' ? 10 : 24,
-      bottom: this.currentBreakpoint === 'sm' ? 8 : 24
+      bottom: (this.currentBreakpoint === 'sm' ? 8 : 24) + this.keyboardHeightVp
     })
   }
 
@@ -134,7 +194,7 @@ export struct FloatingLayerComponent {
     .padding({
       left: this.currentBreakpoint === 'sm' ? 10 : 24,
       right: this.currentBreakpoint === 'sm' ? 10 : 24,
-      bottom: this.currentBreakpoint === 'sm' ? 8 : 24
+      bottom: (this.currentBreakpoint === 'sm' ? 8 : 24) + this.keyboardHeightVp
     })
   }
 

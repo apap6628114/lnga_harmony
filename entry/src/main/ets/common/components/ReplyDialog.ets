@@ -18,6 +18,9 @@ import { UIMaterialManager } from '../managers/UIMaterialManager'
 
 const logger = new Logger(DOMAIN_UI, 'ReplyDialog')
 
+/** 回复正文输入框的组件标识，用于通过 UIContext 恢复焦点并拉起软键盘。 */
+const REPLY_TEXT_AREA_ID: string = 'reply-editor-text-area'
+
 /** 回复编辑器格式操作。 */
 interface FormatAction {
   /** 显示文案。 */
@@ -168,23 +171,53 @@ export struct ReplyDialog {
   private togglePreview(): void {
     if (this.previewMode) {
       this.previewMode = false
-      setTimeout((): void => {
-        this.textAreaController.caretPosition(this.selStart)
-      }, 0)
+      this.showSystemKeyboard()
     } else {
       this.showEmojiPanel = false
+      this.getUIContext().getFocusController().clearFocus()
       this.previewMode = true
     }
+  }
+
+  /** 关闭表情面板并在 TextArea 重建后恢复焦点，由系统拉起软键盘。 */
+  private showSystemKeyboard(): void {
+    this.showEmojiPanel = false
+    setTimeout((): void => {
+      try {
+        this.getUIContext().getFocusController().requestFocus(REPLY_TEXT_AREA_ID)
+        this.textAreaController.caretPosition(this.selStart)
+      } catch (error) {
+        logger.verbose('[IME] request reply editor focus failed: %{public}s', String(error))
+      }
+    }, 0)
+  }
+
+  /** 清除正文焦点以关闭软键盘，再展示与软键盘互斥的表情面板。 */
+  private showEmotionKeyboard(): void {
+    this.textAreaController.caretPosition(this.selStart)
+    this.getUIContext().getFocusController().clearFocus()
+    this.showEmojiPanel = true
+  }
+
+  /** 在表情面板与系统软键盘之间互斥切换。 */
+  private toggleEmotionKeyboard(): void {
+    if (this.showEmojiPanel) {
+      this.showSystemKeyboard()
+    } else {
+      this.showEmotionKeyboard()
+    }
+  }
+
+  /** 正文输入框获得焦点时收起表情面板，保证两种输入面板不会同时显示。 */
+  private onEditorFocus(): void {
+    this.showEmojiPanel = false
   }
 
   /** 将选定格式应用到当前正文选区。 */
   private applyFormat(action: FormatAction): void {
     const tag: string = action.tag
     if (tag === 'emoticon') {
-      this.showEmojiPanel = !this.showEmojiPanel
-      if (this.showEmojiPanel) {
-        this.textAreaController.caretPosition(this.selStart)
-      }
+      this.toggleEmotionKeyboard()
     } else if (tag === 'url') {
       this.replyText = ReplyManagerClass.insertUrl(this.replyText, this.selStart, this.selEnd)
     } else if (tag === 'at') {
@@ -530,6 +563,7 @@ export struct ReplyDialog {
         })
       } else {
         TextArea({ text: this.replyText, placeholder: '写下你的回复…', controller: this.textAreaController })
+          .id(REPLY_TEXT_AREA_ID)
           .width('100%')
           .height(this.currentBreakpoint === 'sm' ? 210 : 250)
           .padding(14)
@@ -540,6 +574,7 @@ export struct ReplyDialog {
           .borderRadius(16)
           .attributeModifier(UIMaterialManager.dialogFieldMaterial)
           .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .onFocus(() => { this.onEditorFocus() })
           .onChange((value: string) => { this.replyText = value })
           .onTextSelectionChange((start: number, end: number) => {
             if (this.previewMode) {
