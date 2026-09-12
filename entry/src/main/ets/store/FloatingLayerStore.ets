@@ -65,6 +65,34 @@ export class FloatingLayerStoreClass {
     this.stack = this.stack.filter(p => p !== page)
   }
 
+  /**
+   * 打开资料卡（所有调用点的统一入口）。
+   *
+   * 两段式压栈的必要性：气泡被**系统**销毁时（应用切后台、横竖屏旋转、折叠状态变化）不会回写
+   * 显隐状态，`top` 会残留 `PROFILE_CARD`。此时直接 `push` 只是把同一页移到栈顶——`stack` 虽然
+   * 换了新数组，但 `top === PROFILE_CARD` 的布尔结果没变，`bindPopup` 的 `show` 参数不经历
+   * `false → true` 跳变，气泡**再也弹不出来**。先移除、下一帧再压栈，保证跳变必然发生。
+   * 正常路径（`top` 不是资料卡）不受影响。
+   *
+   * @param uid - 目标用户 UID
+   * @param x - 资料卡左上角的屏幕绝对 x（vp）
+   * @param y - 资料卡左上角的屏幕绝对 y（vp）
+   */
+  openProfileCard(uid: string, x: number, y: number): void {
+    const stuck: boolean = this.top === FloatingPage.PROFILE_CARD
+    this.profileCardUid = uid
+    this.profileCardX = x
+    this.profileCardY = y
+    if (stuck) {
+      this.remove(FloatingPage.PROFILE_CARD)
+      setTimeout((): void => {
+        this.push(FloatingPage.PROFILE_CARD)
+      }, 0)
+    } else {
+      this.push(FloatingPage.PROFILE_CARD)
+    }
+  }
+
   clear(): void {
     this.stack = []
   }

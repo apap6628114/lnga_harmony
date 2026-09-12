@@ -18,8 +18,8 @@ const logger = new Logger(DOMAIN_UI, 'FloatingLayerComponent')
  * - 回复 / 发新主题编辑器 → `bindSheet` 半模态面板。系统承担进出场动效、下拉手势与
  *   键盘避让；`sm` 断点为底部面板，`md+` 断点用 `SheetType.CENTER` 保持原先的居中浮层形态。
  * - 图片查看器 → `bindContentCover` 全屏模态。
- * - 资料卡 → 保持自绘 `.position()` 定位，原因见 build 内注释（`bindPopup` 的定位模型
- *   不覆盖「任意屏幕坐标气泡」）。
+ * - 资料卡 → `bindPopup` 气泡：锚点用 `.position()` 精确落位、气泡本体吃系统沉浸材质
+ *   （定位推导见 `profileCardPopupOptions`）。
  *
  * 确认类弹窗（通用确认、放弃编辑确认）已迁出本组件，改由各调用点的官方高级对话框
  * 模板（`@ohos.arkui.advanced.Dialog` 的 `AlertDialog`）承载。
@@ -117,9 +117,9 @@ export struct FloatingLayerComponent {
       dragBar: false,
       showClose: false,
       // 内容层一律让位给系统材质：BindOptions.backgroundColor 默认是 Color.White，
-      // 不显式置透明的话，这层白色内容会盖住背板层的沉浸材质；
-      // 设备不支持沉浸材质时该常量回退为半透明填充兜底（见 UIMaterialManager）。
-      backgroundColor: UIMaterialManager.sheetContentBackdrop,
+      // 不显式置透明的话，这层白色内容会盖住背板层的沉浸材质。不做设备降级
+      // （见 UIMaterialManager 的约定说明）。
+      backgroundColor: Color.Transparent,
       // 背板材质：半模态转场属于 Release 允许「页面内全部区域」生效的弹窗类接口，
       // 面板本体由系统接管模糊、折射、边框、阴影与弹出动效（含空间形变）。
       systemMaterial: UIMaterialManager.sheetMaterial,
@@ -168,6 +168,60 @@ export struct FloatingLayerComponent {
       }
     }
     return options
+  }
+
+  /**
+   * 资料卡气泡选项（官方 `bindPopup` 承载）。
+   *
+   * **为什么用「锚点 + offset 抵消」而不是"全屏锚点居中"**：`Placement` 枚举只有
+   * `Left/Right/Top/Bottom` 与 8 个角向组合，**没有 `Center`**——Popup 的模型是"气泡永远在锚点
+   * 外侧"，不存在"居中叠加在锚点上"这种落位。因此锚点必须自己落在目标位置：
+   * 一个 1×1 的透明节点用 `.position()` 定到 `(profileCardX, profileCardY)`，气泡以
+   * `Placement.BottomLeft` 贴着它向左下推导，左上角落在"锚点左下角 + `targetSpace`"，
+   * 再用 `offset.y = -1` 抵消锚点自身高度，气泡左上角就正好等于 store 里的坐标。
+   * （注意 `CustomPopupOptions.offset` 的类型是 `Position`（`x` / `y`），不是 `Offset`（`dx` / `dy`）
+   * ——写成 `{ dx, dy }` 编译器会直接报类型不匹配。）
+   *
+   * 材质由 `systemMaterial` 承担：Popup 控制属 Release 允许「页面内全部区域」生效的弹窗类接口；
+   * 遮罩（原自绘全屏 `Column`）改由 `mask` 提供，点击外部关闭走 `autoCancel`。
+   *
+   * @returns 气泡选项
+   */
+  private profileCardPopupOptions(): CustomPopupOptions {
+    const options: CustomPopupOptions = {
+      builder: (): void => { this.ProfileCardContent() },
+      placement: Placement.BottomLeft,
+      // 气泡与锚点零间距，气泡左上角 = 锚点左下角（= (x, y + 1)），再靠 offset 上移 1vp 归位
+      targetSpace: 0,
+      offset: { x: 0, y: -1 },
+      // 背板完全让位给系统材质（不做设备降级，见 UIMaterialManager 的约定说明）
+      popupColor: Color.Transparent,
+      backgroundBlurStyle: BlurStyle.NONE,
+      enableArrow: false,
+      radius: 14,
+      width: 280,
+      autoCancel: true,
+      mask: { color: AppColors.overlay },
+      systemMaterial: UIMaterialManager.popupMaterial,
+      onStateChange: (event) => {
+        // 系统关闭气泡（点击遮罩 / 返回键 / 页面操作）后回写 store：store 是浮层显隐的单一真源。
+        // 不回写的话 top 会停在 PROFILE_CARD，根 Stack 的 hitTestBehavior 与状态都会错位。
+        if (!event.isVisible && this.floating.top === FloatingPage.PROFILE_CARD) {
+          this.floating.remove(FloatingPage.PROFILE_CARD)
+        }
+      }
+    }
+    return options
+  }
+
+  /** 资料卡内容（气泡本体材质由 `profileCardPopupOptions` 的系统材质承担）。 */
+  @Builder
+  ProfileCardContent() {
+    ProfileCardPopup({
+      targetUid: this.floating.profileCardUid,
+      currentBreakpoint: this.currentBreakpoint,
+      onClose: () => { this.floating.remove(FloatingPage.PROFILE_CARD) }
+    })
   }
 
   /** 回复编辑器半模态内容。 */
@@ -259,37 +313,22 @@ export struct FloatingLayerComponent {
           this.imageCoverOptions()
         )
 
-      // 资料卡：任意屏幕坐标浮层。
+      // 资料卡：官方气泡（bindPopup）承载 → 气泡**本体**由系统沉浸材质承担。
       //
-      // 这里保持自绘定位而不是 `bindPopup`（实测结论，勿轻易改回）：
-      // `bindPopup` 的位置由**锚点组件的几何区域**经 `placement` 推导，`offset` 只是相对该
-      // 推导结果的偏移（声明原文：Offset of the popup relative to the display position
-      // specified by placement）。资料卡要出现在「用户点哪就在哪」的任意坐标上，与这个模型
-      // 不匹配，两种锚点方案实测均不可用：
-      // - 零尺寸锚点：建立不出气泡基准位置，内容不渲染、只剩蒙层挡屏（表现为「看不见但点不动」）；
-      // - 1×1 锚点：气泡以锚点几何推导，实际跑到屏幕左上角外并被裁剪，遮罩也未覆盖全屏。
-      // 调用点算好的 profileCardX / profileCardY 是屏幕绝对 vp 坐标，用 `.position()` 才能精确落位。
-      if (this.floating.top === FloatingPage.PROFILE_CARD) {
-        Stack() {
-          Column().width('100%').height('100%').backgroundColor(AppColors.overlay)
-            .onClick(() => { this.floating.remove(FloatingPage.PROFILE_CARD) })
-          ProfileCardPopup({
-            targetUid: this.floating.profileCardUid,
-            currentBreakpoint: this.currentBreakpoint,
-            onClose: () => { this.floating.remove(FloatingPage.PROFILE_CARD) }
-          })
-          .position({
-            x: this.floating.profileCardX,
-            y: this.floating.profileCardY
-          })
-        }
-        .width('100%').height('100%')
-      }
+      // 锚点是一个用 `.position()` 精确落位的 1×1 透明节点：Popup 的位置由**锚点几何**推导，
+      // 所以"任意屏幕坐标"必须由锚点自己带过去（`Placement` 没有 Center，offset 只做微调）。
+      // 落位细节与参数见 `profileCardPopupOptions`；遮罩、点击外部关闭、返回键都由气泡承担。
+      Column()
+        .width(1).height(1)
+        .hitTestBehavior(HitTestMode.None)
+        .position({ x: this.floating.profileCardX, y: this.floating.profileCardY })
+        .bindPopup(this.floating.top === FloatingPage.PROFILE_CARD, this.profileCardPopupOptions())
     }
     .width('100%').height('100%')
+    // 资料卡不再需要这一项：它的全屏遮罩已交给气泡自身的 `mask` 承担，根节点不必再拦截触摸
+    // （`HitTestMode.Default` 会阻塞兄弟节点，历史上有过"关掉后界面点不动"的事故）。
     .hitTestBehavior(
       (this.floating.top === FloatingPage.IMAGE_VIEWER ||
-       this.floating.top === FloatingPage.PROFILE_CARD ||
        this.floating.top === FloatingPage.REPLY_DIALOG ||
        this.floating.top === FloatingPage.NEW_TOPIC_DIALOG)
         ? HitTestMode.Default : HitTestMode.None

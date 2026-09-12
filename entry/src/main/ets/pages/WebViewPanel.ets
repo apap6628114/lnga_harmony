@@ -1,7 +1,7 @@
 import { webview } from '@kit.ArkWeb'
 import { common } from '@kit.AbilityKit'
 import { BusinessError, pasteboard } from '@kit.BasicServicesKit'
-import { PanelNavBar } from '../common/components/PanelNavBar'
+import { PanelNavBar, NavBarMenuItem } from '../common/components/PanelNavBar'
 import { routerStore } from '../store/RouterStore'
 import { getSession } from '../service/api/AuthApi'
 import { getActiveDomain } from '../service/api/MiscApi'
@@ -16,8 +16,6 @@ import { PageScope } from '../common/concurrency/PageScope'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
 const logger = new Logger(DOMAIN_UI, 'WebViewPanel')
-/** 标题栏高度。 */
-const NAV_BAR_H: number = 44
 /** NGA 官方鸿蒙客户端 WebView 标识，供 H5 选择 app Cookie 分支。 */
 const NGA_HARMONY_USER_AGENT_SUFFIX: string = ' NGA_Harmony/1.0.0'
 /** 普通网页使用的 WebView User-Agent。 */
@@ -29,10 +27,6 @@ export struct WebViewPanel {
   @Prop url: string = ''
   @StorageProp('navBarHeight') navBarHeight: number = 0
   private controller: webview.WebviewController = new webview.WebviewController()
-  /** 系统状态栏高度。 */
-  @StorageProp('statusBarHeight') statusBarHeight: number = 0
-  /** 是否显示标题栏"更多"下拉菜单。 */
-  @State showMoreMenu: boolean = false
   @State pageTitle: string = ''
   @State isLoading: boolean = true
   @State progress: number = 0
@@ -241,47 +235,29 @@ export struct WebViewPanel {
   }
 
   /**
-   * 构建标题栏"更多"下拉菜单（与帖子页右上角菜单同款样式）。
+   * 更多菜单项（菜单本体在 `PanelNavBar` **内部**渲染，锚点是那颗 more 按钮）。
+   *
+   * 材质由 `MenuOptions.systemMaterial` 的系统沉浸材质承担（**菜单控制**属 Release 允许
+   * 「页面内全部区域」生效的弹窗类接口）。回调写成**箭头函数**以捕获本组件的 `this`
+   * （见 `NavBarMenuItem` 说明）。
+   *
+   * @returns 菜单项
    */
-  @Builder
-  moreMenu() {
-    Stack() {
-      Column() {}.width('100%').height('100%').onClick(() => { this.showMoreMenu = false })
-
-      Column() {
-        Column() {
-          Text('浏览器打开').fontSize(15)
-            .fontColor(AppColors.textPrimary)
-            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-            .width('100%')
-            .onClick(() => {
-              this.showMoreMenu = false
-              this.openInBrowser()
-            })
-        }
-        .width('100%')
-
-        Divider().width('100%').color(AppColors.separator)
-
-        Column() {
-          Text('复制URL').fontSize(15)
-            .fontColor(AppColors.textPrimary)
-            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-            .width('100%')
-            .onClick(() => {
-              this.showMoreMenu = false
-              this.copyCurrentUrl()
-            })
-        }
-        .width('100%')
+  private moreMenuItems(): NavBarMenuItem[] {
+    const items: NavBarMenuItem[] = []
+    items.push({
+      label: '浏览器打开',
+      action: (): void => {
+        this.openInBrowser()
       }
-      .width(150)
-      .borderRadius(10)
-      .attributeModifier(UIMaterialManager.surfaceMaterial)
-      .position({ top: this.statusBarHeight + NAV_BAR_H + 6, right: 16 })
-    }
-    .width('100%').height('100%')
-    .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
+    })
+    items.push({
+      label: '复制URL',
+      action: (): void => {
+        this.copyCurrentUrl()
+      }
+    })
+    return items
   }
 
   build() {
@@ -294,9 +270,10 @@ export struct WebViewPanel {
             routerStore.back()
           },
           rightIcon: $r('app.media.icon_more'),
-          onRightClick: (): void => {
-            this.showMoreMenu = !this.showMoreMenu
-          }
+          // 菜单在 PanelNavBar **内部**渲染、锚定这颗 more 按钮；两参 bindMenu 下开合由系统持有，
+          // 本组件不再持有显隐状态，按钮的 onClick 也因此不需要
+          hasMenu: true,
+          menuItemsProvider: (): NavBarMenuItem[] => this.moreMenuItems()
         })
 
         // ─── 加载进度条 ───
@@ -409,10 +386,6 @@ export struct WebViewPanel {
       .width('100%')
       .justifyContent(FlexAlign.End)
       .padding({ right: 16, bottom: 16 + this.navBarHeight })
-
-      if (this.showMoreMenu) {
-        this.moreMenu()
-      }
     }
     .width('100%').height('100%')
     .alignContent(Alignment.BottomEnd)

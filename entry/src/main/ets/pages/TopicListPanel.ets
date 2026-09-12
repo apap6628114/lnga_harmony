@@ -20,7 +20,7 @@ import { FavBoard } from '../model/SocialEntries'
 import { AppColors, FONT_COLORS, SORT_MODES, HOT_RANGES, SortMode, BreakpointType } from '../common/constants/Constants'
 import { formatTime } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
-import { PanelNavBar } from '../common/components/PanelNavBar'
+import { PanelNavBar, NavBarMenuItem } from '../common/components/PanelNavBar'
 import { ThreadDataSource } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/components/PageStateView'
 import { AnonymousName } from '../common/components/AnonymousName'
@@ -145,8 +145,6 @@ export struct TopicListPanel {
   @State listViewportHeight: number = 1
   @State loadingContentOpacity: number = 0
   private loadingDelayTimer: number = -1
-  /** 是否显示标题栏更多菜单。 */
-  @State showMoreMenu: boolean = false
   /** 是否显示子版块显示面板。 */
   @State showSubBoardFilterPanel: boolean = false
   /** 当前父版块返回的子版块。 */
@@ -243,7 +241,6 @@ export struct TopicListPanel {
     this.sortSelected = [0]
     this.showHotRangeMenu = false
     this.modeStates.clear()
-    this.showMoreMenu = false
     this.showSubBoardFilterPanel = false
     this.subBoards = []
     this.updatingSubBoardFilterId = ''
@@ -421,7 +418,7 @@ export struct TopicListPanel {
    * 打开子版块显示面板。
    */
   private openSubBoardFilterPanel(): void {
-    this.showMoreMenu = false
+    this.showHotRangeMenu = false
     if (!this.canManageCurrentBoard()) {
       appStore.showToast('当前页面不支持子版块显示')
       return
@@ -816,7 +813,6 @@ export struct TopicListPanel {
     const mode: string = SORT_MODES[index].key
     if (mode === 'hot') {
       if (this.sortMode === 'hot') {
-        this.showMoreMenu = false
         this.showHotRangeMenu = true
         return
       }
@@ -1136,18 +1132,17 @@ export struct TopicListPanel {
         rightIconBadge: this.canManageCurrentBoard()
           ? this.unreadNotiCount + this.unreadMessageCount + this.unreadActivityCount : 0,
         onRightClick: (): void => {
-          this.showMoreMenu = false
           routerStore.navigateActivity(Screen.notifications())
         },
         secondaryRightIcon: this.canManageCurrentBoard() ? $r('app.media.icon_more') : '',
-        onSecondaryRightClick: (): void => {
-          this.showMoreMenu = !this.showMoreMenu
-        }
+        // 菜单挂在**第二颗**按钮（更多）上，并由 PanelNavBar 内部渲染：折叠屏多列路由下，只有以
+        // 那颗真实按钮为锚点，菜单才不会被算到窗口左侧。两参 bindMenu 下开合由系统持有，本组件
+        // 不再持有显隐状态，第二颗按钮因此也不需要 onClick。
+        hasMenu: this.canManageCurrentBoard(),
+        menuOnSecondary: true,
+        menuItemsProvider: (): NavBarMenuItem[] => this.moreMenuItems()
       })
         .width('100%').position({ x: 0, y: 0 })
-        // 版块菜单锚点＝整条标题栏：菜单本体由系统沉浸材质承担（见 moreMenuOptions）
-        .bindMenu(this.showMoreMenu && this.canManageCurrentBoard(),
-          this.MoreMenu(), this.moreMenuOptions())
 
       this.FloatingActions()
     }
@@ -1186,52 +1181,34 @@ export struct TopicListPanel {
   }
 
   /**
-   * 版块更多菜单（官方 `bindMenu` 承载，选项见 {@link moreMenuOptions}）。
+   * 版块更多菜单项（菜单本体在 `PanelNavBar` **内部**渲染，锚点是那颗"更多"按钮）。
    *
-   * 材质由 `MenuOptions.systemMaterial` 的系统沉浸材质承担——**菜单控制**属 Release 允许
-   * 「页面内全部区域」生效的弹窗类接口，页面内容区也能拿到真材质（迁移前是手搓 Stack 浮层 +
-   * 自绘磨砂玻璃）。因此这里只声明菜单项：不再有手搓遮罩、圆角、描边、投影与分隔线。
+   * 材质由 `MenuOptions.systemMaterial` 的系统沉浸材质承担（菜单控制属页面内全区域生效的
+   * 弹窗类接口）。回调写成**箭头函数**以捕获本组件的 `this`（见 `NavBarMenuItem` 说明）。
    *
-   * 菜单项点击后仍要手动把 `showMoreMenu` 置回 false：系统只隐藏菜单，**不回写**驱动显隐的状态。
+   * @returns 菜单项
    */
-  @Builder
-  MoreMenu() {
-    Menu() {
-      MenuItem({ content: '搜索本版' })
-        .onClick(() => {
-          this.showMoreMenu = false
-          routerStore.navigateSearch(this.boardFid, this.boardName, this.boardStid)
-        })
-
-      MenuItem({ content: '子版块显示' })
-        .onClick(() => {
-          // 内部已置 showMoreMenu = false
-          this.openSubBoardFilterPanel()
-        })
-
-      MenuItem({ content: this.isCurrentBoardFavorite() ? '取消收藏板块' : '收藏板块' })
-        .onClick(() => {
-          this.toggleCurrentBoardFavorite()
-          this.showMoreMenu = false
-        })
-    }
-  }
-
-  /**
-   * 版块更多菜单选项。
-   *
-   * 锚点＝整条 `PanelNavBar`（菜单挂在它身上）。迁移前是 `.position({ top: statusBarHeight + 50,
-   * right: 12 })` 的固定浮层，改为 `Placement.BottomRight` 后由系统按标题栏几何落位。
-   *
-   * @returns 菜单选项
-   */
-  private moreMenuOptions(): MenuOptions {
-    const options: MenuOptions = {
-      placement: Placement.BottomRight,
-      enableArrow: false,
-      systemMaterial: UIMaterialManager.menuMaterial
-    }
-    return options
+  private moreMenuItems(): NavBarMenuItem[] {
+    const items: NavBarMenuItem[] = []
+    items.push({
+      label: '搜索本版',
+      action: (): void => {
+        routerStore.navigateSearch(this.boardFid, this.boardName, this.boardStid)
+      }
+    })
+    items.push({
+      label: '子版块显示',
+      action: (): void => {
+        this.openSubBoardFilterPanel()
+      }
+    })
+    items.push({
+      label: this.isCurrentBoardFavorite() ? '取消收藏板块' : '收藏板块',
+      action: (): void => {
+        this.toggleCurrentBoardFavorite()
+      }
+    })
+    return items
   }
 
   /**
@@ -1270,7 +1247,15 @@ export struct TopicListPanel {
     const options: MenuOptions = {
       placement: Placement.BottomRight,
       enableArrow: false,
-      systemMaterial: UIMaterialManager.menuMaterial
+      // 背板交给系统材质：不设 backgroundColor / backgroundBlurStyle（不做设备降级，
+      // 见 UIMaterialManager 的约定说明）
+      systemMaterial: UIMaterialManager.menuMaterial,
+      // 系统关闭菜单（点击区域外 / 列表滚动等）后回写显隐状态。这一处比标题栏菜单更要紧：
+      // 排序条点击是"赋 true"而不是取反，状态一旦卡在 true，再点「热门」赋同一个值不触发刷新，
+      // 菜单会**再也弹不出来**（迁移前由手搓遮罩的 onClick 承担，迁到 bindMenu 时漏了）。
+      onDisappear: (): void => {
+        this.showHotRangeMenu = false
+      }
     }
     return options
   }
@@ -1398,9 +1383,9 @@ export struct TopicListPanel {
    * 子版块筛选半模态选项。
    *
    * `dragBar` / `showClose` 关闭系统附属元素：内容区自带标题行与「关闭」入口，再叠一套系统元素
-   * 会重复。`backgroundColor` 必须走 `sheetContentBackdrop`——`BindOptions.backgroundColor`
-   * 默认是 `Color.White`，不清掉的话这层白色内容会盖住背板材质；设备不支持材质时该常量回退为
-   * 半透明填充兜底。`shouldDismiss` 保留迁移前「提交中点击遮罩不关闭」的守卫。
+   * 会重复。`backgroundColor` 必须显式置 `Color.Transparent`——`BindOptions.backgroundColor`
+   * 默认是 `Color.White`，不清掉的话这层白色内容会盖住背板材质（不做设备降级，见
+   * `UIMaterialManager` 的约定说明）。`shouldDismiss` 保留迁移前「提交中点击遮罩不关闭」的守卫。
    *
    * @returns 半模态选项
    */
@@ -1409,7 +1394,7 @@ export struct TopicListPanel {
       height: '70%',
       dragBar: false,
       showClose: false,
-      backgroundColor: UIMaterialManager.sheetContentBackdrop,
+      backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.sheetMaterial,
       maskColor: AppColors.overlay,
       preferType: this.currentBreakpoint === 'sm' ? SheetType.BOTTOM : SheetType.CENTER,
@@ -1423,6 +1408,11 @@ export struct TopicListPanel {
       shouldDismiss: (sheetDismiss: SheetDismiss) => {
         if (this.updatingSubBoardFilterId.length === 0) {
           sheetDismiss.dismiss()
+        } else {
+          // 提交中要挡住关闭（与迁移前"点击遮罩不关闭"的守卫一致），但必须给一次反馈：
+          // shouldDismiss 覆盖下拉 / 侧滑 / 返回键全部交互式关闭来源，静默 return 会让用户
+          // 觉得"手势失灵"
+          appStore.showToast('正在同步，请稍候')
         }
       }
     }

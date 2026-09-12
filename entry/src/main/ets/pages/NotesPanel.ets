@@ -7,7 +7,7 @@ import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { NotesDataSource } from '../common/datasource/LazyDataSource'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { NoteEditorContent, NoteAddContent } from '../common/dialogs/Dialogs'
-import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
+import { floatingLayerStore } from '../store/FloatingLayerStore'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
@@ -165,10 +165,7 @@ export struct NotesPanel {
       posX = windowX - cardW / 2
       posY = windowY + pad
     }
-    floatingLayerStore.profileCardUid = uid
-    floatingLayerStore.profileCardX = posX
-    floatingLayerStore.profileCardY = posY
-    floatingLayerStore.push(FloatingPage.PROFILE_CARD)
+    floatingLayerStore.openProfileCard(uid, posX, posY)
   }
 
   build() {

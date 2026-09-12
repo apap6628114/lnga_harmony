@@ -18,7 +18,7 @@ import {
   NAV_BAR_H,
   ThreadNavMode
 } from '../common/constants/Constants'
-import { PanelNavBar } from '../common/components/PanelNavBar'
+import { PanelNavBar, NavBarMenuItem } from '../common/components/PanelNavBar'
 import { PostItem } from '../common/components/PostItem'
 import { PostInfoDataSource } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView } from '../common/components/PageStateView'
@@ -138,7 +138,6 @@ export struct ThreadPanel {
   @State titleScrollEffectProgress: number = 0
   /** 黑名单变更版本号。 */
   @StorageProp('blacklistVersion') @Watch('onBlacklistVersionChange') blacklistVersion: number = 0
-  @State showMoreMenu: boolean = false
   @State showPagePicker: boolean = false
   /** 保存帖子对话框控制器（更多菜单「保存帖子」入口）。 */
   private saveDialogController?: CustomDialogController
@@ -331,10 +330,7 @@ export struct ThreadPanel {
       posX = screenX - cardW / 2
       posY = screenY + pad
     }
-    floatingLayerStore.profileCardUid = uid
-    floatingLayerStore.profileCardX = posX
-    floatingLayerStore.profileCardY = posY
-    floatingLayerStore.push(FloatingPage.PROFILE_CARD)
+    floatingLayerStore.openProfileCard(uid, posX, posY)
   }
 
   private hasInitiallyLoaded: boolean = false
@@ -1796,7 +1792,6 @@ export struct ThreadPanel {
     if (this.threadTid.length === 0) {
       return
     }
-    this.showMoreMenu = false
     routerStore.navigateActivity(Screen.favoriteFolders(this.threadTid))
   }
 
@@ -1817,7 +1812,6 @@ export struct ThreadPanel {
     if (this.threadTid.length === 0) {
       return
     }
-    this.showMoreMenu = false
     this.saveRangeValid = false
     this.saveStartPage = -1
     this.saveEndPage = -1
@@ -2154,13 +2148,13 @@ export struct ThreadPanel {
         title: this.getVisibleThreadSubject(),
         rightIcon: $r('app.media.icon_more'),
         scrollEffectProgress: this.titleScrollEffectProgress,
-        onRightClick: (): void => {
-          this.showMoreMenu = !this.showMoreMenu
-        }
+        // 菜单在 PanelNavBar **内部**渲染、锚定这颗 more 按钮（36×36 系统组件）：挂在标题栏整体上时，
+        // 折叠屏多列路由下菜单会被算到窗口左侧。两参 bindMenu 下开合由系统持有，本组件不再持有显隐
+        // 状态，按钮的 onClick 也因此不需要（此前"本地取反 + 系统回写"两个真源会互相打架）。
+        hasMenu: true,
+        menuItemsProvider: (): NavBarMenuItem[] => this.moreMenuItems()
       })
         .width('100%').position({ x: 0, y: 0 })
-        // 菜单锚点＝整条标题栏：菜单本体由系统沉浸材质承担（见 moreMenuOptions）
-        .bindMenu(this.showMoreMenu, this.MoreMenu(), this.moreMenuOptions())
 
       this.BottomBar()
 
@@ -2170,94 +2164,73 @@ export struct ThreadPanel {
   }
 
   /**
-   * 更多菜单（官方 `bindMenu` 承载，选项见 {@link moreMenuOptions}）。
+   * 更多菜单项（菜单本体在 `PanelNavBar` **内部**渲染，锚点是那颗 more 按钮）。
    *
-   * 材质改由 `MenuOptions.systemMaterial` 的系统沉浸材质承担——**菜单控制**属 Release 允许
-   * 「页面内全部区域」生效的弹窗类接口，页面内容区也能拿到真材质（迁移前是手搓 Stack 浮层 +
-   * 自绘磨砂玻璃，见 docs/UI_COMPONENT_MIGRATION.md）。因此这里只声明菜单项：不再有手搓遮罩、
-   * 圆角、描边、投影与分隔线，分隔交给系统菜单自身的项间距与按压反馈。
+   * 材质由 `MenuOptions.systemMaterial` 的系统沉浸材质承担（**菜单控制**属 Release 允许
+   * 「页面内全部区域」生效的弹窗类接口）。回调一律写成**箭头函数**：菜单项在 `PanelNavBar`
+   * 实例上渲染，只有箭头函数才能把 `this` 固定在本组件上（见 `NavBarMenuItem` 的说明）。
    *
-   * 点击菜单项后仍要手动把 `showMoreMenu` 置回 false：系统只会隐藏菜单，**不会回写**驱动显隐的
-   * 状态变量；漏置会让下一次点击按钮的取反逻辑落到错误值上（菜单弹不出来）。
+   * 这里**不再需要**在回调里关闭菜单：两参 `bindMenu` 由系统持有开合，点菜单项后系统自会收起。
+   *
+   * @returns 菜单项
    */
-  @Builder
-  MoreMenu() {
-    Menu() {
-      if (this.isSavedSource()) {
-        MenuItem({ content: '在线模式打开' })
-          .onClick(() => {
-            this.showMoreMenu = false
-            // 不预检帖子是否失效：直接以在线模式打开（栈顶帖子条目自动替换），
-            // 帖子若已删除由在线加载的错误态呈现
-            routerStore.navigateActivity(Screen.thread(this.threadTid))
-          })
-      }
-
-      if (!this.isSavedSource()) {
-        MenuItem({ content: this.getFavoriteMenuLabel() })
-          .onClick(() => {
-            // 内部已置 showMoreMenu = false
-            this.openFavoriteFolders()
-          })
-
-        MenuItem({ content: '离线保存帖子' })
-          .onClick(() => {
-            // 内部已置 showMoreMenu = false
-            this.openSaveThreadDialog()
-          })
-      }
-
-      // 激活态用文字色表达，**不要**用 `.selected()` + `.selectIcon(true)`：
-      // 那套是"选中图标"能力，菜单项会为此单独预留一块左侧图标位；本菜单只有这一项带它，
-      // 于是只有"只看楼主"前面空出一截（实机反馈：像多了几个空格）。
-      // 文字色方案与迁移前的手搓菜单观感一致：激活时主题色，未激活用系统主文字色。
-      MenuItem({ content: '只看楼主' })
-        .contentFontColor(this.authorOnly ? AppColors.primary : $r('sys.color.font_primary'))
-        .onClick(() => {
-          this.authorOnly = !this.authorOnly
-          this.showMoreMenu = false
-          this.pendingTargetPid = ''
-          this.singlePostFallback = false
-          this.pendingTargetLastPost = false
-          this.loadPosts(1, ThreadLoadMode.REPLACE)
-        })
-
-      MenuItem({ content: '从网页打开' })
-        .onClick(() => {
-          this.showMoreMenu = false
-          const baseUrl: string = getActiveDomain()
-          const threadUrl: string = baseUrl + '/read.php?tid=' + this.threadTid
-          routerStore.navigateActivity(Screen.webview(threadUrl))
-        })
-
-      MenuItem({ content: '分享帖子' })
-        .onClick(() => {
-          this.showMoreMenu = false
-          let hostCtx: Context | undefined = this.getUIContext().getHostContext()
-          if (hostCtx !== undefined) {
-            let ctx: Context = hostCtx
-            shareThread(ctx, Number(this.threadTid), this.threadSubject)
-          }
-        })
+  private moreMenuItems(): NavBarMenuItem[] {
+    const items: NavBarMenuItem[] = []
+    if (this.isSavedSource()) {
+      items.push({
+        label: '在线模式打开',
+        action: (): void => {
+          // 不预检帖子是否失效：直接以在线模式打开（栈顶帖子条目自动替换），
+          // 帖子若已删除由在线加载的错误态呈现
+          routerStore.navigateActivity(Screen.thread(this.threadTid))
+        }
+      })
+    } else {
+      items.push({
+        label: this.getFavoriteMenuLabel(),
+        action: (): void => {
+          this.openFavoriteFolders()
+        }
+      })
+      items.push({
+        label: '离线保存帖子',
+        action: (): void => {
+          this.openSaveThreadDialog()
+        }
+      })
     }
-  }
-
-  /**
-   * 更多菜单选项。
-   *
-   * 菜单锚点是整条 `PanelNavBar`（`bindMenu` 挂在它身上），`Placement.BottomRight` 让菜单落在
-   * 标题栏下方并右对齐——与迁移前 `.position({ top: statusBarHeight + NAV_BAR_H + 6, right: 16 })`
-   * 的位置一致。`enableArrow: false`：箭头是 Tips 语义，不属于操作菜单。
-   *
-   * @returns 菜单选项
-   */
-  private moreMenuOptions(): MenuOptions {
-    const options: MenuOptions = {
-      placement: Placement.BottomRight,
-      enableArrow: false,
-      systemMaterial: UIMaterialManager.menuMaterial
-    }
-    return options
+    // 激活态用文字色表达（`active`），不用系统菜单的选中图标：后者会为该菜单项单独预留一块
+    // 左侧图标位，本菜单只有这一项带它时会显得"像多了几个空格"（实机反馈）。
+    items.push({
+      label: '只看楼主',
+      active: this.authorOnly,
+      action: (): void => {
+        this.authorOnly = !this.authorOnly
+        this.pendingTargetPid = ''
+        this.singlePostFallback = false
+        this.pendingTargetLastPost = false
+        this.loadPosts(1, ThreadLoadMode.REPLACE)
+      }
+    })
+    items.push({
+      label: '从网页打开',
+      action: (): void => {
+        const baseUrl: string = getActiveDomain()
+        const threadUrl: string = baseUrl + '/read.php?tid=' + this.threadTid
+        routerStore.navigateActivity(Screen.webview(threadUrl))
+      }
+    })
+    items.push({
+      label: '分享帖子',
+      action: (): void => {
+        let hostCtx: Context | undefined = this.getUIContext().getHostContext()
+        if (hostCtx !== undefined) {
+          let ctx: Context = hostCtx
+          shareThread(ctx, Number(this.threadTid), this.threadSubject)
+        }
+      }
+    })
+    return items
   }
 
   /**
@@ -2356,6 +2329,7 @@ export struct ThreadPanel {
       placement: Placement.Top,
       // 气泡底边与锚点之间的间距：锚点已改为整颗 40vp 胶囊，再留 12vp 即可明确脱离页码条
       targetSpace: 12,
+      // 背板完全让位给系统材质（不做设备降级，见 UIMaterialManager 的约定说明）
       popupColor: Color.Transparent,
       backgroundBlurStyle: BlurStyle.NONE,
       enableArrow: false,

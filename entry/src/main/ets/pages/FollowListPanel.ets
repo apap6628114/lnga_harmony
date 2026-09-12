@@ -20,7 +20,7 @@ import { PanelNavBar } from '../common/components/PanelNavBar'
 import { TAB_ACTIVITIES } from './NotificationPanel'
 import { FollowedUserDataSource } from '../common/datasource/LazyDataSource'
 import { EmptyStateView, LoadingStateView, ErrorStateView } from '../common/components/PageStateView'
-import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
+import { floatingLayerStore } from '../store/FloatingLayerStore'
 import { PageScope } from '../common/concurrency/PageScope'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 
@@ -212,10 +212,7 @@ export struct FollowListPanel {
       posX = windowX - cardW / 2
       posY = windowY + pad
     }
-    floatingLayerStore.profileCardUid = uid
-    floatingLayerStore.profileCardX = posX
-    floatingLayerStore.profileCardY = posY
-    floatingLayerStore.push(FloatingPage.PROFILE_CARD)
+    floatingLayerStore.openProfileCard(uid, posX, posY)
   }
 
   /**

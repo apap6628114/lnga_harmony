@@ -58,7 +58,8 @@ export struct ComposeMessageSheet {
       height: SheetSize.FIT_CONTENT,
       dragBar: false,
       showClose: false,
-      backgroundColor: UIMaterialManager.sheetContentBackdrop,
+      // 内容层完全让位给系统材质，不做设备降级（见 UIMaterialManager 的约定说明）
+      backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.sheetMaterial,
       maskColor: AppColors.overlay,
       preferType: SheetType.BOTTOM,

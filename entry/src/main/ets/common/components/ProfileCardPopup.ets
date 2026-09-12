@@ -285,10 +285,10 @@ export struct ProfileCardPopup {
         this.ProfileContent(this.profile!)
       }
     }
-    .width(280)
-    .borderRadius(14)
-    .clip(true)
-    .attributeModifier(UIMaterialManager.surfaceMaterial)
+    // 形状与材质都由承载它的官方气泡承担：`CustomPopupOptions` 的 `radius: 14` 给圆角、
+    // `systemMaterial`（`popupMaterial`）给背板材质。这里不再自绘玻璃与裁剪——内容层再叠
+    // 不透明填充或二次模糊，都会盖住 / 糊掉背板材质（同一视觉层不叠两种材质）。
+    .width('100%')
   }
 
   @Builder
@@ -384,7 +384,8 @@ export struct ProfileCardPopup {
         .borderRadius(8)
         .padding(6)
         .margin({ top: 12 })
-        .attributeModifier(UIMaterialManager.inputMaterial)
+        // 材质背板之上的内容层：不做背景模糊（系统材质已经糊过背景），只留半透明填充与描边
+        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
       }
 
       Column() {

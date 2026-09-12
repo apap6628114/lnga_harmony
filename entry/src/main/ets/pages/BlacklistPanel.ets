@@ -13,7 +13,7 @@ import { PanelNavBar } from '../common/components/PanelNavBar'
 import { EmptyStateView } from '../common/components/PageStateView'
 import { BlacklistEditorContent } from '../common/dialogs/Dialogs'
 import { normalizeBlacklistUserId } from '../common/utils/BlacklistUtils'
-import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
+import { floatingLayerStore } from '../store/FloatingLayerStore'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 
@@ -173,10 +173,7 @@ export struct BlacklistPanel {
       posX = windowX - cardW / 2
       posY = windowY + pad
     }
-    floatingLayerStore.profileCardUid = uid
-    floatingLayerStore.profileCardX = posX
-    floatingLayerStore.profileCardY = posY
-    floatingLayerStore.push(FloatingPage.PROFILE_CARD)
+    floatingLayerStore.openProfileCard(uid, posX, posY)
   }
 
   private refreshBlacklist(): void {

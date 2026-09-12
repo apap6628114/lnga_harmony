@@ -4,7 +4,7 @@
 
 import { appStore } from '../store/AppStore'
 import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
-import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
+import { floatingLayerStore } from '../store/FloatingLayerStore'
 import { display } from '@kit.ArkUI'
 import { getTopicList, createTopicListParams, searchForum } from '../service/api/ForumApi'
 import { searchUser } from '../service/api/UserApi'
@@ -366,10 +366,7 @@ export struct SearchPanel {
       posX = windowX - cardW / 2
       posY = windowY + pad
     }
-    floatingLayerStore.profileCardUid = uid
-    floatingLayerStore.profileCardX = posX
-    floatingLayerStore.profileCardY = posY
-    floatingLayerStore.push(FloatingPage.PROFILE_CARD)
+    floatingLayerStore.openProfileCard(uid, posX, posY)
   }
 
   build() {

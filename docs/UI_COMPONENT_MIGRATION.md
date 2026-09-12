@@ -34,7 +34,7 @@
 | `bindSheet` / `bindContentCover` 声明明确写有「cannot be called within `attributeModifier`」 | 不能把这两个 API 塞进工程的 `GlassModifier` |
 | `systemMaterial` 与 `backgroundColor` / `border` / `shadow` 是接管关系 | 走自绘玻璃时就不要同时设系统材质，避免双层背景 |
 | `Placement` 枚举取值是 `Bottom` / `BottomLeft` 等 PascalCase | `Placement.BOTTOM_START` 一类写法不存在 |
-| `bindPopup` 的位置由**锚点组件的几何区域**经 `placement` 推导，`offset` 只是相对该推导结果的微调 | 它表达不了「任意屏幕坐标气泡」；零尺寸锚点更会让内容完全不渲染（实测，见 §4 资料卡） |
+| `bindPopup` 的位置由**锚点组件的几何区域**经 `placement` 推导，`offset` 只是相对该推导结果的微调 | 它本身表达不了「任意屏幕坐标气泡」——要落到任意坐标必须**让锚点自己带上目标坐标**（`Placement` 没有 `Center`，见 §4 与 §7.6）；零尺寸锚点会让内容完全不渲染 |
 | `CustomContentDialog` 是官方高级对话框里**唯一**支持自定义内容的模板 | 输入类弹窗只能用它 |
 | `@BuilderParam` 传值要写 `this.xxx`（不带括号），而 `CustomBuilder` 位置写 `this.xxx()` | 写错会报 `Type 'void' is not assignable to type '() => void'` |
 | 官方 `contentBuilder` 里的 @Builder 在**对话框组件内部**执行 | 不能用 `$变量` 绑定调用方的 @Link：源状态在那一层不存在，打开对话框即闪退（见 §3.2） |
@@ -135,7 +135,7 @@ ProfileCardPopup）、`NoteAddContent`（NotesPanel）、`KeywordEditorContent`�
 
 | 项 | 官方对应 | 不迁移的原因 |
 | --- | --- | --- |
-| 资料卡（`ProfileCardPopup`） | `bindPopup` | **已实测迁移并回退**。`bindPopup` 的位置由**锚点组件的几何区域**经 `placement` 推导，`offset` 只是相对该推导结果的微调（声明原文：Offset of the popup relative to the display position specified by **placement**），模型里没有「任意屏幕坐标」这一能力。两种锚点方案均失败：**零尺寸锚点**建立不出气泡基准位置 → 内容不渲染、只剩蒙层挡屏（用户实测「看不见但点不动，只能按返回键」）；**1×1 锚点** → 气泡按锚点几何推导后跑到屏幕左上角外并被裁剪，遮罩也未覆盖全屏。资料卡的坐标是调用点按点击位置算好的屏幕绝对 vp 值，只有 `.position()` 能精确落位 |
+| 资料卡（`ProfileCardPopup`） | `bindPopup` | **第二轮已迁移**（详见 §7.6）。第一轮回退的结论仍然成立——`bindPopup` 的位置由**锚点组件的几何区域**经 `placement` 推导，`offset` 只是相对该推导结果的微调，模型里没有「任意屏幕坐标」这一能力；第一轮的两种锚点方案（零尺寸锚点 → 内容不渲染只剩蒙层；1×1 锚点 → 气泡跑到屏幕左上角外被裁剪）都**没有让锚点带上目标坐标**。第二轮把锚点本身用 `.position()` 放到 `(profileCardX, profileCardY)`（绝对 vp 坐标由调用点算好），气泡才跟着落到点上 |
 | `PanelNavBar` 标题栏 | `ComposeTitleBar` / `SelectTitleBar` / `EditableTitleBar` | 三者都没有 `onBack` 回调（返回固定走系统返回）、没有标题区 `@BuilderParam`；`ComposeTitleBar` 无角标字段；`SelectTitleBar` 的标题必须是下拉选择器（`options` 必填）；三者声明都明确要求「避免配置通用属性/事件」（会生成 `__Common__` 节点），而现有用法是 `.width('100%').position(...)`。强行替换会同时丢失自定义返回拦截、未读角标、滚动进入标题区的渐变与玻璃圆底图标 |
 | `SettingRow` 设置行 | `ComposeListItem` / `SubHeader` | `IconType` 是图标尺寸枚举（8/16/24/40/64/96vp 六档），无法表达现有的「29×29 圆角色块 + 17vp 白色填充图标」；`operateItem` 没有未读数徽章字段；行高与字号会变成官方规范。`SubHeader` 是分组标题（新增视觉元素），不是列表行 |
 | 三列 / 侧边栏导航容器 | `SideBarContainer` + `Navigation` | 本轮范围外（用户明确排除） |
@@ -187,16 +187,18 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
 | --- | --- | --- |
 | 32 处官方对话框（`AlertDialog` / `TipsDialog` / `SelectDialog` / `CustomContentDialog`） | `CustomDialogControllerOptions.systemMaterial` | `dialogMaterial`（Beta1 原配方） |
 | 3 处半模态面板（回复 / 发新主题编辑器、写私信、**子版块筛选**） | `SheetOptions.systemMaterial` | `sheetMaterial`（同配方） |
-| 3 处菜单（**帖子更多菜单**、**版块更多菜单**、**热门时间窗菜单**） | `MenuOptions.systemMaterial`（`bindMenu`） | `menuMaterial`（`THICK` + 暖白 tint） |
+| 4 处菜单（**帖子更多菜单**、**版块更多菜单**、**热门时间窗菜单**、**WebView 更多菜单**） | `MenuOptions.systemMaterial`（`bindMenu`） | `menuMaterial`（`THICK` + 暖白 tint） |
 | 1 处气泡（**页码选择器**） | `CustomPopupOptions.systemMaterial`（`bindPopup`） | `popupMaterial`（`REGULAR` + 暖白 tint） |
 | 7 处设置类 `Slider` + 2 处 `Toggle(Switch)` | 通用属性 `.systemMaterial(...)` | `controlMaterial`（`THIN` + 交互形变 + 点光源） |
 
-**材质参数在真机上实测校准过**（详见 `IMMERSIVE_LIGHT_DESIGN.md` §12.7）：弹窗 / 面板用
-`REGULAR` + 45% 暖白 `materialColor` + `applyShadow: false`——即 API 26 Beta1 时期本工程实测有效的
-原配方（git `0df06e94`）。官方文档给 Dialog 推荐的 `ULTRA_THICK` 在真机上就是一块**不透的白板**
-（与背景是否透明无关），`ULTRA_THIN` / `THIN` 又太透导致背景文字穿透。同时实测确认：
-**Release 下浮层内部的普通组件写 `.systemMaterial(...)` 不生效**，材质只在面板本体那一层参与渲染，
-所以面板内部控件（工具条、输入框、中性按钮）仍走自绘内容层材质。
+**材质参数以 `UIMaterialManager.ets` 为唯一真源**（本文档曾与 `IMMERSIVE_LIGHT_DESIGN.md` §12.7、
+正文出现三方漂移：表格写 `ULTRA_THICK`、正文写 `REGULAR` + 45% 暖白 + `applyShadow: false`、
+代码写 `THIN` + `applyShadow: true`）。当前取值：弹窗 / 面板 / 半模态 `THIN`、菜单 `THICK`、
+气泡 `REGULAR`，统一 `material_surface_tint`（亮 `#73FEFAF6` / 暗 `#73121214`）+ `applyShadow: true`。
+官方文档给 Dialog 推荐的 `ULTRA_THICK` 在真机上就是一块**不透的白板**（与背景是否透明无关），
+`ULTRA_THIN` 又太透导致背景文字穿透。同时实测确认：**Release 下浮层内部的普通组件写
+`.systemMaterial(...)` 不生效**（判定按**组件类型**，不按所处层级），所以面板内部控件
+（工具条、输入框、中性按钮）仍走自绘内容层材质。
 
 配套改动：
 
@@ -206,14 +208,17 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
 - `SheetOptions.backgroundColor` 走 `UIMaterialManager.sheetContentBackdrop`：设备支持材质时是
   `Color.Transparent`（`BindOptions` 的默认值是 `Color.White`，不显式置透明会盖住背板材质）；
   `isImmersiveMaterialSupported()` 为 `false` 时回退为半透明玻璃填充，避免内容直接浮在蒙层上。
-- 继续自绘玻璃的位置：页面内容区、`PanelNavBar`、`Toast`、资料卡、图片查看器，
-  以及 `AudioPlayer` 的自定义配色进度条（`SliderStyle.OutSet` + 显式 block/track 色）。
+- 继续自绘玻璃的位置：页面内容区常驻控件（面板、列表、`PanelNavBar` 栏位与其图标底板、右下角
+  浮动按钮与页码条）、图片查看器，以及 `AudioPlayer` 的自定义配色进度条（`SliderStyle.OutSet` +
+  显式 block/track 色）。**资料卡已迁到 `bindPopup`**（见 §7.6）；`Toast` 从来不属于自绘玻璃——
+  它用的是不透明 `AppColors.toastBg`，列进去会让后来者按错误的契约去改它。
 
 ### 7.3 仍未覆盖的位置（需要结构变更才能拿到材质）
 
-`PanelNavBar` 标题栏是内容区自绘栏位，**不在** `Navigation` 标题栏内，因此拿不到系统材质。
-要接入需把面板栈改造成 `Navigation`/`NavDestination` + `barStyle: BarStyle.STACK`，
-属于导航模型重构（本轮范围外，需要时另立目标评估）。
+`PanelNavBar` 的**栏位本体与图标底板**仍是内容区自绘栏位，不在 `Navigation` 标题栏内，因此拿不到系统材质
+（栏位本体要拿材质需把面板栈改造成 `Navigation`/`NavDestination` + `barStyle: BarStyle.STACK`，
+属于导航模型重构，本轮范围外，需要时另立目标评估）。
+它承载的**菜单**是例外：菜单走 `bindMenu`（弹窗类接口），已在 `PanelNavBar` 内部接入 `menuMaterial`。
 
 ### 7.4 页面内容区浮层的系统材质迁移（ThreadPanel / TopicListPanel）
 
@@ -222,34 +227,46 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
 
 | 原实现 | 迁移后 | 锚点 | 材质 |
 | --- | --- | --- | --- |
-| `ThreadPanel.MoreMenu`（分享菜单，宽 150 玻璃柱） | `bindMenu` + `Menu` / `MenuItem` | 整条 `PanelNavBar`（`Placement.BottomRight`） | `menuMaterial` |
-| `TopicListPanel.MoreMenu`（版块菜单，宽 170） | `bindMenu` | 同上 | `menuMaterial` |
-| `TopicListPanel.HotRangeMenu`（热门时间窗，宽 150 + 打勾） | `bindMenu`（选中态用 `MenuItem.selected` + `selectIcon(true)`） | 排序条那一行 | `menuMaterial` |
+| `ThreadPanel.MoreMenu`（分享菜单，宽 150 玻璃柱） | `bindMenu`（菜单项在 `PanelNavBar` **内部**渲染） | 标题栏那颗 more 按钮 | `menuMaterial` |
+| `TopicListPanel.MoreMenu`（版块菜单，宽 170） | `bindMenu`（同上，挂在第二颗按钮） | 标题栏那颗 more 按钮 | `menuMaterial` |
+| `TopicListPanel.HotRangeMenu`（热门时间窗，宽 150 + 打勾） | `bindMenu`（**保留** `MenuItem.selected` + `selectIcon(true)`：三项都带图标位、彼此对齐） | 排序条那一行 | `menuMaterial` |
 | `ThreadPanel.PagePicker`（页码选择，220×180 固定浮层） | `bindPopup` + `CustomPopupOptions` | 分页条里的「到」 | `popupMaterial` |
 | `TopicListPanel.SubBoardFilterPanel`（88%×70% 居中面板 + 遮罩） | `bindSheet`（`sm` → `BOTTOM`，其余 → `CENTER`） | 面板根 `Stack` | `sheetMaterial` |
 
 四条落地约束（改动时勿回退）：
 
 1. **锚点决定落位**。`bindPopup` / `bindMenu` 的位置由**锚点组件几何 + `placement`** 推导，
-   不存在"任意屏幕坐标"这条能力（§4 资料卡的实测结论）。因此菜单挂在整条标题栏上取
-   `BottomRight`、气泡挂在「到」上取 `Top`；`PagePicker` 里按 `holdingStatus` 手算左右定位的
-   逻辑随之删除——气泡会自动贴向锚点所在的那一侧。
+   不存在"在锚点之外再指定任意坐标"这条能力（§4 资料卡的实测结论）。菜单锚在标题栏那颗 more
+   按钮上取 `BottomRight`、气泡挂在「到」上取 `Top`；`PagePicker` 里按 `holdingStatus` 手算左右
+   定位的逻辑随之删除——气泡会自动贴向锚点所在的那一侧。
+   （资料卡是唯一需要"任意坐标"的浮层，做法见 §7.6：让 1×1 锚点**自己带上目标坐标**。）
    **锚点要用有明确尺寸的容器，不要拿文字本身当锚点**：文字在 40vp 胶囊里是垂直居中的，
    它的布局矩形顶边并不在胶囊顶边，气泡底边会因此落进胶囊内部（实机现象：气泡与页码条纵向
    压住一点）。「到」的锚点改成 `.height(40)` 的 `Stack` 后，`targetSpace: 12` 才能真正把它
    推离页码条。
-2. **两个默认值必须显式改掉**：`bindPopup` 的 `backgroundBlurStyle` 默认 `COMPONENT_ULTRA_THICK`、
-   `popupColor` 默认「透明 + 该模糊」。要写 `backgroundBlurStyle: BlurStyle.NONE` +
-   `popupColor: Color.Transparent`，否则等于在系统材质上再叠一层模糊。
+2. **背板填充与模糊成对设置**（`UIMaterialManager.floatingBackdrop` / `floatingBackdropBlur`）。
+   支持沉浸材质时是 `Color.Transparent` + `BlurStyle.NONE`：`bindPopup` 的 `popupColor` 默认是
+   「透明 + `COMPONENT_ULTRA_THICK` 模糊」、`backgroundBlurStyle` 默认同一模糊，不清掉就是在系统
+   材质之上再叠一层模糊；菜单同理（`ContextMenuOptions.backgroundColor` / `backgroundBlurStyle`）。
+   **设备不支持沉浸材质时（`isImmersiveMaterialSupported() === false`）材质完全不生效**，此时必须
+   回退半透明填充 + 默认模糊，否则气泡 / 菜单会变成**全透明**、内容直接浮在页面文字上——这两个常量
+   成对存在就是为此（与半模态的 `sheetContentBackdrop` 同一思路）。
 3. **内容层分工不变**：浮层**本体**由 options 的系统材质承担；内部普通组件一律自绘内容层
    （页码选择器里的输入框改用 `dialogFieldMaterial`，替代原来的 `backgroundColor(Color.Transparent)`）。
    但 **`Toggle` / `Slider` / `Select` 例外**——它们在 Release 清单内是"页面内全部区域"，
    处在半模态内部**依然生效**，所以子版块筛选里的 `Toggle(Switch)` 继续用 `controlMaterial`。
-4. **状态回写不能省**：系统只隐藏菜单 / 气泡，**不会回写**驱动显隐的状态变量。菜单项 `onClick`
-   里必须把 `showMoreMenu` 置回 `false`；半模态靠 `onDisappear` 回写 `showSubBoardFilterPanel`，
-   `shouldDismiss` 保留「提交中点击遮罩不关闭」的守卫；气泡靠 `onStateChange` 回写
-   `showPagePicker`（漏了它，气泡被系统关掉后状态停在 `true`，下次点击赋同一个值不触发刷新，
-   **气泡再也弹不出来**）。
+4. **状态回写不能省**（三处都踩过）：系统只隐藏菜单 / 气泡，**不会回写**驱动显隐的状态变量。
+   - **标题栏菜单：本地不持有状态。** 用**两参** `bindMenu(content, options)` 把开合完全交给系统。
+     受控形式（一参 `show`）需要"本地布尔取反 + 系统关闭时回写"**两个真源**，二者在"点锚点本身"
+     这条路径上会互相打架——结果取决于系统是否把该次点击透传给锚点，实测症状就是"点区域外关闭后，
+     第一次点按钮没反应、第二次才打开"。
+   - **排序条上的 `HotRangeMenu` 仍是受控形式**（它的入口是 `showHotRangeMenu = true` 的赋值而非
+     锚点点击，且锚点是一整行、不能整行都弹菜单），必须靠 `MenuOptions.onDisappear` 回写。漏了它
+     后果比"点两次"更重：状态卡在 `true` 后赋同一个值不触发刷新，菜单**再也弹不出来**。
+   - **半模态**：靠 `onDisappear` 回写 `showSubBoardFilterPanel`，`shouldDismiss` 保留
+     「提交中点击遮罩不关闭」的守卫。
+   - **气泡**：靠 `onStateChange` 回写 `showPagePicker`（漏了它，气泡被系统关掉后状态停在 `true`，
+     下次点击赋同一个值不触发刷新，**气泡再也弹不出来**）。
 5. **`builder` 字段要传构造器，不能传构造结果**（实机踩坑）。`CustomPopupOptions.builder` 的类型是
    `CustomBuilder`（`() => void`）。在 `build()` 内的**参数位置**写 `this.PagePicker()` 会被 ArkUI 的
    @Builder 语法糖正确转成构造器（`bindSheet` / `bindMenu` 就是这么写的，已验证有效）；但在
@@ -261,16 +278,85 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
    只有那几项会多出一截空白（现象：帖子更多菜单的「只看楼主」前面"像多了几个空格"）。
    与迁移前的手搓菜单对齐：激活时 `AppColors.primary`，未激活用 `$r('sys.color.font_primary')`。
    `HotRangeMenu`（热门时间窗）三项都带选中图标、彼此对齐，属于系统菜单的标准单选表现，保留。
+7. **菜单锚点必须是标题栏里那颗真实的按钮**（折叠屏，三轮踩坑的最终结论）。`MainPage` 是
+   "侧边栏 + 板块列 + 活动列"的嵌套 `Row`/`Column`，md/lg 下内容区起点不是 `x = 0`，菜单锚点的
+   几何很容易被算到窗口左侧。依次排除掉的写法：
+   - **挂在整条标题栏（自定义组件 `PanelNavBar`）上**：多列下菜单被算到**窗口左侧**；
+     sm 单列时侧边栏隐藏、内容区恰好从 0 开始，所以只在折叠屏暴露。
+   - **改成 `.position({ x: 0, y: 0 })` 换成打在自定义组件上的 `.align(Alignment.TopStart)`**：
+     更糟。`align` 是**容器属性**（SDK 原文：在 Stack 中等价于 `alignContent`，即"设置子组件在
+     容器内的对齐方式"），写在自定义组件上只影响它**内部**子节点，组件自己在父 `Stack` 里仍按
+     `alignContent`（两个页面根 Stack 都是 `BottomEnd`）落位——标题栏直接掉到面板底部。
+   - **套一层系统 `Column` 承载对齐与锚点**：对齐问题解决，但多列下菜单仍偏。
+
+   正解：**把菜单放进 `PanelNavBar` 内部，锚定那颗 36×36 的操作按钮**。按钮是系统组件、
+   正常布局、尺寸确定，`Placement.BottomRight` 让菜单右边缘与按钮右边缘对齐，始终落在标题栏
+   范围内。`PanelNavBar` 自身保持 `.position({ x: 0, y: 0 })` 的原有定位（注意落点与迁移前的
+   `.position({ top: … + 6, right: 16 })` **不再是像素等价**，需要精确间距时显式给 `targetSpace`）。
+   配套两条都是踩坑换来的：
+   - **两参 `bindMenu(content, options)`**，本地不持有显隐状态（见约束 4）；
+   - **菜单项用提供者注入**——`menuItemsProvider: () => NavBarMenuItem[]`，而不是
+     `@Prop menuItems: NavBarMenuItem[]`：平台**不允许 `@Prop` 装饰 Function 类型**（API 23 起
+     编译期校验），而菜单项里带着 `action` 回调；提供者还顺带保证菜单每次构建取到最新文案与
+     激活态，并避免滚动期间每帧新建数组灌进 `@Prop`。
+   - 菜单项的 `ForEach` 键要带**激活态指纹**（`label + active`）：键不变时子组件不重建，
+     只改 `active` 会让激活色不刷新。
 
 `bindSheet` 这一项沿用既有配方：`dragBar: false` + `showClose: false` +
 `backgroundColor: UIMaterialManager.sheetContentBackdrop`（`BindOptions.backgroundColor` 默认
-`Color.White`，不清掉就盖住背板材质）+ `maskColor: AppColors.overlay` + `radius: 16`。
+`Color.White`，不清掉就盖住背板材质）+ `maskColor: AppColors.overlay` + 圆角四角同值 16。
+注意 **`SheetOptions.radius` 的类型是 `LengthMetrics | BorderRadiuses | LocalizedBorderRadiuses`，
+不接受裸 `number`**（写 `radius: 16` 直接编译报类型不匹配）；而 `CustomPopupOptions.radius` 是
+`Dimension`、收裸 number——两者规则不同，别互相照抄。
 
 ### 7.5 明确保留自绘玻璃的位置（用户决策，2026-09）
 
-右下角**常驻**控件不迁移：两个页面的发帖 / 刷新 / 回复圆形按钮、`ThreadPanel` 底部分页条胶囊。
+右下角**常驻**控件不迁移：两个页面的发帖 / 刷新 / 回复圆形按钮、`ThreadPanel` 底部分页条胶囊、
+`WebViewPanel` 的前进 / 后退按钮。至此 `UIMaterialManager.surfaceMaterial` 已无调用点——所有手搓
+浮层（菜单、气泡、半模态、资料卡）都迁到了官方弹窗类接口，该工厂保留以备将来需要页面内容区自绘面板。
 理由是它们在 Release 门禁下**不存在**系统材质通道——它们是页面内容区的 `Stack` / `Row` 普通容器，
 换成 `Button` 也一样（`Button` 不在「页面内全部区域」清单里）；唯一在清单内的按钮形态
 `Toggle(ToggleType.Button)` 又因"样式继承 Button 默认值且不支持设置"而做不出圆形按钮
 （`borderRadius` 不生效，本地 SDK `component/toggle.d.ts` 与官方文档均有说明）。因此维持
 `fabMaterial` 自绘磨砂玻璃，视觉与系统材质同屏共存。
+
+### 7.6 资料卡迁移：让锚点带上目标坐标（2026-09 第二轮）
+
+`ProfileCardPopup` 是唯一「用户点哪就在哪」的浮层，第一轮迁 `bindPopup` 失败后退回自绘玻璃（见 §4）。
+第二轮的差别只有一处：**让锚点自己带上目标坐标**，而不是指望气泡支持任意坐标。
+
+```ts
+// FloatingLayerComponent.build()：锚点就是定位载体
+Column()
+  .width(1).height(1)
+  .hitTestBehavior(HitTestMode.None)
+  .position({ x: this.floating.profileCardX, y: this.floating.profileCardY })
+  .bindPopup(this.floating.top === FloatingPage.PROFILE_CARD, this.profileCardPopupOptions())
+```
+
+```ts
+// profileCardPopupOptions()：气泡左上角 = 锚点左下角 + targetSpace，再上移 1vp 抵消锚点高度
+placement: Placement.BottomLeft,
+targetSpace: 0,
+offset: { x: 0, y: -1 },   // 类型是 Position（x / y），不是 Offset（dx / dy）
+```
+
+四条必须记住的约束：
+
+1. **`Placement` 没有 `Center`**（只有 `Left`/`Right`/`Top`/`Bottom` 与 8 个角向组合，本地 SDK
+   `enums.d.ts:3056`）。Popup 的模型是"气泡在锚点**外侧**"，不存在"居中叠加在锚点上"这种落位；
+   任意坐标只能靠"锚点落位 + `offset` 抵消"，不要试图用"全屏锚点 + 居中"去表达。
+2. **`CustomPopupOptions.offset` 是 `Position`（`x`/`y`）**，而 `CustomDialogControllerOptions.offset`
+   才是 `Offset`（`dx`/`dy`）。写错编译器直接报
+   `Type '{ dx: number; dy: number; }' is not assignable to type 'Position'`。
+3. **遮罩与关闭全部交还系统**：原自绘全屏 `Column`（`AppColors.overlay` + 点击关闭）删除，改由
+   `mask: { color: AppColors.overlay }` + `autoCancel: true` 承担；`onStateChange` 回写
+   `floatingLayerStore`（store 是显隐的单一真源），根 `Stack` 的 `hitTestBehavior` 同时移除了
+   `PROFILE_CARD` 分支——不再需要靠全屏节点拦触摸。
+4. **内容层让位材质**：`ProfileCardPopup` 去掉 `.borderRadius(14)` / `.clip(true)` /
+   `surfaceMaterial`（形状交给气泡的 `radius: 14`、材质交给 `popupMaterial`）；内部统计条从
+   `inputMaterial`（带背景模糊）换成 `dialogFieldMaterial`（不做模糊），避免对同一层背景二次糊化。
+
+**残留风险（需真机确认）**：气泡下方空间不足时系统会自动调整位置，`offset` 随之失效。
+调用点的边界夹取（`cardH = 400`）保证卡片下方至少留 400vp，正常情况下不会触发；若资料内容
+超过这个高度或点击点贴近屏幕底部，可能出现位置偏移。

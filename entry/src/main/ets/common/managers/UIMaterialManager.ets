@@ -212,23 +212,19 @@ export class UIMaterialManager {
   })
 
   /**
-   * 当前设备是否支持沉浸式系统材质（官方兼容性接口）。
+   * **材质能力与降级：本工程不做设备降级（程序约定）。**
    *
-   * 返回 `false` 时，`systemMaterial` 上的 `ImmersiveMaterial` **完全不产生视觉效果**
-   * （官方声明原文：setting the ImmersiveMaterial object in the systemMaterial attribute will
-   * not take effect）。低算力设备不属于此类：它们由系统降级为背景色 / 边框 / 阴影表现。
-   */
-  static readonly immersiveMaterialSupported: boolean = uiMaterial.isImmersiveMaterialSupported()
-
-  /**
-   * 半模态面板的**内容层背景**（`SheetOptions.backgroundColor`）。
+   * 不支持沉浸式系统材质的设备**不在适配范围内**，也不允许为它们写降级分支：
+   * `uiMaterial.isImmersiveMaterialSupported()` 返回 `false` 时材质完全不生效，此时气泡 / 菜单 /
+   * 半模态的背板就是全透明——这是**接受**的结果，不再提供"回退半透明填充"之类的兜底。
+   * 所以浮层背板一律写成"完全让位给系统材质"的固定形式，不做条件分支：
    *
-   * 设备支持材质时置 `Color.Transparent`，把背景完全让给背板材质；
-   * 设备不支持材质时 `Transparent` 会让面板内容直接浮在蒙层上、失去可读背景，
-   * 因此回退成半透明玻璃填充兜底。
+   * - 气泡（`bindPopup`）：`popupColor: Color.Transparent` + `backgroundBlurStyle: BlurStyle.NONE`
+   * - 菜单（`bindMenu`）：不设 `backgroundColor` / `backgroundBlurStyle`（背板交给系统材质）
+   * - 半模态（`bindSheet`）：`SheetOptions.backgroundColor: Color.Transparent`
+   *
+   * 低算力设备不属于"不支持"：它们由系统自行降级为背景色 / 边框 / 阴影表现，无需应用干预。
    */
-  static readonly sheetContentBackdrop: ResourceColor =
-    uiMaterial.isImmersiveMaterialSupported() ? Color.Transparent : $r('app.color.glass_surface_fill')
 
   /** 玻璃层上的主前景色（跟随系统深浅色）。 */
   static readonly adaptiveForeground: ResourceColor = $r('sys.color.font_primary')
