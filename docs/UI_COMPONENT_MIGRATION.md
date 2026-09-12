@@ -256,6 +256,11 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
    **普通方法返回的 options 对象字段**里写 `this.PagePicker()` 会被当作立即调用、得到 `void`，
    气泡拿到空 builder，**整个气泡不渲染**（现象：点「到」毫无反应，连空壳都没有）。
    该字段统一写 `builder: (): void => { this.PagePicker() }`。
+6. **菜单项的激活态用 `contentFontColor` 表达，不要用 `.selected()` + `.selectIcon(true)`**（实机踩坑）。
+   后者是"选中图标"能力，菜单项会为图标单独预留一块左侧位置；一个菜单里只有个别项带它时，
+   只有那几项会多出一截空白（现象：帖子更多菜单的「只看楼主」前面"像多了几个空格"）。
+   与迁移前的手搓菜单对齐：激活时 `AppColors.primary`，未激活用 `$r('sys.color.font_primary')`。
+   `HotRangeMenu`（热门时间窗）三项都带选中图标、彼此对齐，属于系统菜单的标准单选表现，保留。
 
 `bindSheet` 这一项沿用既有配方：`dragBar: false` + `showClose: false` +
 `backgroundColor: UIMaterialManager.sheetContentBackdrop`（`BindOptions.backgroundColor` 默认

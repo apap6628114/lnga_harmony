@@ -2207,9 +2207,12 @@ export struct ThreadPanel {
           })
       }
 
+      // 激活态用文字色表达，**不要**用 `.selected()` + `.selectIcon(true)`：
+      // 那套是"选中图标"能力，菜单项会为此单独预留一块左侧图标位；本菜单只有这一项带它，
+      // 于是只有"只看楼主"前面空出一截（实机反馈：像多了几个空格）。
+      // 文字色方案与迁移前的手搓菜单观感一致：激活时主题色，未激活用系统主文字色。
       MenuItem({ content: '只看楼主' })
-        .selected(this.authorOnly)
-        .selectIcon(true)
+        .contentFontColor(this.authorOnly ? AppColors.primary : $r('sys.color.font_primary'))
         .onClick(() => {
           this.authorOnly = !this.authorOnly
           this.showMoreMenu = false
