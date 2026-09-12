@@ -209,6 +209,14 @@ export class UIMaterialManager {
   /** 玻璃层上的次要前景色与禁用态前景色（跟随系统深浅色）。 */
   static readonly adaptiveSecondaryForeground: ResourceColor = $r('sys.color.font_secondary')
 
+  /**
+   * 玻璃层上的**图标色**（跟随系统深浅色）。
+   *
+   * 数值与 `adaptiveForeground` 相同，但按 §12.3 的约定，图标应走 `sys.color.icon_primary`
+   * 而不是文字色资源——语义正确，系统日后细分图标色阶时也能自动跟进。
+   */
+  static readonly adaptiveIcon: ResourceColor = $r('sys.color.icon_primary')
+
   /** 输入控件的正文色（跟随系统深浅色）。 */
   static readonly inputForeground: ResourceColor = $r('sys.color.font_primary')
 
@@ -328,6 +336,9 @@ export class UIMaterialManager {
    * 与 `dialogFieldMaterial` 同属内容层，只用更实的填充把「可点击」与「输入区」区分开：
    * 输入框是淡底（12%），中性按钮是实一点的胶囊（32% 暖白/暖灰）+ 一圈描边。
    * 主操作按钮仍按工程契约走实底主题色（见 §12.5），不套这一层。
+   *
+   * **当前无调用点**：回复 / 发帖编辑器改造后，面板内原有的中性按钮（「取消」）已被移除
+   * （主操作上移到头部、走实底主题色）。保留该材质以备面板内再出现中性次要操作。
    */
   static readonly dialogActionMaterial: GlassModifier = new GlassModifier({
     fill: $r('app.color.glass_neutral_fill'),

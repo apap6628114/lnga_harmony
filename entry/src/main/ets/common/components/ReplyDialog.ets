@@ -115,6 +115,17 @@ export struct ReplyDialog {
   private textAreaController: TextAreaController = new TextAreaController()
 
   /**
+   * 自动聚焦补试的定时器句柄。
+   *
+   * 补试是「转场期间焦点请求被忽略」的兜底，但它也可能反过来把用户刚点下的焦点（连同光标）
+   * 抢回来，因此用户一旦交互、开始关闭或组件销毁就撤销它（见 `cancelAutoFocusRetry`）。
+   */
+  private autoFocusRetryTimer: number = -1
+
+  /** 组件是否已销毁：异步回调据此停止改状态、停止抢焦点。 */
+  private disposed: boolean = false
+
+  /**
    * 「放弃编辑」确认框（官方高级对话框模板）。
    *
    * 迁移前由 `floatingLayerStore.showReplyConfirm()` 驱动 `FloatingLayerComponent`
@@ -147,6 +158,7 @@ export struct ReplyDialog {
 
   /** 初始化编辑模式、草稿与浮层关闭处理器。 */
   aboutToAppear(): void {
+    this.disposed = false
     if (this.editMode) {
       this.replyText = this.initialContent
       this.isAnonymous = replyManager.isEditMode && replyManager.targetPost !== null
@@ -163,6 +175,12 @@ export struct ReplyDialog {
     this.autoFocusEditor()
   }
 
+  /** 标记组件已销毁，并撤销尚未触发的自动聚焦补试。 */
+  aboutToDisappear(): void {
+    this.disposed = true
+    this.cancelAutoFocusRetry()
+  }
+
   /**
    * 打开编辑器后自动聚焦正文，由系统拉起软键盘。
    *
@@ -171,16 +189,29 @@ export struct ReplyDialog {
    */
   private autoFocusEditor(): void {
     setTimeout((): void => { this.focusReplyEditor() }, 0)
-    setTimeout((): void => { this.focusReplyEditor() }, AUTO_FOCUS_RETRY_DELAY_MS)
+    this.autoFocusRetryTimer = setTimeout((): void => { this.focusReplyEditor() }, AUTO_FOCUS_RETRY_DELAY_MS)
+  }
+
+  /**
+   * 撤销尚未触发的自动聚焦补试。
+   *
+   * 触发时机：输入框已经拿到焦点、用户开始关闭面板、组件销毁。少了这道撤销，用户在打开
+   * 面板后 260ms 内落到别处的焦点会被抢回来、光标会被拽到末尾。
+   */
+  private cancelAutoFocusRetry(): void {
+    if (this.autoFocusRetryTimer >= 0) {
+      clearTimeout(this.autoFocusRetryTimer)
+      this.autoFocusRetryTimer = -1
+    }
   }
 
   /**
    * 聚焦正文输入框，光标落在已有内容（草稿 / 编辑内容）末尾。
    *
-   * 用户已经切到表情面板或预览态时跳过，避免把系统键盘从表情面板手里抢回来。
+   * 组件已销毁、用户已切到表情面板或预览态时跳过，避免把系统键盘从表情面板手里抢回来。
    */
   private focusReplyEditor(): void {
-    if (this.showEmojiPanel || this.previewMode) {
+    if (this.disposed || this.showEmojiPanel || this.previewMode) {
       return
     }
     this.requestEditorFocus(this.replyText.length)
@@ -198,6 +229,8 @@ export struct ReplyDialog {
 
   /** 请求关闭编辑器，并在存在正文时保留草稿。 */
   private requestClose(): void {
+    // 已经开始关闭：撤销补试，避免面板消失过程中又被抢焦点、重弹键盘
+    this.cancelAutoFocusRetry()
     if (this.replyText.trim().length > 0) {
       replyManager.saveDraft(this.replyText)
       this.abandonDialogController.open()
@@ -261,6 +294,8 @@ export struct ReplyDialog {
   /** 正文输入框获得焦点时收起表情面板，保证两种输入面板不会同时显示。 */
   private onEditorFocus(): void {
     this.showEmojiPanel = false
+    // 焦点已经就位（自动聚焦成功或用户自己点的），补试不再需要——留着只会抢焦点
+    this.cancelAutoFocusRetry()
   }
 
   /**
@@ -375,7 +410,8 @@ export struct ReplyDialog {
 
   /** 贴条模式下的实时字节计数（对应 6~650 字节的硬性限制）。 */
   private getCommentMetric(): string {
-    return this.getByteLength(this.replyText.trim()).toString() + ' / ' + COMMENT_MAX_BYTES.toString()
+    return this.getByteLength(this.replyText.trim()).toString() +
+      ' / ' + COMMENT_MAX_BYTES.toString() + ' 字节'
   }
 
   /** 获取当前主操作文案。图标化工具行后按钮移到标题右侧，取最短的可辨识写法。 */

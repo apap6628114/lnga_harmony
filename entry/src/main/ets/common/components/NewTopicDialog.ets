@@ -69,6 +69,22 @@ const EDITOR_HEIGHT_EMOJI_MD: number = 118
 /** 标题输入框高度（vp）：随整体压缩收紧，仍保持单行输入的舒适高度。 */
 const SUBJECT_HEIGHT: number = 42
 
+/** 标题输入框的左右内边距（vp）。 */
+const SUBJECT_PADDING: number = 14
+
+/** 标题输入框内「主题分类」入口按钮的边长（vp）、其距右边缘的距离（vp）与图标边长（vp）。 */
+const SUBJECT_ENTRY_SIZE: number = 32
+const SUBJECT_ENTRY_MARGIN: number = 5
+const SUBJECT_ENTRY_ICON: number = 18
+
+/**
+ * 标题输入框右侧为分类入口预留的宽度（vp）。
+ *
+ * **恒定预留**，不随分类是否已加载出来变化：`categories` 是异步加载的，若按有无分类切换
+ * 内边距，加载完成的一瞬间会看到标题文字与光标横向跳动。
+ */
+const SUBJECT_ENTRY_SLOT: number = SUBJECT_ENTRY_SIZE + SUBJECT_ENTRY_MARGIN + 9
+
 /** 使用沉浸光感材质承载发新主题操作。 */
 @Component
 export struct NewTopicDialog {
@@ -138,8 +154,17 @@ export struct NewTopicDialog {
     autoCancel: true
   })
 
-  /** 组件是否已销毁（防止异步回调在销毁后写 @State）。 */
+  /** 组件是否已销毁（防止异步回调在销毁后写 @State、抢焦点）。 */
   private disposed: boolean = false
+
+  /**
+   * 自动聚焦补试的定时器句柄。
+   *
+   * 补试是「转场期间焦点请求被忽略」的兜底，但它也可能把用户刚点下的焦点（连同光标）
+   * 抢回来——发帖面板有两个输入框，抢焦点会让后续输入落进错误字段。因此用户一旦交互、
+   * 开始关闭或组件销毁就撤销它（见 `cancelAutoFocusRetry`）。
+   */
+  private autoFocusRetryTimer: number = -1
 
   /** 提交回调（失败需 reject，编辑器将保留内容与草稿）。 */
   onSend?: (subject: string, content: string, isAnony: boolean) => Promise<void>
@@ -173,12 +198,29 @@ export struct NewTopicDialog {
    */
   private autoFocusEditor(): void {
     setTimeout((): void => { this.focusSubject() }, 0)
-    setTimeout((): void => { this.focusSubject() }, AUTO_FOCUS_RETRY_DELAY_MS)
+    this.autoFocusRetryTimer = setTimeout((): void => { this.focusSubject() }, AUTO_FOCUS_RETRY_DELAY_MS)
   }
 
-  /** 聚焦标题输入框；用户已经切到表情面板或预览态时跳过，避免把系统键盘抢回来。 */
+  /**
+   * 撤销尚未触发的自动聚焦补试。
+   *
+   * 触发时机：某个输入框已经拿到焦点、用户开始关闭面板、组件销毁。少了这道撤销，
+   * 用户在打开面板后 260ms 内点到正文打字，焦点会被抢回标题，字就落进了标题栏。
+   */
+  private cancelAutoFocusRetry(): void {
+    if (this.autoFocusRetryTimer >= 0) {
+      clearTimeout(this.autoFocusRetryTimer)
+      this.autoFocusRetryTimer = -1
+    }
+  }
+
+  /**
+   * 聚焦标题输入框。
+   *
+   * 组件已销毁、用户已切到表情面板或预览态时跳过，避免把系统键盘抢回来。
+   */
   private focusSubject(): void {
-    if (this.showEmojiPanel || this.previewMode) {
+    if (this.disposed || this.showEmojiPanel || this.previewMode) {
       return
     }
     try {
@@ -188,13 +230,16 @@ export struct NewTopicDialog {
     }
   }
 
-  /** 标记组件已销毁。 */
+  /** 标记组件已销毁，并撤销尚未触发的自动聚焦补试。 */
   aboutToDisappear(): void {
     this.disposed = true
+    this.cancelAutoFocusRetry()
   }
 
   /** 请求关闭编辑器，并在存在内容时保留草稿。 */
   private requestClose(): void {
+    // 已经开始关闭：撤销补试，避免面板消失过程中又被抢焦点、重弹键盘
+    this.cancelAutoFocusRetry()
     if (this.subject.trim().length > 0 || this.content.trim().length > 0) {
       newTopicManager.saveDraft(this.subject, this.content)
       this.abandonDialogController.open()
@@ -264,6 +309,8 @@ export struct NewTopicDialog {
   /** 任一文本输入框获得焦点时收起表情面板，保证两种输入面板不会同时显示。 */
   private onEditorFocus(): void {
     this.showEmojiPanel = false
+    // 焦点已经就位（自动聚焦成功或用户自己点的），补试不再需要——留着只会抢焦点
+    this.cancelAutoFocusRetry()
   }
 
   /**
@@ -417,7 +464,7 @@ export struct NewTopicDialog {
           .id(NEW_TOPIC_SUBJECT_ID)
           .width('100%')
           .height(SUBJECT_HEIGHT)
-          .padding({ left: 14, right: this.categories.length > 0 ? 46 : 14 })
+          .padding({ left: SUBJECT_PADDING, right: SUBJECT_ENTRY_SLOT })
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .fontColor(UIMaterialManager.inputForeground)
@@ -433,19 +480,19 @@ export struct NewTopicDialog {
         if (this.categories.length > 0) {
           Column() {
             Image($r('app.media.icon_category'))
-              .width(17)
-              .height(17)
+              .width(SUBJECT_ENTRY_ICON)
+              .height(SUBJECT_ENTRY_ICON)
               .fillColor(this.categoryExpanded
                 ? AppColors.primary
-                : UIMaterialManager.adaptiveSecondaryForeground)
+                : UIMaterialManager.adaptiveIcon)
           }
-          .width(32)
-          .height(SUBJECT_HEIGHT - 10)
+          .width(SUBJECT_ENTRY_SIZE)
+          .height(SUBJECT_ENTRY_SIZE)
           .justifyContent(FlexAlign.Center)
           .alignItems(HorizontalAlign.Center)
           .borderRadius(9)
           .backgroundColor(this.categoryExpanded ? AppColors.selectionTint : Color.Transparent)
-          .margin({ right: 5 })
+          .margin({ right: SUBJECT_ENTRY_MARGIN })
           .accessibilityText(this.categoryExpanded ? '收起主题分类' : '展开主题分类')
           .onClick(() => { this.categoryExpanded = !this.categoryExpanded })
         }

@@ -18,7 +18,14 @@ import { handleForumLink } from '../utils/LinkUtils'
 import { AppColors } from '../constants/Constants'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 
-/** 用沉浸光感材质承载 BBCode 草稿的只读预览。 */
+/**
+ * 用沉浸光感材质承载 BBCode 草稿的只读预览。
+ *
+ * 本组件只被回复 / 发帖编辑器使用，两处都位于**半模态面板的内容层**（面板背板已是系统
+ * 沉浸材质），因此预览区的底色走 `dialogFieldMaterial`——只给半透明填充与描边、不做背景
+ * 模糊。若在这里用带 `backgroundEffect` 的输入框玻璃，等于对同一层背景二次糊化
+ * （docs/IMMERSIVE_LIGHT_DESIGN.md §12）。
+ */
 @Component
 export struct BBCodePreviewPane {
   /** 待预览的 BBCode 源文（含引用前缀的最终发送串）。 */
@@ -107,7 +114,7 @@ export struct BBCodePreviewPane {
     .height(this.viewportHeight)
     .padding(14)
     .borderRadius(16)
-    .attributeModifier(UIMaterialManager.inputMaterial)
+    .attributeModifier(UIMaterialManager.dialogFieldMaterial)
     .align(Alignment.TopStart)
   }
 }

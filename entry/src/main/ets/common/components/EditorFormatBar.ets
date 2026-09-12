@@ -8,8 +8,8 @@
  *   同样左对齐，窄屏才触发横滑——避免一进来就要滑动找工具。
  *
  * 视觉契约（docs/IMMERSIVE_LIGHT_DESIGN.md §12）：本组件位于系统材质背板之上的**内容层**，
- * 只用半透明填充与描边表达层级、不做背景模糊；激活态只靠颜色区分（主题色图标 + 极淡琥珀底），
- * 未激活态保持完全透明，把材质背板让出来（§12.8）。
+ * 不叠任何背景模糊；激活态靠颜色区分（主题色图标 + 极淡琥珀底），未激活态保持透明，
+ * 把材质背板让出来——图标按钮不占填充，避免整行被压成一排骨块。
  *
  * 状态归属：匿名与预览属于宿主编辑器的语义状态（`@Link` / `@Prop` + 回调），格式插入与
  * 表情面板、预览切换同样回调宿主——本组件只管工具行自身的「折叠 / 展开」。
@@ -22,8 +22,8 @@ import { UIMaterialManager } from '../managers/UIMaterialManager'
 /**
  * 工具行按钮宽度（vp）、高度（vp）、按钮间距（vp）与图标边长（vp）。
  *
- * 按钮宽 32、间距 2：每个图标仍保有 32×32 的点击区，但图标之间的视觉留白收到约 16vp ——
- * 折叠态只有四个按钮时不会显得空旷，展开态也更省横向空间。
+ * 按钮宽 32、间距 2：每个图标仍保有 32×32 的点击区，但图标之间的视觉留白收到约 14vp
+ * （32 − 18）—— 折叠态只有四个按钮时不会显得空旷，展开态也更省横向空间。
  */
 const TOOL_BUTTON_W: number = 32
 const TOOL_BUTTON_H: number = 32
@@ -95,7 +95,7 @@ export struct EditorFormatBar {
   /** 是否展开高级格式行。 */
   @State formatExpanded: boolean = false
 
-  /** 格式动作回调（tag 见 `FORMAT_ACTIONS`；匿名不在其中，由工具行内部处理）。 */
+  /** 格式动作回调（tag 见 `PRIMARY_ACTIONS` / `SECONDARY_ACTIONS`；匿名不在其中，由工具行内部处理）。 */
   onFormat?: (tag: string) => void
 
   /** 预览 / 返回编辑回调。 */
@@ -142,11 +142,29 @@ export struct EditorFormatBar {
   }
 
   /**
+   * 解析工具按钮的无障碍文案。
+   *
+   * 开关型动作必须把**当前状态**说出来：匿名开关在图标化后只剩颜色差异，读屏用户
+   * 无法从「匿名发布」四个字判断它是否已开启；表情按钮同理需要表达面板是否展开。
+   */
+  private resolveAccessibilityLabel(action: FormatAction): string {
+    if (action.tag === 'anony') {
+      return this.isAnonymous ? '匿名发布，已开启' : '匿名发布，未开启'
+    }
+    if (action.tag === 'emoticon') {
+      return this.emojiPanelOpen ? '表情，面板已展开' : '表情'
+    }
+    return action.label
+  }
+
+  /**
    * 工具行图标按钮。
    *
    * 激活态只用颜色区分（主题色图标 + 极淡琥珀底），尺寸与位置恒定，避免同一行内因状态
-   * 切换产生位移；未激活态保持完全透明，把面板材质背板让出来（§12.8）。状态一律经 `this`
-   * 读取，保证 `@Prop` / `@State` 变化能刷新到 `@Builder` 内部。
+   * 切换产生位移；未激活态保持完全透明——图标按钮不占填充，让面板材质背板尽可能透出来。
+   * （§12.8 的「描边 + 极淡填充」针对的是输入区与中性按钮这类需要明确边界的元素；工具行
+   * 图标若逐个加填充，整行会被压成一排骨块，反而丢掉材质。）状态一律经 `this` 读取，
+   * 保证 `@Prop` / `@State` 变化能刷新到 `@Builder` 内部。
    */
   @Builder
   FormatButton(action: FormatAction) {
@@ -156,7 +174,7 @@ export struct EditorFormatBar {
         .height(TOOL_ICON_SIZE)
         .fillColor(this.isFormatActive(action.tag)
           ? AppColors.primary
-          : UIMaterialManager.adaptiveForeground)
+          : UIMaterialManager.adaptiveIcon)
     }
     .width(TOOL_BUTTON_W)
     .height(TOOL_BUTTON_H)
@@ -164,7 +182,7 @@ export struct EditorFormatBar {
     .alignItems(HorizontalAlign.Center)
     .borderRadius(10)
     .backgroundColor(this.isFormatActive(action.tag) ? AppColors.selectionTint : Color.Transparent)
-    .accessibilityText(action.label)
+    .accessibilityText(this.resolveAccessibilityLabel(action))
     .onClick(() => { this.handleAction(action) })
   }
 
@@ -192,7 +210,7 @@ export struct EditorFormatBar {
                 Image($r('app.media.icon_chevron_down'))
                   .width(TOOL_ICON_SIZE)
                   .height(TOOL_ICON_SIZE)
-                  .fillColor(UIMaterialManager.adaptiveForeground)
+                  .fillColor(UIMaterialManager.adaptiveIcon)
                   .rotate({ angle: this.formatExpanded ? 180 : 0 })
               }
               .width(TOOL_BUTTON_W)
@@ -218,9 +236,12 @@ export struct EditorFormatBar {
             .height(16)
             .color($r('app.color.glass_field_stroke'))
             .margin({ left: 4, right: 4 })
-
-          this.FormatButton(ANONY_ACTION)
         }
+
+        // 匿名发布常显在滑动区之外，且**不受预览模式影响**：改造前它是底部操作行里的一个开关、
+        // 不在预览分支内，预览态随时可切换；搬进工具行后必须保持同样的可达性，否则「预览时
+        // 才发现要匿名」就只能先退出预览（属功能净减少）。
+        this.FormatButton(ANONY_ACTION)
 
         Column() {
           Image(this.previewMode ? $r('app.media.icon_compose') : $r('app.media.icon_preview'))
@@ -228,7 +249,7 @@ export struct EditorFormatBar {
             .height(TOOL_ICON_SIZE)
             .fillColor(this.previewMode
               ? AppColors.primary
-              : UIMaterialManager.adaptiveForeground)
+              : UIMaterialManager.adaptiveIcon)
         }
         .width(TOOL_BUTTON_W)
         .height(TOOL_BUTTON_H)
@@ -236,6 +257,7 @@ export struct EditorFormatBar {
         .alignItems(HorizontalAlign.Center)
         .borderRadius(10)
         .backgroundColor(this.previewMode ? AppColors.selectionTint : Color.Transparent)
+        .margin({ left: TOOL_BUTTON_GAP })
         .accessibilityText(this.previewMode ? '返回编辑' : '发布预览')
         .onClick(() => { this.handlePreview() })
       }
