@@ -139,6 +139,18 @@ export struct FloatingLayerComponent {
   /**
    * 图片查看器全屏模态选项。
    *
+   * 关闭路径有两条，**两条都必须把浮层状态同步回 store**（store 是显隐的单一真源）：
+   * - 右上角关闭按钮 → `ImageViewer.onClose` → `remove(IMAGE_VIEWER)`，由状态驱动模态收起；
+   * - 系统返回 / 侧滑返回 → 全屏模态优先消费返回事件（`onWillDismiss` 注册后，返回键不会立即关闭模态，
+   *   见 `ContentCoverOptions.onWillDismiss` 声明），`MainPage.onBackPress` 在这一步不会被调用，
+   *   所以必须在回调里自己清状态。
+   *
+   * 只调 `action.dismiss()` 而不同步状态的后果：模态视觉上收起了，但 `floating.top` 仍是 `IMAGE_VIEWER`，
+   * `FloatingLayerComponent` 根 `Stack` 的 `hitTestBehavior` 保持 `HitTestMode.Default`——该模式自身参与命中
+   * 测试并**阻塞兄弟节点**，于是全屏的浮层容器把下方页面的触摸全部吞掉：表现为「返回关闭后界面点不动，
+   * 要再按一次系统返回（这次才轮到 `onBackPress` 弹栈）才恢复」。同时 `isShow` 表达式与真实显隐脱钩，
+   * 下次 push 同一浮层时表达式值未发生变化，还可能不再弹出。
+   *
    * @returns 全屏模态选项
    */
   private imageCoverOptions(): ContentCoverOptions {
@@ -146,6 +158,13 @@ export struct FloatingLayerComponent {
       modalTransition: ModalTransition.DEFAULT,
       onWillDismiss: (action: DismissContentCoverAction) => {
         action.dismiss()
+        this.floating.remove(FloatingPage.IMAGE_VIEWER)
+      },
+      // 兜底：任何关闭路径（含状态驱动关闭与系统关闭动画收尾）结束后都不残留浮层状态。
+      onDisappear: () => {
+        if (this.floating.top === FloatingPage.IMAGE_VIEWER) {
+          this.floating.remove(FloatingPage.IMAGE_VIEWER)
+        }
       }
     }
     return options

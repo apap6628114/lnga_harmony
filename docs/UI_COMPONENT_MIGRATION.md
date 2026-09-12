@@ -41,6 +41,7 @@
 | 官方 `ConfirmDialog` / `TipsDialog` 带 `checkTips` + `isChecked` 复选框字段 | `ConfirmDialog` 不传 `checkTips` 时仍会渲染一个**没有文字的孤立复选框**（实测）；无图标场景改用它同族的 `AlertDialog`（无复选框字段）。`TipsDialog` 实测不显示孤立复选框 |
 | `ComposeTitleBar` / `SelectTitleBar` / `EditableTitleBar` 都**没有** `onBack` 回调，也没有标题区 `@BuilderParam` 槽 | 官方标题栏无法承载自定义返回拦截 |
 | `ComposeListItem` 的 `IconType` 是**图标尺寸**枚举（8/16/24/40/64/96vp），不是「带角标」 | 无法表达自定义色块图标 |
+| `bindContentCover` 的 `isShow` 未写 `$$` 双向绑定时，用户交互式关闭（系统返回 / 侧滑返回）**不会回写**该变量，必须自己在 `onWillDismiss` 里同步状态 | 本地 SDK `ContentCoverOptions.onWillDismiss` 声明：注册该回调后「touching the back button does not immediately dismiss the modal」——即返回事件由模态优先消费，页面的 `onBackPress` 不会被调用（见 §3.1 修复记录） |
 
 ---
 
@@ -57,6 +58,16 @@
 
 副作用（正向）：`FloatingLayerStore` 不再保存确认框状态，`FloatingPage` 从 6 个枚举减到 5 个，
 `MainPage.onBackPress` 的返回分支同步简化。
+
+**全屏模态的两条关闭路径都必须回写 store**（2026-09 修复，勿改回）：图片查看器点右上角关闭按钮走
+`ImageViewer.onClose` → `remove(IMAGE_VIEWER)`，由状态驱动收起；而**系统返回 / 侧滑返回由全屏模态优先消费**，
+`MainPage.onBackPress` 这一步根本不会被调用。此前 `imageCoverOptions().onWillDismiss` 只调了
+`action.dismiss()`，模态视觉上收起后 `floating.top` 仍是 `IMAGE_VIEWER`，于是 `FloatingLayerComponent`
+根 `Stack` 的 `hitTestBehavior` 一直停在 `HitTestMode.Default`——该模式**自身参与命中测试并阻塞兄弟节点**
+（本地 SDK `enums.d.ts` 原文 "block the hit test of sibling nodes"），全屏浮层容器因此吞掉下方页面的全部触摸。
+用户侧表现就是「用系统返回关掉图片后界面点不动，要再按一次系统返回（这次才轮到 `onBackPress` 弹栈）才恢复」。
+修复：`onWillDismiss` 中 `action.dismiss()` 后立即 `remove`，并加 `onDisappear` 兜底（与 §3.3 写私信面板同一约定，
+条件判断避免误删动画期间新开的其它浮层）。
 
 ### 3.2 对话框（`common/dialogs/`）
 
