@@ -2159,16 +2159,10 @@ export struct ThreadPanel {
         }
       })
         .width('100%').position({ x: 0, y: 0 })
+        // 菜单锚点＝整条标题栏：菜单本体由系统沉浸材质承担（见 moreMenuOptions）
+        .bindMenu(this.showMoreMenu, this.MoreMenu(), this.moreMenuOptions())
 
       this.BottomBar()
-
-      if (this.showMoreMenu) {
-        this.MoreMenu()
-      }
-
-      if (this.showPagePicker) {
-        this.PagePicker()
-      }
 
     }
     .width('100%').height('100%').backgroundColor(AppColors.bg).alignContent(Alignment.BottomEnd)
@@ -2176,190 +2170,206 @@ export struct ThreadPanel {
   }
 
   /**
-   * 更多菜单浮层（原 build() 内联块，纯结构搬移，行为不变）。
+   * 更多菜单（官方 `bindMenu` 承载，选项见 {@link moreMenuOptions}）。
+   *
+   * 材质改由 `MenuOptions.systemMaterial` 的系统沉浸材质承担——**菜单控制**属 Release 允许
+   * 「页面内全部区域」生效的弹窗类接口，页面内容区也能拿到真材质（迁移前是手搓 Stack 浮层 +
+   * 自绘磨砂玻璃，见 docs/UI_COMPONENT_MIGRATION.md）。因此这里只声明菜单项：不再有手搓遮罩、
+   * 圆角、描边、投影与分隔线，分隔交给系统菜单自身的项间距与按压反馈。
+   *
+   * 点击菜单项后仍要手动把 `showMoreMenu` 置回 false：系统只会隐藏菜单，**不会回写**驱动显隐的
+   * 状态变量；漏置会让下一次点击按钮的取反逻辑落到错误值上（菜单弹不出来）。
    */
   @Builder
   MoreMenu() {
-    Stack() {
-      Column() {}.width('100%').height('100%').onClick(() => { this.showMoreMenu = false })
-
-      Column() {
-        if (this.isSavedSource()) {
-          Column() {
-            Text('在线模式打开').fontSize(15)
-              .fontColor(AppColors.textPrimary)
-              .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-              .width('100%')
-              .onClick(() => {
-                this.showMoreMenu = false
-                // 不预检帖子是否失效：直接以在线模式打开（栈顶帖子条目自动替换），
-                // 帖子若已删除由在线加载的错误态呈现
-                routerStore.navigateActivity(Screen.thread(this.threadTid))
-              })
-          }
-          .width('100%')
-
-          Divider().width('100%').color(AppColors.separator)
-        }
-
-        if (!this.isSavedSource()) {
-          Column() {
-            Text(this.getFavoriteMenuLabel()).fontSize(15)
-              .fontColor(AppColors.textPrimary)
-              .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-              .width('100%')
-              .onClick(() => {
-                this.openFavoriteFolders()
-              })
-          }
-          .width('100%')
-
-          Divider().width('100%').color(AppColors.separator)
-
-          Column() {
-            Text('离线保存帖子').fontSize(15)
-              .fontColor(AppColors.textPrimary)
-              .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-              .width('100%')
-              .onClick(() => {
-                this.openSaveThreadDialog()
-              })
-          }
-          .width('100%')
-
-          Divider().width('100%').color(AppColors.separator)
-        }
-
-        Column() {
-          Text('只看楼主').fontSize(15)
-            .fontColor(this.authorOnly ? AppColors.primary : AppColors.textPrimary)
-            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-            .width('100%')
-            .onClick(() => {
-              this.authorOnly = !this.authorOnly
-              this.showMoreMenu = false
-              this.pendingTargetPid = ''
-              this.singlePostFallback = false
-              this.pendingTargetLastPost = false
-              this.loadPosts(1, ThreadLoadMode.REPLACE)
-            })
-        }
-        .width('100%')
-
-        Divider().width('100%').color(AppColors.separator)
-
-        Column() {
-          Text('从网页打开').fontSize(15)
-            .fontColor(AppColors.textPrimary)
-            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-            .width('100%')
-            .onClick(() => {
-              this.showMoreMenu = false
-              const baseUrl: string = getActiveDomain()
-              const threadUrl: string = baseUrl + '/read.php?tid=' + this.threadTid
-              routerStore.navigateActivity(Screen.webview(threadUrl))
-            })
-        }
-        .width('100%')
-
-        Divider().width('100%').color(AppColors.separator)
-
-        Column() {
-          Text('分享帖子').fontSize(15)
-            .fontColor(AppColors.textPrimary)
-            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-            .width('100%')
-            .onClick(() => {
-              this.showMoreMenu = false
-              let hostCtx: Context | undefined = this.getUIContext().getHostContext()
-              if (hostCtx !== undefined) {
-                let ctx: Context = hostCtx
-                shareThread(ctx, Number(this.threadTid), this.threadSubject)
-              }
-            })
-        }
-        .width('100%')
-
+    Menu() {
+      if (this.isSavedSource()) {
+        MenuItem({ content: '在线模式打开' })
+          .onClick(() => {
+            this.showMoreMenu = false
+            // 不预检帖子是否失效：直接以在线模式打开（栈顶帖子条目自动替换），
+            // 帖子若已删除由在线加载的错误态呈现
+            routerStore.navigateActivity(Screen.thread(this.threadTid))
+          })
       }
-      .width(150)
-      .borderRadius(10)
-      .attributeModifier(UIMaterialManager.surfaceMaterial)
-      .position({ top: this.statusBarHeight + NAV_BAR_H + 6, right: 16 })
+
+      if (!this.isSavedSource()) {
+        MenuItem({ content: this.getFavoriteMenuLabel() })
+          .onClick(() => {
+            // 内部已置 showMoreMenu = false
+            this.openFavoriteFolders()
+          })
+
+        MenuItem({ content: '离线保存帖子' })
+          .onClick(() => {
+            // 内部已置 showMoreMenu = false
+            this.openSaveThreadDialog()
+          })
+      }
+
+      MenuItem({ content: '只看楼主' })
+        .selected(this.authorOnly)
+        .selectIcon(true)
+        .onClick(() => {
+          this.authorOnly = !this.authorOnly
+          this.showMoreMenu = false
+          this.pendingTargetPid = ''
+          this.singlePostFallback = false
+          this.pendingTargetLastPost = false
+          this.loadPosts(1, ThreadLoadMode.REPLACE)
+        })
+
+      MenuItem({ content: '从网页打开' })
+        .onClick(() => {
+          this.showMoreMenu = false
+          const baseUrl: string = getActiveDomain()
+          const threadUrl: string = baseUrl + '/read.php?tid=' + this.threadTid
+          routerStore.navigateActivity(Screen.webview(threadUrl))
+        })
+
+      MenuItem({ content: '分享帖子' })
+        .onClick(() => {
+          this.showMoreMenu = false
+          let hostCtx: Context | undefined = this.getUIContext().getHostContext()
+          if (hostCtx !== undefined) {
+            let ctx: Context = hostCtx
+            shareThread(ctx, Number(this.threadTid), this.threadSubject)
+          }
+        })
     }
-    .width('100%').height('100%')
-    .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
   }
 
   /**
-   * 页码选择器浮层（原 build() 内联块，纯结构搬移，行为不变）。
+   * 更多菜单选项。
+   *
+   * 菜单锚点是整条 `PanelNavBar`（`bindMenu` 挂在它身上），`Placement.BottomRight` 让菜单落在
+   * 标题栏下方并右对齐——与迁移前 `.position({ top: statusBarHeight + NAV_BAR_H + 6, right: 16 })`
+   * 的位置一致。`enableArrow: false`：箭头是 Tips 语义，不属于操作菜单。
+   *
+   * @returns 菜单选项
+   */
+  private moreMenuOptions(): MenuOptions {
+    const options: MenuOptions = {
+      placement: Placement.BottomRight,
+      enableArrow: false,
+      systemMaterial: UIMaterialManager.menuMaterial
+    }
+    return options
+  }
+
+  /**
+   * 页码选择气泡内容（官方 `bindPopup` 承载，选项见 {@link pagePickerOptions}）。
+   *
+   * 面板**本体**的材质由 `CustomPopupOptions.systemMaterial` 的系统沉浸材质承担（**Popup 控制**
+   * 属 Release 允许「页面内全部区域」生效的弹窗类接口）。气泡内部按层级契约分工：页码是普通
+   * `Text`，不参与系统材质；跳转输入框走内容层材质 `dialogFieldMaterial`（半透明填充 + 极淡描边，
+   * **不做背景模糊**——系统材质已经糊过背景，再叠一次是二次糊化）。
+   *
+   * 全屏遮罩与「点击空白关闭」改由气泡自身的 `mask` / `autoCancel` 承担，内容里不再自绘遮罩层。
    */
   @Builder
   PagePicker() {
-    Stack() {
-      Column().width('100%').height('100%').onClick(() => { this.showPagePicker = false })
-      Column() {
-        Text('选择页面').fontSize(14).fontColor(AppColors.textPrimary).fontWeight(FontWeight.Bold)
-          .padding({ top: 12, bottom: 8 }).width('100%').textAlign(TextAlign.Center)
-        Divider().color(AppColors.separator)
-        Scroll() {
-          Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start, alignItems: ItemAlign.Start }) {
-            ForEach(this.buildPageArray(), (p: number) => {
-              if (p === PAGE_PICKER_ELLIPSIS) {
-                Text('…').fontSize(15)
-                  .fontColor(AppColors.textSecondary)
-                  .width(40).height(40).textAlign(TextAlign.Center)
-              } else {
-                Text(String(p)).fontSize(15)
-                  .fontColor(p === this.pagePickerCurrentPage ? AppColors.primary : AppColors.textPrimary)
-                  .fontWeight(p === this.pagePickerCurrentPage ? FontWeight.Bold : FontWeight.Regular)
-                  .width(40).height(40).textAlign(TextAlign.Center).borderRadius(20)
-                  .border({
-                    width: p === this.pagePickerCurrentPage ? 1.5 : 0,
-                    color: AppColors.primary
-                  })
-                  .backgroundColor(Color.Transparent)
-                  .onClick(() => {
-                    if (this.pagePickerOnSelect) {
-                      this.pagePickerOnSelect(p)
-                    }
-                    this.showPagePicker = false
-                  })
-              }
-            }, (p: number) => String(p))
-          }.width('100%')
+    Column() {
+      Text('选择页面').fontSize(14).fontColor(AppColors.textPrimary).fontWeight(FontWeight.Bold)
+        .padding({ top: 12, bottom: 8 }).width('100%').textAlign(TextAlign.Center)
+      Divider().color(AppColors.separator)
+      Scroll() {
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start, alignItems: ItemAlign.Start }) {
+          ForEach(this.buildPageArray(), (p: number) => {
+            if (p === PAGE_PICKER_ELLIPSIS) {
+              Text('…').fontSize(15)
+                .fontColor(AppColors.textSecondary)
+                .width(40).height(40).textAlign(TextAlign.Center)
+            } else {
+              Text(String(p)).fontSize(15)
+                .fontColor(p === this.pagePickerCurrentPage ? AppColors.primary : AppColors.textPrimary)
+                .fontWeight(p === this.pagePickerCurrentPage ? FontWeight.Bold : FontWeight.Regular)
+                .width(40).height(40).textAlign(TextAlign.Center).borderRadius(20)
+                .border({
+                  width: p === this.pagePickerCurrentPage ? 1.5 : 0,
+                  color: AppColors.primary
+                })
+                .onClick(() => {
+                  if (this.pagePickerOnSelect) {
+                    this.pagePickerOnSelect(p)
+                  }
+                  this.showPagePicker = false
+                })
+            }
+          }, (p: number) => String(p))
         }.width('100%')
-          .height(this.pagePickerTotalPages > PAGE_PICKER_MAX_DIRECT ? 84 : 120)
-          .align(Alignment.TopStart)
-        if (this.pagePickerTotalPages > PAGE_PICKER_MAX_DIRECT) {
-          Divider().color(AppColors.separator)
-          Row() {
-            TextInput({ text: this.pagePickerInput, placeholder: '输入页码' })
-              .type(InputType.Number)
-              .fontSize(14).backgroundColor(Color.Transparent)
-              .fontColor(UIMaterialManager.inputForeground)
-              .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
-              .caretColor(UIMaterialManager.inputForeground)
-              .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-              .onChange((value: string) => { this.pagePickerInput = value })
-              .onSubmit(() => { this.jumpToPageByInput() })
-              .height(32).layoutWeight(1)
-            Text('跳转').fontSize(14).fontColor(AppColors.primary).fontWeight(FontWeight.Medium)
-              .height(32).padding({ left: 10 })
-              .onClick(() => { this.jumpToPageByInput() })
-          }.width('100%').padding({ top: 8 }).alignItems(VerticalAlign.Center)
+      }.width('100%')
+        .height(this.pagePickerTotalPages > PAGE_PICKER_MAX_DIRECT ? 84 : 120)
+        .align(Alignment.TopStart)
+      if (this.pagePickerTotalPages > PAGE_PICKER_MAX_DIRECT) {
+        Divider().color(AppColors.separator)
+        Row() {
+          TextInput({ text: this.pagePickerInput, placeholder: '输入页码' })
+            .type(InputType.Number)
+            .fontSize(14)
+            .fontColor(UIMaterialManager.inputForeground)
+            .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+            .caretColor(UIMaterialManager.inputForeground)
+            .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+            .onChange((value: string) => { this.pagePickerInput = value })
+            .onSubmit(() => { this.jumpToPageByInput() })
+            // 高度取 36 而不是 32：TextInput 自带上下内边距，32vp 会把 14vp 的正文/占位文字
+            // 压到贴边（实机现象：占位文字下缘被裁掉一点）
+            .height(36).layoutWeight(1)
+            .attributeModifier(UIMaterialManager.dialogFieldMaterial)
+          Text('跳转').fontSize(14).fontColor(AppColors.primary).fontWeight(FontWeight.Medium)
+            .height(36).padding({ left: 10 })
+            .onClick(() => { this.jumpToPageByInput() })
+        }.width('100%').padding({ top: 8 }).alignItems(VerticalAlign.Center)
+      }
+    }
+    .width('100%')
+    // 底部留 12vp：气泡圆角为 12vp，内容只留 8vp 时输入框下缘会被圆角切到
+    .padding({ left: 10, right: 10, bottom: 12 })
+  }
+
+  /**
+   * 页码选择气泡选项。
+   *
+   * 锚点是底部分页条里的「到」（`bindPopup` 挂在它身上），`Placement.Top` 让气泡向上弹出并
+   * 由系统按锚点几何自动落位：右手握持贴右下、左手握持贴左下，不再需要按 `holdingStatus`
+   * 手算左右定位，也不再需要固定 220×180 的手搓浮层。
+   *
+   * 两个必须显式设置的参数（官方默认值会与材质打架）：
+   * - `backgroundBlurStyle: BlurStyle.NONE`——气泡默认带 `COMPONENT_ULTRA_THICK` 模糊背景，
+   *   不清掉等于在系统材质之上再叠一层模糊；
+   * - `popupColor: Color.Transparent`——气泡默认背景是「透明 + 模糊」，显式置透明确保背板层
+   *   完全让位给材质（内容层的不透明色会盖住材质）。
+   *
+   * @returns 气泡选项
+   */
+  private pagePickerOptions(): CustomPopupOptions {
+    const options: CustomPopupOptions = {
+      // builder 必须传**构造器**，不能传构造结果：本方法是普通方法（非 UI 上下文），
+      // 直接写 `this.PagePicker()` 会被立即执行、返回 void，气泡拿到空 builder → 整个气泡不渲染
+      // （实机现象：点「到」没有任何反应）。用箭头函数把执行推迟到渲染期，与官方示例的
+      // `builder: this.popupBuilder` 等价，也是本工程 `contentBuilder` 的同款写法（见 AGENTS.md）。
+      builder: (): void => { this.PagePicker() },
+      placement: Placement.Top,
+      // 气泡底边与锚点之间的间距：锚点已改为整颗 40vp 胶囊，再留 12vp 即可明确脱离页码条
+      targetSpace: 12,
+      popupColor: Color.Transparent,
+      backgroundBlurStyle: BlurStyle.NONE,
+      enableArrow: false,
+      radius: 12,
+      width: 220,
+      autoCancel: true,
+      mask: false,
+      systemMaterial: UIMaterialManager.popupMaterial,
+      // 系统关闭气泡（点击外部 / 返回键 / 页面操作）后必须回写状态：不回写的话
+      // showPagePicker 会一直停在 true，下次点「到」赋同一个值不触发刷新，气泡再也弹不出来
+      onStateChange: (event) => {
+        if (!event.isVisible) {
+          this.showPagePicker = false
         }
       }
-      .width(220).height(180).padding({ left: 10, right: 10, bottom: 8 })
-      .borderRadius(12)
-      .attributeModifier(UIMaterialManager.surfaceMaterial)
-      .position(
-        this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD
-          ? { bottom: 64 + this.navBarHeight, left: 16 }
-          : { bottom: 64 + this.navBarHeight, right: 16 }
-      )
     }
-    .width('100%').height('100%')
-    .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
+    return options
   }
 
   /**
@@ -2448,19 +2458,27 @@ export struct ThreadPanel {
           }
           if (this.mgr.totalPages > 2) {
             Divider().vertical(true).height(16).color(AppColors.dividerStrong)
-            Text('到').fontSize(13).fontColor(UIMaterialManager.adaptiveForeground)
-              .padding({ left: 4, right: 2 })
-              .onClick(() => {
-                this.pagePickerCurrentPage = this.displayPage
-                this.pagePickerTotalPages = this.mgr.totalPages
-                this.pagePickerInput = ''
-                this.pagePickerOnSelect = (page: number): void => {
-                  if (page !== this.displayPage) {
-                    this.navigateToPage(page, PageNavigationSource.PAGE_PICKER)
-                  }
+            // 锚点必须是**整颗胶囊的高度**，不能是文字本身：气泡按锚点的布局矩形 + `placement`
+            // 推导位置，而文字在 40vp 胶囊里是垂直居中的——拿文字当锚点时气泡底边会落进胶囊内部
+            // （实机现象：气泡与页码条在纵向压住一点）。
+            Stack() {
+              Text('到').fontSize(13).fontColor(UIMaterialManager.adaptiveForeground)
+                .padding({ left: 4, right: 2 })
+            }
+            .height(40)
+            // 页码选择气泡的锚点：气泡本体由系统沉浸材质承担（见 pagePickerOptions）
+            .bindPopup(this.showPagePicker, this.pagePickerOptions())
+            .onClick(() => {
+              this.pagePickerCurrentPage = this.displayPage
+              this.pagePickerTotalPages = this.mgr.totalPages
+              this.pagePickerInput = ''
+              this.pagePickerOnSelect = (page: number): void => {
+                if (page !== this.displayPage) {
+                  this.navigateToPage(page, PageNavigationSource.PAGE_PICKER)
                 }
-                this.showPagePicker = true
-              })
+              }
+              this.showPagePicker = true
+            })
           }
         }
         .padding({ left: 8, right: 8, top: 0, bottom: 0 })

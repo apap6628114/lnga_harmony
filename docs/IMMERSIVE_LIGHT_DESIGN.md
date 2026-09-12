@@ -12,8 +12,14 @@
 > 「页面内全部区域生效」清单，于是**系统沉浸材质重新接回来了**——`dialogMaterial`（弹窗）、
 > `sheetMaterial`（半模态面板）、`controlMaterial`（`Slider` / `Toggle`）。
 >
-> 现在的分界：**弹窗类组件与接口 + `Slider` / `Toggle` → 系统沉浸材质**；
-> **页面内容区（面板、列表、`PanelNavBar` 标题栏、图片查看器、资料卡、`Toast`）→ 自绘磨砂玻璃**。
+> 再往后，**页面内容区的浮层本体也逐个迁到了官方弹窗类接口**：菜单改走 `bindMenu`
+> （`menuMaterial`）、页码选择器改走 `bindPopup`（`popupMaterial`）、子版块筛选改走 `bindSheet`
+> （`sheetMaterial`）。这些浮层此前是"手搓 `Stack` + `position` + 自绘玻璃"，现在本体由系统接管。
+>
+> 现在的分界：**弹窗类组件与接口（Dialog / 半模态 / 菜单 / 气泡）+ `Slider` / `Toggle` /
+> `Select` → 系统沉浸材质**；**页面内容区的常驻控件（列表、`PanelNavBar` 标题栏、右下角浮动
+> 按钮与页码条、图片查看器、资料卡、`Toast`）→ 自绘磨砂玻璃**——后者在 Release 门禁下没有任何
+> 合法材质通道，官方 FAQ 给的建议就是"改用 `backgroundColor` 等通用属性替代材质效果"。
 > 分流表、落地契约与接入清单见第 12 节；本文其余章节保留为沉浸光感契约与踩坑记录。
 
 ## 0. 先记住这一条：Release 的生效范围门禁
@@ -760,10 +766,12 @@ HDS 的材质类型/等级与 ArkUI 的 `ImmersiveStyle` 不是一一对应关�
 
 | 位置 | 通路 | 工厂 |
 | --- | --- | --- |
-| 官方弹窗（`CustomDialogController`，含 `AlertDialog` / `TipsDialog` / `SelectDialog` / `CustomContentDialog`） | 系统沉浸材质 | `dialogMaterial`（`ULTRA_THICK`） |
-| 半模态面板（`bindSheet`） | 系统沉浸材质 | `sheetMaterial`（`ULTRA_THICK`） |
+| 官方弹窗（`CustomDialogController`，含 `AlertDialog` / `TipsDialog` / `SelectDialog` / `CustomContentDialog`） | 系统沉浸材质 | `dialogMaterial`（`THIN` + 暖白 tint，见 §12.7） |
+| 半模态面板（`bindSheet`，含子版块筛选、回复 / 发帖编辑器、写私信） | 系统沉浸材质 | `sheetMaterial`（`THIN` + 暖白 tint，见 §12.7） |
+| 菜单（`bindMenu` / `bindContextMenu`） | 系统沉浸材质 | `menuMaterial`（`THICK` + 暖白 tint） |
+| 气泡（`bindPopup`，含页码选择器） | 系统沉浸材质 | `popupMaterial`（`REGULAR` + 暖白 tint） |
 | `Slider` / `Toggle` | 系统沉浸材质 | `controlMaterial`（`THIN` + 交互形变 + 点光源） |
-| 页面内容区（面板、列表、`PanelNavBar` 标题栏、`Toast`、资料卡） | 自绘磨砂玻璃 | `surfaceMaterial` / `barMaterial` / `fabMaterial` / … |
+| 页面内容区常驻控件（面板、列表、`PanelNavBar` 标题栏、右下角浮动按钮与页码条、`Toast`、资料卡） | 自绘磨砂玻璃 | `surfaceMaterial` / `barMaterial` / `fabMaterial` / … |
 | 图片查看器（`bindContentCover` 全屏模态、固定暗场景） | 自绘磨砂玻璃 | `darkOverlayMaterial` / `closeButtonMaterial` |
 
 判定依据就是本文 §0 的生效范围门禁：本工程没有 `Navigation` / `Tabs`，**内容区没有任何标题栏或
@@ -784,7 +792,7 @@ HDS 的材质类型/等级与 ArkUI 的 `ImmersiveStyle` 不是一一对应关�
 | 工厂材质 | 用途 | 磨砂参数（模糊半径 / 饱和度 / 填充不透明度） |
 | --- | --- | --- |
 | `fabMaterial` | 浮动圆形/胶囊按钮 | 36vp、1.4、55% + 极淡整圈描边 + 下沉投影（不设渐变） |
-| `surfaceMaterial` | 面板、浮层、弹窗 | 72vp、1.5、42% + 描边 + 强投影 |
+| `surfaceMaterial` | 内容区自绘卡片与尚未迁移的手搓浮层（如 `WebViewPanel` 更多菜单、资料卡） | 72vp、1.5、42% + 描边 + 强投影 |
 | `barMaterial` | 标题栏、消息页栏位 | 56vp、1.4、42% + 描边，不投影 |
 | `neutralActionMaterial` | 弹窗内的中性次要操作 | 32vp、1.4、32% + 细描边，不投影 |
 | `inputMaterial` | 输入框 | 24vp、1.3、32% + 低透明描边，不投影 |
@@ -868,13 +876,32 @@ HDS 的材质类型/等级与 ArkUI 的 `ImmersiveStyle` 不是一一对应关�
 
 材质工厂在 [`UIMaterialManager.ets`](../entry/src/main/ets/common/managers/UIMaterialManager.ets)：
 
-| 工厂 | 材质 | 接入点 |
+| 工厂 | 材质（与 `UIMaterialManager.ets` 的实际参数一致，勿凭本节旧稿记忆） | 接入点 |
 | --- | --- | --- |
-| `dialogMaterial` | `ImmersiveMaterial`：`REGULAR` + 45% 暖白 tint + `applyShadow: false` | `new CustomDialogController({ backgroundColor: Color.Transparent, builder: …, systemMaterial: … })` |
-| `sheetMaterial` | 同上（Beta1 原配方） | `SheetOptions.systemMaterial` |
+| `dialogMaterial` | `ImmersiveMaterial`：`THIN` + `material_surface_tint` + `applyShadow: true` | `new CustomDialogController({ backgroundColor: Color.Transparent, builder: …, systemMaterial: … })` |
+| `sheetMaterial` | 同 `dialogMaterial` | `SheetOptions.systemMaterial` |
+| `menuMaterial` | `ImmersiveMaterial`：`THICK` + `material_surface_tint` + `applyShadow: true` | `MenuOptions.systemMaterial`（`bindMenu` / `bindContextMenu`） |
+| `popupMaterial` | `ImmersiveMaterial`：`REGULAR` + `material_surface_tint` + `applyShadow: true` | `PopupOptions` / `CustomPopupOptions.systemMaterial`（`bindPopup`） |
 | `controlMaterial` | `ImmersiveMaterial`：`THIN` + `interactive` + `lightEffect` | 通用属性 `.systemMaterial(...)`，用于 `Slider` / `Toggle` |
 | `dialogFieldMaterial` | `GlassModifier`：暖白填充 + 极淡描边，**不做背景模糊** | `.attributeModifier(...)`，材质背板之上的输入框 |
 | `dialogActionMaterial` | `GlassModifier`：填充 32% + 描边，**不做背景模糊** | `.attributeModifier(...)`，材质背板之上的中性按钮 |
+
+**菜单 / 气泡的两个必设参数（官方默认值会与材质打架，踩过就当踩过）**：
+
+- `bindPopup` 的 `backgroundBlurStyle` 默认是 `COMPONENT_ULTRA_THICK`、`popupColor` 默认是
+  「透明 + 该模糊」：不显式写 `backgroundBlurStyle: BlurStyle.NONE` + `popupColor: Color.Transparent`，
+  就是在系统材质之上再叠一层模糊与一层内容色。
+- `bindMenu` 的 `MenuOptions` 继承了 `ContextMenuOptions.systemMaterial`（本地 SDK
+  `common.d.ts:15637` / `15594` 可查）；应用级 `enable` 下菜单本身也有默认材质，显式设置是
+  为了把档位与 tint 收敛到本工程配方，不是"没设置就没材质"。
+- 菜单位置由 `placement` 按**锚点组件几何**推导（`bindMenu` 默认 `Placement.BottomLeft`）：
+  本工程把它挂在整条 `PanelNavBar` 上并取 `Placement.BottomRight`，得到"标题栏下方右对齐"，
+  与迁移前的手写 `position({ top: statusBarHeight + NAV_BAR_H + 6, right: 16 })` 落点一致。
+- **`builder` 字段必须传构造器**：`CustomPopupOptions.builder` 是 `CustomBuilder`（`() => void`）。
+  在 `build()` 内的参数位置写 `this.Xxx()`（`bindSheet` / `bindMenu` 的写法）会被 @Builder 语法糖
+  正确转换；但在**普通方法返回的 options 字段**里写 `this.Xxx()` 会被立即求值成 `void`，
+  气泡拿到空 builder → **整个气泡不渲染**（实机现象：点击锚点毫无反应）。该字段写
+  `builder: (): void => { this.Xxx() }`。
 
 #### 材质参数：回到 Beta1 原配方（真机实测结论）
 
@@ -912,16 +939,21 @@ new uiMaterial.ImmersiveMaterial({
 系统材质**没有模糊半径参数**："又透又柔"靠的是 `REGULAR` 档位的模糊 + `materialColor` 赋色压住
 背景杂色。想把背景糊成更柔和的色块，只有自绘 `backgroundEffect`（大半径）能做到。
 
-#### 生效边界：只有「面板本体」能拿到材质
+#### 生效边界：按「组件类型」判定，不按「组件在哪一层」
 
 真机实测确认（输入框设了 `.systemMaterial(...)` 后完全没有背景、只剩文字）：
-**Release 下浮层内部的普通组件写 `.systemMaterial(...)` 不生效**。材质只在弹窗 / 面板本体那一层
-（`SheetOptions` / `CustomDialogControllerOptions` 的 `systemMaterial`）参与渲染。因此：
+**Release 下普通组件写 `.systemMaterial(...)` 不生效**——即使它处在官方浮层内部。判定的维度是
+**组件类型，不是组件所处的层级**：
 
-- 面板**本体** → 系统沉浸材质（`sheetMaterial` / `dialogMaterial`）。
-- 面板**内部**（工具条按钮、输入框、中性按钮）→ 只能用自绘内容层材质
-  （`dialogFieldMaterial` / `dialogActionMaterial`）。Beta1 时这些控件能直接吃系统材质，Release 收紧
-  生效范围后不行了——**这是与 Beta1 截图唯一的观感差距来源**。
+- 面板 / 菜单 / 气泡**本体** → 由承载接口的 options 拿系统沉浸材质
+  （`SheetOptions` / `CustomDialogControllerOptions` / `MenuOptions` / `CustomPopupOptions`）。
+- 本体**内部**的普通组件（工具条按钮、输入框、中性按钮、`Text`、`Image`）→ 不在官方清单内，
+  任何位置都不生效，只能用自绘内容层材质（`dialogFieldMaterial` / `dialogActionMaterial`）。
+  Beta1 时这些控件能直接吃系统材质，Release 收紧生效范围后不行了——**这是与 Beta1 截图唯一的
+  观感差距来源**。
+- 本体内部若出现 **`Toggle` / `Slider` / `Select`**，它们**依然生效**：这三者在 Release 清单里是
+  「页面内全部区域」，与所在层级无关。`SubBoardFilterPanel`（半模态子版块筛选）里的
+  `Toggle(Switch)` 继续走 `controlMaterial` 就是这个道理。
 
 #### 三条落地要点
 

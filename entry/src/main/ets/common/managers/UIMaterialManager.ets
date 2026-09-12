@@ -185,6 +185,33 @@ export class UIMaterialManager {
   })
 
   /**
+   * 菜单背板材质：`MenuOptions.systemMaterial`（**菜单控制**属 Release 允许「页面内全部区域」
+   * 生效的弹窗类接口，页面内容区也能拿到系统材质）。
+   *
+   * 档位取官方菜单默认的 `THICK`（"浮在内容之上"的强分离层，需要比弹窗更厚的背景模糊）；
+   * `materialColor` 与弹窗 / 半模态共用同一支暖白 tint，保证同屏浮层色调统一。
+   * 与 `dialogMaterial` 一致保留材质自带阴影（`applyShadow: true`）：官方菜单容器不自绘装饰，
+   * 阴影只能由材质承担。
+   */
+  static readonly menuMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+    style: uiMaterial.ImmersiveStyle.THICK,
+    materialColor: $r('app.color.material_surface_tint'),
+    applyShadow: true
+  })
+
+  /**
+   * 气泡背板材质：`PopupOptions` / `CustomPopupOptions.systemMaterial`（**Popup 控制**同样属
+   * 页面内全区域生效的弹窗类接口），用于贴着锚点弹出的轻量浮层（如页码选择器）。
+   *
+   * 档位比菜单薄一档（`REGULAR`）：气泡面积小且贴近用户正在读的内容，过厚会像一块白板压住上下文。
+   */
+  static readonly popupMaterial: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+    style: uiMaterial.ImmersiveStyle.REGULAR,
+    materialColor: $r('app.color.material_surface_tint'),
+    applyShadow: true
+  })
+
+  /**
    * 当前设备是否支持沉浸式系统材质（官方兼容性接口）。
    *
    * 返回 `false` 时，`systemMaterial` 上的 `ImmersiveMaterial` **完全不产生视觉效果**

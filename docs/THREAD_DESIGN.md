@@ -246,11 +246,15 @@ TITLE_SCROLL_EFFECT_DISTANCE = 20vp
 
 - 返回、更多等标题操作按钮使用 36×36 圆形 `UIMaterialManager.fabMaterial`。
 - 右侧存在两个操作按钮时，按钮之间固定保留 `8vp` 间距。
-- `fabMaterial` 当前为 `ImmersiveStyle.ULTRA_THIN`，启用 `interactive` 和 `lightEffect`。
+- `fabMaterial` 是**自绘磨砂玻璃**（`GlassModifier`）：页面内容区与 `PanelNavBar` 都不在 Release
+  允许的材质生效区域内，拿不到系统材质。
 - 标题操作必须使用语义明确的独立 SVG 资源，不在标题栏中混用文字操作；视觉图标与无障碍名称分别由 `rightIcon` 和 `rightIconAccessibilityText` 提供。
 - 标题栏本体不使用整块 `systemMaterial`；正文模糊由 `List` 承担，标题可读性由颜色渐变层承担。
 - 不绘制用于强调标题底边的常驻分割线，避免形成独立矩形区域。
-- 输入框、主操作按钮和浮层分别直接使用 `inputMaterial`、`buttonMaterial` 和 `surfaceMaterial`；组件不得保存材质启用状态，也不得按持久化设置切换 `systemMaterial`。
+- 浮层不再自绘玻璃：更多菜单走 `bindMenu`（`menuMaterial`），页码选择器走 `bindPopup`
+  （`popupMaterial`），菜单 / 气泡内部的输入框走 `dialogFieldMaterial`；右下角**常驻**的分页条与
+  回复按钮继续用自绘 `fabMaterial`（Release 生效范围门禁下无系统材质通道）。
+  组件不得保存材质启用状态，也不得按持久化设置切换 `systemMaterial`。
 
 ### 6.4 共享实现的适用条件
 

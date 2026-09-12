@@ -1016,11 +1016,13 @@ export struct TopicListPanel {
               .padding({ left: '4%', right: '4%' })
               .margin({ top: 8, bottom: 6 })
               .onAreaChange((_oldValue: Area, newValue: Area): void => {
-                // 采集排序条底部纵坐标：供时间窗气泡锚定、状态视图撑满排序条下方的列表可视区
+                // 采集排序条底部纵坐标：供状态视图撑满排序条下方的列表可视区
                 if (typeof newValue.globalPosition.y === 'number' && typeof newValue.height === 'number') {
                   this.sortBarBottomY = newValue.globalPosition.y + newValue.height
                 }
               })
+              // 热门时间窗菜单锚点＝排序条：菜单本体由系统沉浸材质承担（见 hotRangeMenuOptions）
+              .bindMenu(this.showHotRangeMenu, this.HotRangeMenu(), this.hotRangeMenuOptions())
             }
           }
           if (this.isLoading) {
@@ -1143,22 +1145,16 @@ export struct TopicListPanel {
         }
       })
         .width('100%').position({ x: 0, y: 0 })
+        // 版块菜单锚点＝整条标题栏：菜单本体由系统沉浸材质承担（见 moreMenuOptions）
+        .bindMenu(this.showMoreMenu && this.canManageCurrentBoard(),
+          this.MoreMenu(), this.moreMenuOptions())
 
       this.FloatingActions()
-
-      if (this.showMoreMenu && this.canManageCurrentBoard()) {
-        this.MoreMenu()
-      }
-
-      if (this.showHotRangeMenu) {
-        this.HotRangeMenu()
-      }
-
-      if (this.showSubBoardFilterPanel && this.canManageCurrentBoard()) {
-        this.SubBoardFilterPanel()
-      }
     }
     .width('100%').height('100%').backgroundColor(AppColors.bg).alignContent(Alignment.BottomEnd)
+    // 子版块筛选面板：半模态转场承载，面板本体材质见 subBoardFilterSheetOptions
+    .bindSheet(this.showSubBoardFilterPanel && this.canManageCurrentBoard(),
+      this.SubBoardFilterPanel(), this.subBoardFilterSheetOptions())
   }
 
   /**
@@ -1190,248 +1186,247 @@ export struct TopicListPanel {
   }
 
   /**
-   * MoreMenu（原 build() 内联块，纯结构搬移，行为不变）。
+   * 版块更多菜单（官方 `bindMenu` 承载，选项见 {@link moreMenuOptions}）。
+   *
+   * 材质由 `MenuOptions.systemMaterial` 的系统沉浸材质承担——**菜单控制**属 Release 允许
+   * 「页面内全部区域」生效的弹窗类接口，页面内容区也能拿到真材质（迁移前是手搓 Stack 浮层 +
+   * 自绘磨砂玻璃）。因此这里只声明菜单项：不再有手搓遮罩、圆角、描边、投影与分隔线。
+   *
+   * 菜单项点击后仍要手动把 `showMoreMenu` 置回 false：系统只隐藏菜单，**不回写**驱动显隐的状态。
    */
   @Builder
   MoreMenu() {
-    Stack() {
-      Column() {
-      }
-      .width('100%').height('100%')
-      .onClick(() => {
-        this.showMoreMenu = false
-      })
+    Menu() {
+      MenuItem({ content: '搜索本版' })
+        .onClick(() => {
+          this.showMoreMenu = false
+          routerStore.navigateSearch(this.boardFid, this.boardName, this.boardStid)
+        })
 
-      Column() {
-        Column() {
-          Text('搜索本版')
-            .fontSize(15)
-            .fontColor(AppColors.textPrimary)
-            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-            .width('100%')
-            .onClick(() => {
-              this.showMoreMenu = false
-              routerStore.navigateSearch(this.boardFid, this.boardName, this.boardStid)
-            })
-        }
-        .width('100%')
+      MenuItem({ content: '子版块显示' })
+        .onClick(() => {
+          // 内部已置 showMoreMenu = false
+          this.openSubBoardFilterPanel()
+        })
 
-        Divider().width('100%').color(AppColors.separator)
-
-        Column() {
-          Text('子版块显示')
-            .fontSize(15)
-            .fontColor(AppColors.textPrimary)
-            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-            .width('100%')
-            .onClick(() => {
-              this.openSubBoardFilterPanel()
-            })
-        }
-        .width('100%')
-
-        Divider().width('100%').color(AppColors.separator)
-
-        Column() {
-          Text(this.isCurrentBoardFavorite() ? '取消收藏板块' : '收藏板块')
-            .fontSize(15)
-            .fontColor(AppColors.textPrimary)
-            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-            .width('100%')
-            .onClick(() => {
-              this.toggleCurrentBoardFavorite()
-              this.showMoreMenu = false
-            })
-        }
-        .width('100%')
-      }
-      .width(170)
-      .borderRadius(10)
-      .attributeModifier(UIMaterialManager.surfaceMaterial)
-      .position({ top: this.statusBarHeight + 50, right: 12 })
+      MenuItem({ content: this.isCurrentBoardFavorite() ? '取消收藏板块' : '收藏板块' })
+        .onClick(() => {
+          this.toggleCurrentBoardFavorite()
+          this.showMoreMenu = false
+        })
     }
-    .width('100%').height('100%')
-    .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
   }
 
   /**
-   * HotRangeMenu（原 build() 内联块，纯结构搬移，行为不变）。
+   * 版块更多菜单选项。
+   *
+   * 锚点＝整条 `PanelNavBar`（菜单挂在它身上）。迁移前是 `.position({ top: statusBarHeight + 50,
+   * right: 12 })` 的固定浮层，改为 `Placement.BottomRight` 后由系统按标题栏几何落位。
+   *
+   * @returns 菜单选项
+   */
+  private moreMenuOptions(): MenuOptions {
+    const options: MenuOptions = {
+      placement: Placement.BottomRight,
+      enableArrow: false,
+      systemMaterial: UIMaterialManager.menuMaterial
+    }
+    return options
+  }
+
+  /**
+   * 热门时间窗菜单（官方 `bindMenu` 承载，选项见 {@link hotRangeMenuOptions}）。
+   *
+   * 材质由 `MenuOptions.systemMaterial` 承担（菜单控制属页面内全区域生效的弹窗类接口）。
+   * 当前时间窗的选中态改用系统菜单的 `selected` + `selectIcon`，不再自绘主题色文字与打勾图标。
    */
   @Builder
   HotRangeMenu() {
-    Stack() {
-      Column() {
-      }
-      .width('100%').height('100%')
-      .onClick(() => {
-        this.showHotRangeMenu = false
+    Menu() {
+      ForEach(HOT_RANGES, (range: SortMode) => {
+        MenuItem({ content: range.label })
+          .selected(this.hotRange === range.key)
+          .selectIcon(true)
+          .onClick(() => {
+            // 内部已置 showHotRangeMenu = false 并切换时间窗
+            this.handleHotRangeSelect(range.key)
+          })
+      }, (range: SortMode) => {
+        return range.key
       })
-
-      Column() {
-        ForEach(HOT_RANGES, (range: SortMode, index: number) => {
-          Column() {
-            Row() {
-              Text(range.label)
-                .fontSize(15)
-                .fontColor(AppColors.textPrimary)
-                .layoutWeight(1)
-              if (this.hotRange === range.key) {
-                Image($r('app.media.icon_check'))
-                  .width(16).height(16)
-                  .fillColor(AppColors.primary)
-              }
-            }
-            .width('100%')
-            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-            .onClick(() => {
-              this.handleHotRangeSelect(range.key)
-            })
-
-            if (index < HOT_RANGES.length - 1) {
-              Divider().width('100%').color(AppColors.separator)
-            }
-          }
-          .width('100%')
-        }, (range: SortMode) => {
-          return range.key
-        })
-      }
-      .width(150)
-      .borderRadius(10)
-      .attributeModifier(UIMaterialManager.surfaceMaterial)
-      .position({ top: this.sortBarBottomY + 6, right: '4%' })
     }
-    .width('100%').height('100%')
-    .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
   }
 
   /**
-   * SubBoardFilterPanel（原 build() 内联块，纯结构搬移，行为不变）。
+   * 热门时间窗菜单选项。
+   *
+   * 锚点＝排序条那一行（菜单挂在它身上），`Placement.BottomRight` 让菜单落在排序条下方右对齐，
+   * 与迁移前 `.position({ top: sortBarBottomY + 6, right: '4%' })` 的落点一致；`sortBarBottomY`
+   * 的采集因此只剩「状态视图撑满排序条下方的列表可视区」一个用途。
+   *
+   * @returns 菜单选项
+   */
+  private hotRangeMenuOptions(): MenuOptions {
+    const options: MenuOptions = {
+      placement: Placement.BottomRight,
+      enableArrow: false,
+      systemMaterial: UIMaterialManager.menuMaterial
+    }
+    return options
+  }
+
+  /**
+   * 子版块筛选半模态内容（官方 `bindSheet` 承载，选项见 {@link subBoardFilterSheetOptions}）。
+   *
+   * 面板**本体**的材质由 `SheetOptions.systemMaterial` 的系统沉浸材质承担——**半模态转场**属
+   * Release 允许「页面内全部区域」生效的弹窗类接口。全屏遮罩、圆角与「点击空白关闭」分别改由
+   * `maskColor`、`radius` 与下拉/侧滑手势承担，内容里不再自绘遮罩与玻璃面板。
+   *
+   * 面板内部的 `Toggle` 继续走 `controlMaterial`：Toggle 属官方「按钮与选择类」清单，生效范围
+   * 与所在位置无关，**浮层内部依然生效**——这是它与普通容器（Column/Row/Text）最大的区别。
    */
   @Builder
   SubBoardFilterPanel() {
-    Stack({ alignContent: Alignment.Center }) {
-      Column() {
-      }
-      .width('100%').height('100%')
-      .backgroundColor(AppColors.overlay)
-      .onClick(() => {
-        if (this.updatingSubBoardFilterId.length === 0) {
-          this.showSubBoardFilterPanel = false
-        }
-      })
-
-      Column() {
-        Row() {
-          Column() {
-            Text('子版块显示')
-              .fontSize(17)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(AppColors.textPrimary)
-              .width('100%')
-            Text() {
-              Span('关闭即屏蔽，开关会同步到 ')
-              Span('NGA 账号').fontWeight(FontWeight.Medium)
-              Span('，并刷新当前父版块的帖子列表')
-            }
-            .fontSize(12)
-            .fontColor(AppColors.textSecondary)
-            .lineHeight(16)
+    Column() {
+      Row() {
+        Column() {
+          Text('子版块显示')
+            .fontSize(17)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(AppColors.textPrimary)
             .width('100%')
-            .margin({ top: 3 })
+          Text() {
+            Span('关闭即屏蔽，开关会同步到 ')
+            Span('NGA 账号').fontWeight(FontWeight.Medium)
+            Span('，并刷新当前父版块的帖子列表')
           }
-          .layoutWeight(1)
-          .alignItems(HorizontalAlign.Start)
-
-          Text('关闭')
-            .fontSize(14)
-            .fontColor(AppColors.primary)
-            .padding({ left: 12, top: 8, bottom: 8 })
-            .onClick(() => {
-              if (this.updatingSubBoardFilterId.length === 0) {
-                this.showSubBoardFilterPanel = false
-              }
-            })
+          .fontSize(12)
+          .fontColor(AppColors.textSecondary)
+          .lineHeight(16)
+          .width('100%')
+          .margin({ top: 3 })
         }
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 14, bottom: 10 })
-        .alignItems(VerticalAlign.Center)
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
 
-        Divider().width('100%').color(AppColors.separator)
+        Text('关闭')
+          .fontSize(14)
+          .fontColor(AppColors.primary)
+          .padding({ left: 12, top: 8, bottom: 8 })
+          .onClick(() => {
+            if (this.updatingSubBoardFilterId.length === 0) {
+              this.showSubBoardFilterPanel = false
+            }
+          })
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 14, bottom: 10 })
+      .alignItems(VerticalAlign.Center)
 
-        List() {
-          ForEach(this.subBoards, (subBoard: SubBoard) => {
-            ListItem() {
-              Row() {
-                BoardIcon({ url: subBoard.boardHead, iconSize: 36, iconRadius: 8 })
-                  .opacity(subBoard.checked ? 1 : 0.45)
+      Divider().width('100%').color(AppColors.separator)
 
-                Column() {
-                  Text(unescapeHtml(subBoard.name))
-                    .fontSize(15)
-                    .fontColor(subBoard.checked ? AppColors.textPrimary : AppColors.textTertiary)
+      List() {
+        ForEach(this.subBoards, (subBoard: SubBoard) => {
+          ListItem() {
+            Row() {
+              BoardIcon({ url: subBoard.boardHead, iconSize: 36, iconRadius: 8 })
+                .opacity(subBoard.checked ? 1 : 0.45)
+
+              Column() {
+                Text(unescapeHtml(subBoard.name))
+                  .fontSize(15)
+                  .fontColor(subBoard.checked ? AppColors.textPrimary : AppColors.textTertiary)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .width('100%')
+                if (subBoard.checked && subBoard.description.length > 0) {
+                  Text(unescapeHtml(subBoard.description))
+                    .fontSize(12)
+                    .fontColor(AppColors.textTertiary)
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
                     .width('100%')
-                  if (subBoard.checked && subBoard.description.length > 0) {
-                    Text(unescapeHtml(subBoard.description))
-                      .fontSize(12)
-                      .fontColor(AppColors.textTertiary)
-                      .maxLines(1)
-                      .textOverflow({ overflow: TextOverflow.Ellipsis })
-                      .width('100%')
-                      .margin({ top: 2 })
-                  }
-                  if (!subBoard.checked) {
-                    Text('已屏蔽')
-                      .fontSize(12)
-                      .fontColor(AppColors.textSecondary)
-                      .width('100%')
-                      .margin({ top: 2 })
-                  }
+                    .margin({ top: 2 })
                 }
-                .layoutWeight(1)
-                .alignItems(HorizontalAlign.Start)
-                .margin({ left: 10, right: 10 })
-
-                if (this.updatingSubBoardFilterId === subBoard.filterId) {
-                  LoadingProgress().width(22).height(22).color(AppColors.primary)
-                } else {
-                  Toggle({
-                    type: ToggleType.Switch,
-                    isOn: subBoard.filterable ? subBoard.checked : true
-                  })
-                    .enabled(subBoard.filterable && subBoard.filterId.length > 0
-                      && this.updatingSubBoardFilterId.length === 0)
-                    .onChange((show: boolean): void => {
-                      this.handleSubBoardFilterChange(subBoard, show)
-                    })
-                    .systemMaterial(UIMaterialManager.controlMaterial)
+                if (!subBoard.checked) {
+                  Text('已屏蔽')
+                    .fontSize(12)
+                    .fontColor(AppColors.textSecondary)
+                    .width('100%')
+                    .margin({ top: 2 })
                 }
               }
-              .width('100%')
-              .height(58)
-              .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-              .alignItems(VerticalAlign.Center)
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+              .margin({ left: 10, right: 10 })
+
+              if (this.updatingSubBoardFilterId === subBoard.filterId) {
+                LoadingProgress().width(22).height(22).color(AppColors.primary)
+              } else {
+                Toggle({
+                  type: ToggleType.Switch,
+                  isOn: subBoard.filterable ? subBoard.checked : true
+                })
+                  .enabled(subBoard.filterable && subBoard.filterId.length > 0
+                    && this.updatingSubBoardFilterId.length === 0)
+                  .onChange((show: boolean): void => {
+                    this.handleSubBoardFilterChange(subBoard, show)
+                  })
+                  .systemMaterial(UIMaterialManager.controlMaterial)
+              }
             }
-          }, (subBoard: SubBoard) => {
-            const stableId: string = subBoard.filterId.length > 0
-              ? subBoard.filterId : `${subBoard.fid}:${subBoard.stid}:${subBoard.name}`
-            return `${stableId}:${subBoard.checked ? 'shown' : 'blocked'}`
-          })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .divider({ strokeWidth: 0.5, color: AppColors.separator, startMargin: 60 })
-        .scrollBar(BarState.Auto)
+            .width('100%')
+            .height(58)
+            .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+            .alignItems(VerticalAlign.Center)
+          }
+        }, (subBoard: SubBoard) => {
+          const stableId: string = subBoard.filterId.length > 0
+            ? subBoard.filterId : `${subBoard.fid}:${subBoard.stid}:${subBoard.name}`
+          return `${stableId}:${subBoard.checked ? 'shown' : 'blocked'}`
+        })
       }
-      .width('88%')
-      .height('70%')
-      .borderRadius(16)
-      .attributeModifier(UIMaterialManager.surfaceMaterial)
+      .width('100%')
+      .layoutWeight(1)
+      .divider({ strokeWidth: 0.5, color: AppColors.separator, startMargin: 60 })
+      .scrollBar(BarState.Auto)
     }
     .width('100%').height('100%')
-    .transition(TransitionEffect.OPACITY.animation({ duration: 180 }))
+  }
+
+  /**
+   * 子版块筛选半模态选项。
+   *
+   * `dragBar` / `showClose` 关闭系统附属元素：内容区自带标题行与「关闭」入口，再叠一套系统元素
+   * 会重复。`backgroundColor` 必须走 `sheetContentBackdrop`——`BindOptions.backgroundColor`
+   * 默认是 `Color.White`，不清掉的话这层白色内容会盖住背板材质；设备不支持材质时该常量回退为
+   * 半透明填充兜底。`shouldDismiss` 保留迁移前「提交中点击遮罩不关闭」的守卫。
+   *
+   * @returns 半模态选项
+   */
+  private subBoardFilterSheetOptions(): SheetOptions {
+    const options: SheetOptions = {
+      height: '70%',
+      dragBar: false,
+      showClose: false,
+      backgroundColor: UIMaterialManager.sheetContentBackdrop,
+      systemMaterial: UIMaterialManager.sheetMaterial,
+      maskColor: AppColors.overlay,
+      preferType: this.currentBreakpoint === 'sm' ? SheetType.BOTTOM : SheetType.CENTER,
+      // radius 的类型是 LengthMetrics | BorderRadiuses | LocalizedBorderRadiuses，**不接受裸 number**；
+      // 四个圆角取同值（官方说明：圆角相等时面板视觉体验最佳），底部样式不显示底部两角，无副作用
+      radius: { topLeft: 16, topRight: 16, bottomLeft: 16, bottomRight: 16 },
+      onDisappear: () => {
+        // 系统关闭（下拉 / 侧滑 / 蒙层）后回写可见性，保证状态与面板一致
+        this.showSubBoardFilterPanel = false
+      },
+      shouldDismiss: (sheetDismiss: SheetDismiss) => {
+        if (this.updatingSubBoardFilterId.length === 0) {
+          sheetDismiss.dismiss()
+        }
+      }
+    }
+    return options
   }
 }
 

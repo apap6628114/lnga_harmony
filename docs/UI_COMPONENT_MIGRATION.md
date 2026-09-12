@@ -51,7 +51,7 @@
 
 | 原实现 | 迁移后 | 视觉策略 |
 | --- | --- | --- |
-| 回复编辑器 / 发新主题：全屏 `Stack` 遮罩 + 手搓居中/底部定位 | `bindSheet` 半模态（`sm` 用 `SheetType.BOTTOM`，`md+` 用 `SheetType.CENTER` 保持居中浮层形态） | sheet 背景置 `Color.Transparent`、`blurStyle` 默认 NONE、蒙层色对齐 `AppColors.overlay`；外观仍由内容容器的 `surfaceMaterial` 磨砂玻璃承担 |
+| 回复编辑器 / 发新主题：全屏 `Stack` 遮罩 + 手搓居中/底部定位 | `bindSheet` 半模态（`sm` 用 `SheetType.BOTTOM`，`md+` 用 `SheetType.CENTER` 保持居中浮层形态） | sheet 背景置 `Color.Transparent`、`blurStyle` 默认 NONE、蒙层色对齐 `AppColors.overlay`。**注**：这是迁移当时的做法（外观由内容容器的 `surfaceMaterial` 磨砂玻璃承担），后续已被 §7.2 的系统材质接管——sheet 背板改走 `sheetMaterial`，内容容器不再叠自绘玻璃 |
 | 图片查看器：同层 `Stack` 内渲染 | `bindContentCover` 全屏模态 | 内容自带暗场景底色，`modalTransition` 用系统默认 |
 | 通用确认框（`floatingLayerStore.showConfirm`） | 官方 `ConfirmDialog`，调用点下移到唯一使用方 `BrowseHistoryPanel` | 官方模板样式，主按钮保留 `AppColors.destructive` 实底 |
 | 「放弃编辑」确认框（`replyConfirmActive`） | 官方 `ConfirmDialog`，下移到 `ReplyDialog` / `NewTopicDialog` 各自的 `CustomDialogController` | 同上 |
@@ -149,7 +149,9 @@ ProfileCardPopup）、`NoteAddContent`（NotesPanel）、`KeywordEditorContent`�
 
 1. 官方容器的**背景一律让位**：sheet 背景 `Color.Transparent`、popup `popupColor` 透明且 `backgroundBlurStyle: NONE`、
    对话框走官方模板自身材质。
-2. 弹层外观仍由内容容器的 `.attributeModifier(UIMaterialManager.surfaceMaterial / inputMaterial / ...)` 承担；
+2. 弹层外观**迁移当时**仍由内容容器的 `.attributeModifier(UIMaterialManager.surfaceMaterial / inputMaterial / ...)` 承担；
+   **现已被 §7.2 的系统材质取代**——弹层本体走 `dialogMaterial` / `sheetMaterial` / `menuMaterial` / `popupMaterial`，
+   内容层只保留不做背景模糊的 `dialogFieldMaterial`。
    官方容器只提供**位置、动效、手势与命中测试**。
 3. 蒙层色统一对齐 `AppColors.overlay`，迁移前后遮罩观感一致。
 
@@ -184,7 +186,9 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
 | 位置 | 接入点 | 材质 |
 | --- | --- | --- |
 | 32 处官方对话框（`AlertDialog` / `TipsDialog` / `SelectDialog` / `CustomContentDialog`） | `CustomDialogControllerOptions.systemMaterial` | `dialogMaterial`（Beta1 原配方） |
-| 2 处半模态面板（回复 / 发新主题编辑器、写私信） | `SheetOptions.systemMaterial` | `sheetMaterial`（同配方） |
+| 3 处半模态面板（回复 / 发新主题编辑器、写私信、**子版块筛选**） | `SheetOptions.systemMaterial` | `sheetMaterial`（同配方） |
+| 3 处菜单（**帖子更多菜单**、**版块更多菜单**、**热门时间窗菜单**） | `MenuOptions.systemMaterial`（`bindMenu`） | `menuMaterial`（`THICK` + 暖白 tint） |
+| 1 处气泡（**页码选择器**） | `CustomPopupOptions.systemMaterial`（`bindPopup`） | `popupMaterial`（`REGULAR` + 暖白 tint） |
 | 7 处设置类 `Slider` + 2 处 `Toggle(Switch)` | 通用属性 `.systemMaterial(...)` | `controlMaterial`（`THIN` + 交互形变 + 点光源） |
 
 **材质参数在真机上实测校准过**（详见 `IMMERSIVE_LIGHT_DESIGN.md` §12.7）：弹窗 / 面板用
@@ -210,3 +214,58 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
 `PanelNavBar` 标题栏是内容区自绘栏位，**不在** `Navigation` 标题栏内，因此拿不到系统材质。
 要接入需把面板栈改造成 `Navigation`/`NavDestination` + `barStyle: BarStyle.STACK`，
 属于导航模型重构（本轮范围外，需要时另立目标评估）。
+
+### 7.4 页面内容区浮层的系统材质迁移（ThreadPanel / TopicListPanel）
+
+承接 §7.1 的判定：**浮层只要换成官方弹窗类接口承载，材质就能拿到**。本轮把两个页面里剩余的
+手搓玻璃浮层逐个迁走——它们此前都是「全屏 `Stack` 遮罩 + `.position()` 定位 + `surfaceMaterial`」。
+
+| 原实现 | 迁移后 | 锚点 | 材质 |
+| --- | --- | --- | --- |
+| `ThreadPanel.MoreMenu`（分享菜单，宽 150 玻璃柱） | `bindMenu` + `Menu` / `MenuItem` | 整条 `PanelNavBar`（`Placement.BottomRight`） | `menuMaterial` |
+| `TopicListPanel.MoreMenu`（版块菜单，宽 170） | `bindMenu` | 同上 | `menuMaterial` |
+| `TopicListPanel.HotRangeMenu`（热门时间窗，宽 150 + 打勾） | `bindMenu`（选中态用 `MenuItem.selected` + `selectIcon(true)`） | 排序条那一行 | `menuMaterial` |
+| `ThreadPanel.PagePicker`（页码选择，220×180 固定浮层） | `bindPopup` + `CustomPopupOptions` | 分页条里的「到」 | `popupMaterial` |
+| `TopicListPanel.SubBoardFilterPanel`（88%×70% 居中面板 + 遮罩） | `bindSheet`（`sm` → `BOTTOM`，其余 → `CENTER`） | 面板根 `Stack` | `sheetMaterial` |
+
+四条落地约束（改动时勿回退）：
+
+1. **锚点决定落位**。`bindPopup` / `bindMenu` 的位置由**锚点组件几何 + `placement`** 推导，
+   不存在"任意屏幕坐标"这条能力（§4 资料卡的实测结论）。因此菜单挂在整条标题栏上取
+   `BottomRight`、气泡挂在「到」上取 `Top`；`PagePicker` 里按 `holdingStatus` 手算左右定位的
+   逻辑随之删除——气泡会自动贴向锚点所在的那一侧。
+   **锚点要用有明确尺寸的容器，不要拿文字本身当锚点**：文字在 40vp 胶囊里是垂直居中的，
+   它的布局矩形顶边并不在胶囊顶边，气泡底边会因此落进胶囊内部（实机现象：气泡与页码条纵向
+   压住一点）。「到」的锚点改成 `.height(40)` 的 `Stack` 后，`targetSpace: 12` 才能真正把它
+   推离页码条。
+2. **两个默认值必须显式改掉**：`bindPopup` 的 `backgroundBlurStyle` 默认 `COMPONENT_ULTRA_THICK`、
+   `popupColor` 默认「透明 + 该模糊」。要写 `backgroundBlurStyle: BlurStyle.NONE` +
+   `popupColor: Color.Transparent`，否则等于在系统材质上再叠一层模糊。
+3. **内容层分工不变**：浮层**本体**由 options 的系统材质承担；内部普通组件一律自绘内容层
+   （页码选择器里的输入框改用 `dialogFieldMaterial`，替代原来的 `backgroundColor(Color.Transparent)`）。
+   但 **`Toggle` / `Slider` / `Select` 例外**——它们在 Release 清单内是"页面内全部区域"，
+   处在半模态内部**依然生效**，所以子版块筛选里的 `Toggle(Switch)` 继续用 `controlMaterial`。
+4. **状态回写不能省**：系统只隐藏菜单 / 气泡，**不会回写**驱动显隐的状态变量。菜单项 `onClick`
+   里必须把 `showMoreMenu` 置回 `false`；半模态靠 `onDisappear` 回写 `showSubBoardFilterPanel`，
+   `shouldDismiss` 保留「提交中点击遮罩不关闭」的守卫；气泡靠 `onStateChange` 回写
+   `showPagePicker`（漏了它，气泡被系统关掉后状态停在 `true`，下次点击赋同一个值不触发刷新，
+   **气泡再也弹不出来**）。
+5. **`builder` 字段要传构造器，不能传构造结果**（实机踩坑）。`CustomPopupOptions.builder` 的类型是
+   `CustomBuilder`（`() => void`）。在 `build()` 内的**参数位置**写 `this.PagePicker()` 会被 ArkUI 的
+   @Builder 语法糖正确转成构造器（`bindSheet` / `bindMenu` 就是这么写的，已验证有效）；但在
+   **普通方法返回的 options 对象字段**里写 `this.PagePicker()` 会被当作立即调用、得到 `void`，
+   气泡拿到空 builder，**整个气泡不渲染**（现象：点「到」毫无反应，连空壳都没有）。
+   该字段统一写 `builder: (): void => { this.PagePicker() }`。
+
+`bindSheet` 这一项沿用既有配方：`dragBar: false` + `showClose: false` +
+`backgroundColor: UIMaterialManager.sheetContentBackdrop`（`BindOptions.backgroundColor` 默认
+`Color.White`，不清掉就盖住背板材质）+ `maskColor: AppColors.overlay` + `radius: 16`。
+
+### 7.5 明确保留自绘玻璃的位置（用户决策，2026-09）
+
+右下角**常驻**控件不迁移：两个页面的发帖 / 刷新 / 回复圆形按钮、`ThreadPanel` 底部分页条胶囊。
+理由是它们在 Release 门禁下**不存在**系统材质通道——它们是页面内容区的 `Stack` / `Row` 普通容器，
+换成 `Button` 也一样（`Button` 不在「页面内全部区域」清单里）；唯一在清单内的按钮形态
+`Toggle(ToggleType.Button)` 又因"样式继承 Button 默认值且不支持设置"而做不出圆形按钮
+（`borderRadius` 不生效，本地 SDK `component/toggle.d.ts` 与官方文档均有说明）。因此维持
+`fabMaterial` 自绘磨砂玻璃，视觉与系统材质同屏共存。
