@@ -1,3 +1,28 @@
+/**
+ * 回复 / 贴条 / 编辑回复编辑器（沉浸光感半模态面板内容层）。
+ *
+ * 布局取向：**纵向尽量矮**，且不牺牲任何既有能力（模式切换、表情面板、预览、
+ * 格式插入、图片上传、匿名、草稿、输入法互斥）。为此做了四件事：
+ *
+ * 1. 正文输入区高度在历史值（210 / 250）基础上下调 30%（147 / 175）；表情面板
+ *    展开时进一步收缩，把纵向空间让给表情区，避免面板整体顶到屏幕上沿。
+ * 2. 移除「内容将发布到当前帖子 + 字数」提示行：普通回复不再占一行；贴条模式
+ *    必需的 6~650 字节计数并入既有的贴条提示行，不额外增加高度。
+ * 3. 格式工具区从正文区上方移到**下方**（拇指可达区）：文字按钮全部换成 SVG 图标。
+ *    第一行常显「表情 / 图片 / 超链接」并在其后放折叠按钮，右端固定「匿名 / 预览」；
+ *    粗体及以后的插入型格式收在折叠按钮之后，展开时**另起一行**显示，避免窄屏一进来
+ *    就要滑动找工具。格式区左对齐、开关区右对齐，激活态只靠颜色区分（主题色图标 +
+ *    极淡琥珀底）。
+ * 4. 取消按钮移除（下拉手势、点击蒙层、系统返回均能关闭），主操作按钮接管其
+ *    右上角位置。
+ *
+ * 视觉契约（docs/IMMERSIVE_LIGHT_DESIGN.md §12）：面板本体是系统沉浸材质
+ * （`SheetOptions.systemMaterial`），本组件属**内容层**——只用 `dialogFieldMaterial`
+ * 这类「半透明填充 + 极淡描边、不做背景模糊」的玻璃表达层级，不再叠二次模糊；
+ * 未激活的工具按钮保持透明底，让材质背板尽量透出来（§12.8）。主操作按钮按 §12.5
+ * 走实底主题色 + 高对比文字，它是画面上唯一的视觉重点。
+ */
+
 import { AppColors } from '../constants/Constants'
 import { floatingLayerStore } from '../../store/FloatingLayerStore'
 import { BBCodePreviewPane } from './BBCodePreviewPane'
@@ -21,27 +46,86 @@ const logger = new Logger(DOMAIN_UI, 'ReplyDialog')
 /** 回复正文输入框的组件标识，用于通过 UIContext 恢复焦点并拉起软键盘。 */
 const REPLY_TEXT_AREA_ID: string = 'reply-editor-text-area'
 
-/** 回复编辑器格式操作。 */
+/**
+ * 打开编辑器后补一次焦点请求的延时（ms）。
+ *
+ * 面板刚打开时半模态转场尚未结束，转场期间系统会忽略焦点请求——因此组件挂载后先试一次，
+ * 转场结束再补一次，保证软键盘一定被拉起；两次请求都是幂等的，重复请求不会重弹键盘。
+ */
+const AUTO_FOCUS_RETRY_DELAY_MS: number = 260
+
+/** 正文输入区高度（vp）：历史值 210 / 250 的 70%，用于压低整面板高度。 */
+const EDITOR_HEIGHT_SM: number = 147
+const EDITOR_HEIGHT_MD: number = 175
+
+/** 表情面板展开时的正文输入区高度（vp）：把纵向空间让给表情区。 */
+const EDITOR_HEIGHT_EMOJI_SM: number = 104
+const EDITOR_HEIGHT_EMOJI_MD: number = 128
+
+/**
+ * 工具行按钮尺寸（vp）、按钮间距（vp）与图标边长（vp）。
+ *
+ * 按钮宽 32、间距 2：每个图标仍保有 32×32 的点击区，但图标之间的视觉留白收到
+ * 约 16vp —— 折叠态只有四个按钮时不会显得空旷，展开态十个按钮也更省横向空间。
+ */
+const TOOL_BUTTON_W: number = 32
+const TOOL_BUTTON_H: number = 32
+const TOOL_BUTTON_GAP: number = 2
+const TOOL_ICON_SIZE: number = 18
+
+/** 贴条正文的 UTF-8 字节上限，与提交校验、服务端限制一致。 */
+const COMMENT_MAX_BYTES: number = 650
+
+/** 回复编辑器工具行操作。 */
 interface FormatAction {
-  /** 显示文案。 */
+  /** 无障碍标签：图标按钮没有可读文案，语义靠它表达。 */
   label: string
 
-  /** BBCode 标签。 */
+  /** 操作标识：BBCode 标签，或 `emoticon` / `anony` 这类编辑器动作。 */
   tag: string
+
+  /** 工具行图标。 */
+  icon: Resource
 }
 
-/** 回复编辑器支持的格式操作。 */
-const FORMAT_ACTIONS: FormatAction[] = [
-  { label: '表情', tag: 'emoticon' },
-  { label: '粗体', tag: 'b' },
-  { label: '斜体', tag: 'i' },
-  { label: '下划线', tag: 'u' },
-  { label: '删除线', tag: 'del' },
-  { label: '引用', tag: 'quote' },
-  { label: '链接', tag: 'url' },
-  { label: '@', tag: 'at' },
-  { label: '图片', tag: 'img' },
+/**
+ * 常显工具操作：表情、图片、超链接。
+ *
+ * 三项都属于「往正文里插入内容」的高频操作，折叠态下也保持可见——窄屏手机
+ * 不滑动即可触达全部常显项（见工具行的折叠按钮）。
+ */
+const PRIMARY_ACTIONS: FormatAction[] = [
+  { label: '表情', tag: 'emoticon', icon: $r('app.media.icon_emoticon') },
+  { label: '图片', tag: 'img', icon: $r('app.media.icon_image') },
+  { label: '超链接', tag: 'url', icon: $r('app.media.icon_link') },
 ]
+
+/**
+ * 折叠工具操作：粗体、斜体、下划线、删除线、引用、@。
+ *
+ * 都在「选中文字后加格式」的次高频路径上，默认收在折叠按钮之后；展开后
+ * 与常显项连成一行，超出宽度时仍可横向滑动。
+ */
+const SECONDARY_ACTIONS: FormatAction[] = [
+  { label: '粗体', tag: 'b', icon: $r('app.media.icon_format_bold') },
+  { label: '斜体', tag: 'i', icon: $r('app.media.icon_format_italic') },
+  { label: '下划线', tag: 'u', icon: $r('app.media.icon_format_underline') },
+  { label: '删除线', tag: 'del', icon: $r('app.media.icon_format_strike') },
+  { label: '引用', tag: 'quote', icon: $r('app.media.icon_format_quote') },
+  { label: '@', tag: 'at', icon: $r('app.media.icon_at') },
+]
+
+/**
+ * 匿名发布开关。
+ *
+ * 语义上它不是「插入一段格式」，但同属发布前的编辑决策，因此并入工具行；
+ * 固定在右端（滑动区之外）保证可见性，与格式项之间用一条极淡分隔线区分。
+ */
+const ANONY_ACTION: FormatAction = {
+  label: '匿名发布',
+  tag: 'anony',
+  icon: $r('app.media.icon_shield')
+}
 
 /** 使用沉浸光感材质承载帖子回复、贴条与编辑操作。 */
 @Component
@@ -81,6 +165,9 @@ export struct ReplyDialog {
 
   /** 是否处于发布预览模式（以 BBCode 渲染结果替换正文输入区）。 */
   @State previewMode: boolean = false
+
+  /** 是否展开工具行的折叠格式（粗体及以后的插入型格式）。 */
+  @State formatExpanded: boolean = false
 
   /** 当前表情分类。 */
   @State selectedCatKey: string = 'ac'
@@ -137,6 +224,40 @@ export struct ReplyDialog {
       }
     }
     floatingLayerStore.registerReplyCloseHandler(() => { this.requestClose() })
+    this.autoFocusEditor()
+  }
+
+  /**
+   * 打开编辑器后自动聚焦正文，由系统拉起软键盘。
+   *
+   * 新回复、贴条、编辑回复三种入口一致：输入框挂载后立即请求一次（多数情况这一步就够），
+   * 半模态转场结束后再补一次，避免转场期间请求被系统忽略而键盘不弹。
+   */
+  private autoFocusEditor(): void {
+    setTimeout((): void => { this.focusReplyEditor() }, 0)
+    setTimeout((): void => { this.focusReplyEditor() }, AUTO_FOCUS_RETRY_DELAY_MS)
+  }
+
+  /**
+   * 聚焦正文输入框，光标落在已有内容（草稿 / 编辑内容）末尾。
+   *
+   * 用户已经切到表情面板或预览态时跳过，避免把系统键盘从表情面板手里抢回来。
+   */
+  private focusReplyEditor(): void {
+    if (this.showEmojiPanel || this.previewMode) {
+      return
+    }
+    this.requestEditorFocus(this.replyText.length)
+  }
+
+  /** 请求正文输入框焦点并把光标放到指定位置。 */
+  private requestEditorFocus(caret: number): void {
+    try {
+      this.getUIContext().getFocusController().requestFocus(REPLY_TEXT_AREA_ID)
+      this.textAreaController.caretPosition(caret)
+    } catch (error) {
+      logger.verbose('[IME] request reply editor focus failed: %{public}s', String(error))
+    }
   }
 
   /** 请求关闭编辑器，并在存在正文时保留草稿。 */
@@ -182,14 +303,7 @@ export struct ReplyDialog {
   /** 关闭表情面板并在 TextArea 重建后恢复焦点，由系统拉起软键盘。 */
   private showSystemKeyboard(): void {
     this.showEmojiPanel = false
-    setTimeout((): void => {
-      try {
-        this.getUIContext().getFocusController().requestFocus(REPLY_TEXT_AREA_ID)
-        this.textAreaController.caretPosition(this.selStart)
-      } catch (error) {
-        logger.verbose('[IME] request reply editor focus failed: %{public}s', String(error))
-      }
-    }, 0)
+    setTimeout((): void => { this.requestEditorFocus(this.selStart) }, 0)
   }
 
   /** 清除正文焦点以关闭软键盘，再展示与软键盘互斥的表情面板。 */
@@ -213,11 +327,40 @@ export struct ReplyDialog {
     this.showEmojiPanel = false
   }
 
+  /**
+   * 判断工具行按钮是否处于激活态。
+   *
+   * 只有「开关型」动作（表情面板、匿名发布）有激活态；插入型格式（粗体、链接等）
+   * 是一次性动作，不驻留状态，因此统一返回未激活。
+   */
+  private isFormatActive(tag: string): boolean {
+    if (tag === 'emoticon') {
+      return this.showEmojiPanel
+    }
+    if (tag === 'anony') {
+      return this.isAnonymous
+    }
+    return false
+  }
+
+  /** 切换匿名发布。原「隐藏账号信息」副文案的说明改由 Toast 承载。 */
+  private toggleAnonymous(): void {
+    this.isAnonymous = !this.isAnonymous
+    appStore.showToast(this.isAnonymous ? '匿名发布已开启，将隐藏账号信息' : '匿名发布已关闭')
+  }
+
+  /** 展开 / 收起工具行的高级格式（粗体及以后的插入型格式）。 */
+  private toggleFormatExpanded(): void {
+    this.formatExpanded = !this.formatExpanded
+  }
+
   /** 将选定格式应用到当前正文选区。 */
   private applyFormat(action: FormatAction): void {
     const tag: string = action.tag
     if (tag === 'emoticon') {
       this.toggleEmotionKeyboard()
+    } else if (tag === 'anony') {
+      this.toggleAnonymous()
     } else if (tag === 'url') {
       this.replyText = ReplyManagerClass.insertUrl(this.replyText, this.selStart, this.selEnd)
     } else if (tag === 'at') {
@@ -281,7 +424,7 @@ export struct ReplyDialog {
     }
     if (this.isCommentMode) {
       const byteLength: number = this.getByteLength(this.replyText.trim())
-      if (byteLength < 6 || byteLength > 650) {
+      if (byteLength < 6 || byteLength > COMMENT_MAX_BYTES) {
         appStore.showToast('贴条长度需在6~650字节之间')
         return
       }
@@ -320,24 +463,47 @@ export struct ReplyDialog {
     return length
   }
 
-  /** 获取编辑器底部的实时内容统计。 */
-  private getContentMetric(): string {
-    const content: string = this.replyText.trim()
-    if (this.isCommentMode) {
-      return this.getByteLength(content).toString() + ' / 650 字节'
-    }
-    return content.length.toString() + ' 字'
+  /** 贴条模式下的实时字节计数（对应 6~650 字节的硬性限制）。 */
+  private getCommentMetric(): string {
+    return this.getByteLength(this.replyText.trim()).toString() + ' / ' + COMMENT_MAX_BYTES.toString()
   }
 
-  /** 获取当前主操作文案。 */
+  /** 获取当前主操作文案。图标化工具行后按钮移到标题右侧，取最短的可辨识写法。 */
   private getSubmitLabel(): string {
     if (this.sending) {
-      return '发送中…'
+      return '发送中'
     }
     if (this.editMode) {
-      return '保存修改'
+      return '保存'
     }
-    return this.isCommentMode ? '发布贴条' : '发送回复'
+    return this.isCommentMode ? '发贴条' : '发送'
+  }
+
+  /**
+   * 工具行图标按钮。
+   *
+   * 激活态只用颜色区分（主题色图标 + 极淡琥珀底），尺寸与位置恒定，避免同一行内
+   * 因状态切换产生位移；未激活态保持完全透明，把面板材质背板让出来（§12.8）。
+   * 状态一律经 `this` 读取，保证 `@State` 变化能刷新到 `@Builder` 内部。
+   */
+  @Builder
+  FormatButton(action: FormatAction) {
+    Column() {
+      Image(action.icon)
+        .width(TOOL_ICON_SIZE)
+        .height(TOOL_ICON_SIZE)
+        .fillColor(this.isFormatActive(action.tag)
+          ? AppColors.primary
+          : UIMaterialManager.adaptiveForeground)
+    }
+    .width(TOOL_BUTTON_W)
+    .height(TOOL_BUTTON_H)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .borderRadius(10)
+    .backgroundColor(this.isFormatActive(action.tag) ? AppColors.selectionTint : Color.Transparent)
+    .accessibilityText(action.label)
+    .onClick(() => { this.applyFormat(action) })
   }
 
   /** 构建回复编辑界面。 */
@@ -355,6 +521,9 @@ export struct ReplyDialog {
       }
       .width('100%')
 
+      // 头部：标题 +（模式切换 / 副标题）+ 主操作。
+      // 「取消」已移除——下拉手势、点击蒙层、系统返回都能关闭；主操作按钮接管右上角，
+      // 并以实底主题色成为画面上唯一的视觉重点（§12.5）。
       Row() {
         Column() {
           Text(this.dialogTitle)
@@ -401,22 +570,25 @@ export struct ReplyDialog {
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
-        .margin({ right: 12 })
+        .margin({ right: 10 })
 
-        Button('取消')
+        Button(this.getSubmitLabel())
           .type(ButtonType.Capsule)
           .height(36)
           .fontSize(14)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(UIMaterialManager.adaptiveForeground)
-          .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-          .padding({ left: 16, right: 16 })
-          .onClick(() => { this.requestClose() })
+          .fontWeight(FontWeight.Bold)
+          .fontColor(AppColors.white)
+          .backgroundColor(AppColors.primary)
+          .padding({ left: 18, right: 18 })
+          .enabled(!this.sending &&
+            (this.editMode || this.replyText.trim().length > 0 || replyManager.shouldQuote))
+          .onClick(() => { this.doSend() })
       }
       .width('100%')
-      .padding({ bottom: 12 })
+      .padding({ bottom: 10 })
       .alignItems(VerticalAlign.Center)
 
+      // 贴条提示与实时字节计数合并为一行：不加高度，也不丢贴条的硬性长度反馈
       if (this.isCommentMode) {
         Row() {
           Text('贴条')
@@ -426,72 +598,145 @@ export struct ReplyDialog {
             .backgroundColor(AppColors.selectionTint)
             .borderRadius(8)
             .padding({ left: 7, right: 7, top: 3, bottom: 3 })
-          Text('贴条将附着在该楼层下方（6~650字节）')
+          Text('将附着在该楼层下方（6~650字节）')
             .fontSize(11)
             .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
             .margin({ left: 7 })
+          Blank().layoutWeight(1)
+          Text(this.getCommentMetric())
+            .fontSize(10)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.getByteLength(this.replyText.trim()) > COMMENT_MAX_BYTES
+              ? AppColors.destructive
+              : UIMaterialManager.adaptiveSecondaryForeground)
         }
         .width('100%')
         .padding({ left: 2, bottom: 8 })
         .alignItems(VerticalAlign.Center)
       }
 
-      Column() {
-        Row() {
-          Text(this.previewMode ? '发布预览' : '格式工具')
-            .fontSize(11)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-          Blank().layoutWeight(1)
-          if (!this.previewMode) {
-            Text(this.showEmojiPanel ? '表情面板已展开' : '左右滑动查看更多')
-              .fontSize(10)
-              .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-              .margin({ right: 10 })
-          }
-          Text(this.previewMode ? '返回编辑' : '预览')
-            .fontSize(11)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(AppColors.primary)
-            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-            .borderRadius(10)
-            .backgroundColor(AppColors.selectionTint)
-            .onClick(() => { this.togglePreview() })
-        }
-        .width('100%')
-        .padding({ left: 4, right: 4, bottom: 6 })
-
-        if (!this.previewMode) {
-          Scroll() {
-            Row({ space: 6 }) {
-              ForEach(FORMAT_ACTIONS, (action: FormatAction) => {
-                Text(action.label)
-                  .fontSize(13)
-                  .fontColor(action.tag === 'emoticon' && this.showEmojiPanel
-                    ? AppColors.primary : UIMaterialManager.adaptiveForeground)
-                  .fontWeight(action.tag === 'emoticon' && this.showEmojiPanel
-                    ? FontWeight.Bold : FontWeight.Medium)
-                  .height(32)
-                  .padding({ left: 12, right: 12 })
-                  .borderRadius(10)
-                  .backgroundColor(action.tag === 'emoticon' && this.showEmojiPanel
-                    ? AppColors.selectionTint : Color.Transparent)
-                  .border({ width: 0.5, color: AppColors.separator })
-                  .onClick(() => { this.applyFormat(action) })
-              }, (action: FormatAction) => action.tag)
-            }
-            .padding({ left: 2, right: 2 })
-          }
+      if (this.previewMode) {
+        BBCodePreviewPane({
+          content: replyManager.buildContent(this.replyText),
+          viewportHeight: this.currentBreakpoint === 'sm' ? EDITOR_HEIGHT_SM : EDITOR_HEIGHT_MD
+        })
+      } else {
+        TextArea({ text: this.replyText, placeholder: '写下你的回复…', controller: this.textAreaController })
+          .id(REPLY_TEXT_AREA_ID)
           .width('100%')
+          .height(this.showEmojiPanel
+            ? (this.currentBreakpoint === 'sm' ? EDITOR_HEIGHT_EMOJI_SM : EDITOR_HEIGHT_EMOJI_MD)
+            : (this.currentBreakpoint === 'sm' ? EDITOR_HEIGHT_SM : EDITOR_HEIGHT_MD))
+          .padding(14)
+          .fontSize(15)
+          .fontColor(UIMaterialManager.inputForeground)
+          .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+          .caretColor(UIMaterialManager.inputForeground)
+          .borderRadius(16)
+          .attributeModifier(UIMaterialManager.dialogFieldMaterial)
+          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .onFocus(() => { this.onEditorFocus() })
+          .onChange((value: string) => { this.replyText = value })
+          .onTextSelectionChange((start: number, end: number) => {
+            if (this.previewMode) {
+              return
+            }
+            this.selStart = start
+            this.selEnd = end
+          })
+      }
+
+      // 工具行（第一行）：紧贴正文区下方（拇指可达区），分左右两区——
+      // 左侧格式区**左对齐**：常显「表情 / 图片 / 超链接」+ 折叠按钮；
+      // 右侧固定区**右对齐**：放「匿名 / 预览」两个开关，不随格式区滚动，始终可见。
+      Row() {
+        if (this.previewMode) {
+          Text('发布预览')
+            .fontSize(12)
+            .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+            .margin({ left: 10 })
+          Blank().layoutWeight(1)
+        } else {
+          Scroll() {
+            Row({ space: TOOL_BUTTON_GAP }) {
+              ForEach(PRIMARY_ACTIONS, (action: FormatAction) => {
+                this.FormatButton(action)
+              }, (action: FormatAction) => action.tag)
+
+              // 折叠 / 展开控制：紧随常显格式之后。高级格式在**下一行**展开，
+              // 因此折叠态箭头朝下（提示下方还有内容），展开态翻转朝上（点击收回）。
+              Column() {
+                Image($r('app.media.icon_chevron_down'))
+                  .width(TOOL_ICON_SIZE)
+                  .height(TOOL_ICON_SIZE)
+                  .fillColor(UIMaterialManager.adaptiveForeground)
+                  .rotate({ angle: this.formatExpanded ? 180 : 0 })
+              }
+              .width(TOOL_BUTTON_W)
+              .height(TOOL_BUTTON_H)
+              .justifyContent(FlexAlign.Center)
+              .alignItems(HorizontalAlign.Center)
+              .borderRadius(10)
+              .backgroundColor(Color.Transparent)
+              .accessibilityText(this.formatExpanded ? '收起高级格式' : '展开高级格式')
+              .onClick(() => { this.toggleFormatExpanded() })
+            }
+            // Scroll 在内容窄于容器时会把子组件居中摆放，折叠态下格式区就会看着像居中；
+            // 撑满最小宽度 + 显式起端对齐后，内容必然从左侧起排，展开态仍由内容撑开。
+            .constraintSize({ minWidth: '100%' })
+            .justifyContent(FlexAlign.Start)
+          }
+          .layoutWeight(1)
           .scrollable(ScrollDirection.Horizontal)
           .scrollBar(BarState.Off)
+
+          Divider()
+            .vertical(true)
+            .height(16)
+            .color($r('app.color.glass_field_stroke'))
+            .margin({ left: 4, right: 4 })
+
+          this.FormatButton(ANONY_ACTION)
         }
+
+        Column() {
+          Image(this.previewMode ? $r('app.media.icon_compose') : $r('app.media.icon_preview'))
+            .width(TOOL_ICON_SIZE)
+            .height(TOOL_ICON_SIZE)
+            .fillColor(this.previewMode
+              ? AppColors.primary
+              : UIMaterialManager.adaptiveForeground)
+        }
+        .width(TOOL_BUTTON_W)
+        .height(TOOL_BUTTON_H)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+        .borderRadius(10)
+        .backgroundColor(this.previewMode ? AppColors.selectionTint : Color.Transparent)
+        .accessibilityText(this.previewMode ? '返回编辑' : '发布预览')
+        .onClick(() => { this.togglePreview() })
       }
       .width('100%')
-      .padding({ left: 8, right: 8, top: 8, bottom: 8 })
-      .borderRadius(14)
-      .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-      .margin({ bottom: 10 })
+      .padding({ top: 8 })
+      .alignItems(VerticalAlign.Center)
+
+      // 折叠格式行（第二行）：展开后独占一行，六个插入型格式一次排开，
+      // 不再挤进第一行跟常显项抢宽度；同样左对齐，窄屏才会触发横向滑动。
+      if (this.formatExpanded && !this.previewMode) {
+        Scroll() {
+          Row({ space: TOOL_BUTTON_GAP }) {
+            ForEach(SECONDARY_ACTIONS, (action: FormatAction) => {
+              this.FormatButton(action)
+            }, (action: FormatAction) => action.tag)
+          }
+          .constraintSize({ minWidth: '100%' })
+          .justifyContent(FlexAlign.Start)
+        }
+        .width('100%')
+        .scrollable(ScrollDirection.Horizontal)
+        .scrollBar(BarState.Off)
+        .padding({ top: 4 })
+      }
 
       if (this.showEmojiPanel && !this.previewMode) {
         Column() {
@@ -553,91 +798,8 @@ export struct ReplyDialog {
         .padding(10)
         .borderRadius(16)
         .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-        .margin({ bottom: 10 })
+        .margin({ top: 8 })
       }
-
-      if (this.previewMode) {
-        BBCodePreviewPane({
-          content: replyManager.buildContent(this.replyText),
-          viewportHeight: this.currentBreakpoint === 'sm' ? 210 : 250
-        })
-      } else {
-        TextArea({ text: this.replyText, placeholder: '写下你的回复…', controller: this.textAreaController })
-          .id(REPLY_TEXT_AREA_ID)
-          .width('100%')
-          .height(this.currentBreakpoint === 'sm' ? 210 : 250)
-          .padding(14)
-          .fontSize(15)
-          .fontColor(UIMaterialManager.inputForeground)
-          .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
-          .caretColor(UIMaterialManager.inputForeground)
-          .borderRadius(16)
-          .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-          .onFocus(() => { this.onEditorFocus() })
-          .onChange((value: string) => { this.replyText = value })
-          .onTextSelectionChange((start: number, end: number) => {
-            if (this.previewMode) {
-              return
-            }
-            this.selStart = start
-            this.selEnd = end
-          })
-      }
-
-      Row() {
-        Text(this.isCommentMode ? '按 UTF-8 字节计数' : '内容将发布到当前帖子')
-          .fontSize(10)
-          .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-        Blank().layoutWeight(1)
-        Text(this.getContentMetric())
-          .fontSize(11)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.isCommentMode && this.getByteLength(this.replyText.trim()) > 650
-            ? AppColors.destructive : UIMaterialManager.adaptiveSecondaryForeground)
-      }
-      .width('100%')
-      .padding({ left: 4, right: 4, top: 7 })
-
-      Row() {
-        Row() {
-          Toggle({ type: ToggleType.Checkbox, isOn: this.isAnonymous })
-            .width(20)
-            .height(20)
-            .onChange((value: boolean) => { this.isAnonymous = value })
-          Column() {
-            Text('匿名发布')
-              .fontSize(12)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(UIMaterialManager.adaptiveForeground)
-            Text('隐藏账号信息')
-              .fontSize(9)
-              .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-              .margin({ top: 1 })
-          }
-          .alignItems(HorizontalAlign.Start)
-          .margin({ left: 6 })
-        }
-        .alignItems(VerticalAlign.Center)
-
-        Blank().layoutWeight(1)
-
-        Button(this.getSubmitLabel())
-          .type(ButtonType.Capsule)
-          .fontSize(14)
-          .fontWeight(FontWeight.Bold)
-          .height(42)
-          .constraintSize({ minWidth: 104 })
-          .fontColor(UIMaterialManager.adaptiveForeground)
-          .attributeModifier(UIMaterialManager.dialogActionMaterial)
-          .padding({ left: 20, right: 20 })
-          .enabled(!this.sending &&
-            (this.editMode || this.replyText.trim().length > 0 || replyManager.shouldQuote))
-          .onClick(() => { this.doSend() })
-      }
-      .width('100%')
-      .margin({ top: 10 })
-      .alignItems(VerticalAlign.Center)
     }
     .width('100%')
     .constraintSize({ maxWidth: 600 })
