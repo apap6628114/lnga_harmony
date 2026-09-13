@@ -1,6 +1,6 @@
 import { window } from '@kit.ArkUI'
 import { floatingLayerStore, FloatingLayerStoreClass, FloatingPage } from '../../store/FloatingLayerStore'
-import { AppColors } from '../constants/Constants'
+import { AppColors, SheetWidthConstants } from '../constants/Constants'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 import { DOMAIN_UI, formatError, Logger } from '../utils/Logger'
 import { ImageViewer } from './ImageViewer'
@@ -44,6 +44,14 @@ export struct FloatingLayerComponent {
 
   /** 应用导航栏高度。 */
   @StorageProp('navBarHeight') navBarHeight: number = 0
+
+  /**
+   * 当前窗口宽度（vp）：半模态面板宽度按窗口收敛的依据（见 `SheetWidthConstants`）。
+   *
+   * 走 `@StorageProp` 自取而不由父组件透传：断点已经是 `@Prop`（父传），再让父组件多透一层
+   * 窗口宽度没有收益；该键由 `EntryAbility` 随断点一并写入。
+   */
+  @StorageProp('windowWidthVp') windowWidthVp: number = 0
 
   /** 当前固定态软键盘的实际高度，单位 vp。 */
   @State private keyboardHeightVp: number = 0
@@ -130,8 +138,10 @@ export struct FloatingLayerComponent {
         this.floating.notifyReplyCloseRequested()
       }
     }
-    if (this.currentBreakpoint !== 'sm') {
-      options.width = 648
+    // 非 sm 才限宽：sm 走贴底样式，由系统按窗口宽度撑满（设计基准见 `SheetWidthConstants`）。
+    // 窗口宽度未知时不设 width，交给系统默认宽度，避免用猜测值覆盖
+    if (this.currentBreakpoint !== 'sm' && this.windowWidthVp > 0) {
+      options.width = SheetWidthConstants.resolve(this.windowWidthVp)
     }
     return options
   }

@@ -20,6 +20,7 @@ import {
   KEY_STATUS_BAR_HEIGHT,
   KEY_NAV_BAR_HEIGHT,
   KEY_CURRENT_BREAKPOINT,
+  KEY_WINDOW_WIDTH_VP,
 } from '../common/constants/AppStorageKeys';
 import { TtsPlayer } from '../common/media/TtsPlayer';
 import { markPageLoaded } from '../common/infra/PageLifecycle';
@@ -209,6 +210,12 @@ export default class EntryAbility extends UIAbility {
       logger.error( 'getDefaultDisplaySync failed')
     }
     const widthVp = windowWidth / densityPixels
+    // 窗口宽度（vp，取整）随断点一并缓存：半模态面板宽度需要按窗口收敛
+    // （见 `SheetWidthConstants`）。取整 + 值变化才写，避免拖拽窗口时按帧触发全量刷新。
+    const windowWidthVp: number = Math.round(widthVp)
+    if (AppStorage.get<number>(KEY_WINDOW_WIDTH_VP) !== windowWidthVp) {
+      AppStorage.setOrCreate(KEY_WINDOW_WIDTH_VP, windowWidthVp)
+    }
     let newBp: string = 'sm'
     if (widthVp < 600) {
       newBp = 'sm'

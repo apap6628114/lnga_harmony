@@ -17,7 +17,7 @@ import { newTopicManager } from '../common/managers/NewTopicManager'
 import type { PostReplyResult } from '../model/ThreadResult'
 import type { SubBoard } from '../model/Forum'
 import { FavBoard } from '../model/SocialEntries'
-import { AppColors, FONT_COLORS, SORT_MODES, HOT_RANGES, SortMode, BreakpointType } from '../common/constants/Constants'
+import { AppColors, FONT_COLORS, SORT_MODES, HOT_RANGES, SortMode, BreakpointType, SheetWidthConstants } from '../common/constants/Constants'
 import { formatTime } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { PanelNavBar, NavBarMenuItem } from '../common/components/PanelNavBar'
@@ -133,6 +133,8 @@ export struct TopicListPanel {
   private sortBarBottomY: number = 0
   @State showSort: boolean = true
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
+  /** 当前窗口宽度（vp）：半模态面板宽度按窗口收敛的依据（见 `SheetWidthConstants`）。 */
+  @StorageProp('windowWidthVp') windowWidthVp: number = 0
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('unreadNotiCount') unreadNotiCount: number = 0
   /** 未读私信通知数量（与通知/动态未读数合并展示在标题栏铃铛角标）。 */
@@ -1150,7 +1152,7 @@ export struct TopicListPanel {
     .width('100%').height('100%').backgroundColor(AppColors.bg).alignContent(Alignment.BottomEnd)
     // 子版块筛选面板：半模态转场承载，面板本体材质见 subBoardFilterSheetOptions
     .bindSheet(this.showSubBoardFilterPanel && this.canManageCurrentBoard(),
-      this.SubBoardFilterPanel(), this.subBoardFilterSheetOptions())
+      this.SubBoardFilterSheetContent(), this.subBoardFilterSheetOptions())
   }
 
   /**
@@ -1268,7 +1270,28 @@ export struct TopicListPanel {
   }
 
   /**
-   * 子版块筛选半模态内容（官方 `bindSheet` 承载，选项见 {@link subBoardFilterSheetOptions}）。
+   * 子版块筛选半模态内容的居中外层（官方 `bindSheet` 承载，选项见 {@link subBoardFilterSheetOptions}）。
+   *
+   * 与 `FloatingLayerComponent.ReplyEditorSheet` 同构：外层负责居中与左右留白
+   * （`sm` 10vp / 其余 24vp），内层 `SubBoardFilterPanel` 自带 600vp 宽度上限——
+   * 面板在非 sm 断点被限宽（基准 648vp，按窗口收敛）后，内容恒按「600 + 左右各 24」摆放。
+   */
+  @Builder
+  SubBoardFilterSheetContent() {
+    Column() {
+      this.SubBoardFilterPanel()
+    }
+    .width('100%')
+    .height('100%')
+    .alignItems(HorizontalAlign.Center)
+    .padding({
+      left: this.currentBreakpoint === 'sm' ? 10 : 24,
+      right: this.currentBreakpoint === 'sm' ? 10 : 24
+    })
+  }
+
+  /**
+   * 子版块筛选面板内容本体。
    *
    * 面板**本体**的材质由 `SheetOptions.systemMaterial` 的系统沉浸材质承担——**半模态转场**属
    * Release 允许「页面内全部区域」生效的弹窗类接口。全屏遮罩、圆角与「点击空白关闭」分别改由
@@ -1276,6 +1299,9 @@ export struct TopicListPanel {
    *
    * 面板内部的 `Toggle` 继续走 `controlMaterial`：Toggle 属官方「按钮与选择类」清单，生效范围
    * 与所在位置无关，**浮层内部依然生效**——这是它与普通容器（Column/Row/Text）最大的区别。
+   *
+   * 根节点自带 600vp 宽度上限（`SheetWidthConstants.CONTENT_MAX_WIDTH`），居中与左右留白
+   * 由 `SubBoardFilterSheetContent` 的外层容器承担。
    */
   @Builder
   SubBoardFilterPanel() {
@@ -1384,6 +1410,7 @@ export struct TopicListPanel {
       .scrollBar(BarState.Auto)
     }
     .width('100%').height('100%')
+    .constraintSize({ maxWidth: SheetWidthConstants.CONTENT_MAX_WIDTH })
   }
 
   /**
@@ -1422,6 +1449,12 @@ export struct TopicListPanel {
           appStore.showToast('正在同步，请稍候')
         }
       }
+    }
+    // 宽度基准与编辑类半模态一致（`FloatingLayerComponent.editorSheetOptions`）：
+    // 非 sm 限宽（基准 648vp）并按窗口收敛，否则折叠屏展开 / 平板上居中面板会横贯整个窗口宽度。
+    // 窗口宽度未知时不设 width，交给系统默认宽度，避免用猜测值覆盖
+    if (this.currentBreakpoint !== 'sm' && this.windowWidthVp > 0) {
+      options.width = SheetWidthConstants.resolve(this.windowWidthVp)
     }
     return options
   }

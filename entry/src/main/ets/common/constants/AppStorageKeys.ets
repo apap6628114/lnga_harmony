@@ -2,7 +2,11 @@
  * AppStorage key 常量集中注册。
  *
  * 所有跨组件共享的 AppStorage 键名在此统一声明，避免字面量散落导致拼写漂移。
- * 各处 `AppStorage.setOrCreate` / `AppStorage.get<...>` / `@StorageProp` 引用本常量。
+ * 各处 `AppStorage.setOrCreate` / `AppStorage.get<...>` 引用本常量。
+ *
+ * 例外：`@StorageProp` 的装饰器参数目前一律写字面量（装饰器参数须为编译期字面量，无法引用
+ * 导入的常量），因此 `@StorageProp('xxx')` 与本文件的常量是**手工对齐**的关系——改名时必须
+ * 连字面量一起搜。
  *
  * 注意：key 的字符串值必须与历史字面量完全一致，否则破坏持久化数据兼容性。
  */
@@ -15,6 +19,12 @@ export const KEY_NAV_BAR_HEIGHT: string = 'navBarHeight'
 
 /** 当前断点：sm/md/lg，由 EntryAbility 写入 */
 export const KEY_CURRENT_BREAKPOINT: string = 'currentBreakpoint'
+
+/**
+ * 当前窗口宽度（vp，取整），由 EntryAbility 在窗口尺寸变化时随断点一并写入。
+ * 供需要按窗口收敛尺寸的场景使用（半模态面板宽度的收敛见 `SheetWidthConstants`）。
+ */
+export const KEY_WINDOW_WIDTH_VP: string = 'windowWidthVp'
 
 /** 主题名：system/light/dark */
 export const KEY_THEME_NAME: string = 'themeName'

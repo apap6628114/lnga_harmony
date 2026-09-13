@@ -272,6 +272,52 @@ export class BreakpointType<T> {
   }
 }
 
+// ============== 半模态面板宽度基准 ==============
+
+/**
+ * 半模态面板宽度基准（回复 / 发新主题编辑器、写私信、子版块筛选三处共用）。
+ *
+ * 三个数都由本类集中定义，避免「面板 648 / 内容 600 / 留白 24」的关联只存在于注释里：
+ * - 面板宽度 → `SheetOptions.width`（经 `resolve()` 按窗口收敛）；
+ * - 内容上限 → 各面板内容根的 `constraintSize({ maxWidth: SheetWidthConstants.CONTENT_MAX_WIDTH })`；
+ * - 左右留白 → 各面板外层的 `padding`（`sm` 10vp / 其余 24vp）。
+ *
+ * **为什么必须按窗口收敛**：`md` 断点的窗口宽度下限是 600vp，此时写死 648 会让面板宽于窗口。
+ * 而 `SheetOptions.width` 只接受单个 `Dimension`、没有 max/min 语义，收敛只能在这里自己算。
+ */
+export class SheetWidthConstants {
+  /** 内容层宽度上限（vp）：回复 / 发新主题编辑器（`ReplyDialog` / `NewTopicDialog`）同值。 */
+  static readonly CONTENT_MAX_WIDTH: number = 600
+
+  /** 面板单侧留白（vp）：既是内容上限与面板宽度的差额，也是面板内的左右 padding。 */
+  static readonly PANEL_SIDE_GAP: number = 24
+
+  /** 设计基准宽度（vp）= 内容上限 + 左右各一份留白。 */
+  static readonly PANEL_WIDTH: number =
+    SheetWidthConstants.CONTENT_MAX_WIDTH + SheetWidthConstants.PANEL_SIDE_GAP * 2
+
+  /**
+   * 按当前窗口宽度收敛面板宽度。
+   *
+   * **调用前提**：仅用于非 `sm` 断点（该断点窗口宽度必然 ≥ 600vp）。`sm` 走贴底样式、由系统
+   * 按窗口宽度撑满，不应调用本方法——窗口宽度小于两侧留白之和时会算出过窄的值。
+   * 宽度未知（<= 0）时回退到设计基准宽度；但调用点应同时判断 `windowWidthVp > 0`，
+   * 避免在宽度状态缺失时用猜测值覆盖系统默认宽度。
+   *
+   * @param windowWidthVp - 当前窗口宽度（vp）
+   * @returns 面板宽度（vp）
+   */
+  static resolve(windowWidthVp: number): number {
+    if (windowWidthVp <= 0) {
+      return SheetWidthConstants.PANEL_WIDTH
+    }
+    return Math.min(
+      SheetWidthConstants.PANEL_WIDTH,
+      windowWidthVp - SheetWidthConstants.PANEL_SIDE_GAP * 2
+    )
+  }
+}
+
 // 通知类型映射
 export interface NotiTypeInfo {
   label: string

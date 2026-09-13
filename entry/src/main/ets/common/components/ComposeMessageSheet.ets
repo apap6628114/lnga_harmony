@@ -17,7 +17,7 @@
 import { appStore } from '../../store/AppStore'
 import { sendMessage } from '../../service/api/MessageApi'
 import type { MessageSendResult } from '../../model/MessageResult'
-import { AppColors } from '../constants/Constants'
+import { AppColors, SheetWidthConstants } from '../constants/Constants'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 
 @Component
@@ -29,6 +29,10 @@ export struct ComposeMessageSheet {
   /** 发送成功回调（父组件用于刷新会话列表）。 */
   onSent?: () => void
   @StorageProp('navBarHeight') navBarHeight: number = 0
+  /** 当前窗口断点：决定半模态样式与面板宽度（与回复 / 发新主题编辑器同一套基准）。 */
+  @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
+  /** 当前窗口宽度（vp）：面板宽度按窗口收敛的依据（见 `SheetWidthConstants`）。 */
+  @StorageProp('windowWidthVp') windowWidthVp: number = 0
   @State composeTo: string = ''
   @State composeSubject: string = ''
   @State composeContent: string = ''
@@ -51,6 +55,12 @@ export struct ComposeMessageSheet {
   /**
    * 半模态面板选项。
    *
+   * 样式与宽度基准对齐回复 / 发新主题编辑器（`FloatingLayerComponent.editorSheetOptions`）：
+   * - `sm` 走 `SheetType.BOTTOM`（贴底撑满是窄屏的预期形态）；
+   * - `md` / `lg` 走 `SheetType.CENTER` 并显式限宽（设计基准 648vp，按窗口宽度收敛，
+   *   见 `SheetWidthConstants`）——否则底部面板会横贯整个窗口，内容里按百分比布局的
+   *   输入框（`width('92%')`）会跟着一起拉长。
+   *
    * @returns 半模态面板选项
    */
   private composeSheetOptions(): SheetOptions {
@@ -62,11 +72,16 @@ export struct ComposeMessageSheet {
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.sheetMaterial,
       maskColor: AppColors.overlay,
-      preferType: SheetType.BOTTOM,
+      preferType: this.currentBreakpoint === 'sm' ? SheetType.BOTTOM : SheetType.CENTER,
       onDisappear: () => {
         // 系统关闭（下滑 / 点击蒙层）后回写可见性，保证 @Link 状态与面板一致
         this.showCompose = false
       }
+    }
+    // 非 sm 才限宽（sm 贴底撑满）；宽度按窗口收敛，避免 md 窄窗口下面板宽于窗口。
+    // 窗口宽度未知时不设 width，交给系统默认宽度，避免用猜测值覆盖
+    if (this.currentBreakpoint !== 'sm' && this.windowWidthVp > 0) {
+      options.width = SheetWidthConstants.resolve(this.windowWidthVp)
     }
     return options
   }
@@ -97,59 +112,76 @@ export struct ComposeMessageSheet {
     this.sending = false
   }
 
-  /** 半模态面板内容。 */
+  /**
+   * 半模态面板内容。
+   *
+   * 两层结构与 `FloatingLayerComponent.ReplyEditorSheet` 同构：外层负责居中、左右留白
+   * （`sm` 10vp / 其余 24vp）与底部留白，内层是 600vp 上限的内容卡片。
+   * 面板在 md/lg 被限宽后，内容恒按「上限 600 + 左右各 24」摆放，不会再跟着窗口拉伸
+   * （`sm` 走贴底样式，窄屏下 600 上限不触发）。
+   */
   @Builder
   ComposeSheetContent() {
     Column() {
-      Divider().width(36).height(4).borderRadius(2).color(AppColors.sheetIndicator).margin({ top: 8, bottom: 12 })
-      Row() {
-        Text('写私信').fontSize(17).fontWeight(FontWeight.Bold).layoutWeight(1)
-        Text('✕').fontSize(20).fontColor(AppColors.textTertiary)
-          .onClick(() => { this.showCompose = false })
-      }.width('100%').padding({ left: 16, right: 16 })
+      Column() {
+        Divider().width(36).height(4).borderRadius(2).color(AppColors.sheetIndicator).margin({ top: 8, bottom: 12 })
+        Row() {
+          Text('写私信').fontSize(17).fontWeight(FontWeight.Bold).layoutWeight(1)
+          Text('✕').fontSize(20).fontColor(AppColors.textTertiary)
+            .onClick(() => { this.showCompose = false })
+        }.width('100%').padding({ left: 16, right: 16 })
 
-      TextInput({ text: this.composeTo, placeholder: '收件人（用户名）' })
-        .width('92%').height(44).fontSize(15).borderRadius(12)
-        .fontColor(UIMaterialManager.inputForeground)
-        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .caretColor(UIMaterialManager.inputForeground)
-        .margin({ top: 12 })
-        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-        .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-        .onChange((value: string) => { this.composeTo = value })
+        TextInput({ text: this.composeTo, placeholder: '收件人（用户名）' })
+          .width('92%').height(44).fontSize(15).borderRadius(12)
+          .fontColor(UIMaterialManager.inputForeground)
+          .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+          .caretColor(UIMaterialManager.inputForeground)
+          .margin({ top: 12 })
+          .attributeModifier(UIMaterialManager.dialogFieldMaterial)
+          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .onChange((value: string) => { this.composeTo = value })
 
-      TextInput({ text: this.composeSubject, placeholder: '主题' })
-        .width('92%').height(44).fontSize(15).borderRadius(12)
-        .fontColor(UIMaterialManager.inputForeground)
-        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .caretColor(UIMaterialManager.inputForeground)
-        .margin({ top: 8 })
-        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-        .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-        .onChange((value: string) => { this.composeSubject = value })
+        TextInput({ text: this.composeSubject, placeholder: '主题' })
+          .width('92%').height(44).fontSize(15).borderRadius(12)
+          .fontColor(UIMaterialManager.inputForeground)
+          .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+          .caretColor(UIMaterialManager.inputForeground)
+          .margin({ top: 8 })
+          .attributeModifier(UIMaterialManager.dialogFieldMaterial)
+          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .onChange((value: string) => { this.composeSubject = value })
 
-      TextArea({ text: this.composeContent, placeholder: '内容' })
-        .width('92%').height(100).fontSize(15).borderRadius(12)
-        .fontColor(UIMaterialManager.inputForeground)
-        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .caretColor(UIMaterialManager.inputForeground)
-        .margin({ top: 8 })
-        .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-        .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-        .onChange((value: string) => { this.composeContent = value })
+        TextArea({ text: this.composeContent, placeholder: '内容' })
+          .width('92%').height(100).fontSize(15).borderRadius(12)
+          .fontColor(UIMaterialManager.inputForeground)
+          .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+          .caretColor(UIMaterialManager.inputForeground)
+          .margin({ top: 8 })
+          .attributeModifier(UIMaterialManager.dialogFieldMaterial)
+          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .onChange((value: string) => { this.composeContent = value })
 
-      Button(this.sending ? '发送中...' : '发送')
-        .width('92%').height(44).fontSize(16)
-        .fontColor(AppColors.white)
-        .backgroundColor(AppColors.primary)
-        .borderRadius(12).margin({ top: 12, bottom: 20 })
-        .enabled(!this.sending && this.composeTo.trim().length > 0 &&
-          this.composeSubject.trim().length > 0 && this.composeContent.trim().length > 0)
-        .onClick(() => this.handleSend())
+        Button(this.sending ? '发送中...' : '发送')
+          .width('92%').height(44).fontSize(16)
+          .fontColor(AppColors.white)
+          .backgroundColor(AppColors.primary)
+          .borderRadius(12).margin({ top: 12, bottom: 20 })
+          .enabled(!this.sending && this.composeTo.trim().length > 0 &&
+            this.composeSubject.trim().length > 0 && this.composeContent.trim().length > 0)
+          .onClick(() => this.handleSend())
+      }
+      .width('100%')
+      .constraintSize({ maxWidth: SheetWidthConstants.CONTENT_MAX_WIDTH })
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center)
-    .padding({ bottom: this.navBarHeight })
+    // 左右留白与编辑类面板同构（sm 10 / 其余 24）：面板被限宽后内容仍保持 24 留白，
+    // 而不是贴着面板边缘；底部留白在贴底样式（sm）下避让手势条，居中样式下取 24
+    .padding({
+      left: this.currentBreakpoint === 'sm' ? 10 : 24,
+      right: this.currentBreakpoint === 'sm' ? 10 : 24,
+      bottom: this.currentBreakpoint === 'sm' ? this.navBarHeight : 24
+    })
     .backgroundColor(Color.Transparent)
   }
 
