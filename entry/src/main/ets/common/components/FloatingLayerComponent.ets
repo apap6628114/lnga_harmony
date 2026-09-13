@@ -16,7 +16,8 @@ const logger = new Logger(DOMAIN_UI, 'FloatingLayerComponent')
  *
  * 承载方式已从「`Stack` + 全屏遮罩手搓弹窗」迁移到官方模态 API：
  * - 回复 / 发新主题编辑器 → `bindSheet` 半模态面板。系统承担进出场动效、下拉手势与
- *   键盘避让；`sm` 断点为底部面板，`md+` 断点用 `SheetType.CENTER` 保持原先的居中浮层形态。
+ *   键盘避让；**三种断点统一是底部面板**（宽屏只限宽，不切居中浮层——居中形态与应用自做的
+ *   键盘避让互斥，会把面板撑高、平掉底部圆角，见 `editorSheetOptions`）。
  * - 图片查看器 → `bindContentCover` 全屏模态。
  * - 资料卡 → `bindPopup` 气泡：锚点用 `.position()` 精确落位、气泡本体吃系统沉浸材质
  *   （定位推导见 `profileCardPopupOptions`）。
@@ -116,6 +117,8 @@ export struct FloatingLayerComponent {
    * 保证「状态单一真源在 store」这一前提不被系统的自行关闭打破。
    * 关闭 `bindSheet` 默认的局部避让，防止它只滚动到焦点输入项并与外层的整面板避让叠加；
    * 回复与发帖内容通过窗口上报的完整键盘高度在底部占位，从而整体位于输入法上方。
+   * 面板**三个断点统一走贴底样式**（底部两角由系统按规范不绘制，见 `preferType` 处的说明），
+   * 宽屏只做限宽，不再切居中形态——居中形态与上面这套键盘占位互斥。
    *
    * @returns 半模态面板选项
    */
@@ -132,14 +135,28 @@ export struct FloatingLayerComponent {
       // 面板本体由系统接管模糊、折射、边框、阴影与弹出动效（含空间形变）。
       systemMaterial: UIMaterialManager.sheetMaterial,
       maskColor: AppColors.overlay,
-      preferType: this.currentBreakpoint === 'sm' ? SheetType.BOTTOM : SheetType.CENTER,
+      // **所有断点一律走贴底样式**（曾按断点切 `CENTER`，已作废，原因见下）。
+      //
+      // 编辑器的键盘避让是「应用自己做的」（`keyboardAvoidMode: NONE` + 内容底部按窗口上报的
+      // 键盘高度占位，见 `ReplyEditorSheet` 的 bottom padding）。这套做法只在**贴底样式**下成立：
+      // 面板贴屏幕底边，垫高内容才能把输入区顶到键盘上方。
+      //
+      // 居中样式下同一套 padding 会失效并留下两个可见缺陷（真机截图逐像素实测）：
+      // 1. 内容被二次垫高、`FIT_CONTENT` 按含键盘高度的内容测量 → 面板容器比内容高一截，
+      //    多出来的高度全堆在内容下方，工具行与键盘之间出现一条长空白；
+      // 2. 面板底边随之越出可视区，系统不再绘制底部两角 → 面板变成「上圆下方」的怪形状。
+      // 贴底样式天然没有这两个问题（底部两角本就不绘制），并且窄屏（sm）下用户认可的
+      // 「贴着输入法」观感在宽屏上得以保留，三种断点形态一致。
+      preferType: SheetType.BOTTOM,
       keyboardAvoidMode: SheetKeyboardAvoidMode.NONE,
       shouldDismiss: (sheetDismiss: SheetDismiss) => {
         this.floating.notifyReplyCloseRequested()
       }
     }
-    // 非 sm 才限宽：sm 走贴底样式，由系统按窗口宽度撑满（设计基准见 `SheetWidthConstants`）。
-    // 窗口宽度未知时不设 width，交给系统默认宽度，避免用猜测值覆盖
+    // 宽屏限宽（设计基准见 `SheetWidthConstants`）：贴底样式在窄屏由系统按窗口宽度撑满，
+    // 不限宽；md / lg 若不限宽会横贯整个窗口（折叠屏展开、平板），因此仍按窗口收敛面板宽度，
+    // 面板自身在窗口内水平居中、底边贴底。窗口宽度未知时不设 width，交给系统默认宽度，
+    // 避免用猜测值覆盖
     if (this.currentBreakpoint !== 'sm' && this.windowWidthVp > 0) {
       options.width = SheetWidthConstants.resolve(this.windowWidthVp)
     }
@@ -252,10 +269,13 @@ export struct FloatingLayerComponent {
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center)
+    // 左右留白：窄屏 10（面板撑满窗口，不再内缩）、宽屏 24（面板被限宽后内容不贴面板边缘）。
+    // 底部 = 贴底留白 + 窗口上报的键盘高度：三种断点都是贴底样式，避让方式一致
+    // （`keyboardAvoidMode: NONE`，应用自己垫高，见 `editorSheetOptions`）
     .padding({
       left: this.currentBreakpoint === 'sm' ? 10 : 24,
       right: this.currentBreakpoint === 'sm' ? 10 : 24,
-      bottom: (this.currentBreakpoint === 'sm' ? 8 : 24) + this.keyboardHeightVp
+      bottom: 8 + this.keyboardHeightVp
     })
   }
 
@@ -277,7 +297,7 @@ export struct FloatingLayerComponent {
     .padding({
       left: this.currentBreakpoint === 'sm' ? 10 : 24,
       right: this.currentBreakpoint === 'sm' ? 10 : 24,
-      bottom: (this.currentBreakpoint === 'sm' ? 8 : 24) + this.keyboardHeightVp
+      bottom: 8 + this.keyboardHeightVp
     })
   }
 

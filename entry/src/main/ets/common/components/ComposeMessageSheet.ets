@@ -55,11 +55,12 @@ export struct ComposeMessageSheet {
   /**
    * 半模态面板选项。
    *
-   * 样式与宽度基准对齐回复 / 发新主题编辑器（`FloatingLayerComponent.editorSheetOptions`）：
-   * - `sm` 走 `SheetType.BOTTOM`（贴底撑满是窄屏的预期形态）；
-   * - `md` / `lg` 走 `SheetType.CENTER` 并显式限宽（设计基准 648vp，按窗口宽度收敛，
-   *   见 `SheetWidthConstants`）——否则底部面板会横贯整个窗口，内容里按百分比布局的
-   *   输入框（`width('92%')`）会跟着一起拉长。
+   * 形态与宽度基准对齐回复 / 发新主题编辑器（`FloatingLayerComponent.editorSheetOptions`）：
+   * **所有断点统一走 `SheetType.BOTTOM` 贴底样式**（宽屏只限宽，不切居中浮层）。居中形态曾用于
+   * md / lg，但它与应用自做的键盘避让互斥——会把面板撑高、在工具行下方留出长空白，并让面板
+   * 底边越出可视区、平掉底部圆角（详见 `FloatingLayerComponent.editorSheetOptions` 的说明）。
+   * 宽屏限宽仍是必要的：否则贴底面板会横贯整个窗口，内容里按百分比布局的输入框
+   * （`width('92%')`）会跟着一起拉长。
    *
    * @returns 半模态面板选项
    */
@@ -72,13 +73,13 @@ export struct ComposeMessageSheet {
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.sheetMaterial,
       maskColor: AppColors.overlay,
-      preferType: this.currentBreakpoint === 'sm' ? SheetType.BOTTOM : SheetType.CENTER,
+      preferType: SheetType.BOTTOM,
       onDisappear: () => {
         // 系统关闭（下滑 / 点击蒙层）后回写可见性，保证 @Link 状态与面板一致
         this.showCompose = false
       }
     }
-    // 非 sm 才限宽（sm 贴底撑满）；宽度按窗口收敛，避免 md 窄窗口下面板宽于窗口。
+    // 宽屏限宽（基准 648vp，按窗口收敛），避免贴底面板横贯整个窗口；窄屏由系统撑满。
     // 窗口宽度未知时不设 width，交给系统默认宽度，避免用猜测值覆盖
     if (this.currentBreakpoint !== 'sm' && this.windowWidthVp > 0) {
       options.width = SheetWidthConstants.resolve(this.windowWidthVp)
@@ -175,12 +176,13 @@ export struct ComposeMessageSheet {
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center)
-    // 左右留白与编辑类面板同构（sm 10 / 其余 24）：面板被限宽后内容仍保持 24 留白，
-    // 而不是贴着面板边缘；底部留白在贴底样式（sm）下避让手势条，居中样式下取 24
+    // 左右留白与编辑类面板同构（10）：三种断点都是贴底样式，窄屏面板撑满窗口、宽屏限宽后
+    // 内容仍保持 10 的留白，不贴面板边缘。底部留白避让手势条（贴底样式下 `navBarHeight` 即
+    // 屏幕底部安全区，无手势条的设备为 0，需保留最小贴底留白）
     .padding({
-      left: this.currentBreakpoint === 'sm' ? 10 : 24,
-      right: this.currentBreakpoint === 'sm' ? 10 : 24,
-      bottom: this.currentBreakpoint === 'sm' ? this.navBarHeight : 24
+      left: 10,
+      right: 10,
+      bottom: this.navBarHeight > 0 ? this.navBarHeight : 8
     })
     .backgroundColor(Color.Transparent)
   }
