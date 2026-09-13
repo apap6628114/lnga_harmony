@@ -19,6 +19,7 @@ import {
   ThreadNavMode
 } from '../common/constants/Constants'
 import { PanelNavBar, NavBarMenuItem } from '../common/components/PanelNavBar'
+import { HdsMaterialHost } from '../common/components/HdsMaterialHost'
 import { PostItem } from '../common/components/PostItem'
 import { PostInfoDataSource } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView } from '../common/components/PageStateView'
@@ -51,6 +52,45 @@ import {
 import { ReadingProgressEntry } from '../store/ReadingProgressStore'
 
 const logger = new Logger(DOMAIN_UI, 'ThreadPanel')
+
+/** 右下角页码指示器的材质块高度（vp）：与回复按钮同为 40，由 HDS 材质宿主显式指定。 */
+const PAGE_BAR_H = 40
+
+/**
+ * 页码指示器材质块的**两端内边距**（vp）：页码内容铺满整块材质，首尾元素靠它离边。
+ * 内容必须铺满材质块（用显式宽度，不用 `'100%'`），否则内容会跟着 HDS 页签项的对齐方式
+ * 整体偏移——实测现象是"1 左边空一大块、『到』右侧贴死边界"。
+ */
+const PAGE_BAR_PAD = 10
+
+/** 页码指示器里「到」格的宽度（vp）：显式给定，宽度分档才不依赖文字度量。 */
+const PAGE_BAR_GOTO_W = 22
+
+/**
+ * 页码指示器里"当前页定位点"（数字下的「•」）相对**居中位置**的下移量（vp）。
+ *
+ * 这里必须用 `offset` 而不是 `position`：`position` 是相对父容器左上角的**绝对坐标**，
+ * 数字格一旦从固定高度改成铺满内容区，绝对坐标就把点顶到材质块下边界上（真机现象：
+ * "文字居中靠下、定位点压在组件边界上"）。`offset` 相对的是元素自身的居中落点，
+ * 容器怎么变都跟着数字走。
+ *
+ * 取值下限：数字（fontSize 14）字形底边约在内容中心 **+7.5vp**，点（fontSize 10）字形顶边在
+ * `offset - 2`，所以 `offset` 小于 **9.5** 时点会**压到数字上**（真机现象：文字与定位点重叠）。
+ * 取 10 让两者正好贴住、留出约 0.5vp 的缝；材质块下半还余约 3.5vp，不会碰到边界。
+ */
+const PAGE_BAR_DOT_OFFSET = 10
+
+/**
+ * 页码条内容的整体垂直补偿（vp，负值上移）。
+ *
+ * **来由（真机截图逐像素实测，不是拍脑袋）**：材质块 y 范围 1579~1683（中心 1631），而页码
+ * 数字的墨迹范围是 1618~1657（中心 1637.5）——内容在材质块里**天生偏低约 2.5vp**，同一个面板里
+ * 回复按钮的图标却是严格居中的（1605~1657，中心 1631）。也就是说 HDS 悬浮栏的内容区并不是与
+ * 材质块同心。这里补回这个差值，让数字、"到"与分隔线的视觉中心落回材质块中心。
+ *
+ * 换设备/系统版本后若又出现"整体偏下/偏上"，只调这一个值。
+ */
+const PAGE_BAR_CONTENT_OFFSET_Y = -3
 
 /** 帖子页面结果写入连续窗口的方式。 */
 enum ThreadLoadMode {
@@ -2350,12 +2390,44 @@ export struct ThreadPanel {
   }
 
   /**
-   * 底部分页条与回复按钮浮层（原 build() 内联块，纯结构搬移，行为不变）。
+   * 页码指示器的材质块宽度（vp）。
+   *
+   * HDS 材质宿主的 `barWidth` 必须是**显式值**——它不能像自绘玻璃那样由内容撑开。宽度按页码条的
+   * 内容结构分档：每格 24 + 分隔线 1 +「到」`PAGE_BAR_GOTO_W` + 两端各 `PAGE_BAR_PAD` +
+   * 元素间隙 4（元素之间的间隙由内容 Row 的 `SpaceBetween` 均分，所以这里要把间隙预算算进总宽）。
+   * 分档只随**总页数**变化（一两页 vs 多页），翻页本身不改变宽度，避免材质块频繁重排。
+   */
+  private pageBarWidth(): number {
+    if (this.mgr.totalPages === 2) {
+      // 「1 | 2」：两格 + 一条分隔线（3 个元素 → 2 个间隙）
+      return 24 * 2 + 1 + PAGE_BAR_PAD * 2 + 4 * 2
+    }
+    if (this.displayPage === 1 || this.displayPage === this.mgr.totalPages) {
+      // 「1• | 2 | 到」：两格 + 两条分隔线 +「到」（5 个元素 → 4 个间隙）
+      return 24 * 2 + 1 * 2 + PAGE_BAR_GOTO_W + PAGE_BAR_PAD * 2 + 4 * 4
+    }
+    // 「1 | 2• | 3 | 到」：三格 + 三条分隔线 +「到」（7 个元素 → 6 个间隙）
+    return 24 * 3 + 1 * 3 + PAGE_BAR_GOTO_W + PAGE_BAR_PAD * 2 + 4 * 6
+  }
+
+  /**
+   * 底部分页条与回复按钮浮层（原 build() 内联块，结构搬移；材质改为 HDS 材质宿主）。
+   *
+   * 两块的背板都从自绘磨砂玻璃（`UIMaterialManager.fabMaterial`）换成 `HdsMaterialHost`
+   * （→ `HdsTabs` 悬浮页签栏材质）：API 26 Release 收紧 `systemMaterial` 生效范围后，页面内容区
+   * 的普通组件拿不到系统沉浸材质，HDS 材质是内容区唯一能拿到**真材质**的通道（见宿主文件头）。
+   * 宿主默认与材质块逐像素重合，所以这一层的 `padding` / `justifyContent` 落点不变。
    */
   @Builder
   BottomBar() {
-    Row() {
+    // 页码条与回复按钮之间的 8vp 间距改由 Row 的 space 提供：自定义组件的**尾随闭包语法不允许**
+    // 在闭包 `}` 之后直接跟属性链（`.margin(...)` 会报 "Declaration or statement expected"），
+    // 所以间距不能再像自绘玻璃时代那样挂在页码条自身上。
+    Row({ space: 8 }) {
       if (this.mgr.totalPages > 1) {
+        // 页码指示器：整条胶囊的背板由 HDS 材质宿主承担（宽度分档见 pageBarWidth）。
+        // 内部行沿用迁移前的缩进、未随包装层级重排，便于与 git 历史逐行比对。
+        HdsMaterialHost({ barWidth: this.pageBarWidth(), barHeight: PAGE_BAR_H }) {
         Row() {
           if (this.mgr.totalPages === 2) {
             Stack() {
@@ -2365,9 +2437,9 @@ export struct ThreadPanel {
                 .fontWeight(this.displayPage === 1 ? FontWeight.Bold : FontWeight.Regular)
               if (this.displayPage === 1) {
                 Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
-                  .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
+                  .offset({ y: PAGE_BAR_DOT_OFFSET })
               }
-            }.width(24).height(28)
+            }.width(24).height('100%')
               .onClick(() => this.navigateToPage(1, PageNavigationSource.PAGER_BUTTON))
             Divider().vertical(true).height(16).color(AppColors.dividerStrong)
             Stack() {
@@ -2377,28 +2449,28 @@ export struct ThreadPanel {
                 .fontWeight(this.displayPage === 2 ? FontWeight.Bold : FontWeight.Regular)
               if (this.displayPage === 2) {
                 Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
-                  .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
+                  .offset({ y: PAGE_BAR_DOT_OFFSET })
               }
-            }.width(24).height(28)
+            }.width(24).height('100%')
               .onClick(() => this.navigateToPage(2, PageNavigationSource.PAGER_BUTTON))
           } else if (this.displayPage === 1) {
             Stack() {
               Text('1').fontSize(14).fontColor(UIMaterialManager.adaptiveForeground).fontWeight(FontWeight.Bold)
               Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
-                .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
-            }.width(24).height(28)
+                .offset({ y: PAGE_BAR_DOT_OFFSET })
+            }.width(24).height('100%')
               .onClick(() => this.navigateToPage(1, PageNavigationSource.PAGER_BUTTON))
             Divider().vertical(true).height(16).color(AppColors.dividerStrong)
             Stack() {
               Text('2').fontSize(14).fontColor(UIMaterialManager.adaptiveSecondaryForeground).fontWeight(FontWeight.Regular)
-            }.width(24).height(28)
+            }.width(24).height('100%')
               .onClick(() => this.navigateToPage(2, PageNavigationSource.PAGER_BUTTON))
           } else if (this.displayPage === this.mgr.totalPages) {
             Stack() {
               Text(String(this.mgr.totalPages - 1)).fontSize(14)
                 .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
                 .fontWeight(FontWeight.Regular)
-            }.width(24).height(28)
+            }.width(24).height('100%')
               .onClick(() => this.navigateToPage(
                 this.mgr.totalPages - 1, PageNavigationSource.PAGER_BUTTON
               ))
@@ -2407,30 +2479,30 @@ export struct ThreadPanel {
               Text(String(this.mgr.totalPages)).fontSize(14).fontColor(UIMaterialManager.adaptiveForeground)
                 .fontWeight(FontWeight.Bold)
               Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
-                .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
-            }.width(24).height(28)
+                .offset({ y: PAGE_BAR_DOT_OFFSET })
+            }.width(24).height('100%')
               .onClick(() => this.navigateToPage(this.mgr.totalPages, PageNavigationSource.PAGER_BUTTON))
           } else {
             Stack() {
               Text(String(this.displayPage - 1)).fontSize(14)
                 .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
                 .fontWeight(FontWeight.Regular)
-            }.width(24).height(28)
+            }.width(24).height('100%')
               .onClick(() => this.navigateToPage(this.displayPage - 1, PageNavigationSource.PAGER_BUTTON))
             Divider().vertical(true).height(16).color(AppColors.dividerStrong)
             Stack() {
               Text(String(this.displayPage)).fontSize(14).fontColor(UIMaterialManager.adaptiveForeground)
                 .fontWeight(FontWeight.Bold)
               Text('•').fontSize(10).fontColor(UIMaterialManager.adaptiveForeground)
-                .position({ x: '50%', y: 22 }).translate({ x: '-50%' })
-            }.width(24).height(28)
+                .offset({ y: PAGE_BAR_DOT_OFFSET })
+            }.width(24).height('100%')
               .onClick(() => this.navigateToPage(this.displayPage, PageNavigationSource.PAGER_BUTTON))
             Divider().vertical(true).height(16).color(AppColors.dividerStrong)
             Stack() {
               Text(String(this.displayPage + 1)).fontSize(14)
                 .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
                 .fontWeight(FontWeight.Regular)
-            }.width(24).height(28)
+            }.width(24).height('100%')
               .onClick(() => this.navigateToPage(this.displayPage + 1, PageNavigationSource.PAGER_BUTTON))
           }
           if (this.mgr.totalPages > 2) {
@@ -2440,9 +2512,8 @@ export struct ThreadPanel {
             // （实机现象：气泡与页码条在纵向压住一点）。
             Stack() {
               Text('到').fontSize(13).fontColor(UIMaterialManager.adaptiveForeground)
-                .padding({ left: 4, right: 2 })
             }
-            .height(40)
+            .width(PAGE_BAR_GOTO_W).height('100%')
             // 页码选择气泡的锚点：气泡本体由系统沉浸材质承担（见 pagePickerOptions）
             .bindPopup(this.showPagePicker, this.pagePickerOptions())
             .onClick(() => {
@@ -2458,28 +2529,43 @@ export struct ThreadPanel {
             })
           }
         }
-        .padding({ left: 8, right: 8, top: 0, bottom: 0 })
-        .height(40).alignItems(VerticalAlign.Center)
-        .borderRadius(20)
-        .attributeModifier(UIMaterialManager.fabMaterial)
-        .margin({ right: 8 })
+        // 内容**铺满**整块材质（显式宽度 = 材质块宽度）：写 `'100%'` 时宽度会跟随 HDS 页签项的
+        // 内边距，整条内容会一起偏移；铺满 + `SpaceBetween` 后，首尾元素各离边 `PAGE_BAR_PAD`，
+        // 中间间隙均分——与父级怎么对齐无关。
+        .width(this.pageBarWidth())
+        // 高度**跟随页签项**、不写死 PAGE_BAR_H：HDS 悬浮栏的内容区高度与传入的 barHeight 未必相等，
+        // 写死高度会被顶到内容区上沿，看起来就是"垂直方向没居中"（真机现象）。元素的垂直居中由
+        // 下面的 alignItems 负责；`constraintSize.minHeight` 兜底——万一百分比解析不出来，
+        // 仍然保持原来的 40vp。
+        .height('100%')
+        .constraintSize({ minHeight: PAGE_BAR_H })
+        .padding({ left: PAGE_BAR_PAD, right: PAGE_BAR_PAD, top: 0, bottom: 0 })
+        .alignItems(VerticalAlign.Center)
+        .justifyContent(FlexAlign.SpaceBetween)
+        // 垂直补偿：HDS 悬浮栏的内容区与材质块不同心，内容天生偏低（见 PAGE_BAR_CONTENT_OFFSET_Y）
+        .offset({ y: PAGE_BAR_CONTENT_OFFSET_Y })
+        }
       }
 
-      Stack() {
-        Image($r('app.media.icon_reply'))
-          .width(20).height(20).fillColor(UIMaterialManager.adaptiveForeground)
-      }
-      .width(40).height(40).borderRadius(20)
-      .attributeModifier(UIMaterialManager.fabMaterial)
-      .onClick(() => {
-        replyManager.startThreadReply(Number(this.threadTid), this.threadFid)
-        floatingLayerStore.replyDialogTitle = replyManager.dialogTitle
-        floatingLayerStore.editMode = false
-        floatingLayerStore.replyOnSend = (text: string, isAnony: boolean): Promise<void> => {
-          return this.handleReplySend(text, isAnony)
+      HdsMaterialHost({
+        barWidth: 40,
+        barHeight: 40,
+        onTap: () => {
+          replyManager.startThreadReply(Number(this.threadTid), this.threadFid)
+          floatingLayerStore.replyDialogTitle = replyManager.dialogTitle
+          floatingLayerStore.editMode = false
+          floatingLayerStore.replyOnSend = (text: string, isAnony: boolean): Promise<void> => {
+            return this.handleReplySend(text, isAnony)
+          }
+          floatingLayerStore.push(FloatingPage.REPLY_DIALOG)
         }
-        floatingLayerStore.push(FloatingPage.REPLY_DIALOG)
-      })
+      }) {
+        Stack() {
+          Image($r('app.media.icon_reply'))
+            .width(20).height(20).fillColor(UIMaterialManager.adaptiveForeground)
+        }
+        .width('100%').height('100%').alignContent(Alignment.Center)
+      }
     }
     .width('100%').padding({ left: 16, right: 16, bottom: 16 + this.navBarHeight }).alignItems(VerticalAlign.Center)
     .justifyContent(this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? FlexAlign.Start : FlexAlign.End)

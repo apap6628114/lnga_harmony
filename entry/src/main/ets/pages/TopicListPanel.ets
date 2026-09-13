@@ -21,6 +21,7 @@ import { AppColors, FONT_COLORS, SORT_MODES, HOT_RANGES, SortMode, BreakpointTyp
 import { formatTime } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { PanelNavBar, NavBarMenuItem } from '../common/components/PanelNavBar'
+import { HdsMaterialHost } from '../common/components/HdsMaterialHost'
 import { ThreadDataSource } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/components/PageStateView'
 import { AnonymousName } from '../common/components/AnonymousName'
@@ -1153,29 +1154,35 @@ export struct TopicListPanel {
   }
 
   /**
-   * FloatingActions（原 build() 内联块，纯结构搬移，行为不变）。
+   * FloatingActions（原 build() 内联块，结构搬移；材质改为 HDS 材质宿主）。
+   *
+   * 两个按钮的背板从自绘磨砂玻璃（`UIMaterialManager.fabMaterial`）换成 **HDS 材质宿主**
+   * （`HdsMaterialHost` → `HdsTabs` 的悬浮页签栏材质）：API 26 Release 收紧了 `systemMaterial`
+   * 的生效范围，页面内容区的普通组件拿不到系统沉浸材质，HDS 材质是内容区唯一能拿到**真材质**
+   * 的通道（详见 `HdsMaterialHost` 文件头）。宿主尺寸默认与材质块逐像素重合，所以
+   * `Row({ space: 12 })` 与下面这行 `padding` 的落点保持不变。
    */
   @Builder
   FloatingActions() {
     Row({ space: 12 }) {
       if (this.canManageCurrentBoard()) {
+        HdsMaterialHost({ barWidth: 44, barHeight: 44, onTap: () => this.openNewTopic() }) {
+          Stack() {
+            Image($r('app.media.icon_compose'))
+              .width(22).height(22)
+              .fillColor(UIMaterialManager.adaptiveForeground)
+          }
+          .width('100%').height('100%').alignContent(Alignment.Center)
+        }
+      }
+      HdsMaterialHost({ barWidth: 44, barHeight: 44, onTap: () => this.loadTopics(1) }) {
         Stack() {
-          Image($r('app.media.icon_compose'))
+          Image($r('app.media.icon_refresh'))
             .width(22).height(22)
             .fillColor(UIMaterialManager.adaptiveForeground)
         }
-        .width(44).height(44).borderRadius(22)
-        .attributeModifier(UIMaterialManager.fabMaterial)
-        .onClick(() => this.openNewTopic())
+        .width('100%').height('100%').alignContent(Alignment.Center)
       }
-      Stack() {
-        Image($r('app.media.icon_refresh'))
-          .width(22).height(22)
-          .fillColor(UIMaterialManager.adaptiveForeground)
-      }
-      .width(44).height(44).borderRadius(22)
-      .attributeModifier(UIMaterialManager.fabMaterial)
-      .onClick(() => this.loadTopics(1))
     }.width('100%').justifyContent(this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? FlexAlign.Start : FlexAlign.End)
     .padding({ left: this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? 16 : 0, right: this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? 0 : 16, bottom: 16 + this.navBarHeight })
   }

@@ -18,9 +18,17 @@
 >
 > 现在的分界：**弹窗类组件与接口（Dialog / 半模态 / 菜单 / 气泡）+ `Slider` / `Toggle` /
 > `Select` → 系统沉浸材质**——包括**资料卡**（`bindPopup`）、页码选择气泡、标题栏菜单；
-> **页面内容区的常驻控件（列表、`PanelNavBar` 栏位本体与图标底板、右下角浮动按钮与页码条、
-> 图片查看器）→ 自绘磨砂玻璃**——后者在 Release 门禁下没有任何
-> 合法材质通道，官方 FAQ 给的建议就是"改用 `backgroundColor` 等通用属性替代材质效果"。
+> **页面内容区的常驻控件（列表、`PanelNavBar` 栏位本体与图标底板、图片查看器）→ 自绘磨砂玻璃**；
+> **内容区的右下角浮动操作控件（发帖 / 刷新 / 回复按钮、页码指示器）→ HDS 材质宿主**（见 §12.9）。
+>
+> 第三条通路是 Release 之后才出现的：**ArkUI 的 `systemMaterial` 在内容区没有任何合法通道**
+> （官方 FAQ 的建议就是"改用 `backgroundColor` 等通用属性替代材质效果"，也就是自绘玻璃），
+> 但 **UI Design Kit 的 HDS 材质不受那条门禁约束**——`HdsTabs` 的悬浮页签栏背板
+> （`barFloatingStyle.systemMaterialEffect`，API 23 起）由 HDS 组件自己渲染材质。于是可以把
+> 一个只放自定义内容的 `HdsTabs` 当"材质宿主"，给内容区的小面积浮动控件接上**真材质**。
+> 这条路是**设计语义层面的非合规挪用**（详见 §12.9 的边界与风险），只用于官方组件覆盖不到的
+> 小面积控件。
+>
 > 分流表、落地契约与接入清单见第 12 节；本文其余章节保留为沉浸光感契约与踩坑记录。
 
 ## 0. 先记住这一条：Release 的生效范围门禁
@@ -772,7 +780,8 @@ HDS 的材质类型/等级与 ArkUI 的 `ImmersiveStyle` 不是一一对应关�
 | 菜单（`bindMenu` / `bindContextMenu`） | 系统沉浸材质 | `menuMaterial`（`THICK` + 暖白 tint） |
 | 气泡（`bindPopup`，含页码选择器、资料卡） | 系统沉浸材质 | `popupMaterial`（`REGULAR` + 暖白 tint） |
 | `Slider` / `Toggle` | 系统沉浸材质 | `controlMaterial`（`THIN` + 交互形变 + 点光源） |
-| 页面内容区常驻控件（面板、列表、`PanelNavBar` 标题栏、右下角浮动按钮与页码条、`Toast`） | 自绘磨砂玻璃 | `surfaceMaterial` / `barMaterial` / `fabMaterial` / … |
+| 页面内容区的**右下角浮动控件**（发帖 / 刷新 / 回复按钮、页码指示器） | **HDS 材质宿主（非合规旁路）** | `HdsMaterialHost` → `HdsTabs` 的 `barFloatingStyle.systemMaterialEffect`（见 §12.9） |
+| 页面内容区其他常驻控件（面板、列表、`PanelNavBar` 标题栏与图标底板、`Toast`） | 自绘磨砂玻璃 | `surfaceMaterial` / `barMaterial` / `fabMaterial` / … |
 | 图片查看器（`bindContentCover` 全屏模态、固定暗场景） | 自绘磨砂玻璃 | `darkOverlayMaterial` / `closeButtonMaterial` |
 
 判定依据就是本文 §0 的生效范围门禁：本工程没有 `Navigation` / `Tabs`，**内容区没有任何标题栏或
@@ -1014,6 +1023,104 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 - **实底颜色留给语义。** 只有承担明确操作语义的按钮才用实底主题色（§12.5 的主操作按钮、
   破坏性操作如"退出""删除"）。它打破玻璃的连续质感、成为画面上唯一的视觉重点——这正是它有效的
   原因，所以不要为了"好看"给普通按钮也上实底。
+
+### 12.9 HDS 材质宿主：内容区浮动控件的"非合规旁路"（第三条通路）
+
+**问题**：右下角的发帖 / 刷新 / 回复按钮与页码指示器是"页面内容区的常驻控件"，属于 §0 门禁里
+**没有任何 ArkUI 材质通道**的位置（本工程没有 `Navigation` / `Tabs`，`PanelNavBar` 还是自绘标题栏）。
+官方技术支持在开发者问答里对这类位置的正式答复是"用 `backgroundEffect` 自绘近似"，即 §12.1 的磨砂玻璃。
+
+**旁路**：**UI Design Kit 的 HDS 材质是另一套体系**。`HdsTabs` 的悬浮页签栏通过
+`barFloatingStyle.systemMaterialEffect`（`hdsMaterial.MaterialType.ADAPTIVE` +
+`MaterialLevel.ADAPTIVE`，`@since 6.1.0(23)`）由 **HDS 组件自身**渲染材质，`SystemCapability` 是
+`UIDesign.HDSComponent.Core`，**不受 §0 那条针对 ArkUI `systemMaterial` 的生效范围约束**。
+因此可以把一个**只放自定义内容的 `HdsTabs`** 当"材质宿主"：借用它的悬浮页签栏背板承载任意小控件。
+
+接入封装：[`HdsMaterialHost.ets`](../entry/src/main/ets/common/components/HdsMaterialHost.ets)。
+
+#### 非合规边界（必须知情）
+
+- 这是**设计语义层面的挪用**：单页签 + 空 `TabContent` + 自定义 `tabBar`，既不是页签导航，
+  也不承载页面内容，唯一目的是它的材质背板。**官方明确"不能通过改包名、反射或隐藏接口绕过 API 26 门禁"
+  ——本方案没有做任何那类事，调用的是公开 HDS 接口**，但它确实不是官方推荐的用法。
+- 官方给出的合规边界是：*"对于导航栏、标题栏、悬浮页签等标准场景，优先使用 UI Design Kit 官方沉浸光感
+  组件；**仅对官方组件覆盖不了的品牌化小面积控件使用自定义近似实现**"*。本组件只用于**小面积浮动控件**，
+  禁止拿它给列表、面板、大面积区域套材质。
+- **不降级（工程约定不变）**：材质等级固定 `ADAPTIVE`（HDS 推荐值，不要写死 `EXQUISITE`），
+  不为"设备不支持材质"写兜底分支——不支持时控件就是透明的，这是接受的结果。TV 上 HdsTabs 无效果。
+
+#### 四条硬约束（踩坑清单）
+
+1. **悬浮三条件缺一不可**：`barOverlap(true)` + `barPosition(BarPosition.End)` + `vertical(false)`。
+   少任何一个，`barFloatingStyle` 都不生效。
+2. **必须 `.clip(false)`**：HdsTabs 默认裁切自身内容，材质的边缘折射高光 / 阴影会被切掉，
+   观感退化成一块生硬色块（公开方案实测结论）。
+3. **`gradientMask.maskColor` 显式置 `Color.Transparent`**：HdsTabs 的底部渐变遮罩默认会画一层蒙版，
+   叠在材质上等于给材质再盖一层内容色。
+4. **宿主外层容器必须固定尺寸**：`HdsTabs` 会撑满父容器，直接把它放进页面 `Stack` 会铺满整屏。
+
+#### 尺寸与落点
+
+材质块（悬浮栏本体）在宿主内**水平居中、贴底**，所以宿主每边比材质块多出 `2 * contentPadding`：
+
+```text
+宿主宽 = barWidth  + 4 * contentPadding
+宿主高 = barHeight + 4 * contentPadding
+材质块左右边距 = 2 * contentPadding，底边距 = 2 * contentPadding + barBottomMargin
+```
+
+`contentPadding` **默认 0**：材质块与宿主逐像素重合，调用点沿用原来的落点与间距（不必为"多出来的余量"
+重算 padding），光效靠 `.clip(false)` 溢出宿主边界。只有真机上确认光效被父容器裁掉时才调大它，
+并**同步修正调用点外边距**（按上式）。
+
+#### 接入点与改造记录
+
+| 调用点 | 材质块尺寸 | 交互 |
+| --- | --- | --- |
+| `TopicListPanel.FloatingActions` 发帖 / 刷新 | 44×44 | `onTap`（宿主绑定 `onTabBarClick`） |
+| `ThreadPanel.BottomBar` 回复按钮 | 40×40 | 同上 |
+| `ThreadPanel.BottomBar` 页码指示器 | `pageBarWidth()` × 40 | **不传 `onTap`**：块内页码格与「到」各自持有 `onClick` / `bindPopup` |
+
+三条实现约定：
+
+- **`barWidth` 必须是显式值**——HDS 悬浮栏不能像自绘玻璃那样由内容撑开。页码指示器宽度按内容结构分档
+  （`ThreadPanel.pageBarWidth()`：两格 / 两格+到 / 三格+到），分档只随**总页数**变化，翻页本身不改宽度，
+  避免材质块频繁重排（§9.5 的参数稳定约束）。「到」格也给显式宽度，否则分档要依赖文字度量。
+- **内容必须"铺满"材质块**：用**显式数值宽度**（= `barWidth`）+ `.justifyContent(FlexAlign.SpaceBetween)`
+  + 两端 `padding`。写成 `width('100%')` 时宽度会跟着 HDS 页签项走、整条内容随页签项的对齐方式偏移——
+  **真机现象**：页码条里「1」左边空一大块、「到」右侧贴死边界，分布明显不均。铺满之后首尾各离边
+  `PAGE_BAR_PAD`、中间间隙均分，与父级怎么对齐无关。
+- **`onTap` 与内容子元素的 `onClick` 只能二选一**：宿主把 `onTap` 绑在 `onTabBarClick` 上，
+  内容的子元素再写 `onClick` 会**双触发**。单动作按钮用 `onTap`；页码指示器这种块内多热区的，
+  不传 `onTap`，由子元素自己处理。
+- **自定义组件的尾随闭包后不能跟属性链**：`HdsMaterialHost({...}) { ... }.margin(...)` 会报
+  `Declaration or statement expected`（`ThreadPanel` 因此把页码条与回复按钮的 8vp 间距从
+  `.margin` 改成 `Row({ space: 8 })`）。内置组件（`Row` / `Column`）不受此限。
+- **材质块内的定位点要用 `offset`，不能用 `position`**：页码条"当前页"数字下的「•」原本是
+  `.position({ x: '50%', y: 22 })`——`position` 是相对父容器左上角的**绝对坐标**，只在原来那个
+  固定 28vp 高的数字格里成立；数字格改成铺满内容区（`height('100%')`）之后，绝对坐标把点顶到了
+  材质块下边界上（**真机现象**：数字看着居中偏下、「•」压在组件边界）。改成
+  `.offset({ y: PAGE_BAR_DOT_OFFSET })` 后，偏移量相对的是**元素自身的居中落点**，容器怎么变都
+  跟着数字走。这是 HDS 材质宿主特有的坑：内容是别人（HDS 悬浮栏）在排布，任何"假设容器尺寸"的
+  绝对坐标都会失配。
+
+#### 验证状态
+
+DevEco 编译通过（`BUILD SUCCESSFUL`），**真机已确认材质生效**。真机截图逐像素实测得到的事实：
+
+- 材质块高度与 `barHeight` 一致（40vp ≈ 104px，密度 2.575），页码条与回复按钮两个材质块**等高且底边对齐**；
+- 同一面板里两个宿主的**内容垂直行为不同**：回复按钮的图标严格居中（中心 = 材质块中心），
+  而页码条的**数字内容天生偏低约 2.5vp**（数字墨迹中心比材质块中心低 6.5px）——即 **HDS 悬浮栏的
+  内容区并不与材质块同心**。处置是给页码条内容加 `PAGE_BAR_CONTENT_OFFSET_Y = -3` 的垂直补偿
+  （`offset`，只影响绘制，不影响布局），并把「•」定位点的 `offset` 定为 **10vp**——它的下限是
+  9.5vp：数字字形底边在内容中心 +7.5vp、点字形顶边在 `offset − 2`，小于这个值点会**压在数字上**
+  （真机现象：文字与定位点重叠）。
+- 材质块内的定位点、数字格高度等**任何"假设容器尺寸"的写法都已清掉**：格子用 `height('100%')`、
+  定位点用 `offset`。
+
+仍未验证：页码格点击与「到」气泡锚点在材质块内的实际表现、深浅色、左右手镜像、以及单个页面多个
+`HdsTabs` 实例的常驻功耗。已知风险：HDS 材质无法套用本工程的 `material_surface_tint` 暖白 tint
+（与弹窗 / 半模态观感可能有色调差）、`2in1` 上需查设备材质能力。
 
 ## 13. AI 和代码审查规则
 
