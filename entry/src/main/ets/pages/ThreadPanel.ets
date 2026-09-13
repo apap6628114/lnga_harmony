@@ -78,7 +78,7 @@ const PAGE_BAR_GOTO_W = 22
  * `offset - 2`，所以 `offset` 小于 **9.5** 时点会**压到数字上**（真机现象：文字与定位点重叠）。
  * 取 10 让两者正好贴住、留出约 0.5vp 的缝；材质块下半还余约 3.5vp，不会碰到边界。
  */
-const PAGE_BAR_DOT_OFFSET = 10
+const PAGE_BAR_DOT_OFFSET = 11
 
 /**
  * 页码条内容的整体垂直补偿（vp，负值上移）。
@@ -90,7 +90,7 @@ const PAGE_BAR_DOT_OFFSET = 10
  *
  * 换设备/系统版本后若又出现"整体偏下/偏上"，只调这一个值。
  */
-const PAGE_BAR_CONTENT_OFFSET_Y = -3
+const PAGE_BAR_CONTENT_OFFSET_Y = -4
 
 /** 帖子页面结果写入连续窗口的方式。 */
 enum ThreadLoadMode {
