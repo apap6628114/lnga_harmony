@@ -229,7 +229,7 @@ const materialSupported: boolean = uiMaterial.isImmersiveMaterialSupported();
 | 参数 | 默认值 | 规则 |
 | --- | --- | --- |
 | `style` | `REGULAR` | 只有高、中算力设备完整支持样式差异；自动反色仅对 `THIN`、`ULTRA_THIN` 生效 |
-| `materialColor` | `undefined` | 给材质滤镜再混合一层纯色；必须使用带透明度的颜色，纯不透明色会遮挡材质滤镜；低算力设备将其作为背景色 |
+| `materialColor` | `undefined` | 给材质滤镜再混合一层纯色；必须使用带透明度的颜色，纯不透明色会遮挡材质滤镜；**只在高、中算力设备上生效**（本地 SDK `@ohos.arkui.uiMaterial.d.ts` 原文："takes effect only for the display effect of devices with high- and mid-level computing power"）。低算力设备上材质接管的是 `backgroundColor` / `borderColor` / `borderWidth` / `shadow` 的表现，**与 `materialColor` 无关**。**本工程四条背板通路一律不传该参数**（见 §12.7） |
 | `colorInvert` | `false` | 对材质节点子树中的支持颜色接口启用自动反色；只在高、中算力、满足薄材质和特殊资源条件时生效 |
 | `applyShadow` | `true` | 使用材质自带阴影；此时通用 `shadow` 不生效 |
 | `interactive` | `false` | 开启按压时的交互形变 |
@@ -775,10 +775,10 @@ HDS 的材质类型/等级与 ArkUI 的 `ImmersiveStyle` 不是一一对应关�
 
 | 位置 | 通路 | 工厂 |
 | --- | --- | --- |
-| 官方弹窗（`CustomDialogController`，含 `AlertDialog` / `TipsDialog` / `SelectDialog` / `CustomContentDialog`） | 系统沉浸材质 | `dialogMaterial`（`THIN` + 暖白 tint，见 §12.7） |
-| 半模态面板（`bindSheet`，含子版块筛选、回复 / 发帖编辑器、写私信） | 系统沉浸材质 | `sheetMaterial`（`THIN` + 暖白 tint，见 §12.7） |
-| 菜单（`bindMenu` / `bindContextMenu`） | 系统沉浸材质 | `menuMaterial`（`THICK` + 暖白 tint） |
-| 气泡（`bindPopup`，含页码选择器、资料卡） | 系统沉浸材质 | `popupMaterial`（`REGULAR` + 暖白 tint） |
+| 官方弹窗（`CustomDialogController`，含 `AlertDialog` / `TipsDialog` / `SelectDialog` / `CustomContentDialog`） | 系统沉浸材质 | `dialogMaterial`（`THIN` + `applyShadow: true`，**不赋色**，见 §12.7） |
+| 半模态面板（`bindSheet`，含子版块筛选、回复 / 发帖编辑器、写私信） | 系统沉浸材质 | `sheetMaterial`（同 `dialogMaterial`，**不赋色**，见 §12.7） |
+| 菜单（`bindMenu` / `bindContextMenu`） | 系统沉浸材质 | `menuMaterial`（`THICK` + `applyShadow: true`，**不赋色**） |
+| 气泡（`bindPopup`，含页码选择器、资料卡） | 系统沉浸材质 | `popupMaterial`（`REGULAR` + `applyShadow: true`，**不赋色**） |
 | `Slider` / `Toggle` | 系统沉浸材质 | `controlMaterial`（`THIN` + 交互形变 + 点光源） |
 | 页面内容区的**右下角浮动控件**（发帖 / 刷新 / 回复按钮、页码指示器） | **HDS 材质宿主（非合规旁路）** | `HdsMaterialHost` → `HdsTabs` 的 `barFloatingStyle.systemMaterialEffect`（见 §12.9） |
 | 页面内容区其他常驻控件（面板、列表、`PanelNavBar` 标题栏与图标底板、`Toast`） | 自绘磨砂玻璃 | `surfaceMaterial` / `barMaterial` / `fabMaterial` / … |
@@ -806,7 +806,7 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 | `fabMaterial` | 浮动圆形/胶囊按钮（内容区常驻控件） | 36vp、1.4、55% + 极淡整圈描边 + 下沉投影（不设渐变） |
 | `surfaceMaterial` | **当前无调用点**（页面内容区的浮层已全部迁到官方弹窗类接口，保留备用） | 72vp、1.5、42% + 描边 + 强投影 |
 | `barMaterial` | 标题栏、消息页栏位 | 56vp、1.4、42% + 描边，不投影 |
-| `neutralActionMaterial` | **当前无调用点**（弹窗内的中性次要操作已由 `dialogActionMaterial` 承担，保留备用） | 32vp、1.4、32% + 细描边，不投影 |
+| `neutralActionMaterial` | **当前无调用点**（保留备用；`dialogActionMaterial` 同样无调用点，弹窗内的中性次要操作场景已移除） | 32vp、1.4、32% + 细描边，不投影 |
 | `inputMaterial` | 内容区常驻输入框（登录页等） | 24vp、1.3、32% + 低透明描边，不投影 |
 | `dialogFieldMaterial` | 系统材质背板之上的输入框 / 内容层（**不做模糊**） | 无模糊、暖白半透明填充 + 极淡描边 |
 | `dialogActionMaterial` | **当前无调用点**（中性按钮场景已移除，保留备用） | 无模糊、填充 32% + 描边 |
@@ -892,11 +892,11 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 
 | 工厂 | 材质（与 `UIMaterialManager.ets` 的实际参数一致，勿凭本节旧稿记忆） | 接入点 |
 | --- | --- | --- |
-| `dialogMaterial` | `ImmersiveMaterial`：`THIN` + `material_surface_tint` + `applyShadow: true` | `new CustomDialogController({ backgroundColor: Color.Transparent, builder: …, systemMaterial: … })` |
+| `dialogMaterial` | `ImmersiveMaterial`：`THIN` + `applyShadow: true`（**不赋色**） | `new CustomDialogController({ backgroundColor: Color.Transparent, builder: …, systemMaterial: … })` |
 | `sheetMaterial` | 同 `dialogMaterial` | `SheetOptions.systemMaterial` |
-| `menuMaterial` | `ImmersiveMaterial`：`THICK` + `material_surface_tint` + `applyShadow: true` | `MenuOptions.systemMaterial`（`bindMenu` / `bindContextMenu`） |
-| `popupMaterial` | `ImmersiveMaterial`：`REGULAR` + `material_surface_tint` + `applyShadow: true` | `PopupOptions` / `CustomPopupOptions.systemMaterial`（`bindPopup`） |
-| `controlMaterial` | `ImmersiveMaterial`：`THIN` + `interactive` + `lightEffect` | 通用属性 `.systemMaterial(...)`，用于 `Slider` / `Toggle` |
+| `menuMaterial` | `ImmersiveMaterial`：`THICK` + `applyShadow: true`（**不赋色**） | `MenuOptions.systemMaterial`（`bindMenu` / `bindContextMenu`） |
+| `popupMaterial` | `ImmersiveMaterial`：`REGULAR` + `applyShadow: true`（**不赋色**） | `PopupOptions` / `CustomPopupOptions.systemMaterial`（`bindPopup`） |
+| `controlMaterial` | `ImmersiveMaterial`：`THIN` + `interactive` + `lightEffect`（本就没有材质底色） | 通用属性 `.systemMaterial(...)`，用于 `Slider` / `Toggle` |
 | `dialogFieldMaterial` | `GlassModifier`：暖白填充 + 极淡描边，**不做背景模糊** | `.attributeModifier(...)`，材质背板之上的输入框 |
 | `dialogActionMaterial` | `GlassModifier`：填充 32% + 描边，**不做背景模糊** | `.attributeModifier(...)`，材质背板之上的中性按钮 |
 
@@ -907,7 +907,7 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
   就是在系统材质之上再叠一层模糊与一层内容色。
 - `bindMenu` 的 `MenuOptions` 继承了 `ContextMenuOptions.systemMaterial`（本地 SDK
   `common.d.ts:15637` / `15594` 可查）；应用级 `enable` 下菜单本身也有默认材质，显式设置是
-  为了把档位与 tint 收敛到本工程配方，不是"没设置就没材质"。
+  为了把档位收敛到本工程配方，不是"没设置就没材质"。
 - 菜单位置由 `placement` 按**锚点组件几何**推导（`bindMenu` 默认 `Placement.BottomLeft`）：
   本工程把它挂在整条 `PanelNavBar` 上并取 `Placement.BottomRight`，得到"标题栏下方右对齐"，
   与迁移前的手写 `position({ top: statusBarHeight + NAV_BAR_H + 6, right: 16 })` 落点一致。
@@ -925,17 +925,37 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 
 | 工厂 | `style` | `materialColor` | `applyShadow` |
 | --- | --- | --- | --- |
-| `dialogMaterial` / `sheetMaterial` | `THIN` | `material_surface_tint` | `true` |
-| `menuMaterial` | `THICK`（官方菜单默认档） | 同上 | `true` |
-| `popupMaterial` | `REGULAR` | 同上 | `true` |
-| `controlMaterial` | `THIN` + `interactive` + `lightEffect` | 无 | 默认 |
+| `dialogMaterial` / `sheetMaterial` | `THIN` | **无（不赋色）** | `true` |
+| `menuMaterial` | `THICK`（官方菜单默认档） | **无（不赋色）** | `true` |
+| `popupMaterial` | `REGULAR` | **无（不赋色）** | `true` |
+| `controlMaterial` | `THIN` + `interactive` + `lightEffect` | 无（本就没有材质底色） | 默认 |
 
-**层次由「遮罩压暗背景」制造，不是靠把玻璃调暗。** 这里踩过一次坑：亮色模式下玻璃看着"平"，
-当时的处置是把 tint 改成偏暗的 `#4D5A4632` 去"制造"明度差，结果玻璃发暗发黄、整个画面发闷，
-被否掉了。正确做法是**玻璃保持亮暖白**（`app.color.material_surface_tint`：亮 `#73FEFAF6`、
-暗 `#73121214`），由弹窗 / 半模态的 `maskColor` 把背后内容压暗，玻璃自然浮起来——这也是弹层本来
-该有的层次手段。配套把**亮色遮罩从 20%（`#33000000`）提到 30%（`#4D000000`，即
-`app.color.overlay`）**；暗色遮罩 40% 保持不变。
+**四条系统材质通路一律不赋色，且层次手段按通路各不相同。** 两条历史教训：
+
+1. **不要为了提层次把材质调暗。** 亮色模式下玻璃一度看着"平"，当时的处置是把 tint 改成偏暗的
+   `#4D5A4632` 去"制造"明度差，结果玻璃发暗发黄、整个画面发闷，被否掉了。
+2. **也不要再给材质加应用色相。** 曾用的 45% 暖白 tint（`app.color.material_surface_tint`，
+   亮 `#73FEFAF6` / 暗 `#73121214`）已**全部移除**：四条通路（弹窗 / 半模态 / 菜单 / 气泡）的
+   `materialColor` 一律留空，色调来源完全交给系统按深浅色模式自适应——与 HDS 通路
+   （`HdsMaterialHost`，同样不传任何颜色）一致。该颜色资源已从 `base` / `dark` 的 `color.json`
+   删除，不要再加回来。
+   （边界：**「色调来源一致」不等于「观感一致」**。HDS 用 `materialType` / `materialLevel` 这套枚举、
+   由 HDS 组件自身渲染，与 `ImmersiveStyle` 的厚薄档位和 `applyShadow` 没有对应关系——官方明确
+   HDS 不提供与 `ImmersiveStyle` 对等的厚薄配置。不要把两条通路的参数互相套用。）
+
+**层次手段按通路各不相同**（2026-09 独立审查逐点核对，勿再笼统写成"层次只由遮罩承担"）：
+
+| 通路 | 遮罩实际情况 | 层次主要来源 |
+| --- | --- | --- |
+| 半模态（`sheetMaterial`，3 处） | ✅ `SheetOptions.maskColor = AppColors.overlay`（亮 30% / 暗 40%） | 遮罩 + 材质阴影 |
+| 官方弹窗（`dialogMaterial`，20+ 处） | ⚠️ 工程**未设** `CustomDialogControllerOptions.maskColor`，走系统默认 `0x33000000`（固定 20% 黑，**不随深浅色**） | 材质阴影（`applyShadow: true`）为主 |
+| 菜单（`menuMaterial`） | ❌ **无遮罩**（`bindMenu` 无 preview 时默认不显示；菜单的参数是 `mask` / `MenuMaskType`，**没有 `maskColor` 字段**） | `THICK` 档背景模糊 + 材质阴影 |
+| 气泡（`popupMaterial`） | ⚠️ 资料卡有 `mask: { color: AppColors.overlay }`；页码气泡显式 `mask: false` | `REGULAR` 档背景模糊 + 材质阴影 |
+
+配套的遮罩取值：**亮色 30%（`#4D000000`，即 `app.color.overlay`）/ 暗色 40%（`#66000000`）**——这两个值
+目前只落在**半模态**（及资料卡气泡）上，**弹窗并未受益**（它用的是系统默认的固定 20%）。日后若觉得
+浮层与背景分不开，按通路取手段：半模态调 `maskColor`；弹窗可考虑补 `maskColor`；菜单 / 气泡**没有
+`maskColor` 可调**，只能调档位。**一律不要往材质里加色。**
 
 至于**为什么同一套材质在暗色下天生更好看**（这是材质物理特性，不是参数没调对）：材质的边缘
 高光、折射、流光**都是亮部细节**，在暗背景上对比度最高；亮色模式下背景内容本身亮度高，模糊
@@ -948,11 +968,12 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 | --- | --- |
 | `ULTRA_THICK`（官方对 Dialog 的推荐值） | **就是一块不透的白板**，与背景是否透明无关（两张不同配置的截图逐像素完全相同）——这是"没有高透玻璃感"的直接原因 |
 | `ULTRA_THIN` | 几乎全透，背景文字与前景文字重叠，可读性崩 |
-| `THIN` | 配暖白 tint 后背景可见且柔和、色调统一、前景清晰——**当前弹窗 / 面板 / 半模态取值** |
+| `THIN` | 背景可见且柔和、前景清晰——**当前弹窗 / 面板 / 半模态取值**（注意：该档位结论是**配暖白 tint 时**测得的，tint 移除后**尚未重新做三档截图对比**；用户已目视确认无 tint 版本优于带 tint 版本，但 `THIN` / `REGULAR` / `ULTRA_THIN` 三档在无 tint 条件下的相对优劣未验证） |
 | `REGULAR` | 比 `THIN` 更实一档，用于小面积气泡（`popupMaterial`），避免压住上下文 |
 | `THICK` | 官方菜单默认档，用于"浮在内容之上"的菜单（`menuMaterial`） |
 
-系统材质**没有模糊半径参数**："又透又柔"靠的是档位自带的模糊 + `materialColor` 赋色压住背景杂色。
+系统材质**没有模糊半径参数**："又透又柔"靠的是档位自带的模糊。背景杂色偏重时，宁可换更厚的档位，
+也不要靠 `materialColor` 给材质加色——四条背板通路一律不赋色（见上表），色调交给系统深浅色自适应。
 想把背景糊成更柔和的色块，只有自绘 `backgroundEffect`（大半径）能做到。
 
 #### 生效边界：按「组件类型」判定，不按「组件在哪一层」
@@ -1021,9 +1042,9 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 玻璃材质上的内容（输入区、工具条按钮、次级操作）**用描边 + 极淡填充表达层级，而不是用颜色差**。
 这条取向的理由是结构性的，不是审美偏好：
 
-1. **底色是动态的。** 玻璃层的实际颜色由「背景内容 + `materialColor` + 系统模糊」共同决定，随
-   背后内容变化。内容元素若再用深浅色块表达层级，层级关系就跟着底色漂移——同一个按钮，背景是
-   帖子列表时是一个观感，背景是空白页时又是另一个。
+1. **底色是动态的。** 玻璃层的实际颜色由「背景内容 + 系统模糊」共同决定（背板材质已不含应用 tint，
+   见上表），随背后内容变化。内容元素若再用深浅色块表达层级，层级关系就跟着底色漂移——同一个按钮，
+   背景是帖子列表时是一个观感，背景是空白页时又是另一个。
 2. **描边是与底色无关的结构信息。** 一条细描边在任何底色上都能稳定表达"这里是输入区 /
    可交互区域"，不随背景改变而失效。
 3. **官方层级模型本身要求内容层轻量。** 材质渲染在背板层，内容层的实色会盖住材质（§8.1），
@@ -1133,8 +1154,11 @@ DevEco 编译通过（`BUILD SUCCESSFUL`），**真机已确认材质生效**。
   定位点用 `offset`。
 
 仍未验证：页码格点击与「到」气泡锚点在材质块内的实际表现、深浅色、左右手镜像、以及单个页面多个
-`HdsTabs` 实例的常驻功耗。已知风险：HDS 材质无法套用本工程的 `material_surface_tint` 暖白 tint
-（与弹窗 / 半模态观感可能有色调差）、`2in1` 上需查设备材质能力。
+`HdsTabs` 实例的常驻功耗。原先的已知风险「HDS 材质无法套用本工程的 `material_surface_tint` 暖白
+tint（与弹窗 / 半模态观感可能有色调差）」**已消除**：四条 ArkUI 系统材质通路（`dialogMaterial` /
+`sheetMaterial` / `menuMaterial` / `popupMaterial`）已同步取消 `materialColor`，与 HDS 一样不赋色，
+色调统一由系统深浅色自适应，同屏不再存在"应用 tint vs HDS 原色"的色调差。
+剩余待查：`2in1` 上的设备材质能力。
 
 ## 13. AI 和代码审查规则
 
@@ -1145,9 +1169,12 @@ DevEco 编译通过（`BUILD SUCCESSFUL`），**真机已确认材质生效**。
 3. 若不是例外，组件是否确实在 `Navigation/NavDestination` 标题栏或横向 `Tabs` 的 `BarPosition.End` 底部 TabBar？
 4. 应用级配置是否位于 `entry` module？是否误用 `disable`？
 5. 是否使用了 `uiMaterial.Material.empty` 明确关闭，而不是用 `undefined` 误关闭？
-6. 是否使用 `ImmersiveMaterial` 的正确样式：浮动控件用薄材质，弹窗用厚材质？
+6. 是否使用 `ImmersiveMaterial` 的正确样式？（本工程取值以 §12.7 为准：弹窗 / 半模态 `THIN`、
+   菜单 `THICK`、气泡 `REGULAR`。"弹窗用厚材质"是官方通用建议，本工程实测 `ULTRA_THICK` 是一块
+   不透的白板，**已改用 `THIN`**——不要按通用建议把 `dialogMaterial` 改厚）
 7. 是否在材质后设置了不透明背景、背景模糊、重复阴影或边框，导致效果被遮挡或冲突？
-8. `materialColor` 是否带透明度？
+8. 是否给材质赋了色？（**本工程四条背板通路一律不传 `materialColor`**，见 §12.7——这里不是
+   "检查透明度"，而是"不应赋色"；只有确需赋色的位置才检查颜色是否带透明度）
 9. `colorInvert` 是否同时满足薄材质、高/中算力、特殊系统资源和白名单属性？
 10. 是否把材质套在整页、大列表、视频、动图或持续动画上？是否有嵌套材质？
 11. 是否把自定义弹窗写成普通 Stack 模拟而不是使用 Dialog/Popup/Menu 等官方接口？
@@ -1165,9 +1192,9 @@ DevEco 编译通过（`BUILD SUCCESSFUL`），**真机已确认材质生效**。
 | 材质被纯色盖住 | 移除不透明 `backgroundColor`、`backgroundBlurStyle`、`backgroundEffect`；检查自绘内容层背景 |
 | `colorInvert` 不工作 | `THIN`/`ULTRA_THIN`；高/中算力；系统强度；颜色是否是表 1 特殊资源；属性是否在白名单 |
 | 黑字黑底或白字白底 | 检查是否硬编码颜色或误用 `ohos_id_color_*`；改为 `sys.color.font_*`/`icon_*` |
-| `materialColor` 后变纯色 | 颜色不透明；改用带 Alpha 的颜色 |
+| `materialColor` 后变纯色 | 颜色不透明；改用带 Alpha 的颜色（**本工程四条背板通路不赋色，此症状不会出现**） |
 | 自定义 `shadow` 不生效 | `applyShadow` 默认是 `true`；需要自定义阴影时设为 `false` |
-| 材质边框颜色像周围背景 | 这是薄材质折射；换厚样式或使用半透明 `materialColor` |
+| 材质边框颜色像周围背景 | 这是薄材质折射（`THIN` / `ULTRA_THIN` 尤其明显，官方给的解法之一就是赋色）；**本工程背板一律不赋色**，只能换更厚的档位、或加强遮罩对比 |
 | Dialog/Toast 默认没有材质 | 是否主动设置了背景、模糊或阴影；`DEFAULT` 模式只有无冲突样式时才默认启用 |
 | 低端设备效果明显不同 | 设备使用 `SMOOTH` 降级；`style` 和 `colorInvert` 本来就可能不生效，属于系统自适应 |
 | 运行旧系统崩溃或样式异常 | `ImmersiveMaterial`/`systemMaterial` 是否按 `deviceInfo.sdkApiVersion` 做了低版本分支 |
@@ -1182,7 +1209,7 @@ DevEco 编译通过（`BUILD SUCCESSFUL`），**真机已确认材质生效**。
 - [ ] 弹窗使用官方弹窗接口和 options，不使用普通 Stack 冒充弹窗。
 - [ ] `Tabs` 同时满足 `barPosition: End`、横向、`barOverlap(true)`。
 - [ ] 材质节点没有不透明背景、重复模糊、重复阴影和嵌套材质。
-- [ ] `materialColor` 带透明度。
+- [ ] 材质赋色检查：本工程四条背板通路一律不赋色（§12.7）；若确需赋色，颜色必须带透明度。
 - [ ] `colorInvert` 使用 `THIN`/`ULTRA_THIN` 与官方特殊系统资源。
 - [ ] 低算力、不支持材质设备仍然可读、可操作。
 - [ ] 低版本运行时将 `systemMaterial` 设置为 `undefined`。

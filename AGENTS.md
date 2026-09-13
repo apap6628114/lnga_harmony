@@ -64,22 +64,32 @@ skill：**`bbcode-ts`**（加载后按其操作；Rule 0–9 完整规则已并�
 常驻要点（完整契约见该文档第 12 节）：
 
 - 材质按**生效区域**分两条通路，先判断能否用系统材质，不能才自绘：
-  - **系统沉浸材质**（`UIMaterialManager` 的 `dialogMaterial` / `sheetMaterial` / `controlMaterial`）——
-    用于 Release 允许「页面内全部区域」生效的位置：官方弹窗（写在
-    `CustomDialogControllerOptions.systemMaterial`）、半模态转场（`SheetOptions.systemMaterial`）、
-    `Slider`/`Toggle`/`Select`（通用属性 `.systemMaterial(...)`）。
+  - **系统沉浸材质**（`UIMaterialManager` 的 `dialogMaterial` / `sheetMaterial` / `menuMaterial` /
+    `popupMaterial` / `controlMaterial`）——用于 Release 允许「页面内全部区域」生效的位置：
+    官方弹窗（写在 `CustomDialogControllerOptions.systemMaterial`）、半模态转场
+    （`SheetOptions.systemMaterial`）、菜单（`MenuOptions.systemMaterial`）、气泡
+    （`PopupOptions` / `CustomPopupOptions.systemMaterial`）、`Slider`/`Toggle`/`Select`
+    （通用属性 `.systemMaterial(...)`）。
   - **自绘磨砂玻璃**（`GlassModifier` 单例 + `.attributeModifier(...)`）——用于页面内容区：
     本工程无 `Navigation`/`Tabs`，内容区没有标题栏或底部 TabBar 可借位。
-- **弹窗 / 面板的材质参数固定用 Beta1 原配方**：`REGULAR` + `material_surface_tint`（45% 暖白）
-  + `applyShadow: false`。官方给 Dialog 推荐的 `ULTRA_THICK` 在真机上是一块**不透的白板**
-  （实测与背景是否透明无关），`ULTRA_THIN` / `THIN` 又太透、背景文字穿透——不要改这两个极端。
+- **系统沉浸材质一律不赋色**：四条背板通路（`dialogMaterial` / `sheetMaterial` / `menuMaterial` /
+  `popupMaterial`）都不传 `materialColor`，色调来源交给系统按深浅色模式自适应，与 HDS 通路
+  （`HdsMaterialHost`，同样不传颜色）一致；但**「色调来源一致」不等于「观感一致」**——HDS 是另一套
+  枚举与渲染（`materialType`/`materialLevel`，无 `applyShadow` 对应项），参数不要互相套用。
+  档位固定：弹窗 / 半模态 `THIN`、菜单 `THICK`、气泡 `REGULAR`，均 `applyShadow: true`。
+  官方给 Dialog 推荐的 `ULTRA_THICK` 在真机上是一块**不透的白板**（实测与背景是否透明无关），
+  `ULTRA_THIN` 又太透、背景文字穿透——不要用这两个极端。
+- **层次手段按通路不同**，不要以为一条遮罩能打天下：半模态有 `maskColor`（`AppColors.overlay`，
+  亮 30% / 暗 40%）；**弹窗没设** `maskColor`，走系统默认 `0x33000000`（固定 20% 黑，不随深浅色），
+  靠材质自带阴影；**菜单 / 气泡没有遮罩**（菜单的参数是 `mask` / `MenuMaskType`，**没有 `maskColor`**），
+  靠档位模糊 + 材质阴影。浮层与背景分不开时按对应通路调，**不要往材质里加色**。
 - **浮层内部拿不到材质**：Release 下弹窗 / 面板**内部**的普通组件写 `.systemMaterial(...)`
   不生效（真机实测：设了材质的输入框完全没有背景）。材质只在面板本体那一层参与渲染，
   内部控件一律用自绘的 `dialogFieldMaterial` / `dialogActionMaterial`。
 - 系统材质在**背板层**、`backgroundColor` 在**内容层**，内容层会盖住材质：接了系统材质的位置
   不要再写不透明背景色；`CustomDialogControllerOptions.backgroundColor` 与
   `SheetOptions.backgroundColor`（默认白色）都必须显式置透明，否则弹窗就是白板。
-  半模态这一项走 `UIMaterialManager.sheetContentBackdrop`（不支持材质的设备回退半透明填充）。
+  **不做设备降级**：不为"设备不支持材质"写兜底分支（不回退半透明填充），直接把背板交给系统材质。
 - 自绘玻璃组件的**同名属性会覆盖 `attributeModifier`**：不要在其上再写 `backgroundColor(...)`
   （尤其 `Color.Transparent`）、`border(...)`、`shadow(...)`；需要偏离默认玻璃时直接写属性覆盖。
 - 玻璃填充必须是 `$r('app.color.glass_*')` 半透明资源；前景用 `adaptiveForeground` 系列，

@@ -192,16 +192,16 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
 
 | 位置 | 接入点 | 材质 |
 | --- | --- | --- |
-| 32 处官方对话框（`AlertDialog` / `TipsDialog` / `SelectDialog` / `CustomContentDialog`） | `CustomDialogControllerOptions.systemMaterial` | `dialogMaterial`（Beta1 原配方） |
-| 3 处半模态面板（回复 / 发新主题编辑器、写私信、**子版块筛选**） | `SheetOptions.systemMaterial` | `sheetMaterial`（同配方） |
-| 4 处菜单（**帖子更多菜单**、**版块更多菜单**、**热门时间窗菜单**、**WebView 更多菜单**） | `MenuOptions.systemMaterial`（`bindMenu`） | `menuMaterial`（`THICK` + 暖白 tint） |
-| 1 处气泡（**页码选择器**） | `CustomPopupOptions.systemMaterial`（`bindPopup`） | `popupMaterial`（`REGULAR` + 暖白 tint） |
+| 32 处官方对话框（`AlertDialog` / `TipsDialog` / `SelectDialog` / `CustomContentDialog`） | `CustomDialogControllerOptions.systemMaterial` | `dialogMaterial`（`THIN` + `applyShadow: true`，不赋色） |
+| 3 处半模态面板（回复 / 发新主题编辑器、写私信、**子版块筛选**） | `SheetOptions.systemMaterial` | `sheetMaterial`（同 `dialogMaterial`） |
+| 4 处菜单（**帖子更多菜单**、**版块更多菜单**、**热门时间窗菜单**、**WebView 更多菜单**） | `MenuOptions.systemMaterial`（`bindMenu`） | `menuMaterial`（`THICK` + `applyShadow: true`，不赋色） |
+| 1 处气泡（**页码选择器**） | `CustomPopupOptions.systemMaterial`（`bindPopup`） | `popupMaterial`（`REGULAR` + `applyShadow: true`，不赋色） |
 | 7 处设置类 `Slider` + 2 处 `Toggle(Switch)` | 通用属性 `.systemMaterial(...)` | `controlMaterial`（`THIN` + 交互形变 + 点光源） |
 
 **材质参数以 `UIMaterialManager.ets` 为唯一真源**（本文档曾与 `IMMERSIVE_LIGHT_DESIGN.md` §12.7、
 正文出现三方漂移：表格写 `ULTRA_THICK`、正文写 `REGULAR` + 45% 暖白 + `applyShadow: false`、
 代码写 `THIN` + `applyShadow: true`）。当前取值：弹窗 / 面板 / 半模态 `THIN`、菜单 `THICK`、
-气泡 `REGULAR`，统一 `material_surface_tint`（亮 `#73FEFAF6` / 暗 `#73121214`）+ `applyShadow: true`。
+气泡 `REGULAR`，**统一不传 `materialColor`**（色调交给系统按深浅色模式自适应）+ `applyShadow: true`。
 官方文档给 Dialog 推荐的 `ULTRA_THICK` 在真机上就是一块**不透的白板**（与背景是否透明无关），
 `ULTRA_THIN` 又太透导致背景文字穿透。同时实测确认：**Release 下浮层内部的普通组件写
 `.systemMaterial(...)` 不生效**（判定按**组件类型**，不按所处层级），所以面板内部控件
@@ -212,9 +212,10 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
 - 面板 / 弹窗**内容层**从自绘模糊玻璃切到无模糊的内容层材质（`dialogFieldMaterial` 输入框、
   `dialogActionMaterial` 中性按钮）——系统材质已经糊过背景，再叠 `backgroundEffect` 是二次糊化。
 - 半模态面板内容容器移除 `borderRadius` + `clip` + `surfaceMaterial`，形状交给系统面板。
-- `SheetOptions.backgroundColor` 走 `UIMaterialManager.sheetContentBackdrop`：设备支持材质时是
-  `Color.Transparent`（`BindOptions` 的默认值是 `Color.White`，不显式置透明会盖住背板材质）；
-  `isImmersiveMaterialSupported()` 为 `false` 时回退为半透明玻璃填充，避免内容直接浮在蒙层上。
+- `SheetOptions.backgroundColor` 一律固定 `Color.Transparent`（`BindOptions` 的默认值是
+  `Color.White`，不显式置透明会盖住背板材质）。**不做设备降级**——不为"设备不支持材质"写回退填充：
+  历史上曾有 `UIMaterialManager.sheetContentBackdrop` 这类"不支持则回退半透明填充"的常量，
+  已按工程约定删除（材质不生效时背板全透明是接受的结果）。
 - 继续自绘玻璃的位置：页面内容区常驻控件（面板、列表、`PanelNavBar` 栏位与其图标底板、右下角
   浮动按钮与页码条）、图片查看器，以及 `AudioPlayer` 的自定义配色进度条（`SliderStyle.OutSet` +
   显式 block/track 色）。**资料卡已迁到 `bindPopup`**（见 §7.6）；`Toast` 从来不属于自绘玻璃——
@@ -251,13 +252,13 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
    它的布局矩形顶边并不在胶囊顶边，气泡底边会因此落进胶囊内部（实机现象：气泡与页码条纵向
    压住一点）。「到」的锚点改成 `.height(40)` 的 `Stack` 后，`targetSpace: 12` 才能真正把它
    推离页码条。
-2. **背板填充与模糊成对设置**（`UIMaterialManager.floatingBackdrop` / `floatingBackdropBlur`）。
-   支持沉浸材质时是 `Color.Transparent` + `BlurStyle.NONE`：`bindPopup` 的 `popupColor` 默认是
-   「透明 + `COMPONENT_ULTRA_THICK` 模糊」、`backgroundBlurStyle` 默认同一模糊，不清掉就是在系统
-   材质之上再叠一层模糊；菜单同理（`ContextMenuOptions.backgroundColor` / `backgroundBlurStyle`）。
-   **设备不支持沉浸材质时（`isImmersiveMaterialSupported() === false`）材质完全不生效**，此时必须
-   回退半透明填充 + 默认模糊，否则气泡 / 菜单会变成**全透明**、内容直接浮在页面文字上——这两个常量
-   成对存在就是为此（与半模态的 `sheetContentBackdrop` 同一思路）。
+2. **背板填充与模糊写死为"完全让位给系统材质"**：气泡 `popupColor: Color.Transparent` +
+   `backgroundBlurStyle: BlurStyle.NONE`；菜单不设 `backgroundColor` / `backgroundBlurStyle`。
+   `bindPopup` 的 `popupColor` 默认是「透明 + `COMPONENT_ULTRA_THICK` 模糊」、`backgroundBlurStyle`
+   默认同一模糊，不清掉就是在系统材质之上再叠一层模糊；菜单同理（`ContextMenuOptions.backgroundColor`
+   / `backgroundBlurStyle`）。**不做设备降级**：不为 `isImmersiveMaterialSupported() === false` 写
+   回退分支（历史上曾有 `floatingBackdrop` / `floatingBackdropBlur` 这类"回退半透明填充 + 默认模糊"
+   的常量对，已按工程约定删除）——材质不生效时气泡 / 菜单背板全透明是**接受**的结果。
 3. **内容层分工不变**：浮层**本体**由 options 的系统材质承担；内部普通组件一律自绘内容层
    （页码选择器里的输入框改用 `dialogFieldMaterial`，替代原来的 `backgroundColor(Color.Transparent)`）。
    但 **`Toggle` / `Slider` / `Select` 例外**——它们在 Release 清单内是"页面内全部区域"，
@@ -310,7 +311,7 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
      只改 `active` 会让激活色不刷新。
 
 `bindSheet` 这一项沿用既有配方：`dragBar: false` + `showClose: false` +
-`backgroundColor: UIMaterialManager.sheetContentBackdrop`（`BindOptions.backgroundColor` 默认
+`backgroundColor: Color.Transparent`（`BindOptions.backgroundColor` 默认
 `Color.White`，不清掉就盖住背板材质）+ `maskColor: AppColors.overlay` + 圆角四角同值 16。
 注意 **`SheetOptions.radius` 的类型是 `LengthMetrics | BorderRadiuses | LocalizedBorderRadiuses`，
 不接受裸 `number`**（写 `radius: 16` 直接编译报类型不匹配）；而 `CustomPopupOptions.radius` 是
