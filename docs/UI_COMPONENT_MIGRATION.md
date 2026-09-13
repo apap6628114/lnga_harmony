@@ -127,7 +127,14 @@ ProfileCardPopup）、`NoteAddContent`（NotesPanel）、`KeywordEditorContent`�
 ### 3.3 写私信表单（`ComposeMessageSheet`）
 
 手搓遮罩 + `position({x: 0, y: '40%'})` 的伪底部面板 → `bindSheet` 半模态：
-系统承担进出场动效、下拉手势与键盘避让；`onDisappear` 回写 `@Link showCompose` 保证状态一致。
+系统承担进出场动效与下拉手势；`onDisappear` 回写 `@Link showCompose` 保证状态一致。
+
+**弹出与键盘避让参数与编辑器两件套同构**（`SheetType.BOTTOM` 贴底 + `keyboardAvoidMode: NONE`
++ 组件自己订阅 `keyboardHeightChange` 把键盘高度垫进内容底部留白，见
+`IMMERSIVE_LIGHT_DESIGN.md` §12.7）。注意**三项必须成套**：只关系统避让不垫高 → 输入区被输入法
+盖住；只垫高不关系统避让 → 系统与应用各避让一次，输入法上方凭空多一段空白。
+（本面板原先依赖系统默认避让，且底部留白用 `navBarHeight` 避让手势条 —— 后者在贴底形态下
+既无必要、又会与键盘留白叠加，已移除。）
 
 ---
 
