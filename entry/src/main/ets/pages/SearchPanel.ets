@@ -569,7 +569,9 @@ export struct SearchPanel {
 
       Column() {
         if (this.titleScrollEffectProgress > 0) {
-          // 搜索区背板：对齐帖子标题区——透明承载，滚动时叠加向下衰减的主题同色偏色。
+          // 搜索区背板：对齐帖子标题区——透明承载；着色层颜色资源（title_backdrop_tint /
+          // title_backdrop_clear）在亮 / 暗主题下均为全透明，当前不产生任何像素，
+          // 仅保留结构以便与帖子标题区一致地恢复着色。
           // 必须绝对定位（不参与布局）：若作为布局子元素，其高度依赖 fixedHeaderHeight
           // 会形成自引用膨胀（偏色撑高固定区 → 高度更新 → 更高），导致模糊区域失控。
           Column()

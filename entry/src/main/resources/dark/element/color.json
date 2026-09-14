@@ -110,11 +110,11 @@
     },
     {
       "name": "title_backdrop_tint",
-      "value": "#4D121214"
+      "value": "#00000000"
     },
     {
       "name": "title_backdrop_clear",
-      "value": "#00121214"
+      "value": "#00000000"
     },
     {
       "name": "glass_surface_fill",
