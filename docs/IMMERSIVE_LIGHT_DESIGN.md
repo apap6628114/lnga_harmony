@@ -934,8 +934,11 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
   `common.d.ts:15637` / `15594` 可查）；应用级 `enable` 下菜单本身也有默认材质，显式设置是
   为了把档位收敛到本工程配方，不是"没设置就没材质"。
 - 菜单位置由 `placement` 按**锚点组件几何**推导（`bindMenu` 默认 `Placement.BottomLeft`）：
-  本工程把它挂在整条 `PanelNavBar` 上并取 `Placement.BottomRight`，得到"标题栏下方右对齐"，
-  与迁移前的手写 `position({ top: statusBarHeight + NAV_BAR_H + 6, right: 16 })` 落点一致。
+  本工程一律取 `Placement.BottomRight`，锚点则必须是**尺寸确定的真实节点**：标题栏菜单挂在
+  那颗 36×36 的操作按钮上，排序条的热门时间窗菜单挂在排序条右端一枚 36×28 的透明占位节点上，
+  得到"锚点下方、右边缘对齐"的落点。**不要把 `bindMenu` 挂在整条标题栏 / 整行排序条这类宽锚点上**：
+  折叠屏多列路由（md/lg）下锚点几何会被算到**窗口左侧**，sm 单列反而不暴露（详见
+  `UI_COMPONENT_MIGRATION.md` §7.4 约束 7）。
 - **`builder` 字段必须传构造器**：`CustomPopupOptions.builder` 是 `CustomBuilder`（`() => void`）。
   在 `build()` 内的参数位置写 `this.Xxx()`（`bindSheet` / `bindMenu` 的写法）会被 @Builder 语法糖
   正确转换；但在**普通方法返回的 options 字段**里写 `this.Xxx()` 会被立即求值成 `void`，

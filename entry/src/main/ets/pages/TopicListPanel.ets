@@ -47,6 +47,21 @@ import {
 
 const logger = new Logger(DOMAIN_UI, 'TopicListPanel')
 
+/**
+ * 热门时间窗菜单锚点的尺寸（宽 × 高，vp）。
+ *
+ * 锚点必须是**有确定尺寸的真实节点**：折叠屏多列路由（md/lg）下内容区起点不是 `x = 0`，
+ * 菜单锚点的几何很容易被算到**窗口左侧**——挂在整条排序条这种宽锚点上必然复发，与 `sm` 无关
+ * （三轮踩坑的结论见 `PanelNavBar` 文件头、`docs/UI_COMPONENT_MIGRATION.md` §7.4 约束 7）。
+ *
+ * 宽度取与标题栏操作按钮同一档（36）：本项目已验证该量级的锚点几何在多列下被正确计算。
+ * 高度取 28——官方声明 `SegmentButton` 的**最小高度就是 28vp**，锚点因此不会把排序条那一行撑高
+ * （`Stack` 的高度由更高的 `SegmentButton` 决定）；排序条实际更高时锚点在其内容区内**垂直居中**，
+ * 菜单落点随之略向上收，仍紧贴排序条下方。
+ */
+const HOT_RANGE_ANCHOR_WIDTH: number = 36
+const HOT_RANGE_ANCHOR_HEIGHT: number = 28
+
 /** 预加载页面临时结果 — startPrefetch 内部收集用 */
 class PrefetchPageResult {
   page: number = 0
@@ -129,7 +144,7 @@ export struct TopicListPanel {
   @State sortSelected: number[] = [0]
   /** 是否显示热门时间窗气泡菜单。 */
   @State showHotRangeMenu: boolean = false
-  /** 排序条在窗口中的底部纵坐标（onAreaChange 实时采集，供时间窗气泡锚定与状态视图撑满）。 */
+  /** 排序条在窗口中的底部纵坐标（onAreaChange 实时采集，供状态视图撑满排序条下方的列表可视区）。 */
   private sortBarBottomY: number = 0
   @State showSort: boolean = true
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
@@ -1002,7 +1017,12 @@ export struct TopicListPanel {
         List({ scroller: this.scroller }) {
           if (this.showSort) {
             ListItem() {
-              Row() {
+              // 排序条与时间窗菜单锚点**同层叠放**：菜单不能挂在排序条这一行上——整行是宽锚点，
+              // 折叠屏多列路由下会被算到窗口左侧（见文件头 HOT_RANGE_ANCHOR_WIDTH 的说明）。
+              // 锚点也不再能挂在 `SegmentButton` 上：本地 SDK 声明它**不支持通用属性**，
+              // 且各分段均分其宽度——「热门」是最后一段，所以锚点取排序条内容区的**右端**，
+              // 横向与那颗真实分段对齐、纵向与排序条同心（`Alignment.End` ＝ 右中对齐）。
+              Stack({ alignContent: Alignment.End }) {
                 SegmentButton({
                   options: this.sortOptions,
                   selectedIndexes: $sortSelected,
@@ -1010,6 +1030,16 @@ export struct TopicListPanel {
                     this.handleSortClicked(index)
                   }
                 })
+
+                // 热门时间窗菜单锚点：透明占位节点，只为承载锚点几何，不参与视觉与交互。
+                // - `HitTestMode.None` 必须写：锚点盖在「热门」分段上，`Default` 会吞掉该分段的点击
+                //   （该模式自身不响应命中测试，且不阻塞兄弟节点）。
+                // - 菜单本体仍由系统沉浸材质承担（见 hotRangeMenuOptions）。
+                Row()
+                  .width(HOT_RANGE_ANCHOR_WIDTH)
+                  .height(HOT_RANGE_ANCHOR_HEIGHT)
+                  .hitTestBehavior(HitTestMode.None)
+                  .bindMenu(this.showHotRangeMenu, this.HotRangeMenu(), this.hotRangeMenuOptions())
               }
               .width('100%')
               .padding({ left: '4%', right: '4%' })
@@ -1020,8 +1050,6 @@ export struct TopicListPanel {
                   this.sortBarBottomY = newValue.globalPosition.y + newValue.height
                 }
               })
-              // 热门时间窗菜单锚点＝排序条：菜单本体由系统沉浸材质承担（见 hotRangeMenuOptions）
-              .bindMenu(this.showHotRangeMenu, this.HotRangeMenu(), this.hotRangeMenuOptions())
             }
           }
           if (this.isLoading) {
@@ -1250,9 +1278,14 @@ export struct TopicListPanel {
   /**
    * 热门时间窗菜单选项。
    *
-   * 锚点＝排序条那一行（菜单挂在它身上），`Placement.BottomRight` 让菜单落在排序条下方右对齐，
-   * 与迁移前 `.position({ top: sortBarBottomY + 6, right: '4%' })` 的落点一致；`sortBarBottomY`
-   * 的采集因此只剩「状态视图撑满排序条下方的列表可视区」一个用途。
+   * 锚点＝排序条右端那颗固定尺寸的透明占位节点（见 `build()` 里的排序条 `Stack`），
+   * `Placement.BottomRight` 让菜单落在排序条下方、右边缘与排序条内容右边缘对齐——与迁移前
+   * `.position({ top: sortBarBottomY + 6, right: '4%' })` 的落点一致（锚点底边已对齐排序条内容底边，
+   * 纵向差额由系统 `targetSpace` 补）；`sortBarBottomY` 的采集因此只剩「状态视图撑满排序条下方的
+   * 列表可视区」一个用途。
+   *
+   * **锚点不能再挂回排序条那一行**：整行是宽锚点，折叠屏多列路由下菜单会被算到窗口左侧
+   * （`PanelNavBar` 三轮踩坑的同一结论，见 `docs/UI_COMPONENT_MIGRATION.md` §7.4 约束 7）。
    *
    * @returns 菜单选项
    */

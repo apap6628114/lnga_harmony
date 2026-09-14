@@ -244,7 +244,7 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
 | --- | --- | --- | --- |
 | `ThreadPanel.MoreMenu`（分享菜单，宽 150 玻璃柱） | `bindMenu`（菜单项在 `PanelNavBar` **内部**渲染） | 标题栏那颗 more 按钮 | `menuMaterial` |
 | `TopicListPanel.MoreMenu`（版块菜单，宽 170） | `bindMenu`（同上，挂在第二颗按钮） | 标题栏那颗 more 按钮 | `menuMaterial` |
-| `TopicListPanel.HotRangeMenu`（热门时间窗，宽 150 + 打勾） | `bindMenu`（**保留** `MenuItem.selected` + `selectIcon(true)`：三项都带图标位、彼此对齐） | 排序条那一行 | `menuMaterial` |
+| `TopicListPanel.HotRangeMenu`（热门时间窗，宽 150 + 打勾） | `bindMenu`（**保留** `MenuItem.selected` + `selectIcon(true)`：三项都带图标位、彼此对齐） | 排序条**右端**固定尺寸锚点（初版挂整行＝复发，见约束 7） | `menuMaterial` |
 | `ThreadPanel.PagePicker`（页码选择，220×180 固定浮层） | `bindPopup` + `CustomPopupOptions` | 分页条里的「到」 | `popupMaterial` |
 | `TopicListPanel.SubBoardFilterPanel`（88%×70% 居中面板 + 遮罩） | `bindSheet`（`sm` → `BOTTOM`，其余 → `CENTER`） | 面板根 `Stack` | `sheetMaterial` |
 
@@ -276,7 +276,7 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
      这条路径上会互相打架——结果取决于系统是否把该次点击透传给锚点，实测症状就是"点区域外关闭后，
      第一次点按钮没反应、第二次才打开"。
    - **排序条上的 `HotRangeMenu` 仍是受控形式**（它的入口是 `showHotRangeMenu = true` 的赋值而非
-     锚点点击，且锚点是一整行、不能整行都弹菜单），必须靠 `MenuOptions.onDisappear` 回写。漏了它
+     锚点点击，且锚点只是一枚透明占位节点、不承载点击），必须靠 `MenuOptions.onDisappear` 回写。漏了它
      后果比"点两次"更重：状态卡在 `true` 后赋同一个值不触发刷新，菜单**再也弹不出来**。
    - **半模态**：靠 `onDisappear` 回写 `showSubBoardFilterPanel`，`shouldDismiss` 保留
      「提交中点击遮罩不关闭」的守卫。
@@ -316,6 +316,19 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
      激活态，并避免滚动期间每帧新建数组灌进 `@Prop`。
    - 菜单项的 `ForEach` 键要带**激活态指纹**（`label + active`）：键不变时子组件不重建，
      只改 `active` 会让激活色不刷新。
+
+   **同一坑的第二次复发（热门时间窗菜单）**：`TopicListPanel` 的 `HotRangeMenu` 此前把 `bindMenu`
+   挂在 `width('100%')` 的**排序条那一行**上——整行同样是宽锚点，折叠屏 md/lg 下照样被算到窗口左侧
+   （sm 正常，与标题栏那次现象完全一致）。修法同源：在排序条 `Stack` 里叠一枚 **36×28 的透明占位
+   节点**（`Alignment.End` ＝ 右中对齐，正对最后一段「热门」），`bindMenu` 改挂这枚节点。
+   三条附带结论：
+   - **占位节点必须写 `hitTestBehavior(HitTestMode.None)`**：它盖在「热门」分段上，`Default`
+     会把该分段的点击吞掉（该模式自身不响应命中测试，且不阻塞兄弟节点）。
+   - **不能挂在 `SegmentButton` 上**：本地 SDK 声明该组件**不支持通用属性**，且其各分段**均分**
+     内容区宽度——「热门」是最后一段，所以锚点取排序条内容区**右端**即与那颗真实分段几何重合。
+   - 判定标准是**锚点有没有确定尺寸**，而不是"挂在哪一层"：整条标题栏、整行、全宽容器这类宽锚点
+     在多列下一律偏左，固定尺寸的小节点才稳；锚点也不再需要 `.position()` 或百分比 margin 参与
+     定位（`Stack` 对齐 + 排序条的 `padding` 已经表达了落点）。
 
 `bindSheet` 这一项沿用既有配方：`dragBar: false` + `showClose: false` +
 `backgroundColor: Color.Transparent`（`BindOptions.backgroundColor` 默认
