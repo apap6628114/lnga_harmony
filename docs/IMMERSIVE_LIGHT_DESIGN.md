@@ -19,8 +19,8 @@
 > 现在的分界：**弹窗类组件与接口（Dialog / 半模态 / 菜单 / 气泡）+ `Slider` / `Toggle` /
 > `Select` → 系统沉浸材质**——包括**资料卡**（`bindPopup`）、页码选择气泡、标题栏菜单；
 > **HDS 材质宿主（非合规旁路，见 §12.9）→ 内容区右下角浮动操作控件（发帖 / 刷新 / 回复按钮、
-> 页码指示器），以及 `PanelNavBar` 的返回 / 右侧操作按钮**——标题栏是自绘 `Stack`、不属于
-> `Navigation` 标题栏，ArkUI 侧拿不到材质，只能走这条旁路；
+> 页码指示器、`WebViewPanel` 网页前进 / 后退按钮），以及 `PanelNavBar` 的返回 / 右侧操作按钮**
+> ——标题栏是自绘 `Stack`、不属于 `Navigation` 标题栏，ArkUI 侧拿不到材质，只能走这条旁路；
 > **页面内容区其余常驻控件（列表、`PanelNavBar` 栏位本体、图片查看器）→ 自绘磨砂玻璃**。
 >
 > 第三条通路是 Release 之后才出现的：**ArkUI 的 `systemMaterial` 在内容区没有任何合法通道**
@@ -803,7 +803,7 @@ HDS 的材质类型/等级与 ArkUI 的 `ImmersiveStyle` 不是一一对应关�
 | 菜单（`bindMenu` / `bindContextMenu`） | 系统沉浸材质 | `menuMaterial`（`THICK` + `applyShadow: true`，**不赋色**） |
 | 气泡（`bindPopup`，含页码选择器、资料卡） | 系统沉浸材质 | `popupMaterial`（`REGULAR` + `applyShadow: true`，**不赋色**） |
 | `Slider` / `Toggle` | 系统沉浸材质 | `controlMaterial`（`THIN` + 交互形变 + 点光源） |
-| 页面内容区的**右下角浮动控件**（发帖 / 刷新 / 回复按钮、页码指示器） | **HDS 材质宿主（非合规旁路）** | `HdsMaterialHost` → `HdsTabs` 的 `barFloatingStyle.systemMaterialEffect`（见 §12.9） |
+| 页面内容区的**右下角浮动控件**（发帖 / 刷新 / 回复按钮、页码指示器、`WebViewPanel` 网页前进 / 后退按钮） | **HDS 材质宿主（非合规旁路）** | `HdsMaterialHost` → `HdsTabs` 的 `barFloatingStyle.systemMaterialEffect`（见 §12.9） |
 | `PanelNavBar` 的**返回 / 右侧操作按钮**（标题栏是自绘 `Stack`，不在 `Navigation` 标题栏内） | **HDS 材质宿主（非合规旁路）** | 同上；材质块 `TITLE_POD_SIZE`（36vp，见 §12.9） |
 | 页面内容区其他常驻控件（面板、列表、`PanelNavBar` **栏位本体**、`Toast`） | 自绘磨砂玻璃 | `surfaceMaterial` / `barMaterial` / `fabMaterial` / … |
 | 图片查看器（`bindContentCover` 全屏模态、固定暗场景） | 自绘磨砂玻璃 | `darkOverlayMaterial` / `closeButtonMaterial` |
@@ -828,7 +828,7 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 
 | 工厂材质 | 用途 | 磨砂参数（模糊半径 / 饱和度 / 填充不透明度） |
 | --- | --- | --- |
-| `fabMaterial` | 浮动圆形/胶囊按钮（内容区常驻控件；**不含 `PanelNavBar` 标题栏按钮**——那三颗已迁 HDS 材质宿主，见 §12.9） | 36vp、1.4、55% + 极淡整圈描边 + 下沉投影（不设渐变） |
+| `fabMaterial` | 浮动圆形/胶囊按钮（内容区常驻控件）。**剩余调用点只有 `SearchPanel` 的返回按钮与 `PageStateView` `ErrorStateView` 的「重试」按钮**：右下角浮动操作（发帖 / 刷新 / 回复 / 页码 / `WebViewPanel` 网页前进后退）与 `PanelNavBar` 三颗标题栏按钮已全部迁 HDS 材质宿主（见 §12.9） | 36vp、1.4、55% + 极淡整圈描边 + 下沉投影（不设渐变） |
 | `surfaceMaterial` | **当前无调用点**（页面内容区的浮层已全部迁到官方弹窗类接口，保留备用） | 72vp、1.5、42% + 描边 + 强投影 |
 | `barMaterial` | 标题栏、消息页栏位 | 56vp、1.4、42% + 描边，不投影 |
 | `neutralActionMaterial` | **当前无调用点**（保留备用；面板内的中性次要操作走 `dialogActionMaterial`） | 32vp、1.4、32% + 细描边，不投影 |
@@ -1178,6 +1178,7 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 | `ThreadPanel.BottomBar` 回复按钮 | 40×40 | 同上 |
 | `ThreadPanel.BottomBar` 页码指示器 | `pageBarWidth()` × 40 | **不传 `onTap`**：块内页码格与「到」各自持有 `onClick` / `bindPopup` |
 | `PanelNavBar.iconPod` 返回 / 主右侧 / 次右侧按钮 | `TITLE_POD_SIZE`（36×36） | **一律不传 `onTap`**：内容节点持有 `onClick` / `bindMenu`（与迁移前的自绘底板逐条等价） |
+| `WebViewPanel` 网页前进 / 后退按钮 | `FAB_SIZE`（44×44） | **不传 `onTap`**：内容节点持有 `onClick` / `accessibilityText`；**禁用态的变淡写在宿主外层容器上**（见下文"禁用态"一条） |
 
 三条实现约定：
 
@@ -1204,6 +1205,11 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 - **自定义组件的尾随闭包后不能跟属性链**：`HdsMaterialHost({...}) { ... }.margin(...)` 会报
   `Declaration or statement expected`（`ThreadPanel` 因此把页码条与回复按钮的 8vp 间距从
   `.margin` 改成 `Row({ space: 8 })`）。内置组件（`Row` / `Column`）不受此限。
+- **按钮的禁用态（`.opacity` / `.enabled`）写在宿主外层的固定尺寸容器上**：宿主只承担材质背板，
+  自身没有"禁用"语义，而上面那条语法限制又让 `.opacity(...)` 挂不到宿主上。所以在宿主外包一层与
+  材质块同尺寸的 `Stack`，把变淡与禁用写在那里——材质块与图标**一起**变淡，与迁移前的自绘玻璃
+  观感一致；`enabled(false)` 会级联阻止内容节点的 `onClick`（`onClick` 内的可用性守卫仍保留，
+  两层防御）。实例：`WebViewPanel.historyButton`（网页前进 / 后退按钮，不可用时 45% 不透明度）。
 - **材质块内的定位点要用 `offset`，不能用 `position`**：页码条"当前页"数字下的「•」原本是
   `.position({ x: '50%', y: 22 })`——`position` 是相对父容器左上角的**绝对坐标**，只在原来那个
   固定 28vp 高的数字格里成立；数字格改成铺满内容区（`height('100%')`）之后，绝对坐标把点顶到了
@@ -1227,8 +1233,11 @@ DevEco 编译通过（`BUILD SUCCESSFUL`），**真机已确认材质生效**。
   定位点用 `offset`。
 
 仍未验证：页码格点击与「到」气泡锚点在材质块内的实际表现、深浅色、左右手镜像、以及单个页面多个
-`HdsTabs` 实例的常驻功耗。原先的已知风险「HDS 材质无法套用本工程的 `material_surface_tint` 暖白
-tint（与弹窗 / 半模态观感可能有色调差）」**已消除**：四条 ArkUI 系统材质通路（`dialogMaterial` /
+`HdsTabs` 实例的常驻功耗。**2026-09 新增的 `WebViewPanel` 网页前进 / 后退按钮**（44×44，与已验证
+尺寸同类）同样**尚未真机核对**：禁用态 45% 不透明度叠在材质块上的观感、两个材质块 12vp 间距下的
+光效溢出是否被父容器裁切，以及 `WebViewPanel` 常驻时新增的 2 个 `HdsTabs` 实例功耗（并入上一条）。
+原先的已知风险「HDS 材质无法套用本工程的 `material_surface_tint` 暖白 tint（与弹窗 / 半模态观感
+可能有色调差）」**已消除**：四条 ArkUI 系统材质通路（`dialogMaterial` /
 `sheetMaterial` / `menuMaterial` / `popupMaterial`）已同步取消 `materialColor`，与 HDS 一样不赋色，
 色调统一由系统深浅色自适应，同屏不再存在"应用 tint vs HDS 原色"的色调差。
 剩余待查：`2in1` 上的设备材质能力。
@@ -1336,7 +1345,7 @@ tint（与弹窗 / 半模态观感可能有色调差）」**已消除**：四条
 - [ ] `module.json5` 的材质 metadata 只配置在 `entry` module。
 - [ ] 已按 Release 生效范围逐个检查 `systemMaterial` 调用点。
 - [ ] 普通组件材质全部位于有效标题栏或底部 TabBar 区域。
-- [ ] 走 HDS 材质宿主（§12.9）的位置只有**小面积常驻控件**，没有列表 / 面板 / 大面积区域；材质块尺寸是显式值、内容与材质块同尺寸、宿主 `onTap` 与内容子元素交互**没有同时存在**。
+- [ ] 走 HDS 材质宿主（§12.9）的位置只有**小面积常驻控件**，没有列表 / 面板 / 大面积区域；材质块尺寸是显式值、内容与材质块同尺寸、宿主 `onTap` 与内容子元素交互**没有同时存在**；按钮的禁用态写在宿主外层容器上（不试图挂在宿主的属性链上）。
 - [ ] `PanelNavBar` 标题栏按钮的真机核对已完成：材质块尺寸是否被 HDS 规范接受、图标是否与材质块同心、绑菜单那颗的菜单落点、无障碍朗读；常驻多实例功耗已实测（§12.9"标题栏按钮"）。
 - [ ] 弹窗使用官方弹窗接口和 options，不使用普通 Stack 冒充弹窗。
 - [ ] `Tabs` 同时满足 `barPosition: End`、横向、`barOverlap(true)`。

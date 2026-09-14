@@ -2,6 +2,7 @@ import { webview } from '@kit.ArkWeb'
 import { common } from '@kit.AbilityKit'
 import { BusinessError, pasteboard } from '@kit.BasicServicesKit'
 import { PanelNavBar, NavBarMenuItem } from '../common/components/PanelNavBar'
+import { HdsMaterialHost } from '../common/components/HdsMaterialHost'
 import { routerStore } from '../store/RouterStore'
 import { getSession } from '../service/api/AuthApi'
 import { getActiveDomain } from '../service/api/MiscApi'
@@ -21,6 +22,8 @@ const NGA_HARMONY_USER_AGENT_SUFFIX: string = ' NGA_Harmony/1.0.0'
 /** 普通网页使用的 WebView User-Agent。 */
 const DEFAULT_WEBVIEW_USER_AGENT: string =
   'Mozilla/5.0 (Linux; Android 10; HarmonyOS) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.144 Mobile Safari/537.36'
+/** 右下角浮动按钮（前进 / 后退）的材质块尺寸（vp），与迁移前的自绘玻璃按钮逐像素一致。 */
+const FAB_SIZE: number = 44
 
 @Component
 export struct WebViewPanel {
@@ -260,6 +263,68 @@ export struct WebViewPanel {
     return items
   }
 
+  /**
+   * 右下角前进 / 后退浮动按钮：**HDS 材质宿主**背板 + 一颗承载动作的内容节点。
+   *
+   * ## 为什么换成 HDS 材质
+   *
+   * 背板原为 `UIMaterialManager.fabMaterial`（自绘磨砂玻璃）。API 26 Release 收紧了
+   * `systemMaterial` 的生效范围：**内容区的普通组件拿不到系统沉浸材质**，而本工程没有
+   * `Navigation` / `Tabs` 可借位（详见 `HdsMaterialHost` 文件头与
+   * `docs/IMMERSIVE_LIGHT_DESIGN.md` §12.9）。HDS 材质由 `HdsTabs` 悬浮页签栏自身渲染、
+   * 不受那条门禁约束，是这里唯一能拿到**真材质**（折射、高光、系统阴影、深浅色自适应色调）
+   * 的通道——与 `TopicListPanel` 发帖 / 刷新、`ThreadPanel` 回复按钮同构。
+   * 材质块尺寸沿用新旧一致的 `FAB_SIZE`（44×44），宿主默认与材质块逐像素重合，
+   * 外层 `Row` 的 `space` 与 `padding` 落点不变。
+   *
+   * ## 三条约定（与既有接入点一致）
+   *
+   * 1. **内容容器写 `'100%'`，不写 `FAB_SIZE` 的显式尺寸**：HDS 页签项的内容区比 `barHeight`
+   *    矮，容器高于内容区时超出部分按顶部溢出对齐（真机现象：图标整体偏下）；写成 `'100%'`
+   *    后容器高度 = 内容区高度，图标由 `alignContent(Center)` 居中即与材质块同心。
+   * 2. **不传宿主 `onTap`**，动作与无障碍名称都挂在内容节点上——与迁移前的
+   *    `.onClick` / `.accessibilityText` 逐条等价（可聚焦性与无障碍语义都留在原节点），
+   *    也避免"宿主 `onTabBarClick` + 子元素 `onClick`"双触发。
+   * 3. **`draggable(false)` 必须显式写**：`Image` 自 API 10 起 `draggable` 默认为 `true`，
+   *    长按会被系统当成"拖拽图片"（§12.9）。
+   *
+   * ## 状态一律经 `this` 读取
+   *
+   * 参数只传**静态字面量**（方向 `step` 与无障碍名称）；`canGoBackward` / `canGoForward`
+   * 会随 WebView 历史栈刷新，必须在 `@Builder` 内用 `this` 读取——`@Builder` 按值传参
+   * **不建立响应式依赖**，传参会静默固化为首帧值（按钮永远不变淡、永远可点，且不报错）。
+   *
+   * 禁用态的变淡写在**外层固定尺寸容器**上（材质块与图标一起变淡，与迁移前的自绘玻璃一致）：
+   * 自定义组件的**尾随闭包之后不能跟属性链**，`.opacity(...)` / `.enabled(...)` 无法直接挂在
+   * `HdsMaterialHost` 上（会报 `Declaration or statement expected`，同类记录见 §12.9）。
+   *
+   * @param step - -1 表示后退，1 表示前进（静态字面量）
+   * @param accessibilityText - 无障碍名称
+   */
+  @Builder
+  historyButton(step: number, accessibilityText: string) {
+    Stack() {
+      HdsMaterialHost({ barWidth: FAB_SIZE, barHeight: FAB_SIZE }) {
+        Stack() {
+          Image($r('app.media.icon_back'))
+            .width(22).height(22)
+            .fillColor(UIMaterialManager.adaptiveForeground)
+            .rotate({ angle: step < 0 ? 0 : 180 })
+            // Image 的 draggable 自 API 10 起默认为 true：长按会被系统当成"拖拽图片"（见 §12.9）
+            .draggable(false)
+        }
+        .width('100%').height('100%').alignContent(Alignment.Center)
+        .accessibilityText(accessibilityText)
+        .onClick((): void => {
+          this.navigateHistory(step)
+        })
+      }
+    }
+    .width(FAB_SIZE).height(FAB_SIZE)
+    .opacity((step < 0 ? this.canGoBackward : this.canGoForward) ? 1 : 0.45)
+    .enabled(step < 0 ? this.canGoBackward : this.canGoForward)
+  }
+
   build() {
     Stack() {
       Column() {
@@ -353,39 +418,10 @@ export struct WebViewPanel {
       }
       .width('100%').height('100%')
 
+      // ─── 右下角浮动操作：前进 / 后退（背板为 HDS 材质宿主，见 historyButton） ───
       Row({ space: 12 }) {
-        Stack() {
-          Image($r('app.media.icon_back'))
-            .width(22).height(22)
-            .fillColor(UIMaterialManager.adaptiveForeground)
-            // Image 的 draggable 自 API 10 起默认为 true：长按会被系统当成"拖拽图片"（见 §12.9）
-            .draggable(false)
-        }
-        .width(44).height(44).borderRadius(22)
-        .attributeModifier(UIMaterialManager.fabMaterial)
-        .opacity(this.canGoBackward ? 1 : 0.45)
-        .enabled(this.canGoBackward)
-        .accessibilityText('网页后退')
-        .onClick(() => {
-          this.navigateHistory(-1)
-        })
-
-        Stack() {
-          Image($r('app.media.icon_back'))
-            .width(22).height(22)
-            .fillColor(UIMaterialManager.adaptiveForeground)
-            .rotate({ angle: 180 })
-            // Image 的 draggable 自 API 10 起默认为 true：长按会被系统当成"拖拽图片"（见 §12.9）
-            .draggable(false)
-        }
-        .width(44).height(44).borderRadius(22)
-        .attributeModifier(UIMaterialManager.fabMaterial)
-        .opacity(this.canGoForward ? 1 : 0.45)
-        .enabled(this.canGoForward)
-        .accessibilityText('网页前进')
-        .onClick(() => {
-          this.navigateHistory(1)
-        })
+        this.historyButton(-1, '网页后退')
+        this.historyButton(1, '网页前进')
       }
       .width('100%')
       .justifyContent(FlexAlign.End)
