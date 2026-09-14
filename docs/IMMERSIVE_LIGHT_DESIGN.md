@@ -831,10 +831,10 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 | `fabMaterial` | 浮动圆形/胶囊按钮（内容区常驻控件；**不含 `PanelNavBar` 标题栏按钮**——那三颗已迁 HDS 材质宿主，见 §12.9） | 36vp、1.4、55% + 极淡整圈描边 + 下沉投影（不设渐变） |
 | `surfaceMaterial` | **当前无调用点**（页面内容区的浮层已全部迁到官方弹窗类接口，保留备用） | 72vp、1.5、42% + 描边 + 强投影 |
 | `barMaterial` | 标题栏、消息页栏位 | 56vp、1.4、42% + 描边，不投影 |
-| `neutralActionMaterial` | **当前无调用点**（保留备用；`dialogActionMaterial` 同样无调用点，弹窗内的中性次要操作场景已移除） | 32vp、1.4、32% + 细描边，不投影 |
+| `neutralActionMaterial` | **当前无调用点**（保留备用；面板内的中性次要操作走 `dialogActionMaterial`） | 32vp、1.4、32% + 细描边，不投影 |
 | `inputMaterial` | 内容区常驻输入框（登录页等） | 24vp、1.3、32% + 低透明描边，不投影 |
 | `dialogFieldMaterial` | 系统材质背板之上的输入框 / 内容层（**不做模糊**） | 无模糊、暖白半透明填充 + 极淡描边 |
-| `dialogActionMaterial` | **当前无调用点**（中性按钮场景已移除，保留备用） | 无模糊、填充 32% + 描边 |
+| `dialogActionMaterial` | 系统材质背板之上的**中性次要操作**（子版块筛选面板的「关闭」胶囊） | 无模糊、填充 32% + 描边 |
 | `darkOverlayMaterial` | 图片查看器等固定暗场景浮层 | 48vp、1.2、固定深色填充 32% |
 | `closeButtonMaterial` | 图片查看器关闭按钮 | 同暗场景玻璃 + 轻投影 |
 
@@ -880,6 +880,16 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 - 主题色：`AppColors.primary`（应用琥珀主题）或 `$r('sys.color.brand')`。
 - 深浅色一律走 `$r('app.color.*')` 资源限定词（`base/`=亮色、`dark/`=暗色），由 `setColorMode`
   联动解析，不要在代码里判断 `effectiveColorMode` 来切玻璃颜色。
+- **系统材质背板 / 玻璃之上的前景，禁止使用 `AppColors.text*` 等应用自定义色**（`text_primary` /
+  `text_secondary` / `text_tertiary` / `separator`）。这批颜色是为应用**实底** `bg`（亮 `#FEFAF6` /
+  暗 `#121214`）调制的暖棕阶，而材质背板**不含应用 tint**（§12.7）且**半透明**：色相不匹配之外，
+  低对比那两档（亮色 `#9C8B7A` / `#C4B5A0`）在实底上"刚好够用"的余量会被透出的背景内容吃光。
+  所有弹窗 / 半模态 / 菜单 / 气泡的**内容层**一律取 `UIMaterialManager.adaptive*`；分隔线取
+  `$r('sys.color.comp_divider')`、中性徽标底取 `$r('sys.color.comp_background_secondary')`
+  （均见 §6.3 表 1）。应用色只保留在两个语义位置：**实底主操作的品牌色**
+  （`AppColors.primary` + `AppColors.white`，§12.5）与**页面内容区的实底场景**（`AppColors.bg` 等）。
+  2026-09 复核：`SubBoardFilterPanel`（子版块筛选半模态）是最后一个漏改的浮层，已按本条重做取色
+  ——它是"材质 + 应用色"混搭的典型症状来源（低对比文字叠在半透明材质上，亮色下几乎不可辨）。
 
 ### 12.4 应用级材质开关
 
@@ -1103,6 +1113,13 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 - **实底颜色留给语义。** 只有承担明确操作语义的按钮才用实底主题色（§12.5 的主操作按钮、
   破坏性操作如"退出""删除"）。它打破玻璃的连续质感、成为画面上唯一的视觉重点——这正是它有效的
   原因，所以不要为了"好看"给普通按钮也上实底。
+
+**已落地实例（`SubBoardFilterPanel`，2026-09）**：该面板原先用三档应用色表达行状态
+（生效 = `text_primary`、"已屏蔽" = `text_secondary`、版块说明 = `text_tertiary`）——既跨了调色板
+（§12.3），又把三个不同含义压在同一个颜色轴上。重做后：生效 / 屏蔽 = 系统前景**两档 + 字重**
+（`font_primary` + Medium / `font_secondary` + Regular），「已屏蔽」另给一枚**中性半透明底徽标**
+（`sys.color.comp_background_secondary` + 7vp 圆角），面板的「关闭」入口从纯文字改为**有边界的胶囊**
+（`dialogActionMaterial`）。状态因此由"结构 + 层级"表达，不再依赖颜色深浅。
 
 ### 12.9 HDS 材质宿主：内容区浮动控件的"非合规旁路"（第三条通路）
 

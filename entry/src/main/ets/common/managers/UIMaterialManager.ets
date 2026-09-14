@@ -412,8 +412,10 @@ export class UIMaterialManager {
    * 输入框是淡底（12%），中性按钮是实一点的胶囊（32% 暖白/暖灰）+ 一圈描边。
    * 主操作按钮仍按工程契约走实底主题色（见 §12.5），不套这一层。
    *
-   * **当前无调用点**：回复 / 发帖编辑器改造后，面板内原有的中性按钮（「取消」）已被移除
-   * （主操作上移到头部、走实底主题色）。保留该材质以备面板内再出现中性次要操作。
+   * **当前调用点**：子版块筛选面板（`TopicListPanel.SubBoardFilterPanel`）头部的「关闭」胶囊——
+   * 它是面板内唯一的中性次要操作（半模态虽可下拉 / 点蒙层关闭，但面板仍需要一个显式关闭入口）。
+   * 历史：回复 / 发帖编辑器改造后，面板内原有的中性按钮（「取消」）已被移除（主操作上移到头部、
+   * 走实底主题色），此后该材质一度无调用点。
    */
   static readonly dialogActionMaterial: GlassModifier = new GlassModifier({
     fill: $r('app.color.glass_neutral_fill'),

@@ -62,6 +62,15 @@ const logger = new Logger(DOMAIN_UI, 'TopicListPanel')
 const HOT_RANGE_ANCHOR_WIDTH: number = 36
 const HOT_RANGE_ANCHOR_HEIGHT: number = 28
 
+/**
+ * 子版块筛选面板中「已屏蔽」行图标的弱化不透明度。
+ *
+ * 图标弱化只负责"降噪"，**不再承担状态语义**：面板背板是半透明系统材质，背后帖子列表的
+ * 图标与文字会透上来，靠整体压暗的位图图标无法稳定传达"已屏蔽"，语义交给行内的状态徽标。
+ * 因此这里从原来的 0.45 提到 0.6——屏蔽态图标仍可辨认，同时不与未屏蔽行抢注意力。
+ */
+const SUB_BOARD_BLOCKED_ICON_OPACITY: number = 0.6
+
 /** 预加载页面临时结果 — startPrefetch 内部收集用 */
 class PrefetchPageResult {
   page: number = 0
@@ -1337,6 +1346,25 @@ export struct TopicListPanel {
    * 面板内部的 `Toggle` 继续走 `controlMaterial`：Toggle 属官方「按钮与选择类」清单，生效范围
    * 与所在位置无关，**浮层内部依然生效**——这是它与普通容器（Column/Row/Text）最大的区别。
    *
+   * **前景色一律取 `UIMaterialManager.adaptive*`（系统 `sys.color.font_*` / `icon_*`），不再用
+   * `AppColors.text*`**——与 `ReplyDialog` / `NewTopicDialog` 同一套内容层取色契约（§12.3）。
+   * 原因是结构性的，不是审美偏好：
+   *
+   * 1. 四条系统材质背板**一律不赋色**（§12.7），面板的实际底色是系统按深浅色模式自适应的中性色，
+   *    **不等于**应用的实底 `bg`（暖白 `#FEFAF6` / 暗色 `#121214`）；而 `AppColors.text*` 是
+   *    为那个暖白底调制的暖棕阶（`#3E2A1D` / `#9C8B7A` / `#C4B5A0`），落在系统材质上属于
+   *    **跨调色板取色**——色相不匹配，明度余量也不是按材质底算的。
+   * 2. 材质是**半透明**的，背后帖子列表的文字与图标会透上来。`textSecondary` / `textTertiary`
+   *    在实底上"刚好够用"的对比余量会被这些透出的高频细节吃光（亮色下 `textTertiary`
+   *    `#C4B5A0` 几乎不可辨，而它此刻正承担「已屏蔽」与「版块说明」两种信息）。
+   * 3. 分隔线同理改用 `sys.color.comp_divider`（§6.3 表 1 的特殊系统资源，亮 `#33000000` /
+   *    暗 `#33FFFFFF`）：它是随材质深浅色自适应的那一档，`AppColors.separator` 的暖米细线在
+   *    系统材质上近乎不可见。
+   *
+   * 层级与状态也不再靠"颜色差"表达（§12.8）：行内用「主 / 次两档系统前景 + 字重」区分生效与屏蔽，
+   * 「已屏蔽」升级为**中性半透明底的状态徽标**，「关闭」升级为**有边界的胶囊按钮**
+   * （`dialogActionMaterial`，与 `ReplyDialog` 头部的模式切换胶囊是同一套内容层配方）。
+   *
    * 根节点自带 600vp 宽度上限（`SheetWidthConstants.CONTENT_MAX_WIDTH`），居中与左右留白
    * 由 `SubBoardFilterSheetContent` 的外层容器承担。
    */
@@ -1348,7 +1376,7 @@ export struct TopicListPanel {
           Text('子版块显示')
             .fontSize(17)
             .fontWeight(FontWeight.Bold)
-            .fontColor(AppColors.textPrimary)
+            .fontColor(UIMaterialManager.adaptiveForeground)
             .width('100%')
           Text() {
             Span('关闭即屏蔽，开关会同步到 ')
@@ -1356,7 +1384,7 @@ export struct TopicListPanel {
             Span('，并刷新当前父版块的帖子列表')
           }
           .fontSize(12)
-          .fontColor(AppColors.textSecondary)
+          .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
           .lineHeight(16)
           .width('100%')
           .margin({ top: 3 })
@@ -1364,10 +1392,19 @@ export struct TopicListPanel {
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
 
+        // 「关闭」是面板内唯一的中性次要操作：从纯文字升级为有边界的胶囊，
+        // 用 `dialogActionMaterial`（半透明填充 + 极淡描边、不做模糊）表达"可点区域"——
+        // 与 ReplyDialog 头部的模式切换胶囊同一套内容层配方（§12.7）。纯文字入口在半透明
+        // 材质上没有结构，用户要靠猜；描边胶囊在任何底色上都稳定。
+        // 文字保留主题色（品牌强调，ReplyDialog 的主操作同样取 AppColors.primary）。
         Text('关闭')
           .fontSize(14)
           .fontColor(AppColors.primary)
-          .padding({ left: 12, top: 8, bottom: 8 })
+          .height(32)
+          .padding({ left: 14, right: 14 })
+          .textAlign(TextAlign.Center)
+          .borderRadius(16)
+          .attributeModifier(UIMaterialManager.dialogActionMaterial)
           .onClick(() => {
             if (this.updatingSubBoardFilterId.length === 0) {
               this.showSubBoardFilterPanel = false
@@ -1378,37 +1415,49 @@ export struct TopicListPanel {
       .padding({ left: 16, right: 16, top: 14, bottom: 10 })
       .alignItems(VerticalAlign.Center)
 
-      Divider().width('100%').color(AppColors.separator)
+      Divider().width('100%').color($r('sys.color.comp_divider'))
 
       List() {
         ForEach(this.subBoards, (subBoard: SubBoard) => {
           ListItem() {
             Row() {
               BoardIcon({ url: subBoard.boardHead, iconSize: 36, iconRadius: 8 })
-                .opacity(subBoard.checked ? 1 : 0.45)
+                .opacity(subBoard.checked ? 1 : SUB_BOARD_BLOCKED_ICON_OPACITY)
 
               Column() {
+                // 生效 / 屏蔽用「主 / 次两档系统前景 + 字重」区分，而不是三档应用色：
+                // 系统色阶随材质深浅色自适应，且带正确的 alpha 档位，在半透明背板上仍有对比余量。
                 Text(unescapeHtml(subBoard.name))
                   .fontSize(15)
-                  .fontColor(subBoard.checked ? AppColors.textPrimary : AppColors.textTertiary)
+                  .fontWeight(subBoard.checked ? FontWeight.Medium : FontWeight.Regular)
+                  .fontColor(subBoard.checked
+                    ? UIMaterialManager.adaptiveForeground
+                    : UIMaterialManager.adaptiveSecondaryForeground)
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
                   .width('100%')
                 if (subBoard.checked && subBoard.description.length > 0) {
                   Text(unescapeHtml(subBoard.description))
                     .fontSize(12)
-                    .fontColor(AppColors.textTertiary)
+                    .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
                     .width('100%')
                     .margin({ top: 2 })
                 }
                 if (!subBoard.checked) {
+                  // 「已屏蔽」是状态徽标，不再用"更淡的一档文字色"表达：颜色差会随透出的背景
+                  // 漂移、且与上方的版块说明撞在同一档色上（§12.8）。改为中性半透明底 + 圆角胶囊，
+                  // 底色取 `sys.color.comp_background_secondary`（§6.3 表 1，亮 10% 黑 / 暗 10% 白），
+                  // 在任何材质底色上都是一块稳定的淡底，语义不再依赖颜色的深浅。
                   Text('已屏蔽')
-                    .fontSize(12)
-                    .fontColor(AppColors.textSecondary)
-                    .width('100%')
-                    .margin({ top: 2 })
+                    .fontSize(11)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+                    .padding({ left: 7, right: 7, top: 2, bottom: 2 })
+                    .borderRadius(7)
+                    .backgroundColor($r('sys.color.comp_background_secondary'))
+                    .margin({ top: 3 })
                 }
               }
               .layoutWeight(1)
@@ -1443,7 +1492,7 @@ export struct TopicListPanel {
       }
       .width('100%')
       .layoutWeight(1)
-      .divider({ strokeWidth: 0.5, color: AppColors.separator, startMargin: 60 })
+      .divider({ strokeWidth: 0.5, color: $r('sys.color.comp_divider'), startMargin: 60 })
       .scrollBar(BarState.Auto)
     }
     .width('100%').height('100%')
