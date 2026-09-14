@@ -426,6 +426,7 @@ struct LoginPage {
       this.importCredentialDialogController = new CustomDialogController({
         backgroundColor: Color.Transparent,
         systemMaterial: UIMaterialManager.dialogMaterial,
+        maskColor: UIMaterialManager.scrim,
         builder: CustomContentDialog({
           primaryTitle: '导入加密凭证',
           secondaryTitle: '请输入导出时设置的加密密码（至少 8 位）。',

@@ -79,10 +79,16 @@ skill：**`bbcode-ts`**（加载后按其操作；Rule 0–9 完整规则已并�
   档位固定：弹窗 / 半模态 `THIN`、菜单 `THICK`、气泡 `REGULAR`，均 `applyShadow: true`。
   官方给 Dialog 推荐的 `ULTRA_THICK` 在真机上是一块**不透的白板**（实测与背景是否透明无关），
   `ULTRA_THIN` 又太透、背景文字穿透——不要用这两个极端。
-- **层次手段按通路不同**，不要以为一条遮罩能打天下：半模态有 `maskColor`（`AppColors.overlay`，
-  亮 30% / 暗 40%）；**弹窗没设** `maskColor`，走系统默认 `0x33000000`（固定 20% 黑，不随深浅色），
-  靠材质自带阴影；**菜单 / 气泡没有遮罩**（菜单的参数是 `mask` / `MenuMaskType`，**没有 `maskColor`**），
-  靠档位模糊 + 材质阴影。浮层与背景分不开时按对应通路调，**不要往材质里加色**。
+- **遮罩只有一个值 + 一条叠层让位规则，业务代码不得自取色**：`UIMaterialManager.scrim`
+  （亮 15% / 暗 0%）用于半模态 `SheetOptions.maskColor`、资料卡气泡 `mask`，以及**页面级**官方弹窗
+  的 `maskColor`；`UIMaterialManager.nestedScrim`（`Color.Transparent`）用于**叠在带遮罩浮层之上**
+  的弹窗（ReplyDialog / NewTopicDialog 的放弃确认、资料卡内笔记弹窗），由下层那一层独自承担，
+  保证任意时刻画面上只有一层遮罩、不叠加变深。资源值落在
+  `resources/base|dark/element/color.json` 的 `overlay`，改值即全局生效。弹窗**必须显式写**
+  `maskColor`——不写就走系统默认 `0x33000000`（固定 20% 黑、不随深浅色），那是已被消除的魔法值；
+  暗色的 `#00000000` 是**完全透明但仍生效**的遮罩（命中区、`autoCancel` 点击外部关闭都照常），
+  暗色下浮层与背景的分离只剩材质阴影。**菜单 / 页码气泡没有遮罩**（菜单参数是 `mask` /
+  `MenuMaskType`，**没有 `maskColor` 字段**）。**不要往材质里加色**。
 - **浮层内部拿不到材质**：Release 下弹窗 / 面板**内部**的普通组件写 `.systemMaterial(...)`
   不生效（真机实测：设了材质的输入框完全没有背景）。材质只在面板本体那一层参与渲染，
   内部控件一律用自绘的 `dialogFieldMaterial` / `dialogActionMaterial`。

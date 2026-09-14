@@ -139,6 +139,7 @@ export struct NewTopicDialog {
   private abandonDialogController: CustomDialogController = new CustomDialogController({
     backgroundColor: Color.Transparent,
     systemMaterial: UIMaterialManager.dialogMaterial,
+    maskColor: UIMaterialManager.nestedScrim,
     builder: AlertDialog({
       primaryTitle: '放弃编辑？',
       content: '已保存为草稿，下次编辑可恢复',

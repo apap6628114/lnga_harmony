@@ -39,6 +39,7 @@ export struct BrowseHistoryPanel {
   private clearHistoryDialogController: CustomDialogController = new CustomDialogController({
     backgroundColor: Color.Transparent,
     systemMaterial: UIMaterialManager.dialogMaterial,
+    maskColor: UIMaterialManager.scrim,
     builder: AlertDialog({
       primaryTitle: '清空浏览记录',
       content: '确定清空所有浏览记录？此操作不可撤销。',

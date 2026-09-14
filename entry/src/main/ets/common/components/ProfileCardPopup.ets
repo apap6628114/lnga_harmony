@@ -134,6 +134,7 @@ export struct ProfileCardPopup {
     this.noteDialogController = new CustomDialogController({
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.nestedScrim,
       builder: CustomContentDialog({
         primaryTitle: '编辑备注',
         contentBuilder: (): void => { this.noteEditorContent() },

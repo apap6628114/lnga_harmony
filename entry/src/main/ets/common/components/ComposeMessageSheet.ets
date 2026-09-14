@@ -149,7 +149,7 @@ export struct ComposeMessageSheet {
       // 内容层完全让位给系统材质，不做设备降级（见 UIMaterialManager 的约定说明）
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.sheetMaterial,
-      maskColor: AppColors.overlay,
+      maskColor: UIMaterialManager.scrim,
       preferType: SheetType.BOTTOM,
       // 关闭系统避让：键盘避让由本组件自己做（底部留白 = BOTTOM_GAP + 键盘高度）。
       // 少了这一项，系统会先按自己的方式避让一次，内容再叠加一次键盘高度，

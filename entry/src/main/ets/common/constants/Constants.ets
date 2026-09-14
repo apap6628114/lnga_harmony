@@ -57,8 +57,6 @@ export class AppColors {
   static dividerStrong: Resource = $r('app.color.divider_strong')
   static white: Resource = $r('app.color.white')
   static black: Resource = $r('app.color.black')
-  static overlay: Resource = $r('app.color.overlay')
-  static overlayStrong: Resource = $r('app.color.overlay_strong')
   static shadow: Resource = $r('app.color.shadow')
   static shadowLight: Resource = $r('app.color.shadow_light')
   static toastBg: Resource = $r('app.color.toast_bg')

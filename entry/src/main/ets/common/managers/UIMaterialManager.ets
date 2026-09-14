@@ -16,7 +16,8 @@ import { uiMaterial } from '@kit.ArkUI'
  *    通用属性 `.systemMaterial(...)`。
  *    **色调一律交给系统**：`dialogMaterial` / `sheetMaterial` / `menuMaterial` / `popupMaterial`
  *    都不传 `materialColor`，由系统按深浅色模式自适应（与 HDS 通路同取向）。层次靠遮罩
- *    （`maskColor`）制造，不要往材质里加应用色相——工程曾用 45% 暖白 tint，已按此约定移除。
+ *    （一个值 `scrim` + 叠层让位 `nestedScrim`，见「一、模态遮罩」）制造，不要往材质里加应用色相——
+ *    工程曾用 45% 暖白 tint，已按此约定移除。
  * 2. **自绘磨砂玻璃**（`GlassModifier` 系列）：用于系统材质不生效的区域——页面内容区的普通
  *    组件（本工程无 `Navigation`/`Tabs`，内容区没有标题栏或底部 TabBar 可借位）。由
  *    `backgroundEffect` 背景模糊（半径、饱和度、亮度可控）+ 半透明填充 + 厚度渐变（仅大容器）
@@ -129,7 +130,38 @@ export class GlassModifier implements AttributeModifier<CommonAttribute> {
 }
 
 export class UIMaterialManager {
-  // ==================== 一、系统沉浸材质（官方合规区域，优先使用） ====================
+  // ==================== 一、模态遮罩（唯一值 + 叠层让位） ====================
+
+  /**
+   * **全工程唯一的模态遮罩值：亮色 15%（`#26000000`）/ 暗色 0%（`#00000000`）**
+   * （`app.color.overlay`，随 `setColorMode` 自动切换）。
+   *
+   * 半模态（`SheetOptions.maskColor`）、资料卡气泡（`CustomPopupOptions.mask`）、页面级官方弹窗
+   * （`CustomDialogControllerOptions.maskColor`）**全部取这一个值**——不存在"面板档 / 弹窗档"之分；
+   * 要调强度就改 `color.json` 里的资源值，一处生效于全部接入点。
+   *
+   * 暗色的 `#00000000` 是**完全透明但仍然生效**的一层遮罩：命中区、`autoCancel` 的点击外部关闭、
+   * 遮罩吞掉事件的行为都照常，只是不可见。暗色下浮层与背景的分离因此**只靠材质阴影**——这是
+   * 明确接受的取舍，不要为了"提层次"往材质里加色，也不要把暗色值改回不透明。
+   *
+   * **取色唯一入口**：业务代码一律写 `UIMaterialManager.scrim`，不要直接写 `AppColors`
+   * 或十六进制字面值。
+   */
+  static readonly scrim: ResourceColor = $r('app.color.overlay')
+
+  /**
+   * **叠层让位（不是一档颜色）**：浮层叠在「本身已带遮罩的浮层」之上时，上层不再画遮罩，由下层
+   * 那一层承担层次——保证**任意时刻画面上只有一层遮罩，不会叠加变深**。
+   *
+   * 目前三处叠层弹窗用它：回复编辑器（`ReplyDialog`）与发新主题（`NewTopicDialog`）的「放弃编辑」
+   * 确认框（叠在半模态面板上）、资料卡内的笔记弹窗（`ProfileCardPopup`，叠在气泡遮罩上）。
+   * 它们只在宿主浮层已打开时才会出现，不存在"整屏没有任何遮罩"的窗口。
+   *
+   * 新增浮层时先问一句：**它的宿主自己带遮罩吗？** 带 → 用本令牌；不带（页面直接弹起）→ `scrim`。
+   */
+  static readonly nestedScrim: ResourceColor = Color.Transparent
+
+  // ==================== 二、系统沉浸材质（官方合规区域，优先使用） ====================
 
   /**
    * 弹窗背板材质：官方 `CustomDialog` 类弹窗（`AlertDialog` / `TipsDialog` / `SelectDialog` /
@@ -148,13 +180,19 @@ export class UIMaterialManager {
    * 结果玻璃发暗发黄、整个画面发闷（用户否掉）；后改为"tint 保持亮暖白 + 遮罩压暗背后内容"制造
    * 层次。**现在改为彻底不赋色。**
    *
-   * 不赋色之后，层次手段**按通路各不相同**，不要以为一条 `maskColor` 能打天下（详见 §12.7）：
-   * - 半模态：`SheetOptions.maskColor = AppColors.overlay`（亮 30% / 暗 40%），遮罩是主要手段；
-   * - 官方弹窗：工程**未设** `CustomDialogControllerOptions.maskColor`，走系统默认 `0x33000000`
-   *   （固定 20% 黑，不随深浅色），层次主要靠材质自带阴影（`applyShadow: true`）；
-   * - 菜单 / 气泡：**没有遮罩**（`bindMenu` 无 preview 时默认不显示遮罩；页码气泡显式 `mask: false`），
-   *   层次靠档位模糊（`THICK` / `REGULAR`）+ 材质阴影。
-   * 日后若又觉得浮层与背景分不开，按对应通路的手段调（弹窗可考虑补 `maskColor`），不要往材质里加色。
+   * 不赋色之后，层次手段**按通路各不相同**，不要以为一条遮罩能打天下（详见 §12.7）。
+   * 遮罩只有**一个值**（`UIMaterialManager.scrim`，亮 15% / 暗 0%）加一条**叠层让位**规则
+   * （`nestedScrim`，见「一、模态遮罩」），四条通路按此接入：
+   * - 半模态：`SheetOptions.maskColor = UIMaterialManager.scrim`；亮色 15% 很轻、暗色不可见，
+   *   层次由遮罩 + 材质阴影共同承担；
+   * - 官方弹窗：`CustomDialogControllerOptions.maskColor = UIMaterialManager.scrim`；**叠在带遮罩
+   *   浮层之上的三处弹窗**（`ReplyDialog` / `NewTopicDialog` 的放弃确认、`ProfileCardPopup` 的
+   *   笔记弹窗）改用 `UIMaterialManager.nestedScrim`，让下层那一层遮罩独自承担，避免叠加变深；
+   * - 资料卡气泡：`mask: { color: UIMaterialManager.scrim }`；页码气泡显式 `mask: false`；
+   * - 菜单：**没有遮罩**（`bindMenu` 无 preview 时默认不显示遮罩；菜单的参数是 `mask` /
+   *   `MenuMaskType`，**没有 `maskColor` 字段**），层次靠档位模糊（`THICK`）+ 材质阴影。
+   * 日后若又觉得浮层与背景分不开，改 `scrim` 落在 `color.json` 里的**资源值**（一处生效于全部
+   * 接入点），或按通路调档位，**一律不要往材质里加色**。
    *
    * `applyShadow: true`：容器的形状装饰归面板本体（见 `sheetMaterial`），阴影由材质自带的
    * 那套承担——实测亮色模式下没有阴影时，面板会"贴"在背景上、缺少浮起感。

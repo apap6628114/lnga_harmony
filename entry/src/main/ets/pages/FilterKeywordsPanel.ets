@@ -43,6 +43,7 @@ export struct FilterKeywordsPanel {
   deleteDialogController?: CustomDialogController = new CustomDialogController({
     backgroundColor: Color.Transparent,
     systemMaterial: UIMaterialManager.dialogMaterial,
+    maskColor: UIMaterialManager.scrim,
     builder: AlertDialog({
       primaryTitle: '删除关键词',
       content: '确定要删除该关键词吗？',
@@ -189,6 +190,7 @@ export struct FilterKeywordsPanel {
         this.addDialogController = new CustomDialogController({
           backgroundColor: Color.Transparent,
           systemMaterial: UIMaterialManager.dialogMaterial,
+          maskColor: UIMaterialManager.scrim,
           builder: CustomContentDialog({
             primaryTitle: '添加关键词',
             secondaryTitle: '输入需要屏蔽的关键词',

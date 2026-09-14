@@ -1467,7 +1467,7 @@ export struct TopicListPanel {
       showClose: false,
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.sheetMaterial,
-      maskColor: AppColors.overlay,
+      maskColor: UIMaterialManager.scrim,
       preferType: this.currentBreakpoint === 'sm' ? SheetType.BOTTOM : SheetType.CENTER,
       // radius 的类型是 LengthMetrics | BorderRadiuses | LocalizedBorderRadiuses，**不接受裸 number**；
       // 四个圆角取同值（官方说明：圆角相等时面板视觉体验最佳），底部样式不显示底部两角，无副作用

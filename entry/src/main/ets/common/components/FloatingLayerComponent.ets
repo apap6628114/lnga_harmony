@@ -29,8 +29,8 @@ const logger = new Logger(DOMAIN_UI, 'FloatingLayerComponent')
  * 属于 API 26 Release 允许「页面内全部区域」生效的弹窗类接口，模糊、折射、高光、阴影与弹出
  * 空间动效都由系统接管；面板**内容层**只保留半透明内容色（`UIMaterialManager.dialogFieldMaterial`），
  * 不再自绘玻璃，避免对同一层背景二次糊化。内容层背景仍需显式置 `Color.Transparent`
- * （`BindOptions.backgroundColor` 默认 `Color.White`，会盖住背板材质），蒙层色对齐
- * `AppColors.overlay`。
+ * （`BindOptions.backgroundColor` 默认 `Color.White`，会盖住背板材质），蒙层色统一取
+ * `UIMaterialManager.scrim`（遮罩令牌的唯一真源，见 `UIMaterialManager` 的「一、模态遮罩」）。
  * 图片查看器是固定暗场景的全屏模态（`ContentCoverOptions` 没有材质字段，且整页不宜套材质），
  * 继续由 `UIMaterialManager` 的暗场景玻璃承担。
  * 详见 docs/IMMERSIVE_LIGHT_DESIGN.md §12。
@@ -134,7 +134,7 @@ export struct FloatingLayerComponent {
       // 背板材质：半模态转场属于 Release 允许「页面内全部区域」生效的弹窗类接口，
       // 面板本体由系统接管模糊、折射、边框、阴影与弹出动效（含空间形变）。
       systemMaterial: UIMaterialManager.sheetMaterial,
-      maskColor: AppColors.overlay,
+      maskColor: UIMaterialManager.scrim,
       // **所有断点一律走贴底样式**（曾按断点切 `CENTER`，已作废，原因见下）。
       //
       // 编辑器的键盘避让是「应用自己做的」（`keyboardAvoidMode: NONE` + 内容底部按窗口上报的
@@ -228,7 +228,7 @@ export struct FloatingLayerComponent {
       radius: 14,
       width: 280,
       autoCancel: true,
-      mask: { color: AppColors.overlay },
+      mask: { color: UIMaterialManager.scrim },
       systemMaterial: UIMaterialManager.popupMaterial,
       onStateChange: (event) => {
         // 系统关闭气泡（点击遮罩 / 返回键 / 页面操作）后回写 store：store 是浮层显隐的单一真源。

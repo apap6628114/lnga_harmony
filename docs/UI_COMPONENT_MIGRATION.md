@@ -51,7 +51,7 @@
 
 | 原实现 | 迁移后 | 视觉策略 |
 | --- | --- | --- |
-| 回复编辑器 / 发新主题：全屏 `Stack` 遮罩 + 手搓居中/底部定位 | `bindSheet` 半模态（**三种断点统一 `SheetType.BOTTOM`**，宽屏仅限宽） | sheet 背景置 `Color.Transparent`、`blurStyle` 默认 NONE、蒙层色对齐 `AppColors.overlay`。**注**：这是迁移当时的做法（外观由内容容器的 `surfaceMaterial` 磨砂玻璃承担），后续已被 §7.2 的系统材质接管——sheet 背板改走 `sheetMaterial`，内容容器不再叠自绘玻璃。**另注**：`md+` 曾用 `SheetType.CENTER` 保持居中浮层形态，已作废——编辑器自己用「窗口键盘高度占底部 padding」（`keyboardAvoidMode: NONE`）做避让，该做法只在贴底样式下成立；居中形态会被二次垫高，面板比内容高一截、工具行下方留长空白，且底边越出可视区导致底部圆角不再绘制（真机截图逐像素实测，见 `IMMERSIVE_LIGHT_DESIGN.md` §12.7） |
+| 回复编辑器 / 发新主题：全屏 `Stack` 遮罩 + 手搓居中/底部定位 | `bindSheet` 半模态（**三种断点统一 `SheetType.BOTTOM`**，宽屏仅限宽） | sheet 背景置 `Color.Transparent`、`blurStyle` 默认 NONE、蒙层色取 `UIMaterialManager.scrim`（2026-09 起遮罩统一收敛到该令牌）。**注**：这是迁移当时的做法（外观由内容容器的 `surfaceMaterial` 磨砂玻璃承担），后续已被 §7.2 的系统材质接管——sheet 背板改走 `sheetMaterial`，内容容器不再叠自绘玻璃。**另注**：`md+` 曾用 `SheetType.CENTER` 保持居中浮层形态，已作废——编辑器自己用「窗口键盘高度占底部 padding」（`keyboardAvoidMode: NONE`）做避让，该做法只在贴底样式下成立；居中形态会被二次垫高，面板比内容高一截、工具行下方留长空白，且底边越出可视区导致底部圆角不再绘制（真机截图逐像素实测，见 `IMMERSIVE_LIGHT_DESIGN.md` §12.7） |
 | 图片查看器：同层 `Stack` 内渲染 | `bindContentCover` 全屏模态 | 内容自带暗场景底色，`modalTransition` 用系统默认 |
 | 通用确认框（`floatingLayerStore.showConfirm`） | 官方 `ConfirmDialog`，调用点下移到唯一使用方 `BrowseHistoryPanel` | 官方模板样式，主按钮保留 `AppColors.destructive` 实底 |
 | 「放弃编辑」确认框（`replyConfirmActive`） | 官方 `ConfirmDialog`，下移到 `ReplyDialog` / `NewTopicDialog` 各自的 `CustomDialogController` | 同上 |
@@ -160,7 +160,7 @@ ProfileCardPopup）、`NoteAddContent`（NotesPanel）、`KeywordEditorContent`�
    **现已被 §7.2 的系统材质取代**——弹层本体走 `dialogMaterial` / `sheetMaterial` / `menuMaterial` / `popupMaterial`，
    内容层只保留不做背景模糊的 `dialogFieldMaterial`。
    官方容器只提供**位置、动效、手势与命中测试**。
-3. 蒙层色统一对齐 `AppColors.overlay`，迁移前后遮罩观感一致。
+3. 蒙层色统一取 `UIMaterialManager.scrim`（遮罩唯一值；叠在带遮罩浮层之上的弹窗走 `nestedScrim` 让位，不叠加），迁移前后遮罩观感一致。
 
 ---
 
@@ -332,7 +332,7 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
 
 `bindSheet` 这一项沿用既有配方：`dragBar: false` + `showClose: false` +
 `backgroundColor: Color.Transparent`（`BindOptions.backgroundColor` 默认
-`Color.White`，不清掉就盖住背板材质）+ `maskColor: AppColors.overlay` + 圆角四角同值 16。
+`Color.White`，不清掉就盖住背板材质）+ `maskColor: UIMaterialManager.scrim` + 圆角四角同值 16。
 注意 **`SheetOptions.radius` 的类型是 `LengthMetrics | BorderRadiuses | LocalizedBorderRadiuses`，
 不接受裸 `number`**（写 `radius: 16` 直接编译报类型不匹配）；而 `CustomPopupOptions.radius` 是
 `Dimension`、收裸 number——两者规则不同，别互相照抄。
@@ -384,8 +384,8 @@ offset: { x: 0, y: -1 },   // 类型是 Position（x / y），不是 Offset（dx
 2. **`CustomPopupOptions.offset` 是 `Position`（`x`/`y`）**，而 `CustomDialogControllerOptions.offset`
    才是 `Offset`（`dx`/`dy`）。写错编译器直接报
    `Type '{ dx: number; dy: number; }' is not assignable to type 'Position'`。
-3. **遮罩与关闭全部交还系统**：原自绘全屏 `Column`（`AppColors.overlay` + 点击关闭）删除，改由
-   `mask: { color: AppColors.overlay }` + `autoCancel: true` 承担；`onStateChange` 回写
+3. **遮罩与关闭全部交还系统**：原自绘全屏 `Column`（`app.color.overlay` + 点击关闭）删除，改由
+   `mask: { color: UIMaterialManager.scrim }` + `autoCancel: true` 承担；`onStateChange` 回写
    `floatingLayerStore`（store 是显隐的单一真源），根 `Stack` 的 `hitTestBehavior` 同时移除了
    `PROFILE_CARD` 分支——不再需要靠全屏节点拦触摸。
 4. **内容层让位材质**：`ProfileCardPopup` 去掉 `.borderRadius(14)` / `.clip(true)` /
@@ -395,3 +395,29 @@ offset: { x: 0, y: -1 },   // 类型是 Position（x / y），不是 Offset（dx
 **残留风险（需真机确认）**：气泡下方空间不足时系统会自动调整位置，`offset` 随之失效。
 调用点的边界夹取（`cardH = 400`）保证卡片下方至少留 400vp，正常情况下不会触发；若资料内容
 超过这个高度或点击点贴近屏幕底部，可能出现位置偏移。
+
+### 7.8 遮罩统一收敛到「一个值 + 叠层让位」（2026-09）
+
+浮层遮罩此前是「半模态显式写色 + 官方弹窗吃系统默认值 + 气泡各写一份」的散落状态，现已收敛：
+
+| 通路 | 接入方式 | 取值（亮 / 暗） |
+| --- | --- | --- |
+| 半模态（3 处选项定义 / 4 个 `bindSheet` 调用点） | `SheetOptions.maskColor = UIMaterialManager.scrim` | 15% / 0% |
+| 官方弹窗·页面级（**29 处**） | `maskColor: UIMaterialManager.scrim` | 15% / 0% |
+| 官方弹窗·叠层（**3 处**：两处「放弃编辑」确认 + 资料卡笔记弹窗） | `maskColor: UIMaterialManager.nestedScrim`（透明让位） | — |
+| 资料卡气泡 | `mask: { color: UIMaterialManager.scrim }` | 15% / 0% |
+| 页码气泡 / 菜单 | `mask: false` / 无遮罩（API 无 `maskColor` 字段） | — |
+
+- 唯一真源：`UIMaterialManager.scrim` → `app.color.overlay`；`AppColors` 不再提供遮罩成员，
+  避免双入口。
+- **叠层让位**（`nestedScrim` = `Color.Transparent`）解决"两层遮罩叠加变深"：`ReplyDialog` /
+  `NewTopicDialog` 的「放弃编辑」确认框叠在半模态面板上、资料卡笔记弹窗叠在气泡遮罩上，此时由
+  下层那一层独立承担，**画面任意时刻只有一层遮罩**。判断规则：宿主自己带遮罩 → `nestedScrim`；
+  页面直接弹起 → `scrim`。
+- 弹窗此前**未设** `maskColor`，实际吃系统默认 `0x33000000`（固定 20% 黑、不随深浅色）。
+  显式接入后，暗色的 `#00000000` 是**完全透明但仍生效**的遮罩——命中区、`autoCancel` 的
+  「点击外部关闭」都照常，只是不可见。
+- 死资源清理：`overlay_strong`（亮 `#66000000` / 暗 `#88000000`，全工程零引用）已从 `base` /
+  `dark` 的 `color.json` 删除；中间产物 `overlay_dialog`（曾用于"弹窗独立档"）随两档合并一并删除。
+- 改动后 `hvigorw assembleHap --mode module -p module=entry@default -p buildMode=debug` →
+  `BUILD SUCCESSFUL`。

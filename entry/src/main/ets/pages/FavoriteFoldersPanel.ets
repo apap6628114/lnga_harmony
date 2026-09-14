@@ -181,6 +181,7 @@ export struct FavoriteFoldersPanel {
     this.nameDialogController = new CustomDialogController({
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
       builder: CustomContentDialog({
         primaryTitle: '新建收藏夹',
         contentBuilder: (): void => { this.folderNameContent() },
@@ -257,6 +258,7 @@ export struct FavoriteFoldersPanel {
     this.nameDialogController = new CustomDialogController({
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
       builder: CustomContentDialog({
         primaryTitle: '重命名收藏夹',
         contentBuilder: (): void => { this.folderNameContent() },
@@ -327,6 +329,7 @@ export struct FavoriteFoldersPanel {
     this.deleteDialogController = new CustomDialogController({
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
       builder: AlertDialog({
         primaryTitle: '删除收藏夹',
         content: `确定删除“${folderName}”以及其中的全部收藏关系吗？`,

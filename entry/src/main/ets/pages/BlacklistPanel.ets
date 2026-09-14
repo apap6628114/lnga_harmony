@@ -54,6 +54,7 @@ export struct BlacklistPanel {
   deleteDialogController?: CustomDialogController = new CustomDialogController({
     backgroundColor: Color.Transparent,
     systemMaterial: UIMaterialManager.dialogMaterial,
+    maskColor: UIMaterialManager.scrim,
     builder: AlertDialog({
       primaryTitle: '移除黑名单',
       content: '确定要将其从黑名单中移除吗？',
@@ -82,6 +83,7 @@ export struct BlacklistPanel {
   clearDialogController?: CustomDialogController = new CustomDialogController({
     backgroundColor: Color.Transparent,
     systemMaterial: UIMaterialManager.dialogMaterial,
+    maskColor: UIMaterialManager.scrim,
     builder: AlertDialog({
       primaryTitle: '清空黑名单',
       content: '确定要清空全部黑名单吗？此操作无法撤销。',
@@ -269,6 +271,7 @@ export struct BlacklistPanel {
         this.addDialogController = new CustomDialogController({
           backgroundColor: Color.Transparent,
           systemMaterial: UIMaterialManager.dialogMaterial,
+          maskColor: UIMaterialManager.scrim,
           builder: CustomContentDialog({
             primaryTitle: '添加黑名单',
             contentBuilder: (): void => { this.addBlacklistContent() },

@@ -63,6 +63,7 @@ export struct SettingsPanel {
   clearCacheDialogController?: CustomDialogController = new CustomDialogController({
     backgroundColor: Color.Transparent,
     systemMaterial: UIMaterialManager.dialogMaterial,
+    maskColor: UIMaterialManager.scrim,
     builder: TipsDialog({
       imageRes: $r('app.media.settings_clear_cache'),
       title: '清除缓存',
@@ -89,6 +90,7 @@ export struct SettingsPanel {
   logoutDialogController?: CustomDialogController = new CustomDialogController({
     backgroundColor: Color.Transparent,
     systemMaterial: UIMaterialManager.dialogMaterial,
+    maskColor: UIMaterialManager.scrim,
     builder: TipsDialog({
       imageRes: $r('app.media.settings_logout'),
       title: '退出登录',
@@ -259,6 +261,7 @@ export struct SettingsPanel {
     this.exportCredentialDialogController = new CustomDialogController({
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
       builder: CustomContentDialog({
         primaryTitle: '加密导出凭证',
         secondaryTitle: '导出的文件将使用此密码加密，导入时需要再次输入（至少 8 位）。',
@@ -347,6 +350,7 @@ export struct SettingsPanel {
     this.threadNavDialogController = new CustomDialogController({
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
       builder: SelectDialog({
         title: '帖子楼层导航',
         selectedIndex: radio.selectedIndex,
@@ -388,6 +392,7 @@ export struct SettingsPanel {
     this.prefetchPageDialogController = new CustomDialogController({
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
       builder: SelectDialog({
         title: '预加载页数',
         selectedIndex: radio.selectedIndex,
@@ -411,6 +416,7 @@ export struct SettingsPanel {
     this.imageStrategyDialogController = new CustomDialogController({
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
       builder: SelectDialog({
         title: '图片加载模式',
         selectedIndex: radio.selectedIndex,

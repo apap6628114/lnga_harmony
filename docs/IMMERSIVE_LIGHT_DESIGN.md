@@ -973,17 +973,34 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 
 **层次手段按通路各不相同**（2026-09 独立审查逐点核对，勿再笼统写成"层次只由遮罩承担"）：
 
+遮罩**只有一个值 + 一条叠层让位规则**，集中在 `UIMaterialManager`（唯一真源：业务代码只引用令牌，
+不再直接引用 `AppColors`，更不写十六进制字面值；资源值落在 `resources/base|dark/element/color.json`）：
+
+- `UIMaterialManager.scrim` → `app.color.overlay`：**亮 15%（`#26000000`）/ 暗 0%（`#00000000`）**
+  ——半模态、资料卡气泡、页面级官方弹窗**全部取这一个值**（2026-09 定案；此前"面板 30/40 + 弹窗
+  15/0"的两档已合并为一档）
+- `UIMaterialManager.nestedScrim`（`Color.Transparent`）：**叠层让位**，只给「叠在本身带遮罩的浮层
+  之上」的弹窗用，见下表
+
 | 通路 | 遮罩实际情况 | 层次主要来源 |
 | --- | --- | --- |
-| 半模态（`sheetMaterial`，3 处） | ✅ `SheetOptions.maskColor = AppColors.overlay`（亮 30% / 暗 40%） | 遮罩 + 材质阴影 |
-| 官方弹窗（`dialogMaterial`，20+ 处） | ⚠️ 工程**未设** `CustomDialogControllerOptions.maskColor`，走系统默认 `0x33000000`（固定 20% 黑，**不随深浅色**） | 材质阴影（`applyShadow: true`）为主 |
+| 半模态（`sheetMaterial`，3 处选项定义 / 4 个 `bindSheet` 调用点） | ✅ `SheetOptions.maskColor = UIMaterialManager.scrim` | 遮罩 + 材质阴影 |
+| 官方弹窗（`dialogMaterial`，32 处） | ✅ 页面级 **29 处**用 `UIMaterialManager.scrim`；叠层 **3 处**（`ReplyDialog` / `NewTopicDialog` 的放弃确认、`ProfileCardPopup` 笔记弹窗）用 `nestedScrim` 让位 | 材质阴影（`applyShadow: true`）为主 |
 | 菜单（`menuMaterial`） | ❌ **无遮罩**（`bindMenu` 无 preview 时默认不显示；菜单的参数是 `mask` / `MenuMaskType`，**没有 `maskColor` 字段**） | `THICK` 档背景模糊 + 材质阴影 |
-| 气泡（`popupMaterial`） | ⚠️ 资料卡有 `mask: { color: AppColors.overlay }`；页码气泡显式 `mask: false` | `REGULAR` 档背景模糊 + 材质阴影 |
+| 气泡（`popupMaterial`） | ⚠️ 资料卡 `mask: { color: UIMaterialManager.scrim }`；页码气泡显式 `mask: false` | `REGULAR` 档背景模糊 + 材质阴影 |
 
-配套的遮罩取值：**亮色 30%（`#4D000000`，即 `app.color.overlay`）/ 暗色 40%（`#66000000`）**——这两个值
-目前只落在**半模态**（及资料卡气泡）上，**弹窗并未受益**（它用的是系统默认的固定 20%）。日后若觉得
-浮层与背景分不开，按通路取手段：半模态调 `maskColor`；弹窗可考虑补 `maskColor`；菜单 / 气泡**没有
-`maskColor` 可调**，只能调档位。**一律不要往材质里加色。**
+**为什么叠层必须"让位"**：每层浮层各自画一次遮罩，两层同时在场就是两层黑叠在一起（工程实测过
+"半模态 30% + 弹窗 15% = 40.5%"的观感，且与"改一个值全局生效"的预期不符）。现在下层那一层
+`scrim` 独自承担，**画面上任意时刻只有一层遮罩**。
+
+**暗色的 0% 是取舍，不是漏配**：`#00000000` 是**完全透明但仍然生效**的一层遮罩——命中区、
+`autoCancel` 的点击外部关闭、遮罩吞掉事件的行为都照常，只是不可见；暗色下浮层与背景的分离
+**只靠材质阴影**。在此之前工程走的是「**不设** `maskColor`」→ 系统默认 `0x33000000`（固定 20% 黑、
+**不随深浅色**），那正是要消除的魔法值，**不要退回不设 `maskColor` 的写法**（SDK 默认值见
+`component/custom_dialog_controller.d.ts`）。
+
+日后若觉得浮层与背景分不开，改 `scrim` 对应的**资源值**（一处生效于全部接入点），或调菜单 / 气泡
+档位（它们**没有 `maskColor` 可调**）。**一律不要往材质里加色。**
 
 至于**为什么同一套材质在暗色下天生更好看**（这是材质物理特性，不是参数没调对）：材质的边缘
 高光、折射、流光**都是亮部细节**，在暗背景上对比度最高；亮色模式下背景内容本身亮度高，模糊

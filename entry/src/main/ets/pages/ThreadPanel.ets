@@ -1858,6 +1858,7 @@ export struct ThreadPanel {
     this.saveDialogController = new CustomDialogController({
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
       builder: CustomContentDialog({
         primaryTitle: '保存帖子',
         contentBuilder: (): void => { this.saveThreadContent() },

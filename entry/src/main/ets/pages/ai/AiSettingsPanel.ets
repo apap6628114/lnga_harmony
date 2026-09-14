@@ -242,6 +242,7 @@ export struct AiSettingsPanel {
     this.discardConfirmController = new CustomDialogController({
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
       builder: AlertDialog({
         primaryTitle: '放弃修改',
         content: '当前编辑的内容尚未保存，确定要放弃吗？',
@@ -377,6 +378,7 @@ export struct AiSettingsPanel {
     this.deleteConfirmController = new CustomDialogController({
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
       builder: TipsDialog({
         imageRes: $r('app.media.icon_delete'),
         title: '删除 AI 配置',
@@ -435,6 +437,7 @@ export struct AiSettingsPanel {
     this.providerPickerController = new CustomDialogController({
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
       builder: SelectDialog({
         title: '选择 AI 平台',
         selectedIndex: 0,

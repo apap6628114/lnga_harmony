@@ -257,6 +257,7 @@ export struct FavoriteSavedPanel {
     this.nameDialogController = new CustomDialogController({
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
       builder: CustomContentDialog({
         primaryTitle: '新建收藏夹',
         contentBuilder: (): void => { this.folderNameContent() },
@@ -327,6 +328,7 @@ export struct FavoriteSavedPanel {
     this.nameDialogController = new CustomDialogController({
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
       builder: CustomContentDialog({
         primaryTitle: '重命名收藏夹',
         contentBuilder: (): void => { this.folderNameContent() },
@@ -385,6 +387,7 @@ export struct FavoriteSavedPanel {
     this.folderDeleteDialogController = new CustomDialogController({
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
       builder: AlertDialog({
         primaryTitle: '删除收藏夹',
         content: '确定删除“' + folderName + '”以及其中的全部收藏关系吗？',
@@ -719,6 +722,7 @@ export struct FavoriteSavedPanel {
     this.clearDialogController = new CustomDialogController({
       backgroundColor: Color.Transparent,
       systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
       builder: TipsDialog({
         imageRes: $r('app.media.icon_delete'),
         title: '清空存档',
@@ -865,6 +869,7 @@ export struct FavoriteSavedPanel {
                       this.savedDeleteDialogController = new CustomDialogController({
                         backgroundColor: Color.Transparent,
                         systemMaterial: UIMaterialManager.dialogMaterial,
+                        maskColor: UIMaterialManager.scrim,
                         builder: TipsDialog({
                           imageRes: $r('app.media.icon_delete'),
                           title: '删除存档',

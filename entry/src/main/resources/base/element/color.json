@@ -62,11 +62,7 @@
     },
     {
       "name": "overlay",
-      "value": "#4D000000"
-    },
-    {
-      "name": "overlay_strong",
-      "value": "#66000000"
+      "value": "#26000000"
     },
     {
       "name": "shadow",
