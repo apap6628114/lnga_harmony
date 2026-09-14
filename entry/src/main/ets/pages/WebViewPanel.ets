@@ -358,6 +358,8 @@ export struct WebViewPanel {
           Image($r('app.media.icon_back'))
             .width(22).height(22)
             .fillColor(UIMaterialManager.adaptiveForeground)
+            // Image 的 draggable 自 API 10 起默认为 true：长按会被系统当成"拖拽图片"（见 §12.9）
+            .draggable(false)
         }
         .width(44).height(44).borderRadius(22)
         .attributeModifier(UIMaterialManager.fabMaterial)
@@ -373,6 +375,8 @@ export struct WebViewPanel {
             .width(22).height(22)
             .fillColor(UIMaterialManager.adaptiveForeground)
             .rotate({ angle: 180 })
+            // Image 的 draggable 自 API 10 起默认为 true：长按会被系统当成"拖拽图片"（见 §12.9）
+            .draggable(false)
         }
         .width(44).height(44).borderRadius(22)
         .attributeModifier(UIMaterialManager.fabMaterial)

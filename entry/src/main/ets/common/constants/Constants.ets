@@ -30,6 +30,16 @@ export const TITLE_BLUR_RADIUS: number = 16
 /** 标题栏右侧相邻操作按钮之间的间距（vp）。 */
 export const TITLE_ACTION_BUTTON_GAP: number = 8
 
+/**
+ * 标题栏操作按钮的材质块尺寸（vp，正方形）。
+ *
+ * HDS 悬浮页签栏**不能像自绘玻璃那样由内容撑开**，`barWidth` / `barHeight` 必须是显式值。
+ * 但**内容容器要写 `'100%'`**（跟随 HDS 页签项的内容区），不要用本常量再写一遍显式高度——
+ * 真机踩坑：HDS 内容区比 `barHeight` 矮，显式高度会让图标整体偏下（见 `PanelNavBar.iconPod` 约定 2）。
+ * 36 是本工程标题栏沿用至今的按钮尺寸，真机已核对材质块可正常显示。
+ */
+export const TITLE_POD_SIZE: number = 36
+
 // 当前激活的主题色（通过 $r 引用资源，setColorMode 自动切换）
 export class AppColors {
   static primary: Resource = $r('app.color.primary')

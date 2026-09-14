@@ -3,10 +3,12 @@ import {
   AppColors,
   NAV_BAR_H,
   TITLE_ACTION_BUTTON_GAP,
-  TITLE_BLUR_FADE_DISTANCE
+  TITLE_BLUR_FADE_DISTANCE,
+  TITLE_POD_SIZE
 } from '../constants/Constants'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 import { TitleScrollEffect } from '../utils/TitleScrollEffect'
+import { HdsMaterialHost } from './HdsMaterialHost'
 
 /**
  * 标题栏菜单项。
@@ -32,7 +34,10 @@ export interface NavBarMenuItem {
 /**
  * 面板通用标题栏。
  *
- * 标题栏本体不使用整块系统材质，沉浸光感材质只作用于返回、菜单等操作按钮。
+ * 标题栏本体不使用整块材质（栏位保持透明，正文从下方穿越），沉浸光感材质**只作用于返回 /
+ * 右侧操作按钮**：每颗按钮的背板是 `HdsMaterialHost`（→ `HdsTabs` 悬浮页签栏材质），
+ * 而不是自绘磨砂玻璃（见 `iconPod` 的说明）。`title`、渐变着色层与按钮布局都不参与材质。
+ *
  * 列表滚动进入标题区时，正文自身承担空间渐变模糊，标题层不参与着色：向下衰减的着色层
  * 保留结构，但其两个颜色资源（title_backdrop_tint / title_backdrop_clear）在亮色与
  * 暗色下**均为全透明**（#00000000），因此不产生任何像素。需要恢复"主题同色偏色"时，
@@ -89,7 +94,40 @@ export struct PanelNavBar {
   @Prop scrollEffectProgress: number = 0
 
   /**
-   * 标题栏内可操作图标按钮：圆形光感底板 + 按压形变反馈。
+   * 标题栏内可操作图标按钮：**HDS 材质块**底板 + 一颗承载动作 / 菜单的内容节点。
+   *
+   * ## 为什么不再用自绘磨砂玻璃
+   *
+   * 背板原为 `UIMaterialManager.fabMaterial`（自绘磨砂玻璃）。但标题栏是本组件自绘的
+   * `Stack` + `Row`，**不属于 `docs/IMMERSIVE_LIGHT_DESIGN.md` §0 生效范围门禁里的
+   * `Navigation` 标题栏**，普通组件写 `.systemMaterial(...)` 在 Release 下静默失效；HDS 材质由
+   * HDS 组件自身渲染、不受该门禁约束，是这里唯一能拿到**真材质**（折射、高光、系统阴影、
+   * 深浅色自适应色调）的通道（详见 `HdsMaterialHost` 文件头与 §12.9）。
+   *
+   * ## 与 `ThreadPanel` / `TopicListPanel` 现有调用点同构的三条约定
+   *
+   * 1. **尺寸显式**：HDS 悬浮栏不能像自绘玻璃那样由内容撑开，`barWidth` / `barHeight` 固定传
+   *    `TITLE_POD_SIZE`（见该常量的真机核对提示）。
+   * 2. **内容容器必须写 `'100%'`，不能写 `TITLE_POD_SIZE` 的显式高度**：HDS 页签项的**内容区比
+   *    `barHeight` 矮**（页签项自带内边距），内容容器高于内容区时超出部分按**顶部溢出**对齐——
+   *    真机现象是**图标整体偏下**（三颗按钮一致）。写成 `'100%'` 后容器高度 = 内容区高度，图标由
+   *    `alignContent(Center)` 居中于内容区，即与材质块同心；这与 `ThreadPanel` 回复按钮（真机实测
+   *    "图标中心 = 材质块中心"）的写法完全一致。角标不再用 `position`，见 `iconPodContent`。
+   * 3. **宿主 `onTap` 与内容子元素交互二选一**：这里**一律不传宿主 `onTap`**，动作 / 菜单 / 无障碍
+   *    名称全部挂在内容节点上——与迁移前 `.onClick` / `.bindMenu` 的行为、可聚焦性与无障碍语义
+   *    逐条等价，也避免"宿主 `onTabBarClick` + 子元素 `onClick`"双触发。代价是拿不到 HDS 页签项
+   *    自带的点击反馈（迁移前的自绘玻璃本来也没有按压动画）。
+   *
+   * ## 真机核对记录
+   *
+   * - **已核对**：36×36 材质块按 `TITLE_POD_SIZE` 正常显示（未被 HDS 规范撑大或截断）；图标**曾
+   *   整体偏下**（原因与修法见约定 2），内容容器改 `'100%'` 后居中。
+   * - 待核对：角标是否被 HDS 页签项裁切（角标锚在图标右上角、向图标外溢出最多 9vp）；
+   * - 绑菜单那颗：菜单是否仍落在按钮下方、右边缘与之对齐——锚点从自绘底板换成了材质块**内部**的
+   *   内容节点，多列路由下的锚点几何必须重新确认（`docs/UI_COMPONENT_MIGRATION.md` §7.7 记的是
+   *   同一类坑，那次连挂错三层才定位到"锚点必须是标题栏里那颗真实按钮"）；
+   * - 无障碍朗读是否仍落到按钮上（`accessibilityText` 挂在持有 `onClick` / `bindMenu` 的内容节点上，
+   *   应仍可聚焦）。
    *
    * 图标与颜色、角标一样通过 this 读取状态变量，而不是按值传入：
    * @Builder 私有构建函数按值传递时，参数（状态变量）变化不会触发 UI 刷新，
@@ -111,42 +149,60 @@ export struct PanelNavBar {
   ) {
     if (this.hasMenu && !isBack && isSecondary === this.menuOnSecondary) {
       // 只有这一颗按钮绑定菜单，避免给返回 / 铃铛等按钮挂上无意义的菜单
-      Stack() {
-        this.iconPodContent(isBack, isSecondary)
+      HdsMaterialHost({ barWidth: TITLE_POD_SIZE, barHeight: TITLE_POD_SIZE }) {
+        Stack() {
+          this.iconPodContent(isBack, isSecondary)
+        }
+        .width('100%').height('100%')
+        .alignContent(Alignment.Center)
+        .accessibilityText(accessibilityText)
+        .onClick(onTap)
+        // 两参形式：菜单开合完全交给系统（点锚点开合、点区域外关闭），本地**不持有显隐状态**。
+        // 受控形式需要"本地布尔取反 + 系统关闭时回写"两个真源，二者在"点锚点本身"这条路径上会
+        // 互相打架（结果取决于系统是否把该次点击透传给锚点）——这是踩过的坑，不要再改回一参形式。
+        .bindMenu(this.navBarMenu(), this.navBarMenuOptions())
       }
-      .width(36).height(36).borderRadius(18)
-      .alignContent(Alignment.Center)
-      .attributeModifier(UIMaterialManager.fabMaterial)
-      .accessibilityText(accessibilityText)
-      .onClick(onTap)
-      // 两参形式：菜单开合完全交给系统（点锚点开合、点区域外关闭），本地**不持有显隐状态**。
-      // 受控形式需要"本地布尔取反 + 系统关闭时回写"两个真源，二者在"点锚点本身"这条路径上会
-      // 互相打架（结果取决于系统是否把该次点击透传给锚点）——这是踩过的坑，不要再改回一参形式。
-      .bindMenu(this.navBarMenu(), this.navBarMenuOptions())
     } else {
-      Stack() {
-        this.iconPodContent(isBack, isSecondary)
+      HdsMaterialHost({ barWidth: TITLE_POD_SIZE, barHeight: TITLE_POD_SIZE }) {
+        Stack() {
+          this.iconPodContent(isBack, isSecondary)
+        }
+        .width('100%').height('100%')
+        .alignContent(Alignment.Center)
+        .accessibilityText(accessibilityText)
+        .onClick(onTap)
       }
-      .width(36).height(36).borderRadius(18)
-      .alignContent(Alignment.Center)
-      .attributeModifier(UIMaterialManager.fabMaterial)
-      .accessibilityText(accessibilityText)
-      .onClick(onTap)
     }
   }
 
-  /** 按钮内容（图标 + 角标）：带菜单与不带菜单两个分支共用，避免重复。 */
+  /**
+   * 按钮内容（图标 + 角标）：带菜单与不带菜单两个分支共用，避免重复。
+   *
+   * **角标锚在图标自己的右上角，不用 `position` 绝对坐标**：外层容器的高度由 HDS 页签项的
+   * 内容区决定（不由我们控制），任何"假设容器尺寸"的绝对坐标都会失配（`IMMERSIVE_LIGHT_DESIGN.md`
+   * §12.9 的教训）。`offset(8, -9)` 是"角标右上角对齐图标右上角"后的落点换算——旧实现是
+   * `position({ x: 19, y: 0 })`（相对 36×36 材质块；角标宽 16 时右上角落在材质块坐标 `(35, 0)`），
+   * 图标右上角在材质块坐标 `(27, 9)`，两者之差即 `(8, -9)`。
+   *
+   * **`draggable(false)` 必须显式写**：`Image` 自 API 10 起 `draggable` 默认为 `true`（官方声明：
+   * 值为 `true` 时**绑定的长按手势不生效**，事件被拖拽消费），于是长按标题栏按钮会把图标当成
+   * 图片拖起。标题栏按钮不做拖拽（真机现象：长按图标出现系统拖拽预览）。
+   */
   @Builder
   iconPodContent(isBack: boolean, isSecondary: boolean) {
-    Image(this.resolveIcon(isBack, isSecondary)).width(18).height(18).objectFit(ImageFit.Contain)
-      .fillColor(this.resolveIconColor(isBack, isSecondary))
-    if (!isBack && this.resolveBadgeCount(isSecondary) > 0) {
-      Text(this.formatBadgeCount(this.resolveBadgeCount(isSecondary)))
-        .fontSize(9).fontColor(Color.White).textAlign(TextAlign.Center)
-        .height(16).borderRadius(8).backgroundColor(Color.Red)
-        .padding({ left: 5, right: 5 })
-        .position({ x: 19, y: 0 })
+    Stack({ alignContent: Alignment.TopEnd }) {
+      Image(this.resolveIcon(isBack, isSecondary)).width(18).height(18).objectFit(ImageFit.Contain)
+        .fillColor(this.resolveIconColor(isBack, isSecondary))
+        .draggable(false)
+      if (!isBack && this.resolveBadgeCount(isSecondary) > 0) {
+        Text(this.formatBadgeCount(this.resolveBadgeCount(isSecondary)))
+          .fontSize(9).fontColor(Color.White).textAlign(TextAlign.Center)
+          .height(16).borderRadius(8).backgroundColor(Color.Red)
+          .padding({ left: 5, right: 5 })
+          .offset({ x: 8, y: -9 })
+      }
     }
+    .width(18).height(18)
   }
 
   /**

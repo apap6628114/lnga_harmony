@@ -215,9 +215,10 @@ private getStateViewHeight(): number {
    闪屏）；轮询增量同步用 `prependAll` 语义（旧列表是缓存后缀时仅插头部新增，见 6.3）。
 7. **切 tab/切换数据源后回顶**：`setTimeout(0)` 后 `scroller.scrollEdge(Edge.Top)`（内容已重建，
    立即调用可能无效）。
-8. **沉浸光感（IMMERSIVE_LIGHT_DESIGN.md）**：`SegmentButton.fontColor` 属 colorInvert 白名单属性，
-   不得用硬编码色值；任何 `systemMaterial` 组件不得叠加不透明背景色；`systemMaterial` 必须放在
-   其他样式属性之后。
+8. **沉浸光感（IMMERSIVE_LIGHT_DESIGN.md）**：任何 `systemMaterial` 组件不得叠加不透明背景色；
+   `systemMaterial` 必须放在其他样式属性之后。颜色一律走 `sys.color.*` / 应用资源（不得硬编码）——
+   但这**不等于**会自动反色：反色白名单只认 SDK 明确列举的属性（§6.2），排序条的
+   `SegmentButton.fontColor` **不在**其中。
 9. **`maintainVisibleContentPosition(true)` 仅用于帖子详情前插场景**（ThreadPanel），
    列表面板（帖子列表/通知页）不要加——它可能干扰数据替换后的滚动位置（见 6.2）。
 10. **分页预加载阈值**：列表含筛选条占位（索引 0）时，数据项索引 = 列表索引 - 1；
@@ -281,7 +282,7 @@ List 属性链、`syncTitleScrollEffect`、`getStateViewHeight`，再替换业�
 
 | 文件 | 角色 |
 | --- | --- |
-| `entry/src/main/ets/common/components/PanelNavBar.ets` | 通用标题区（压暗层、iconPod 材质按钮） |
+| `entry/src/main/ets/common/components/PanelNavBar.ets` | 通用标题区（压暗层、iconPod 的 HDS 材质块按钮） |
 | `entry/src/main/ets/common/utils/TitleScrollEffect.ets` | 进度/模糊/高度计算 |
 | `entry/src/main/ets/common/constants/Constants.ets` | `NAV_BAR_H`、`TITLE_*`、`AppColors` |
 | `entry/src/main/ets/pages/TopicListPanel.ets` | 视觉范本（排序条 + 状态视图 + 属性链） |

@@ -2563,6 +2563,9 @@ export struct ThreadPanel {
         Stack() {
           Image($r('app.media.icon_reply'))
             .width(20).height(20).fillColor(UIMaterialManager.adaptiveForeground)
+            // Image 的 draggable 自 API 10 起默认为 true：长按会被系统当成"拖拽图片"（吞掉长按手势）。
+            // 材质块 / 玻璃按钮内的图标一律显式关掉（见 IMMERSIVE_LIGHT_DESIGN.md §12.9）
+            .draggable(false)
         }
         .width('100%').height('100%').alignContent(Alignment.Center)
       }

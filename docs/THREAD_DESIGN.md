@@ -244,16 +244,19 @@ TITLE_SCROLL_EFFECT_DISTANCE = 20vp
 
 沉浸光感是 API 26 构建的固定视觉契约，不提供运行时开关或旧版实色回退：
 
-- 返回、更多等标题操作按钮使用 36×36 圆形 `UIMaterialManager.fabMaterial`。
-- 右侧存在两个操作按钮时，按钮之间固定保留 `8vp` 间距。
-- `fabMaterial` 是**自绘磨砂玻璃**（`GlassModifier`）：页面内容区与 `PanelNavBar` 都不在 Release
-  允许的材质生效区域内，拿不到系统材质。
+- 返回、更多等标题操作按钮的背板是 36×36 的 `HdsMaterialHost`（HDS 材质宿主，材质块尺寸常量
+  `TITLE_POD_SIZE`）：`PanelNavBar` 是自绘标题栏，不在 `Navigation` 标题栏内，ArkUI 的
+  `systemMaterial` 在 Release 下拿不到材质，HDS 悬浮页签栏材质是这里唯一的通道
+  （`docs/IMMERSIVE_LIGHT_DESIGN.md` §12.9）。材质块的形状由 HDS 规范决定，**不再是自绘的正圆**；
+  真机待核对项见该节"标题栏按钮"。
+- 右侧存在两个操作按钮时，按钮之间固定保留 `8vp` 间距（`TITLE_ACTION_BUTTON_GAP`）。
+- 材质不做设备降级：设备不支持材质时按钮背板就是透明的，这是接受的结果。
 - 标题操作必须使用语义明确的独立 SVG 资源，不在标题栏中混用文字操作；视觉图标与无障碍名称分别由 `rightIcon` 和 `rightIconAccessibilityText` 提供。
-- 标题栏本体不使用整块 `systemMaterial`；正文模糊由 `List` 承担，标题可读性由颜色渐变层承担。
+- 标题栏本体不使用整块材质；正文模糊由 `List` 承担，标题可读性由颜色渐变层承担。
 - 不绘制用于强调标题底边的常驻分割线，避免形成独立矩形区域。
 - 浮层不再自绘玻璃：更多菜单走 `bindMenu`（`menuMaterial`），页码选择器走 `bindPopup`
   （`popupMaterial`），菜单 / 气泡内部的输入框走 `dialogFieldMaterial`；右下角**常驻**的分页条与
-  回复按钮继续用自绘 `fabMaterial`（Release 生效范围门禁下无系统材质通道）。
+  回复按钮走 `HdsMaterialHost`（HDS 材质宿主）。
   组件不得保存材质启用状态，也不得按持久化设置切换 `systemMaterial`。
 
 ### 6.4 共享实现的适用条件

@@ -477,6 +477,8 @@ export struct ImageViewer {
           Image($r('app.media.icon_close'))
             .width(20).height(20)
             .fillColor(UIMaterialManager.onDarkForeground)
+            // Image 的 draggable 自 API 10 起默认为 true：长按会被系统当成"拖拽图片"（见 §12.9）
+            .draggable(false)
         }
         .width(38).height(38).borderRadius(19)
         .position({ top: 4, right: 16 })

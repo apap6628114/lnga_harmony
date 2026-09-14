@@ -18,8 +18,10 @@
 >
 > 现在的分界：**弹窗类组件与接口（Dialog / 半模态 / 菜单 / 气泡）+ `Slider` / `Toggle` /
 > `Select` → 系统沉浸材质**——包括**资料卡**（`bindPopup`）、页码选择气泡、标题栏菜单；
-> **页面内容区的常驻控件（列表、`PanelNavBar` 栏位本体与图标底板、图片查看器）→ 自绘磨砂玻璃**；
-> **内容区的右下角浮动操作控件（发帖 / 刷新 / 回复按钮、页码指示器）→ HDS 材质宿主**（见 §12.9）。
+> **HDS 材质宿主（非合规旁路，见 §12.9）→ 内容区右下角浮动操作控件（发帖 / 刷新 / 回复按钮、
+> 页码指示器），以及 `PanelNavBar` 的返回 / 右侧操作按钮**——标题栏是自绘 `Stack`、不属于
+> `Navigation` 标题栏，ArkUI 侧拿不到材质，只能走这条旁路；
+> **页面内容区其余常驻控件（列表、`PanelNavBar` 栏位本体、图片查看器）→ 自绘磨砂玻璃**。
 >
 > 第三条通路是 Release 之后才出现的：**ArkUI 的 `systemMaterial` 在内容区没有任何合法通道**
 > （官方 FAQ 的建议就是"改用 `backgroundColor` 等通用属性替代材质效果"，也就是自绘玻璃），
@@ -295,7 +297,25 @@ Column() {
 
 ## 6. 自动反色 `colorInvert`
 
+> **适用范围**：本节只讲 ArkUI 的 `uiMaterial` 通路。**HDS 通路没有反色能力**——HDS 的
+> `SystemMaterialParams` 只有 `materialType` 与 `materialLevel` 两个字段，本地 SDK 的 HDS 声明
+> （`@hms.hds.hdsBaseComponent.d.ets` 等）中**没有任何 invert 相关符号**。走 HDS 材质宿主的位置
+> （§12.9）因此不存在"开不开反色"这个问题，只能靠 §12.3 的前景色规则保证可读性。
+
 自动反色用于高透明材质背景下的文字、图标可读性。它不是通用的“把所有颜色取反”，而是系统在材质子树中扫描特定属性接口和特定资源值，按底层背景计算前景色。
+
+官方术语是「**自动适配背景色的互补色**」（SDK 原文：*the subtree of the node of the material object
+automatically adapts the material to the complementary color of the background color*）。三条性质决定了
+它的行为边界：
+
+1. **作用域是"材质对象节点的子树"**，不是"某类组件自带的能力"。组件不在任何名单里，判定是三个集合的
+   交集：**材质子树** × **属性白名单**（§6.2）× **特殊资源值**（§6.3）。
+2. **它是阈值型、非确定性的能力**：`colorInvert: true` 只表示"允许"，实际是否适配由系统判定——SDK
+   注释口径是"材质层足够薄时才适配"，可适配材质由系统定义、**至少**需要 `THIN` / `ULTRA_THIN`，且与
+   **应用的沉浸光感强度配置**联动：材质越薄、光感越强，越容易满足要求。所以"开了没效果"是正常结果，
+   不是 bug（另有 Note：只对高 / 中算力设备的显示效果生效）。
+3. **只对"特殊资源值"生效**：白名单属性上必须写 §6.3 表 1 的 `sys.color.*`；硬编码色值与应用自定义
+   资源（`AppColors.*`）都不参与计算。
 
 ### 6.1 必须同时满足的条件
 
@@ -308,17 +328,20 @@ Column() {
 
 ### 6.2 颜色属性白名单
 
-官方 API 参考列出的可反色属性包括：
+**以本地 SDK 声明为准**（`@ohos.arkui.uiMaterial.d.ts` 里 `colorInvert` 的说明，API 26.0.0）。
+SDK 明确列举的可反色属性**只有下面这些**，清单外的属性不得假定能反色：
 
-- `Text.fontColor`、`Button.fontColor`、`SymbolGlyph.fontColor`。
+- `Text.fontColor`。
+- `Button.fontColor`。
+- `SymbolGlyph.fontColor`。
 - `Image.fillColor`。
-- `Search.placeholderColor`、`Search.fontColor`、`searchIcon` 图标色、`cancelButton` 图标色、`caretStyle` 光标色、`searchButton` 按钮色。
-- `TabContent.tabBar` 使用 `BottomTabBarStyle` 时的文字和图标颜色。
-- `Chip.prefixIcon.fillColor`、`Chip.suffixIcon.fillColor`、`Chip.label.fontColor`。
-- `ChipGroup.itemStyle.fontColor`。
-- `TextArea.fontColor`、`TextArea.placeholderColor`、`TextInput.fontColor`、`TextInput.placeholderColor`。
-- `SegmentButton.fontColor`。
-- `Swiper.fontColor`。
+- `Search.placeholderColor`、`Search.fontColor`、`Search.searchIcon`、`Search.cancelButton`、`Search.caretStyle`。
+- `TabContent.tabBar` 使用 `BottomTabBarStyle` 时的文字与图标色。
+
+⚠️ **与官方网页 API 参考的差异**：网页版另外列出了 `Chip` / `ChipGroup` / `TextArea` / `TextInput` /
+`SegmentButton` / `Swiper` 的颜色属性以及 `Search.searchButton`，但**本地 SDK（API 26）的
+`colorInvert` 说明中没有它们**。按"系统 API 以本地 SDK 为准"的门禁，这些属性**不得作为反色依据**；
+确需依赖时只能真机逐项验证，验证前一律视为不生效。
 
 错误写法：
 
@@ -781,11 +804,13 @@ HDS 的材质类型/等级与 ArkUI 的 `ImmersiveStyle` 不是一一对应关�
 | 气泡（`bindPopup`，含页码选择器、资料卡） | 系统沉浸材质 | `popupMaterial`（`REGULAR` + `applyShadow: true`，**不赋色**） |
 | `Slider` / `Toggle` | 系统沉浸材质 | `controlMaterial`（`THIN` + 交互形变 + 点光源） |
 | 页面内容区的**右下角浮动控件**（发帖 / 刷新 / 回复按钮、页码指示器） | **HDS 材质宿主（非合规旁路）** | `HdsMaterialHost` → `HdsTabs` 的 `barFloatingStyle.systemMaterialEffect`（见 §12.9） |
-| 页面内容区其他常驻控件（面板、列表、`PanelNavBar` 标题栏与图标底板、`Toast`） | 自绘磨砂玻璃 | `surfaceMaterial` / `barMaterial` / `fabMaterial` / … |
+| `PanelNavBar` 的**返回 / 右侧操作按钮**（标题栏是自绘 `Stack`，不在 `Navigation` 标题栏内） | **HDS 材质宿主（非合规旁路）** | 同上；材质块 `TITLE_POD_SIZE`（36vp，见 §12.9） |
+| 页面内容区其他常驻控件（面板、列表、`PanelNavBar` **栏位本体**、`Toast`） | 自绘磨砂玻璃 | `surfaceMaterial` / `barMaterial` / `fabMaterial` / … |
 | 图片查看器（`bindContentCover` 全屏模态、固定暗场景） | 自绘磨砂玻璃 | `darkOverlayMaterial` / `closeButtonMaterial` |
 
 判定依据就是本文 §0 的生效范围门禁：本工程没有 `Navigation` / `Tabs`，**内容区没有任何标题栏或
-底部 TabBar 可以借位**，所以内容区只能用自绘玻璃；而弹窗类组件与接口（含半模态转场）以及
+底部 TabBar 可以借位**，所以 ArkUI 的 `systemMaterial` 在内容区（含 `PanelNavBar` 这个自绘标题栏）
+一律不生效——要么自绘玻璃，要么走 §12.9 的 HDS 材质宿主旁路；而弹窗类组件与接口（含半模态转场）以及
 `Slider` / `Toggle` 在 Release 下允许「页面内全部区域」生效，因此这些位置一律优先用系统材质。
 弹窗 / 面板**内部**的内容层同理不能自绘模糊，改用 `dialogFieldMaterial` / `dialogActionMaterial`。
 
@@ -803,7 +828,7 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 
 | 工厂材质 | 用途 | 磨砂参数（模糊半径 / 饱和度 / 填充不透明度） |
 | --- | --- | --- |
-| `fabMaterial` | 浮动圆形/胶囊按钮（内容区常驻控件） | 36vp、1.4、55% + 极淡整圈描边 + 下沉投影（不设渐变） |
+| `fabMaterial` | 浮动圆形/胶囊按钮（内容区常驻控件；**不含 `PanelNavBar` 标题栏按钮**——那三颗已迁 HDS 材质宿主，见 §12.9） | 36vp、1.4、55% + 极淡整圈描边 + 下沉投影（不设渐变） |
 | `surfaceMaterial` | **当前无调用点**（页面内容区的浮层已全部迁到官方弹窗类接口，保留备用） | 72vp、1.5、42% + 描边 + 强投影 |
 | `barMaterial` | 标题栏、消息页栏位 | 56vp、1.4、42% + 描边，不投影 |
 | `neutralActionMaterial` | **当前无调用点**（保留备用；`dialogActionMaterial` 同样无调用点，弹窗内的中性次要操作场景已移除） | 32vp、1.4、32% + 细描边，不投影 |
@@ -1115,19 +1140,30 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 | `TopicListPanel.FloatingActions` 发帖 / 刷新 | 44×44 | `onTap`（宿主绑定 `onTabBarClick`） |
 | `ThreadPanel.BottomBar` 回复按钮 | 40×40 | 同上 |
 | `ThreadPanel.BottomBar` 页码指示器 | `pageBarWidth()` × 40 | **不传 `onTap`**：块内页码格与「到」各自持有 `onClick` / `bindPopup` |
+| `PanelNavBar.iconPod` 返回 / 主右侧 / 次右侧按钮 | `TITLE_POD_SIZE`（36×36） | **一律不传 `onTap`**：内容节点持有 `onClick` / `bindMenu`（与迁移前的自绘底板逐条等价） |
 
 三条实现约定：
 
 - **`barWidth` 必须是显式值**——HDS 悬浮栏不能像自绘玻璃那样由内容撑开。页码指示器宽度按内容结构分档
   （`ThreadPanel.pageBarWidth()`：两格 / 两格+到 / 三格+到），分档只随**总页数**变化，翻页本身不改宽度，
   避免材质块频繁重排（§9.5 的参数稳定约束）。「到」格也给显式宽度，否则分档要依赖文字度量。
-- **内容必须"铺满"材质块**：用**显式数值宽度**（= `barWidth`）+ `.justifyContent(FlexAlign.SpaceBetween)`
-  + 两端 `padding`。写成 `width('100%')` 时宽度会跟着 HDS 页签项走、整条内容随页签项的对齐方式偏移——
-  **真机现象**：页码条里「1」左边空一大块、「到」右侧贴死边界，分布明显不均。铺满之后首尾各离边
-  `PAGE_BAR_PAD`、中间间隙均分，与父级怎么对齐无关。
+- **内容宽度分两种情况，别互相套用**。
+  - **两端分布型内容**（页码指示器）：必须用**显式数值宽度**（= `barWidth`）+
+    `.justifyContent(FlexAlign.SpaceBetween)` + 两端 `padding`。写成 `width('100%')` 时宽度会跟着
+    HDS 页签项走、整条内容随页签项的对齐方式偏移——**真机现象**：页码条里「1」左边空一大块、
+    「到」右侧贴死边界，分布明显不均。铺满之后首尾各离边 `PAGE_BAR_PAD`、中间间隙均分，与父级
+    怎么对齐无关。
+  - **单个居中元素**（标题栏图标按钮、回复按钮）：反过来要写 **`'100%'`**（宽高都跟随 HDS 内容
+    区），元素居中即与材质块同心。此时若写显式尺寸（`TITLE_POD_SIZE` 见方），图标会整体偏下——
+    原因与实测见下文"标题栏按钮"第 2 条。
 - **`onTap` 与内容子元素的 `onClick` 只能二选一**：宿主把 `onTap` 绑在 `onTabBarClick` 上，
   内容的子元素再写 `onClick` 会**双触发**。单动作按钮用 `onTap`；页码指示器这种块内多热区的，
   不传 `onTap`，由子元素自己处理。
+- **交互归属的两种写法都成立，按"要不要 HDS 点击反馈"选**：内容不挂交互、由宿主 `onTap` 承担
+  （拿到 HDS 页签项的点击反馈，见上表前两行）；或**一律不传宿主 `onTap`**、由内容节点持有
+  `onClick` / `bindMenu`（`PanelNavBar.iconPod` 选这条：与迁移前逐条等价，无障碍焦点与菜单锚点
+  都留在原来的节点语义上，代价是没有 HDS 的点击反馈）。**两种不能混用**——宿主 `onTap` 与
+  子元素 `onClick` 同时存在即双触发。
 - **自定义组件的尾随闭包后不能跟属性链**：`HdsMaterialHost({...}) { ... }.margin(...)` 会报
   `Declaration or statement expected`（`ThreadPanel` 因此把页码条与回复按钮的 8vp 间距从
   `.margin` 改成 `Row({ space: 8 })`）。内置组件（`Row` / `Column`）不受此限。
@@ -1159,6 +1195,63 @@ tint（与弹窗 / 半模态观感可能有色调差）」**已消除**：四条
 `sheetMaterial` / `menuMaterial` / `popupMaterial`）已同步取消 `materialColor`，与 HDS 一样不赋色，
 色调统一由系统深浅色自适应，同屏不再存在"应用 tint vs HDS 原色"的色调差。
 剩余待查：`2in1` 上的设备材质能力。
+
+#### 标题栏按钮（`PanelNavBar.iconPod`，第三批接入）
+
+三颗按钮（返回 / 主右侧 / 次右侧）的背板从自绘 `fabMaterial` 换成同一个 HDS 材质宿主：标题栏是本
+组件自绘的 `Stack` + `Row`，**不属于 §0 门禁里的 `Navigation` 标题栏**，ArkUI 侧拿不到材质，HDS
+宿主是这里唯一的真材质通道。材质块尺寸 `TITLE_POD_SIZE`（36×36）。
+
+**真机实测：两条踩坑与修法（都已落到代码）**
+
+1. **36×36 材质块正常显示**——HDS 规范没有把它撑大或截断（既有已验证尺寸是 40 / 44，36 亦可用）。
+2. **内容容器写显式高度 → 三颗图标整体偏下**。HDS 页签项的**内容区比 `barHeight` 矮**（页签项自带
+   内边距），内容容器比内容区高时，超出部分按**顶部溢出**对齐，图标中心因此落在"内容区顶 + 半个
+   容器高"上，整体偏低。**修法：内容容器写 `'100%'`**（高度 = HDS 内容区高度），图标用
+   `alignContent(Center)` 居中于内容区 = 与材质块同心——也就是 `ThreadPanel` 回复按钮（真机实测
+   "图标中心 = 材质块中心"）的原写法。**不要在 HDS 材质块里给内容容器写显式高度**；
+   `constraintSize` 的 `minHeight` 兜底同理会把容器顶回显式高度，`PanelNavBar` 因此没有加它。
+3. **图标被系统当成"可拖拽图片"**。`Image` 的 `draggable` 自 **API 10 起默认为 `true`**（本地 SDK
+   `component/image.d.ts` 原文：值为 `true` 时**长按手势不生效**，事件被拖拽消费），真机现象是长按
+   标题栏按钮出现系统拖拽预览。**修法：`.draggable(false)`**。注意通用属性 `draggable` 的默认值是
+   `false`（`common.d.ts`）——这条只对 `Image` 是例外：**凡是"图标 + 点击"的按钮，图标都要显式写**。
+   本轮把这类位置一并清理了：`PanelNavBar.iconPod`（三颗）、`ThreadPanel` 回复按钮、
+   `TopicListPanel` 发帖 / 刷新、`WebViewPanel` 前进 / 后退、`SearchPanel` 返回按钮、
+   `ImageViewer` 关闭按钮。**新增图标按钮时不要再漏**。
+4. **角标不再用 `position` 绝对坐标**：容器高度改由 HDS 内容区决定之后，`position({ x: 19, y: 0 })`
+   这类"假设容器尺寸"的写法必然失配（同类教训见上文"材质块内的定位点要用 `offset`"）。改法是把
+   图标与角标收进一个 **18×18 的 `Stack({ alignContent: TopEnd })`**，角标锚在**图标的右上角**并用
+   `offset(8, -9)` 平移——该偏移由旧落点换算而来（旧角标右上角在材质块坐标 `(35, 0)`，图标右上角在
+   `(27, 9)`，差值即 `(8, -9)`）；角标宽度变化时右边缘固定，不会再顶出材质块。
+
+**自动反色（`colorInvert`）在本通路不可用**：反色是 ArkUI `uiMaterial.ImmersiveMaterial` 的参数
+（`@ohos.arkui.uiMaterial.d.ts`，`colorInvert?: boolean`，`@since 26.0.0`），HDS 的
+`SystemMaterialParams` 只有 `materialType` / `materialLevel`——**HDS 材质没有公开的反色开关**。
+所以标题栏三颗按钮**没有、也无法在这条通路上启用自动反色**，可读性完全靠 §12.3 的前景色规则
+（图标色默认 `UIMaterialManager.adaptiveForeground` = `sys.color.font_primary`，跟随深浅色模式）
+加材质块自身由系统自适应的色调。工程四条 ArkUI 背板通路（弹窗 / 半模态 / 菜单 / 气泡）同样**都没有**
+开 `colorInvert`（§12.7）。
+
+将来若把面板栈改造成 `Navigation` 标题栏（ArkUI 通路，才能写 `colorInvert`），反色的六个前提里
+"白名单属性 `Image.fillColor` + 表 1 特殊系统资源（§6.3）"**对默认色已经满足**，但有三处不满足、
+需要先改色：`NotificationPanel` 传的 `AppColors.primary` / `AppColors.textTertiary` 与
+`BrowseHistoryPanel` 传的 `AppColors.destructive` 都是**应用资源**（不在表 1）；角标是硬编码
+`Color.White`（表 1 的对应项是 `sys.color.font_on_primary`）。
+
+**仍待核对**
+
+- 角标是否被 HDS 页签项裁切（角标锚在图标右上角、向图标外溢出最多 9vp）；
+- **绑菜单那颗的菜单落点**——锚点从"自绘 36×36 底板"换成了材质块**内部**的内容节点，必须重新确认
+  菜单仍落在按钮下方、右边缘对齐。折叠屏多列路由下的锚点几何是
+  `docs/UI_COMPONENT_MIGRATION.md` §7.7 踩过三轮的坑（当时连挂错三层才定位到"锚点必须是标题栏里
+  那颗真实按钮"），这里等于把锚点又往里挪了一层；
+- **无障碍朗读是否仍落到按钮上**——`accessibilityText` 挂在持有 `onClick` / `bindMenu` 的内容节点上
+  （应与迁移前一致，因为交互节点没变）；
+- **常驻多实例功耗**：标题栏把"单个页面多个 `HdsTabs` 实例"从 2 个抬到最多 3 个，且这三块是**常驻**
+  的（18 处 `PanelNavBar` 调用点，随面板切换反复重建），上面那条"多实例常驻功耗未验证"因此升级为
+  必须实测项。
+
+`PanelNavBar` 的**栏位本体**仍不使用整块材质（保持透明，正文从下方穿越），本轮没有改动滚动渐变压暗层。
 
 ## 13. AI 和代码审查规则
 
@@ -1206,6 +1299,8 @@ tint（与弹窗 / 半模态观感可能有色调差）」**已消除**：四条
 - [ ] `module.json5` 的材质 metadata 只配置在 `entry` module。
 - [ ] 已按 Release 生效范围逐个检查 `systemMaterial` 调用点。
 - [ ] 普通组件材质全部位于有效标题栏或底部 TabBar 区域。
+- [ ] 走 HDS 材质宿主（§12.9）的位置只有**小面积常驻控件**，没有列表 / 面板 / 大面积区域；材质块尺寸是显式值、内容与材质块同尺寸、宿主 `onTap` 与内容子元素交互**没有同时存在**。
+- [ ] `PanelNavBar` 标题栏按钮的真机核对已完成：材质块尺寸是否被 HDS 规范接受、图标是否与材质块同心、绑菜单那颗的菜单落点、无障碍朗读；常驻多实例功耗已实测（§12.9"标题栏按钮"）。
 - [ ] 弹窗使用官方弹窗接口和 options，不使用普通 Stack 冒充弹窗。
 - [ ] `Tabs` 同时满足 `barPosition: End`、横向、`barOverlap(true)`。
 - [ ] 材质节点没有不透明背景、重复模糊、重复阴影和嵌套材质。

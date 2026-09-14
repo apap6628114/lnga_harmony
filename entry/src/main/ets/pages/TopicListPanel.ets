@@ -1173,6 +1173,8 @@ export struct TopicListPanel {
             Image($r('app.media.icon_compose'))
               .width(22).height(22)
               .fillColor(UIMaterialManager.adaptiveForeground)
+              // Image 的 draggable 自 API 10 起默认为 true：长按会被系统当成"拖拽图片"（见 §12.9）
+              .draggable(false)
           }
           .width('100%').height('100%').alignContent(Alignment.Center)
         }
@@ -1182,6 +1184,8 @@ export struct TopicListPanel {
           Image($r('app.media.icon_refresh'))
             .width(22).height(22)
             .fillColor(UIMaterialManager.adaptiveForeground)
+            // Image 的 draggable 自 API 10 起默认为 true：长按会被系统当成"拖拽图片"（见 §12.9）
+            .draggable(false)
         }
         .width('100%').height('100%').alignContent(Alignment.Center)
       }

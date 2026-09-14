@@ -143,7 +143,7 @@ ProfileCardPopup）、`NoteAddContent`（NotesPanel）、`KeywordEditorContent`�
 | 项 | 官方对应 | 不迁移的原因 |
 | --- | --- | --- |
 | 资料卡（`ProfileCardPopup`） | `bindPopup` | **第二轮已迁移**（详见 §7.6）。第一轮回退的结论仍然成立——`bindPopup` 的位置由**锚点组件的几何区域**经 `placement` 推导，`offset` 只是相对该推导结果的微调，模型里没有「任意屏幕坐标」这一能力；第一轮的两种锚点方案（零尺寸锚点 → 内容不渲染只剩蒙层；1×1 锚点 → 气泡跑到屏幕左上角外被裁剪）都**没有让锚点带上目标坐标**。第二轮把锚点本身用 `.position()` 放到 `(profileCardX, profileCardY)`（绝对 vp 坐标由调用点算好），气泡才跟着落到点上 |
-| `PanelNavBar` 标题栏 | `ComposeTitleBar` / `SelectTitleBar` / `EditableTitleBar` | 三者都没有 `onBack` 回调（返回固定走系统返回）、没有标题区 `@BuilderParam`；`ComposeTitleBar` 无角标字段；`SelectTitleBar` 的标题必须是下拉选择器（`options` 必填）；三者声明都明确要求「避免配置通用属性/事件」（会生成 `__Common__` 节点），而现有用法是 `.width('100%').position(...)`。强行替换会同时丢失自定义返回拦截、未读角标、滚动进入标题区的渐变与玻璃圆底图标 |
+| `PanelNavBar` 标题栏 | `ComposeTitleBar` / `SelectTitleBar` / `EditableTitleBar` | 三者都没有 `onBack` 回调（返回固定走系统返回）、没有标题区 `@BuilderParam`；`ComposeTitleBar` 无角标字段；`SelectTitleBar` 的标题必须是下拉选择器（`options` 必填）；三者声明都明确要求「避免配置通用属性/事件」（会生成 `__Common__` 节点），而现有用法是 `.width('100%').position(...)`。强行替换会同时丢失自定义返回拦截、未读角标、滚动进入标题区的渐变与图标按钮的材质块底板（`HdsMaterialHost`，见 `IMMERSIVE_LIGHT_DESIGN.md` §12.9） |
 | `SettingRow` 设置行 | `ComposeListItem` / `SubHeader` | `IconType` 是图标尺寸枚举（8/16/24/40/64/96vp 六档），无法表达现有的「29×29 圆角色块 + 17vp 白色填充图标」；`operateItem` 没有未读数徽章字段；行高与字号会变成官方规范。`SubHeader` 是分组标题（新增视觉元素），不是列表行 |
 | 三列 / 侧边栏导航容器 | `SideBarContainer` + `Navigation` | 本轮范围外（用户明确排除） |
 | `ToastComponent` | `promptAction.showToast` | 官方 toast 不支持动作按钮，而工程有「回复成功 → 前往查看」这类带回调的 toast（`appStore.showToastAction`）；官方 toast 也无法承载现有玻璃底色与自定义命中测试策略 |
@@ -216,17 +216,24 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
   `Color.White`，不显式置透明会盖住背板材质）。**不做设备降级**——不为"设备不支持材质"写回退填充：
   历史上曾有 `UIMaterialManager.sheetContentBackdrop` 这类"不支持则回退半透明填充"的常量，
   已按工程约定删除（材质不生效时背板全透明是接受的结果）。
-- 继续自绘玻璃的位置：页面内容区常驻控件（面板、列表、`PanelNavBar` 栏位与其图标底板、右下角
-  浮动按钮与页码条）、图片查看器，以及 `AudioPlayer` 的自定义配色进度条（`SliderStyle.OutSet` +
-  显式 block/track 色）。**资料卡已迁到 `bindPopup`**（见 §7.6）；`Toast` 从来不属于自绘玻璃——
-  它用的是不透明 `AppColors.toastBg`，列进去会让后来者按错误的契约去改它。
+- 继续自绘玻璃的位置：页面内容区其余常驻控件（面板、列表、`PanelNavBar` **栏位本体**）、图片查看器，
+  以及 `AudioPlayer` 的自定义配色进度条（`SliderStyle.OutSet` + 显式 block/track 色）。
+  **资料卡已迁到 `bindPopup`**（见 §7.6）；**右下角浮动按钮与页码条、`PanelNavBar` 的图标底板已迁到
+  `HdsMaterialHost`**（见 §7.3）；`Toast` 从来不属于自绘玻璃——它用的是不透明 `AppColors.toastBg`，
+  列进去会让后来者按错误的契约去改它。
 
 ### 7.3 仍未覆盖的位置（需要结构变更才能拿到材质）
 
-`PanelNavBar` 的**栏位本体与图标底板**仍是内容区自绘栏位，不在 `Navigation` 标题栏内，因此拿不到系统材质
-（栏位本体要拿材质需把面板栈改造成 `Navigation`/`NavDestination` + `barStyle: BarStyle.STACK`，
-属于导航模型重构，本轮范围外，需要时另立目标评估）。
+`PanelNavBar` 的**栏位本体**仍是自绘栏位（保持透明，正文从下方穿越），不在 `Navigation` 标题栏内，
+因此拿不到系统材质（栏位本体要拿材质需把面板栈改造成 `Navigation`/`NavDestination` +
+`barStyle: BarStyle.STACK`，属于导航模型重构，本轮范围外，需要时另立目标评估）。
+
 它承载的**菜单**是例外：菜单走 `bindMenu`（弹窗类接口），已在 `PanelNavBar` 内部接入 `menuMaterial`。
+**图标底板**也不再是自绘玻璃：三颗操作按钮（返回 / 主右侧 / 次右侧）的背板改走 `HdsMaterialHost`
+（HDS 材质宿主，见 `IMMERSIVE_LIGHT_DESIGN.md` §12.9）——`HdsTabs` 的悬浮页签栏材质由 HDS 组件自身
+渲染、不受 §0 门禁约束，是自绘标题栏里唯一能拿到**真材质**的通道。两点必须分清：这**不等于**
+"标题栏拿到了系统材质"（栏位本体仍是透明自绘，只是按钮背板换了通路），也**不是**官方推荐路径
+（标题栏属官方点名的"标准场景"，官方组件是 `HdsNavigation`）。
 
 ### 7.4 页面内容区浮层的系统材质迁移（ThreadPanel / TopicListPanel）
 
@@ -327,6 +334,13 @@ API 26 Release 的生效范围门禁（`IMMERSIVE_LIGHT_DESIGN.md` §0）：普�
 `Toggle(ToggleType.Button)` 又因"样式继承 Button 默认值且不支持设置"而做不出圆形按钮
 （`borderRadius` 不生效，本地 SDK `component/toggle.d.ts` 与官方文档均有说明）。因此维持
 `fabMaterial` 自绘磨砂玻璃，视觉与系统材质同屏共存。
+
+> **后续变化（本节结论已部分被取代）**：上面记录的是当时的决策。此后用户改为把这些位置接到
+> **HDS 材质宿主**（`HdsMaterialHost`）——先是 `TopicListPanel` / `ThreadPanel` 的发帖 / 刷新 /
+> 回复按钮与页码条，再是 `PanelNavBar` 的三颗标题栏按钮（接入点与真机待核对项见
+> `IMMERSIVE_LIGHT_DESIGN.md` §12.9）。仍留在 `fabMaterial` 的是 `WebViewPanel` 的前进 / 后退按钮、
+> `SearchPanel` 与 `PageStateView` 的浮动按钮。
+> 本节"Release 门禁下不存在**系统材质**通道"的判断依然成立，变化的是**后来多了一条非合规旁路**。
 
 ### 7.6 资料卡迁移：让锚点带上目标坐标（2026-09 第二轮）
 

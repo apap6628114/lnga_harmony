@@ -599,6 +599,8 @@ export struct SearchPanel {
             Stack() {
               Image($r('app.media.icon_back')).width(18).height(18)
                 .fillColor(UIMaterialManager.adaptiveForeground)
+                // Image 的 draggable 自 API 10 起默认为 true：长按会被系统当成"拖拽图片"（见 §12.9）
+                .draggable(false)
             }
             .width(36).height(36).borderRadius(18)
             .attributeModifier(UIMaterialManager.fabMaterial)
