@@ -622,6 +622,38 @@ export default function bbcodeUnitTest(): void {
       expect(runs[0].kind).assertEqual(InlineRunKind.LINK)
     })
 
+    it('resolvesSiteRelativeUrlToAbsoluteLink', 0, (): void => {
+      const nodes: BBNode[] = parseBBCode('[url]/read.php?tid=47555118[/url]')
+
+      expect(nodes.length).assertEqual(1)
+      expect(nodes[0].type).assertEqual(BBNodeType.URL)
+      expect(nodes[0].href).assertEqual('https://bbs.nga.cn/read.php?tid=47555118')
+      expect(nodes[0].text).assertEqual('https://bbs.nga.cn/read.php?tid=47555118')
+      const runs: InlineRun[] = flattenInlineNodes(nodes)
+      expect(runs.length).assertEqual(1)
+      expect(runs[0].kind).assertEqual(InlineRunKind.LINK)
+      expect(runs[0].href).assertEqual('https://bbs.nga.cn/read.php?tid=47555118')
+      expect(runs[0].text).assertEqual('https://bbs.nga.cn/read.php?tid=47555118')
+    })
+
+    it('keepsDisplayTextOfAttributeRelativeUrl', 0, (): void => {
+      const runs: InlineRun[] = flattenInlineNodes(parseBBCode('[url=/read.php?tid=1]看这个[/url]'))
+
+      expect(runs.length).assertEqual(1)
+      expect(runs[0].kind).assertEqual(InlineRunKind.LINK)
+      expect(runs[0].href).assertEqual('https://bbs.nga.cn/read.php?tid=1')
+      expect(runs[0].text).assertEqual('看这个')
+    })
+
+    it('keepsProtocolRelativeUrlUnclickable', 0, (): void => {
+      const nodes: BBNode[] = parseBBCode('[url]//bbs.nga.cn/read.php?tid=1[/url]')
+      const runs: InlineRun[] = flattenInlineNodes(nodes)
+
+      expect(nodes[0].href).assertEqual('')
+      expect(runs.length).assertEqual(1)
+      expect(runs[0].kind).assertEqual(InlineRunKind.TEXT)
+    })
+
     it('keepsNonNgaAttachTagAsPlainText', 0, (): void => {
       const nodes: BBNode[] = parseBBCode('[attach]https://evil.example.com/a.zip[/attach]')
 

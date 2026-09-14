@@ -1,6 +1,7 @@
 import { BBNode, BBNodeType } from '../../model/BBCodeNode'
 import { decodeHtmlEntities } from '../_shared/HtmlEntityCodec'
 import { NGA_CDN_BASE } from '../_shared/AttachUrl'
+import { NGA_SITE_BASE } from '../../common/constants/NgaDomains'
 import { normalizeHeadingLinesOutsideCode } from './heading-normalizer'
 
 /**
@@ -46,6 +47,27 @@ function isSafeUrl(url: string): boolean {
   if (trimmed.startsWith('./')) return true
   if (/^\w+\.php\b/i.test(trimmed)) return true
   return false
+}
+
+/**
+ * 把站内相对链接补全为绝对 URL（官方 `ubbcode.urlToAry` 同域分支语义）。
+ *
+ * 官方对 `[url]` 内容调用 `urlToAry`：`checklink` 判定为同域（返回 3）且
+ * pathname 以 `/` 开头时，补全为 `协议//location.host + path`。线上实例：
+ * tid=47554761 第 50 楼 `[url]/read.php?tid=47555118[/url]`，官方网页渲染为
+ * `https://bbs.nga.cn/read.php?tid=47555118` 的链接（显示文字同为该地址），
+ * 旧实现保留相对路径，客户端点击链路只识别 http(s)/应用内链接而毫无反应。
+ *
+ * 客户端没有页面 location，固定以主站基准 `NGA_SITE_BASE` 补全；
+ * `//host/path` 协议相对地址可绕过域名白名单，沿用 `isSafeUrl` 的拒绝策略不补全。
+ *
+ * @param raw 原始链接文本
+ * @returns 补全后的绝对 URL；非站内相对路径时原样返回（已 trim）
+ */
+function resolveSiteRelativeUrl(raw: string): string {
+  const trimmed: string = raw.trim()
+  if (trimmed.startsWith('/') && !trimmed.startsWith('//')) return NGA_SITE_BASE + trimmed
+  return trimmed
 }
 
 /**
@@ -213,6 +235,7 @@ export {
   createBBNode,
   resolveMediaUrl,
   isSafeUrl,
+  resolveSiteRelativeUrl,
   indexOfIgnoreCase,
   matchesIgnoreCaseAt,
   pushTextNode,

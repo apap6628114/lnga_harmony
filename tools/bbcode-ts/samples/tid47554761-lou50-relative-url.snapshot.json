@@ -1,0 +1,29 @@
+[
+ {
+  "type": "TEXT",
+  "text": "要不要过度解读一下，结合这个帖子来看呢\n"
+ },
+ {
+  "type": "URL",
+  "text": "https://bbs.nga.cn/read.php?tid=47555118",
+  "href": "https://bbs.nga.cn/read.php?tid=47555118"
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "EMOTION",
+  "emotionCat": "ac",
+  "emotionCode": "blink"
+ },
+ {
+  "type": "STRIKETHROUGH",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "块打起来，我要看到血流成河"
+   }
+  ]
+ }
+]

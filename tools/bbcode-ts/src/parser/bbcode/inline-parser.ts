@@ -1,7 +1,7 @@
 import { BBNode, BBNodeType } from '../../model/BBCodeNode'
 import { decodeHtmlEntities } from '../_shared/HtmlEntityCodec'
 import { resolveAttachBBCodeUrl } from '../_shared/AttachUrl'
-import { createBBNode, isSafeUrl, pushTextNode } from './lexer'
+import { createBBNode, isSafeUrl, pushTextNode, resolveSiteRelativeUrl } from './lexer'
 import { isInlineStyleTagName, isValidInlineStyleTag, parseSizePercent } from './inline-tag-policy'
 
 /** 可作为视频播放的常见文件扩展名。 */
@@ -208,7 +208,11 @@ function collectInlineText(nodes: BBNode[]): string {
  */
 function createLinkHref(tag: InlineTagToken): string {
   const attribute: string = decodeHtmlEntities(tag.attribute).trim()
-  if (tag.name === 'url') return isSafeUrl(attribute) ? attribute : ''
+  if (tag.name === 'url') {
+    // 官方 urlToAry：站内相对地址（/read.php?...）先补全为绝对 URL 再渲染
+    const resolved: string = resolveSiteRelativeUrl(attribute)
+    return isSafeUrl(resolved) ? resolved : ''
+  }
   if (tag.name === 'uid') return attribute.length > 0 ? `#/profile?uid=${attribute}` : ''
   if (tag.name === 'pid') {
     const parts: string[] = attribute.split(',')
@@ -293,8 +297,20 @@ function finalizeFrame(frame: InlineFrame): void {
     return
   }
   if (frame.deriveUrlFromText) {
-    const href: string = collectInlineText(frame.node.children).trim()
-    frame.node.href = isSafeUrl(href) ? href : ''
+    const raw: string = collectInlineText(frame.node.children).trim()
+    const resolved: string = resolveSiteRelativeUrl(raw)
+    if (resolved.length > 0 && isSafeUrl(resolved)) {
+      frame.node.href = resolved
+      // 官方 ubbcode.writelink(u, n)：无属性 [url] 没有独立显示文字，n 为空时显示
+      // 补全后的 v.url。仅在实际发生补全时把节点收敛为地址文字（其余形式保持
+      // 原有子节点结构，解析树零丢失与快照不漂移）。
+      if (resolved !== raw) {
+        frame.node.text = resolved
+        frame.node.children = []
+      }
+    } else {
+      frame.node.href = ''
+    }
   }
 }
 

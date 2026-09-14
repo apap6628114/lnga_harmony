@@ -265,7 +265,11 @@ export function treeToRuns(nodes: BBNode[], ctx: StyleCtx = { b: false, i: false
         case BBNodeType.TID_LINK:
         case BBNodeType.MENTION:
           if (node.href.length > 0) nctx.href = node.href
-          break
+          // 链接节点自身可携带显示文字（[attach] 与补全后的站内相对 [url] 收敛为
+          // 叶子节点），与 default 分支同语义：有子节点走子节点，否则用节点文字
+          if (node.children.length > 0) walk(node.children, nctx)
+          else if (node.text.length > 0) push(node.text)
+          continue
         case BBNodeType.QUOTE:
         case BBNodeType.FLOAT_LEFT:
         case BBNodeType.FLOAT_RIGHT:

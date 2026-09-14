@@ -197,6 +197,91 @@ describe('真实样本结构（tid47537330-lou1-size-no-percent.txt）', () => {
 })
 
 // ---------------------------------------------------------------------------
+// 站内相对 [url] 补全（对齐官方 ubbcode.urlToAry 同域分支）
+// ---------------------------------------------------------------------------
+
+describe('站内相对链接补全（tid47554761-lou50-relative-url.txt）', () => {
+  // 线上异常：tid=47554761 第 50 楼 `[url]/read.php?tid=47555118[/url]`。
+  // 官方网页（chrome 执行脚本后的 postcontent50 DOM）渲染为
+  //   <a class="urlincontent" href="https://bbs.nga.cn/read.php?tid=47555118">
+  //     https://bbs.nga.cn/read.php?tid=47555118</a>
+  // 即同域相对地址按官方 urlToAry 的 `协议//location.host + path` 补全，
+  // 且无属性 [url] 没有独立显示文字、显示的就是补全后的地址（writelink 的
+  // `n ? n : v.url`）。旧实现 href 停在 `/read.php?tid=47555118`，客户端点击
+  // 链路（LinkUtils.handleForumLink 只识别 http(s) 与应用内 `#/` 链接）无反应。
+  const content: string = loadSampleContent('tid47554761-lou50-relative-url.txt')
+  const nodes: BBNode[] = parseBBCode(content)
+
+  it('相对路径补全为绝对 URL，解析树显示文字同步补全', () => {
+    const urls: BBNode[] = []
+    collectType(nodes, BBNodeType.URL, urls)
+    assert.equal(urls.length, 1, `URL 节点应为 1 个，实际 ${urls.length}`)
+    assert.equal(urls[0].href, 'https://bbs.nga.cn/read.php?tid=47555118')
+    assert.equal(urls[0].text, 'https://bbs.nga.cn/read.php?tid=47555118',
+      '无属性 [url] 的显示文字应为补全后的地址（官方 writelink 语义）')
+    assert.equal(concatTextNodes(urls[0].children), '', '补全后链接收敛为叶子节点')
+  })
+
+  it('Run 层链接为绝对地址（点击链路可识别）', () => {
+    const runs: InlineRun[] = flattenInlineNodes(nodes)
+    const links: InlineRun[] = runs.filter((run: InlineRun) => run.kind === InlineRunKind.LINK)
+    assert.equal(links.length, 1, `LINK run 应为 1 个，实际 ${links.length}`)
+    assert.equal(links[0].text, 'https://bbs.nga.cn/read.php?tid=47555118')
+    assert.ok(/^https?:\/\//.test(links[0].href), `href 必须是绝对地址: ${links[0].href}`)
+  })
+
+  it('正文其余文字零丢失（原相对路径仍为链接文字子序列）', () => {
+    const text: string = concatTextNodes(nodes)
+    assert.ok(text.includes('块打起来，我要看到血流成河'), `删除线文字缺失: ${text}`)
+    assert.ok(isSubsequence('/read.php?tid=47555118', text), `原相对路径未保留: ${text}`)
+  })
+})
+
+describe('站内相对链接补全的相邻形式', () => {
+  it('有属性 [url=/...] 补全跳转地址、保留显示文字', () => {
+    const urls: BBNode[] = []
+    collectType(parseBBCode('[url=/read.php?tid=1]看这个[/url]'), BBNodeType.URL, urls)
+    assert.equal(urls.length, 1, `URL 节点应为 1 个，实际 ${urls.length}`)
+    assert.equal(urls[0].href, 'https://bbs.nga.cn/read.php?tid=1')
+    assert.equal(concatTextNodes(urls[0].children), '看这个', '有属性形式显示文字不应被地址覆盖')
+  })
+
+  it('绝对 URL 不受影响（站内与站外均保持原样）', () => {
+    const inside: BBNode[] = []
+    collectType(parseBBCode('[url]https://bbs.nga.cn/read.php?tid=1[/url]'), BBNodeType.URL, inside)
+    assert.equal(inside[0].href, 'https://bbs.nga.cn/read.php?tid=1')
+    assert.equal(concatTextNodes(inside[0].children), 'https://bbs.nga.cn/read.php?tid=1')
+
+    const outside: BBNode[] = []
+    collectType(parseBBCode('[url]https://example.com/a[/url]'), BBNodeType.URL, outside)
+    assert.equal(outside[0].href, 'https://example.com/a')
+    assert.equal(concatTextNodes(outside[0].children), 'https://example.com/a')
+  })
+
+  it('协议相对 //host/path 维持既有拒绝策略（不补全、不产生链接）', () => {
+    const urls: BBNode[] = []
+    const tree: BBNode[] = parseBBCode('[url]//bbs.nga.cn/read.php?tid=1[/url]')
+    collectType(tree, BBNodeType.URL, urls)
+    assert.equal(urls.length, 1)
+    assert.equal(urls[0].href, '', '协议相对地址可绕过域名白名单，不得写入 href')
+    const links: InlineRun[] = flattenInlineNodes(tree).filter((run: InlineRun) => run.kind === InlineRunKind.LINK)
+    assert.equal(links.length, 0, '不应渲染为可点击链接')
+  })
+
+  it('跨块无属性 [url] 补全后经标签栈延续（图片截断片段）', () => {
+    const input: string =
+      '[url]/read.php?tid=1[img]https://img.nga.cn/attachments/mon_202609/11/a.jpg[/img][/url]'
+    const urls: BBNode[] = []
+    collectType(parseBBCode(input), BBNodeType.URL, urls)
+    assert.ok(urls.length >= 1, 'URL 节点缺失')
+    for (const node of urls) {
+      assert.equal(node.href, 'https://bbs.nga.cn/read.php?tid=1',
+        `跨块延续的 href 应同为补全后的绝对地址: ${node.href}`)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // size 属性边界（对齐官方 js_bbscode_core.js：^(\d{1,3})%?$）
 // ---------------------------------------------------------------------------
 

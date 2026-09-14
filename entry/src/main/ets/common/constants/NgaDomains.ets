@@ -15,6 +15,16 @@ export const NGA_HOSTS: string[] = [
 /** NGA API 站点域（带协议，请求轮换用，由 NGA_HOSTS 派生） */
 export const NGA_API_DOMAINS: string[] = NGA_HOSTS.map((host: string): string => 'https://' + host)
 
+/**
+ * 站点基准根（站内相对链接补全用）。
+ *
+ * 官方 `ubbcode.urlToAry` 对同域链接（`checklink` 返回 3）以浏览器
+ * `location.host` 为基准补全 `协议//host + path`；客户端没有页面 location，
+ * 固定以主站 bbs.nga.cn 为基准（应用内跳转只按 host 判定是否 NGA 域，
+ * 不依赖具体域名，补全结果仅需是绝对地址）。
+ */
+export const NGA_SITE_BASE: string = 'https://' + NGA_HOSTS[0]
+
 /** 附件图片 CDN 根（img.nga.cn，2026-08-05 从 img.nga.178.com 切换） */
 export const NGA_IMG_BASE: string = 'https://img.nga.cn'
 
