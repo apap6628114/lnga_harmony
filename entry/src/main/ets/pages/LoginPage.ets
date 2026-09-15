@@ -18,6 +18,7 @@ import { webview } from '@kit.ArkWeb'
 import { PageScope } from '../common/concurrency/PageScope'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { Logger, DOMAIN_UI, formatError } from '../common/utils/Logger'
+import { clearIncognitoWebCookies } from '../common/utils/WebViewCookieUtils'
 
 const logger = new Logger(DOMAIN_UI, 'LoginPage')
 
@@ -279,7 +280,27 @@ struct LoginPage {
             .height(48 + this.statusBarHeight)
             .padding({ left: 16, right: 16, top: this.statusBarHeight })
 
-            Web({ src: this.loginDomain + '/nuke.php?__lib=login&__act=account&login', controller: this.webController })
+            /**
+             * 网页登录层必须跑在**隐私模式**（`incognitoMode: true`）下。
+             *
+             * 非隐私模式的 WebView Cookie 是**应用级持久化存储**，与 App 的 token 存储互不相干：
+             * 上一次网页登录留下的 `ngaPassportUid` / `ngaPassportCid`，或 `WebViewPanel` 浏览
+             * 网页版时由 `injectCookies` 注入的同一对 Cookie，都会一直留在磁盘上——退出登录
+             * （`appStore.clearAuth()`）并不会碰它们。
+             *
+             * 于是再次打开本层时，NGA 登录页在**没有任何用户输入**的情况下就已经是登录态，
+             * 两条回包通道（`onPageEnd` 起的 Cookie 轮询 / `onConsole` 的 `loginSuccess`）
+             * 会在页面加载后立刻取回凭证，表现为"没输密码、没扫码就登录成功"。
+             *
+             * 隐私模式既不读取也不写入磁盘上的普通 Cookie，每次打开都是全新会话；
+             * 进入前再配合 `clearIncognitoWebCookies()` 清一次内存 Cookie，双保险。
+             * ⚠️ 本属性是这条链路的**第一道防线**，不要移除。
+             */
+            Web({
+              src: this.loginDomain + '/nuke.php?__lib=login&__act=account&login',
+              controller: this.webController,
+              incognitoMode: true
+            })
               .width('100%')
               .layoutWeight(1)
               .javaScriptAccess(true)
@@ -287,11 +308,21 @@ struct LoginPage {
               .metaViewport(true)
               .overviewModeAccess(true)
               .onControllerAttached(() => {
+                // 时机：Web 组件已创建（隐私分区已就绪）、页面尚未加载——此时清空内存 Cookie
+                // 可保证登录页首帧请求就不带任何历史凭证，不依赖隐私分区是否随组件销毁而清空
+                clearIncognitoWebCookies()
                 this.webController.setCustomUserAgent(
                   'Mozilla/5.0 (Linux; Android 10; HarmonyOS) AppleWebKit/537.36 Mobile Safari/537.36'
                 )
               })
               .onPageEnd(() => { this.startCookiePolling() })
+              /**
+               * 登录回包通道之二（另一条是 Cookie 轮询）：NGA 登录页的内联桥接脚本在用户
+               * 输完账号密码 / 完成扫码后输出 `loginSuccess:{uid, token}`，宿主从 console 取回凭证。
+               *
+               * 与轮询一样，它反映的是"WebView 里当前是不是登录态"——所以 WebView 里一旦残留
+               * 有效凭证，本层就会跳过账号密码/扫码直接完成登录（见上面 Web 的 `incognitoMode` 说明）。
+               */
               .onConsole((event) => {
                 const msg: string = event.message.getMessage()
                 if (msg.indexOf('loginSuccess') >= 0 && !this.authTriggered) {
@@ -491,16 +522,28 @@ struct LoginPage {
     this.error = ''
     this.loginDomain = getActiveDomain()
     this.authTriggered = false
+    // 打开前先清空登录层的隐私 Cookie：确保本次登录一定从"未登录"开始
+    // （清理点与原因见 WebViewCookieUtils 文件头）
+    clearIncognitoWebCookies()
     this.showWebLogin = true
   }
 
   /** 关闭网页登录层并停止 Cookie 轮询。 */
   private closeWebLogin(): void {
     this.stopCookiePolling()
+    // 登录层关闭即丢弃其中的登录态，不让有效凭证留在内存里被下一次打开复用
+    clearIncognitoWebCookies()
     this.showWebLogin = false
   }
 
-  /** 开始轮询网页登录 Cookie。 */
+  /**
+   * 开始轮询网页登录 Cookie（登录回包通道之一，另一条是 `onConsole` 的 `loginSuccess`）。
+   *
+   * ⚠️ 本通道只看**当前 WebView 的登录态**：页面加载完成后，只要 WebView 里带着有效凭证，
+   * `document.cookie` 里就会出现 `ngaPassportUid` + `ngaPassportCid`，1.5s 内的第一次轮询
+   * 就会取回凭证并完成登录，用户没有任何输入机会——这正是网页登录层必须走隐私模式、
+   * 且进入前清空 Cookie 的原因（见 build 中 `incognitoMode` 的说明）。
+   */
   private startCookiePolling(): void {
     if (this.pollingActive) {
       return
@@ -582,6 +625,9 @@ struct LoginPage {
       this.error = (e as Error).message || '处理失败'
       this.webLoginLoading = false
       this.showWebLogin = false
+    } finally {
+      // 凭证已交给 App 的 token 体系，登录层里的 Cookie 无论成败都不再需要
+      clearIncognitoWebCookies()
     }
   }
 

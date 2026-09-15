@@ -54,6 +54,23 @@ skill：**`bbcode-ts`**（加载后按其操作；Rule 0–9 完整规则已并�
   帖子特定入口仍是 bbcode-ts 的 `npm run inspect:json` / `inspect:html`
   （均在 `tools/bbcode-ts` 下执行，命令不变）
 
+## 网页登录 / WebView Cookie 纪律
+
+网页登录（`LoginPage` 的 WebView 层）、App 内浏览网页版（`WebViewPanel`）、退出登录三处的
+Cookie 契约见 `entry/src/main/ets/common/utils/WebViewCookieUtils.ets` 文件头。常驻红线：
+
+- **ArkWeb 的 Cookie 是应用级持久化存储，与 App 的 token 存储互不相干**：
+  `appStore.clearAuth()` 清不掉它。退出登录必须调 `clearWebViewAuthCookies()`
+  （`clearAllCookiesSync(false)` + `clearSessionCookieSync()` + 隐私模式清理）。否则残留的
+  `ngaPassportUid` / `ngaPassportCid` 会让**下一次打开网页登录层时立刻"登录成功"**——NGA
+  登录页已处于登录态，Cookie 轮询与 `loginSuccess` console 两条回包通道在页面加载后立即
+  取回凭证，用户没有任何输入机会（账号密码 / 扫码都被跳过）。
+- **网页登录层的 `Web` 组件必须带 `incognitoMode: true`**（隐私模式），并在打开前与
+  `onControllerAttached` 时调 `clearIncognitoWebCookies()`。隐私模式既不读取也不写入磁盘上的
+  普通 Cookie，每次打开都是全新会话，是这条链路的第一道防线，**不要移除**。
+- `clearAllCookiesSync(incognito?)` 的 `incognito` **必须显式传 boolean**：省略或传 `undefined`
+  时官方实现**不清除**任何 Cookie（`false` = 清普通模式的持久化 Cookie，`true` = 清隐私模式的内存 Cookie）。
+
 ## 玻璃材质（磨砂玻璃）与沉浸光感情报文档
 
 凡处理涉及玻璃/材质视觉的内容——`attributeModifier(UIMaterialManager.*)` 磨砂玻璃工厂、
