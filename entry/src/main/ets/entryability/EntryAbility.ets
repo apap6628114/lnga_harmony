@@ -9,6 +9,7 @@ import {
 import { resourceManager } from '@kit.LocalizationKit';
 import { Logger, DOMAIN_APP, formatError } from '../common/utils/Logger'
 import { display, window } from '@kit.ArkUI';
+import { UIContext } from '@ohos.arkui.UIContext'
 import { appStore } from '../store/AppStore';
 import { initStatusBarManager, updateStatusBarStyle } from '../common/managers/StatusBarManager';
 import { initScreenOnManager } from '../common/managers/ScreenOnManager';
@@ -27,6 +28,33 @@ import { markPageLoaded } from '../common/infra/PageLifecycle';
 
 /** EntryAbility 日志记录器。 */
 const logger = new Logger(DOMAIN_APP, 'EntryAbility')
+
+/**
+ * 解码后位图的内存缓存张数上限。
+ *
+ * `UIContext.setImageCacheCount` 的 SDK 声明写明 **if not set, the application will not
+ * cache any decoded image**——不设就是 0、完全不缓存。缓存关闭时，打开图片查看器要同时
+ * 解码当前图与左右相邻两张全屏大图，正文里已解码的位图被挤掉；退出查看器后正文 `Image`
+ * 需要**重新解码**，那一两帧空白就是"进出查看器后帖子图片闪一下"。
+ *
+ * 取 10 而不是更大的值，有两个理由：
+ * 1. 缓存是 **LRU**，被挤掉的总是"最久没用"的，而我们恰恰只关心"刚看过的那几张"
+ *    （正文可见图 + 查看器相邻三张）——它们永远处于最近使用端，小容量即可保住；
+ *    大容量只对"滚回去看很早以前的图"有帮助，那个场景本次没有诉求。
+ * 2. 正文图片的 `autoResize` 默认为 **false**（按原图尺寸解码，见图片链路盘点 G6），
+ *    单张解码后位图可能到十几 MB，缓存张数的内存成本比"张数看着不多"要高得多。
+ *
+ * **这是"内存 ↔ 闪烁"的取舍旋钮**：真机上若仍偶发闪烁可适当调大，若发现内存压力则调小。
+ */
+const IMAGE_CACHE_COUNT: number = 20
+
+/**
+ * 解码前图片原始数据的内存缓存上限（字节）。
+ *
+ * 与 `IMAGE_CACHE_COUNT` 配套：命中原始数据缓存时不必重新走网络/磁盘即可重新解码，
+ * 是"位图被挤出缓存后快速补回"的兜底。NGA 图片多为几百 KB 量级，64MB 足够容纳大量条目。
+ */
+const IMAGE_RAW_CACHE_BYTES: number = 64 * 1024 * 1024
 
 /**
  * 应用主 Ability，负责窗口、主题和全局服务初始化。
@@ -141,6 +169,7 @@ export default class EntryAbility extends UIAbility {
 
       try {
         const mainWindow = windowStage.getMainWindowSync()
+        this.enableImageDecodeCache(mainWindow)
 
         mainWindow.setWindowLayoutFullScreen(true)
         mainWindow.setPreferredOrientation(window.Orientation.AUTO_ROTATION_RESTRICTED)
@@ -183,6 +212,30 @@ export default class EntryAbility extends UIAbility {
   /** 记录窗口舞台销毁事件。 */
   onWindowStageDestroy(): void {
     logger.info( '%{public}s', 'Ability onWindowStageDestroy');
+  }
+
+  /**
+   * 开启系统图片解码缓存（全局，只需在窗口创建后设置一次）。
+   *
+   * 两个接口的默认值都是 **不缓存**（SDK 原文：if not set, the application will not cache
+   * any decoded image / any raw image data）。不开启时，图片离开视野或被内存压力挤掉后
+   * 再次显示必须**重新解码**，解码完成前的那一两帧就是可见的闪烁——典型触发场景是打开
+   * 图片查看器（要同时解码全屏大图）再退出，正文图片被挤出缓存后重新解码。
+   *
+   * 拿不到 UIContext 时只记录日志：这只是体验优化，不应影响窗口初始化主流程。
+   *
+   * @param mainWindow - 主窗口（提供承载页面 UI 的 UIContext）
+   */
+  private enableImageDecodeCache(mainWindow: window.Window): void {
+    try {
+      const uiContext: UIContext = mainWindow.getUIContext()
+      uiContext.setImageCacheCount(IMAGE_CACHE_COUNT)
+      uiContext.setImageRawDataCacheSize(IMAGE_RAW_CACHE_BYTES)
+      logger.info('Image decode cache enabled: count=%{public}d rawBytes=%{public}d',
+        IMAGE_CACHE_COUNT, IMAGE_RAW_CACHE_BYTES)
+    } catch (e) {
+      logger.error('Failed to enable image decode cache. Cause: %{public}s', formatError(e))
+    }
   }
 
   /** 应用进入前台时恢复前台服务。 */

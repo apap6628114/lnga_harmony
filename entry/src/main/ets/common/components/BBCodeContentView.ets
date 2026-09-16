@@ -758,8 +758,40 @@ export struct BBCodeContentView {
           .alignItems(HorizontalAlign.Center)
         }
 
+        /* 静态封面常驻：播放态切换绝不能走 if/else 换枝——换枝会销毁并重建整个 Image
+           节点，新节点必须重新解码，解码完成前那一两帧是空白，正是"点角标播放 / 播完
+           收起"时看到的闪烁。改为把播放器**叠**在封面上：两者几何完全重合（同为 Contain），
+           播放时封面被完全盖住；播放器出帧前的空档露出来的正是下面这张已解码好的封面。
+           同一契约也用在 `MovingPhotoPlayer` 内部（封面 Image 与 MovingPhotoView）。 */
+        if (this.releasedImages.has(src) || this.getImageAspectRatio(src) > 0) {
+          Image(src)
+            .width('100%').height('100%')
+            /* 动态照片恒用 Contain：须与播放用的 MovingPhotoView（固定 Contain）同几何，
+               否则引用块里 Cover 的封面与 Contain 的播放画面会大小不一。 */
+            .objectFit(inQuote && !isMovingPhoto ? ImageFit.Cover : ImageFit.Contain)
+            .borderRadius(inQuote ? 6 : 8)
+            /* 长按不注册操作：Image 自 API 10 起 draggable 默认 true，长按会被系统当成拖拽图片。 */
+            .draggable(false)
+            .onError(() => {
+              this.markImageFailed(src)
+            })
+            .onComplete((event) => {
+              if (event) {
+                this.onImageLoaded(src, event.width, event.height)
+              } else {
+                this.onImageLoaded(src)
+              }
+            })
+            .onClick(() => {
+              let urls: string[] = this.allImageUrls.length > 0 ? this.allImageUrls : [src]
+              let idx: number = this.getImageIndex(src)
+              this.onImageClick(urls, idx)
+            })
+        }
+
         if (isMovingPhoto && this.playingMovingPhotoSrc === src) {
-          /* 就地播放：点击图片左上角图标后展开播放器，播放一遍后自动收起回静态封面。 */
+          /* 就地播放：点击图片左上角图标后展开播放器，播放一遍后自动收起回静态封面。
+             叠在封面之上（不是替换）：封面节点始终不动，播放结束只卸载本层。 */
           MovingPhotoPlayer({
             coverUrl: src,
             videoUrl: getMovingPhotoVideo(src),
@@ -781,32 +813,11 @@ export struct BBCodeContentView {
           })
             .width('100%')
             .height('100%')
-        } else if (this.releasedImages.has(src) || this.getImageAspectRatio(src) > 0) {
-          Image(src)
-            .width('100%').height('100%')
-            .objectFit(inQuote ? ImageFit.Cover : ImageFit.Contain)
-            .borderRadius(inQuote ? 6 : 8)
-            /* 长按不注册操作：Image 自 API 10 起 draggable 默认 true，长按会被系统当成拖拽图片。 */
-            .draggable(false)
-            .onError(() => {
-              this.markImageFailed(src)
-            })
-            .onComplete((event) => {
-              if (event) {
-                this.onImageLoaded(src, event.width, event.height)
-              } else {
-                this.onImageLoaded(src)
-              }
-            })
-            .onClick(() => {
-              let urls: string[] = this.allImageUrls.length > 0 ? this.allImageUrls : [src]
-              let idx: number = this.getImageIndex(src)
-              this.onImageClick(urls, idx)
-            })
         }
 
         if (isMovingPhoto && this.playingMovingPhotoSrc !== src) {
-          /* 图片左上角 Live Photo 图标按钮（同心圆，行业标准形态）：点击就地播放一次。 */
+          /* 图片左上角 Live Photo 图标按钮：圆形实底 + 一圈细描边（按钮底板形态，
+             与视频右上角静音按钮同款），点击就地播放一次。 */
           Stack() {
             Image($r('app.media.icon_live_photo'))
               .width(25)
@@ -818,6 +829,9 @@ export struct BBCodeContentView {
           .height(40)
           .borderRadius(20)
           .backgroundColor(AppColors.movingPhotoBadgeBg)
+          /* 描边给底板上边：底板是半透明黑，压在暗色/杂乱画面上时边界糊掉，
+             一圈细白线负责在任何底图上都框出按钮轮廓。 */
+          .border({ width: 1, color: AppColors.movingPhotoBadgeBorder })
           /* 绝对定位：保证落在图片左上角（不受父 Stack 对齐规则影响）。 */
           .position({ x: 6, y: 6 })
           .accessibilityText('播放动态照片')

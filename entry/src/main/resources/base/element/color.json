@@ -86,7 +86,11 @@
     },
     {
       "name": "moving_photo_badge_bg",
-      "value": "#59000000"
+      "value": "#80000000"
+    },
+    {
+      "name": "moving_photo_badge_border",
+      "value": "#54FFFFFF"
     },
     {
       "name": "warn_bg",

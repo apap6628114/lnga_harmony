@@ -272,6 +272,24 @@ loading ──成功──▶ ready ──onPrepared 后播放──▶ playing 
 `resources/base/media/icon_live_photo.svg`：**点状环（10 段短线）+ 中心播放三角**（24 网格，纯 `fill` path，
 保证 `fillColor` 运行时着色）。白色 = 可播放，琥珀色（`AppColors.primary`）= 播放中。
 
+**底板不画进 SVG，改在渲染层做**：`fillColor` 会替换 SVG 内**所有**可绘制元素的 `fill`，
+底圆若画进资源里会被一起染成前景色（撑成一块不透的白盘、把图形吃掉）。因此底板由图标外的 `Stack` 承担
+—— 圆形实底（`moving_photo_badge_bg`，50% 黑、深浅色同值，因为它永远叠在图片而非应用底色上）
++ 一圈 1vp 细描边（`moving_photo_badge_border`，33% 白）。描边是"按钮感"的关键：底板是**半透明**黑，
+压在暗色或杂乱画面上时边界会糊掉、只剩一团脏影；细白线负责在任何底图上都框出按钮轮廓，
+与视频右上角静音按钮（`rgba(0,0,0,0.5)` 圆底）同款。静态角标与 `MovingPhotoPlayer` 的图标
+共用同一套底板参数（尺寸随 `iconSize`），保证播放器接管前后不跳动。
+
+**播放态切换禁止换枝（防闪烁契约）**：正文的静态 `Image(src)` 与播放器内部的封面
+`Image(coverUrl)` 都必须**常驻**，播放器（`MovingPhotoPlayer` / 其内的 `MovingPhotoView`）
+只以**叠层**方式按条件叠加。原因：ArkUI 的 `if/else` 换枝是销毁 + 新建节点，新 `Image`
+节点要重新解码，解码完成前那一两帧空白就是"未播放 ↔ 播放互相切换时闪一下"。
+因叠层与封面同为 `ImageFit.Contain` 且覆盖同一区域，播放时封面被完全盖住；
+播放器尚未出帧时露出的正是下面那张已解码的封面，两端都无空帧。
+契约同时写在 `BBCodeContentView.RenderImageContent` 与 `MovingPhotoPlayer` 类头，
+**改动其一必须同步另一处**。另注：`MovingPhotoView`「当前不支持动态属性设置」（官方约束），
+因此**不要**用 `opacity` 之类的动态属性给它做显示闸门——真机会直接不生效。
+
 ### 7.4 落地文件
 
 | 文件 | 说明 |

@@ -164,8 +164,15 @@ const arbiter: PlaybackArbiter = new PlaybackArbiter()
  * 且 `startPlayback()` 之后必须等 `onStart` 才算真的在播（见 `playRequested`）。
  *
  * ## 交互契约
+ * - **静态封面常驻、播放器叠层**（本组件与正文渲染层共同遵守的防闪烁契约）：封面 `Image`
+ *   自挂载起一直在树上，`MovingPhotoView` 只在就绪后**叠**上去，绝不用 `if/else` 在两者
+ *   之间换枝。换枝会销毁并重建封面节点，重新解码期间出现空白帧——这正是"播放态 ↔ 未播放态
+ *   切换闪一下"的成因。本体（`build`）与正文（`BBCodeContentView.RenderImageContent`）
+ *   两处都按此写法，改动其一时另一处必须同步。
  * - **图标常驻**左上角（由父组件用 `iconLeft/iconTop` 决定贴图片还是贴内容区）：
  *   loading 半透明、ready 常态白、playing 高亮主题色、failed 不显示。
+ * - **图标带圆形底板**（半透明黑 + 1vp 细描边）：图标叠在图片内容上，没有底板时图形直接
+ *   和画面纹理混在一起、读不出"这是个按钮"；底板参数与正文静态角标完全一致（见 7.3）。
  * - **图标是唯一的播放入口**：图片本体的**长按**不注册操作（`hitTestBehavior(None)`
  *   同时屏蔽了 `MovingPhotoView` 自带的长按播放）；图片**点击**由根节点透传给父组件的
  *   `onBodyClick`（帖子内用于打开查看器；查看器内不传回调即点击无操作）。
@@ -571,6 +578,18 @@ export struct MovingPhotoPlayer {
 
   build() {
     Stack() {
+      /* 静态封面**常驻**：它就绪后一直挂在树上，播放器只叠在它之上。
+         不用 if/else 在「封面 ↔ MovingPhotoView」之间换枝——换枝会销毁并重建封面
+         `Image` 节点，重新解码期间是空白的（正文里点角标播放/播完收起看到的闪烁就在
+         这一层）。两者都是 `ImageFit.Contain`、覆盖同一块区域，因此播放时画面被完全
+         盖住；播放器尚未出帧时露出的正是下面这张已解码好的封面，视觉上无空窗。 */
+      Image(this.coverUrl)
+        .width('100%')
+        .height('100%')
+        .objectFit(ImageFit.Contain)
+        .draggable(false)
+        .hitTestBehavior(HitTestMode.None)
+
       if (this.movingPhoto !== undefined) {
         MovingPhotoView({ movingPhoto: this.movingPhoto, controller: this.controller })
           .width('100%')
@@ -625,14 +644,6 @@ export struct MovingPhotoPlayer {
              MovingPhotoView 自带「长按播放」，用 hitTestBehavior(None) 屏蔽组件自身手势，
              事件穿透给父容器（查看器左右滑动切图不受影响）。 */
           .hitTestBehavior(HitTestMode.None)
-      } else {
-        /* 准备中 / 失败：始终先给出静态封面，避免出现空白。 */
-        Image(this.coverUrl)
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Contain)
-          .draggable(false)
-          .hitTestBehavior(HitTestMode.None)
       }
 
       /* 图标常驻左上角（位置由父组件参数决定）：加载中半透明、就绪常态、播放中高亮。 */
@@ -647,8 +658,11 @@ export struct MovingPhotoPlayer {
         .width(this.iconSize)
         .height(this.iconSize)
         .borderRadius(this.iconSize / 2)
-        /* 实色半透明底：与正文里的静态图标完全同款，播放器接管前后无视觉跳动。 */
+        /* 实色半透明底 + 一圈细描边（按钮底板形态）：与正文里的静态图标完全同款，
+           播放器接管前后无视觉跳动；底板半透明，压在暗色/杂乱画面上边界会糊掉，
+           细白线负责在任何底图上都框出按钮轮廓。 */
         .backgroundColor(AppColors.movingPhotoBadgeBg)
+        .border({ width: 1, color: AppColors.movingPhotoBadgeBorder })
         .opacity(this.phase === PHASE_LOADING ? 0.55 : 1)
         /* 绝对定位：不受父 Stack 对齐规则影响，始终落在容器左上角指定偏移。 */
         .position({ x: this.iconLeft, y: this.iconTop })

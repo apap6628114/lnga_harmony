@@ -64,6 +64,8 @@ export class AppColors {
   static imageViewerButtonBg: Resource = $r('app.color.image_viewer_button_bg')
   /** 正文图片上「动态照片」角标的半透明底（叠在图片上，深浅色一致）。 */
   static movingPhotoBadgeBg: Resource = $r('app.color.moving_photo_badge_bg')
+  /** 「动态照片」角标的描边：把角标从图片内容里「抬」出来，强化按钮感（深浅色一致）。 */
+  static movingPhotoBadgeBorder: Resource = $r('app.color.moving_photo_badge_border')
   static warnBg: Resource = $r('app.color.warn_bg')
   static warnBorder: Resource = $r('app.color.warn_border')
   static warnText: Resource = $r('app.color.warn_text')

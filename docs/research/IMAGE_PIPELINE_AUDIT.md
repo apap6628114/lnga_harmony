@@ -196,3 +196,56 @@ ImageViewer.ets                            全屏查看器（前/中/后三张 I
 
 → 失效图判定必须增加"解码尺寸 ≤ 1px"这一条（或校验 HTTP 状态）才算完整，
 这是当前帖子图片渲染的一个实际缺陷（与动图无关，但同属"帖子图片支持"范围）。
+
+---
+
+## 6. 已修复：两处图片闪烁（2026-09）
+
+症状与根因都已核实，两处都属"图片节点被重建/解码结果被丢弃后需要**重新解码**，
+解码完成前那一两帧是空白"这一类，但触发机制不同。
+
+### 6.1 动态照片「未播放 ↔ 播放」切换闪一下
+
+**根因**：`BBCodeContentView.RenderImageContent` 用 `if / else if` 在
+「静态 `Image(src)`」与「`MovingPhotoPlayer`」之间**换枝**。ArkUI 的 `if` 换枝是
+**销毁 + 新建节点**，新 `Image` 节点必须重新解码，解码完成前的一两帧空白即所见闪烁。
+开关播放（`playingMovingPhotoSrc` 置位/清空）都会走一次换枝，所以**进出两个方向都闪**。
+`MovingPhotoPlayer` 内部同样是「封面 `Image` ↔ `MovingPhotoView`」换枝，是第二处同源问题。
+
+**修法（防闪烁契约）**：**静态封面常驻，播放器叠层**——
+- 正文：`Image(src)` 去掉互斥分支、始终渲染；`MovingPhotoPlayer` 改为在其之上按条件叠加。
+- 播放器：内部封面 `Image(coverUrl)` 常驻，`MovingPhotoView` 叠在其上。
+- 因两者都是 `ImageFit.Contain` 且覆盖同一区域，播放时画面被完全盖住；播放器尚未出帧时
+  露出的正是下面那张**已解码的**封面，两端都不会有空帧。动态照片因此在正文中**恒用
+  `Contain`**（引用块也不例外），否则叠层与封面几何不一致会出现画面大小跳变。
+
+→ 契约写在两处源码里：`BBCodeContentView.RenderImageContent` 与
+`MovingPhotoPlayer` 类头「交互契约」；**改动其一必须同步另一处**。
+
+### 6.2 进出图片查看器后帖子图片偶发闪一下
+
+**根因**：系统的**图片解码缓存默认关闭**。SDK 声明（`@ohos.arkui.UIContext.d.ts`，
+API 23+）原文：
+
+> `setImageCacheCount`：Set image cache capacity of decoded image count.
+> **if not set, the application will not cache any decoded image.**
+> `setImageRawDataCacheSize`：**if not set, the application will not cache any raw image data.**
+
+工程此前两处接口都没有调用 → 解码缓存为 0。打开查看器要同时解码当前图与左右相邻两张
+全屏大图（`ImageViewer` 预渲染三张），内存压力下正文已解码的位图被回收；退出查看器后
+正文 `Image` **重新解码**，那一两帧空白即闪烁。这解释了症状为何是**偶发**（取决于图片
+大小与当时内存压力）而非必现。
+
+**修法**：`EntryAbility.onWindowStageCreate` 的 `loadContent` 回调内调
+`UIContext.setImageCacheCount(10)` + `setImageRawDataCacheSize(64MB)`（见
+`enableImageDecodeCache`）。取 10 而非更大值的理由写在常量注释里：缓存是 **LRU**，
+被挤掉的总是最久未用的，而本诉求只关心"刚看过的那几张"；且正文图片 `autoResize`
+默认为 **false**（按原图尺寸解码，见 §2.2 G6），单张位图内存成本高。
+**这是"内存 ↔ 闪烁"的取舍旋钮**，真机验证后可调。
+
+**仍待真机确认**：6.2 是从官方"默认不缓存"+ 查看器解码三张大图推得的最强解释，能解释
+偶发性，但改后需在真机反复进出查看器复核。若仍偶发，需再查"正文 `Image` 是否被重新创建"。
+另：6.1 的叠层方案依赖"`MovingPhotoView` 出帧前不遮挡下层"，若真机发现其出帧前画**不透明
+黑块**，则闪烁会变成黑闪，届时应改用官方 `onComplete`（the image load completed）信号
+做显示闸门——注意**不能**用 `opacity` 动态属性实现该闸门：官方明确
+「`MovingPhotoView`」**当前不支持动态属性设置**。
