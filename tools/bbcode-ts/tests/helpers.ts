@@ -70,6 +70,7 @@ export function nodeToJson(nodes: BBNode[]): unknown[] {
     if (n.color.length > 0) o.color = n.color
     if (n.size !== 0) o.size = n.size
     if (n.src.length > 0) o.src = n.src
+    if (n.videoSrc.length > 0) o.videoSrc = n.videoSrc
     if (n.title.length > 0) o.title = n.title
     if (n.emotionCat.length > 0) o.emotionCat = n.emotionCat
     if (n.emotionCode.length > 0) o.emotionCode = n.emotionCode

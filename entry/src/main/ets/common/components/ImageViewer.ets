@@ -7,6 +7,8 @@ import { common } from '@kit.AbilityKit';
 import { appStore } from '../../store/AppStore';
 import { AppColors } from '../constants/Constants';
 import { UIMaterialManager } from '../managers/UIMaterialManager';
+import { MovingPhotoPlayer } from '../media/MovingPhotoPlayer';
+import { getMovingPhotoVideo } from '../media/MovingPhotoRegistry';
 import { Logger, DOMAIN_UI, formatError } from '../utils/Logger';
 
 const logger = new Logger(DOMAIN_UI, 'ImageViewer');
@@ -65,6 +67,21 @@ export struct ImageViewer {
 
   aboutToAppear(): void {
     this.currentIndex = this.initialIndex
+  }
+
+  /**
+   * 当前页的动态视频地址；非动态照片返回空串。
+   *
+   * 正文渲染时已把「动态照片封面 → 动态视频」登记到 `MovingPhotoRegistry`，
+   * 查看器按当前封面地址反查即可，无需给点击回调链层层加参数。
+   *
+   * @returns 动态视频地址或空串
+   */
+  private currentMovingPhotoVideo(): string {
+    if (this.currentIndex < 0 || this.currentIndex >= this.urls.length) {
+      return ''
+    }
+    return getMovingPhotoVideo(this.urls[this.currentIndex])
   }
 
   private getExtension(url: string): string {
@@ -294,19 +311,37 @@ export struct ImageViewer {
               })
           }
 
-          Image(this.urls[this.currentIndex])
-            .objectFit(ImageFit.Contain)
-            .width('100%').height('100%')
-            .scale({ x: this.zoomScale, y: this.zoomScale, centerX: 0, centerY: 0 })
-            .translate({ x: this.zoomOffsetX + this.swipeTranslateX, y: this.zoomOffsetY })
-            .onComplete((event) => {
-              if (event && event.loadingStatus === 1) {
-                this.imgNaturalW = event.width
-                this.imgNaturalH = event.height
-              }
+          if (this.currentMovingPhotoVideo().length > 0) {
+            /* 动态照片（NGA [b]MPHOTO[/b]）：交给系统动态照片组件播放（点击播放/停止）。
+               MovingPhotoView 不支持缩放类动态属性，因此本页不参与捏合/双击缩放。 */
+            MovingPhotoPlayer({
+              coverUrl: this.urls[this.currentIndex],
+              videoUrl: this.currentMovingPhotoVideo(),
+              /* 不自动播放：播放全部由左上角图标触发；图标固定在内容区左上角
+                 （不随图片位置/尺寸变化），图片本体点击/长按不注册操作。 */
+              iconTop: 12,
+              iconLeft: 16,
+              iconSize: 44
             })
-            .onError(() => {
-            })
+              .width('100%').height('100%')
+              .translate({ x: this.swipeTranslateX })
+          } else {
+            Image(this.urls[this.currentIndex])
+              .objectFit(ImageFit.Contain)
+              .width('100%').height('100%')
+              /* 长按不注册操作：Image 自 API 10 起 draggable 默认 true，长按会被当成拖拽图片。 */
+              .draggable(false)
+              .scale({ x: this.zoomScale, y: this.zoomScale, centerX: 0, centerY: 0 })
+              .translate({ x: this.zoomOffsetX + this.swipeTranslateX, y: this.zoomOffsetY })
+              .onComplete((event) => {
+                if (event && event.loadingStatus === 1) {
+                  this.imgNaturalW = event.width
+                  this.imgNaturalH = event.height
+                }
+              })
+              .onError(() => {
+              })
+          }
 
           if (this.currentIndex < this.urls.length - 1) {
             Image(this.urls[this.currentIndex + 1])
@@ -323,7 +358,7 @@ export struct ImageViewer {
           GestureGroup(GestureMode.Exclusive,
             PinchGesture({ fingers: 2 })
               .onActionStart((event: GestureEvent) => {
-                if (this.isPageAnimating) return
+                if (this.isPageAnimating || this.currentMovingPhotoVideo().length > 0) return
                 this.pinchBaseScale = this.zoomScale
                 this.pinchBaseOffsetX = this.zoomOffsetX
                 this.pinchBaseOffsetY = this.zoomOffsetY
@@ -332,7 +367,7 @@ export struct ImageViewer {
                 this.resetPanTracking()
               })
               .onActionUpdate((event: GestureEvent) => {
-                if (this.isPageAnimating) return
+                if (this.isPageAnimating || this.currentMovingPhotoVideo().length > 0) return
                 let newScale: number = this.pinchBaseScale * event.scale
                 newScale = Math.max(this.ZOOM_MIN, Math.min(newScale, this.ZOOM_MAX))
                 let imgX: number = (this.pinchCenterX - this.pinchBaseOffsetX) / this.pinchBaseScale
@@ -342,7 +377,7 @@ export struct ImageViewer {
                 this.zoomOffsetY = this.pinchCenterY - imgY * newScale
               })
               .onActionEnd(() => {
-                if (this.isPageAnimating) return
+                if (this.isPageAnimating || this.currentMovingPhotoVideo().length > 0) return
                 if (this.zoomScale <= 1) {
                   this.zoomScale = 1
                   this.zoomOffsetX = 0
@@ -354,7 +389,7 @@ export struct ImageViewer {
               }),
             TapGesture({ count: 2 })
               .onAction((event: GestureEvent) => {
-                if (this.isPageAnimating) return
+                if (this.isPageAnimating || this.currentMovingPhotoVideo().length > 0) return
                 if (this.zoomScale > 1.01) {
                   this.getUIContext()?.animateTo({ duration: 250, curve: Curve.FastOutSlowIn }, () => {
                     this.zoomScale = 1

@@ -4,6 +4,8 @@ import { getEmotionResource, isEmotionCategoryNeedDarkBg } from '../media/Emotio
 import { AudioPlayer } from '../media/AudioPlayer'
 import { MutedVideo } from '../media/MutedVideo'
 import { ImageSize, getCachedImageSize, setCachedImageSize } from '../media/ImageSizeUtil'
+import { MovingPhotoPlayer } from '../media/MovingPhotoPlayer'
+import { getMovingPhotoVideo, registerMovingPhoto } from '../media/MovingPhotoRegistry'
 import { fetchVideoSize, getCachedVideoSize } from '../media/VideoSizeUtil'
 import { shouldUsePassive } from '../utils/NetworkUtil'
 import { LengthMetrics } from '@kit.ArkUI'
@@ -96,6 +98,8 @@ export struct BBCodeContentView {
   @State private failedImages: Set<string> = new Set()
   /** 已允许释放占位约束的图片地址。 */
   @State private releasedImages: Set<string> = new Set()
+  /** 正在就地播放动态照片的封面地址（空串表示没有就地播放）。 */
+  @State private playingMovingPhotoSrc: string = ''
   /** 已知视频尺寸缓存。 */
   @State private videoSizes: Map<string, ImageSize> = new Map()
   /** 当前生效的亮暗色模式。 */
@@ -322,6 +326,11 @@ export struct BBCodeContentView {
       }
       if (n.type === BBNodeType.IMAGE && n.src.length > 0) {
         urls.push(n.src)
+        if (n.videoSrc.length > 0) {
+          /* 动态照片（NGA [b]MPHOTO[/b]）：登记「封面 → 动态视频」关系，
+             查看器按当前封面地址反查后改用 MovingPhotoView 播放。 */
+          registerMovingPhoto(n.src, n.videoSrc)
+        }
       }
       if (n.children.length > 0) {
         const childUrls = this.collectUrls(n.children, skipBlacklistedQuotes)
@@ -697,7 +706,7 @@ export struct BBCodeContentView {
   @Builder
   RenderImage(node: BBNode, ctx: RenderContext) {
     if (node.src.length > 0 && !(this.hideFailedImages && this.failedImages.has(node.src))) {
-      this.RenderImageContent(node.src, ctx.inQuote)
+      this.RenderImageContent(node.src, ctx.inQuote, node.videoSrc.length > 0)
     }
   }
 
@@ -706,9 +715,10 @@ export struct BBCodeContentView {
    *
    * @param src 图片地址
    * @param inQuote 是否位于引用块内
+   * @param isMovingPhoto 是否为动态照片（NGA `[b]MPHOTO[/b]` 折叠而来，解析层挂在 videoSrc）
    */
   @Builder
-  RenderImageContent(src: string, inQuote: boolean) {
+  RenderImageContent(src: string, inQuote: boolean, isMovingPhoto: boolean) {
     if (shouldUsePassive(this.imageLoadStrategy)) {
       /* 被动式：紧凑占位图。 */
       Row() {
@@ -722,7 +732,7 @@ export struct BBCodeContentView {
         .borderRadius(6)
         .backgroundColor(AppColors.bgSecondary)
 
-        Text('点击查看图片').fontSize(13).fontColor(AppColors.textTertiary).margin({ left: 8 })
+        Text(isMovingPhoto ? '点击查看动态照片' : '点击查看图片').fontSize(13).fontColor(AppColors.textTertiary).margin({ left: 8 })
       }
       .padding({ left: 10, right: 10 })
       .height(40)
@@ -748,11 +758,36 @@ export struct BBCodeContentView {
           .alignItems(HorizontalAlign.Center)
         }
 
-        if (this.releasedImages.has(src) || this.getImageAspectRatio(src) > 0) {
+        if (isMovingPhoto && this.playingMovingPhotoSrc === src) {
+          /* 就地播放：点击图片左上角图标后展开播放器，播放一遍后自动收起回静态封面。 */
+          MovingPhotoPlayer({
+            coverUrl: src,
+            videoUrl: getMovingPhotoVideo(src),
+            /* 与正文静态图标同位置同尺寸：接管前后图标不跳动。 */
+            iconTop: 6,
+            iconLeft: 6,
+            iconSize: 40,
+            autoPlayOnce: true,
+            onPlaybackFinish: (): void => {
+              this.playingMovingPhotoSrc = ''
+            },
+            onBodyClick: (): void => {
+              /* 播放态点图片与静态封面行为一致：收起就地播放器并打开查看器。 */
+              this.playingMovingPhotoSrc = ''
+              let urls: string[] = this.allImageUrls.length > 0 ? this.allImageUrls : [src]
+              let idx: number = this.getImageIndex(src)
+              this.onImageClick(urls, idx)
+            }
+          })
+            .width('100%')
+            .height('100%')
+        } else if (this.releasedImages.has(src) || this.getImageAspectRatio(src) > 0) {
           Image(src)
             .width('100%').height('100%')
             .objectFit(inQuote ? ImageFit.Cover : ImageFit.Contain)
             .borderRadius(inQuote ? 6 : 8)
+            /* 长按不注册操作：Image 自 API 10 起 draggable 默认 true，长按会被系统当成拖拽图片。 */
+            .draggable(false)
             .onError(() => {
               this.markImageFailed(src)
             })
@@ -768,6 +803,27 @@ export struct BBCodeContentView {
               let idx: number = this.getImageIndex(src)
               this.onImageClick(urls, idx)
             })
+        }
+
+        if (isMovingPhoto && this.playingMovingPhotoSrc !== src) {
+          /* 图片左上角 Live Photo 图标按钮（同心圆，行业标准形态）：点击就地播放一次。 */
+          Stack() {
+            Image($r('app.media.icon_live_photo'))
+              .width(25)
+              .height(25)
+              .fillColor(AppColors.white)
+              .draggable(false)
+          }
+          .width(40)
+          .height(40)
+          .borderRadius(20)
+          .backgroundColor(AppColors.movingPhotoBadgeBg)
+          /* 绝对定位：保证落在图片左上角（不受父 Stack 对齐规则影响）。 */
+          .position({ x: 6, y: 6 })
+          .accessibilityText('播放动态照片')
+          .onClick(() => {
+            this.playingMovingPhotoSrc = src
+          })
         }
       }
       .width('100%')

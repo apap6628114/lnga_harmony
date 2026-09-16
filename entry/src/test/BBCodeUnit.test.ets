@@ -24,6 +24,65 @@ import {
  * 注册 BBCode 解析与文字样式规范化回归测试。
  */
 export default function bbcodeUnitTest(): void {
+  describe('movingPhotoFolding', (): void => {
+    it('foldsMovingPhotoTriple', 0, (): void => {
+      const nodes: BBNode[] = parseBBCode(
+        '[img]./mon_202601/01/a.jpg[/img][b]MPHOTO[/b][flash=video]./mon_202601/01/a.mp4[/flash]')
+      let imageCount: number = 0
+      let videoCount: number = 0
+      let foldedVideo: string = ''
+      for (let i: number = 0; i < nodes.length; i++) {
+        if (nodes[i].type === BBNodeType.IMAGE) {
+          imageCount++
+          foldedVideo = nodes[i].videoSrc
+        }
+        if (nodes[i].type === BBNodeType.VIDEO) {
+          videoCount++
+        }
+      }
+      expect(imageCount).assertEqual(1)
+      expect(foldedVideo.length > 0).assertTrue()
+      expect(videoCount).assertEqual(0)
+    })
+
+    it('keepsIncompleteTripleUnfolded', 0, (): void => {
+      const nodes: BBNode[] = parseBBCode('[img]./mon_202601/01/a.jpg[/img][b]MPHOTO[/b]')
+      let imageCount: number = 0
+      let boldCount: number = 0
+      for (let i: number = 0; i < nodes.length; i++) {
+        if (nodes[i].type === BBNodeType.IMAGE) {
+          imageCount++
+        }
+        if (nodes[i].type === BBNodeType.BOLD) {
+          boldCount++
+        }
+      }
+      expect(imageCount).assertEqual(1)
+      expect(boldCount).assertEqual(1)
+      expect(nodes[0].videoSrc).assertEqual('')
+    })
+
+    it('foldsMovingPhotoInsideListItem', 0, (): void => {
+      const nodes: BBNode[] = parseBBCode(
+        '[list][*][img]./mon_202601/01/a.jpg[/img][b]MPHOTO[/b][flash=video]./mon_202601/01/a.mp4[/flash][/list]')
+      expect(nodes.length).assertEqual(1)
+      expect(nodes[0].type).assertEqual(BBNodeType.LIST)
+      const itemChildren: BBNode[] = nodes[0].children[0].children
+      let folded: boolean = false
+      let videoCount: number = 0
+      for (let i: number = 0; i < itemChildren.length; i++) {
+        if (itemChildren[i].type === BBNodeType.IMAGE && itemChildren[i].videoSrc.length > 0) {
+          folded = true
+        }
+        if (itemChildren[i].type === BBNodeType.VIDEO) {
+          videoCount++
+        }
+      }
+      expect(folded).assertTrue()
+      expect(videoCount).assertEqual(0)
+    })
+  })
+
   describe('bbcodeFormatting', (): void => {
     it('combinesDeepNestedTextStyles', 0, (): void => {
       const nodes: BBNode[] = parseBBCode(

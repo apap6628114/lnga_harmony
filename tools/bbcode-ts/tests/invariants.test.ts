@@ -31,6 +31,12 @@ function stripBBCodeTags(s: string): string {
  */
 function expectedPlainText(content: string): string {
   let preprocessed: string = preprocessContent(content)
+  // NGA 动态照片标记 [b]MPHOTO[/b]：解析阶段与相邻封面图折叠为一个动态照片节点
+  // （cover.src + cover.videoSrc），标记文字不属于正文文字。
+  // 必须**在媒体标签剥除之前**处理：媒体标签剥除会删掉 [img]/[flash]，
+  // 之后就无从判断 MPHOTO 是否紧跟封面图（锚定失效会让标记残留在期望文本里）。
+  // 只锚定"紧跟封面图"的三元组形态——放宽成全局删除会掩盖"本应保留却被吞掉"的回归。
+  preprocessed = preprocessed.replace(/(\[img\][\s\S]*?\[\/img\])(?:\s|<br\/>)*\[b\]\s*MPHOTO\s*\[\/b\]/gi, '$1')
   preprocessed = preprocessed.replace(/\[(img|flash|album|video|audio)(?:=[^\]]*)?\][\s\S]*?\[\/\1\]/gi, '')
   // 镜像 handleQuote 的消费语义：引用头（[pid=..]Reply[/pid] [b]Post by ...[/b]）
   // 后的连续换行段整体跳过（真实 NGA 数据为 </b><br/><br/>，预处理后成 \n\n）
@@ -91,6 +97,83 @@ describe('文本零丢失不变量（真实样本）', () => {
       )
     })
   }
+})
+
+describe('动态照片（[b]MPHOTO[/b]）折叠', () => {
+  /** 收集指定类型的全部节点（含嵌套）。 */
+  function collectType(nodes: BBNode[], type: BBNodeType, out: BBNode[]): void {
+    for (const n of nodes) {
+      if (n.type === type) out.push(n)
+      collectType(n.children, type, out)
+    }
+  }
+
+  it('真实样本：封面图携带 videoSrc，标记与视频节点被折叠', () => {
+    const content: string = loadSampleContent('tid47553967-lou0-mphoto.txt')
+    const nodes: BBNode[] = parseBBCode(content)
+    const images: BBNode[] = []
+    collectType(nodes, BBNodeType.IMAGE, images)
+    assert.equal(images.length, 3, '样本应为 1 张普通图 + 2 张动态照片封面')
+    assert.equal(countType(nodes, BBNodeType.VIDEO), 0, '动态照片视频不应留在节点序列中')
+    assert.equal(countType(nodes, BBNodeType.FLASH), 0, '动态照片视频不应退化为 FLASH')
+    const dynamic: BBNode[] = images.filter((n: BBNode): boolean => n.videoSrc.length > 0)
+    assert.equal(dynamic.length, 2, '应折叠出 2 个动态照片节点')
+    assert.ok(dynamic[0].src.endsWith('k2Q43-ikqiK2jT3cSsg-lc.jpg'), `封面地址异常: ${dynamic[0].src}`)
+    assert.ok(dynamic[0].videoSrc.endsWith('k2Q43-2ul5Z27T6wS1hc-140.mp4'), `视频地址异常: ${dynamic[0].videoSrc}`)
+    assert.ok(dynamic[1].src.endsWith('k2Q43-jca4ZcT3cSsg-lc.jpg'), `第二张封面地址异常: ${dynamic[1].src}`)
+    assert.ok(dynamic[1].videoSrc.endsWith('k2Q43-9wy5Z2rT6wS1hc-140.mp4'), `第二个视频地址异常: ${dynamic[1].videoSrc}`)
+    /* 折叠后 MPHOTO 标记不再作为可见文字出现 */
+    assert.ok(!concatTextNodes(nodes).includes('MPHOTO'), 'MPHOTO 标记文字不应残留在解析树中')
+  })
+
+  it('相邻形式不受影响：无标记的「图片 + 视频」保持原样', () => {
+    const content: string = '[img]./mon_202601/01/a.jpg[/img][flash=video]./mon_202601/01/a.mp4[/flash]'
+    const nodes: BBNode[] = parseBBCode(content)
+    assert.equal(countType(nodes, BBNodeType.IMAGE), 1)
+    assert.equal(countType(nodes, BBNodeType.VIDEO), 1)
+    const images: BBNode[] = []
+    collectType(nodes, BBNodeType.IMAGE, images)
+    assert.equal(images[0].videoSrc, '', '缺少 MPHOTO 标记时不得折叠')
+  })
+
+  it('三元组不完整时安全降级：只有封面 + 标记，或只有标记 + 视频', () => {
+    const noVideo: BBNode[] = parseBBCode('[img]./mon_202601/01/a.jpg[/img][b]MPHOTO[/b]')
+    assert.equal(countType(noVideo, BBNodeType.IMAGE), 1)
+    assert.equal(countType(noVideo, BBNodeType.BOLD), 1, '缺视频时 MPHOTO 标记应原样保留')
+    assert.ok(concatTextNodes(noVideo).includes('MPHOTO'))
+
+    const noCover: BBNode[] = parseBBCode('[b]MPHOTO[/b][flash=video]./mon_202601/01/a.mp4[/flash]')
+    assert.equal(countType(noCover, BBNodeType.VIDEO), 1, '缺封面时视频节点应原样保留')
+    assert.equal(countType(noCover, BBNodeType.BOLD), 1)
+  })
+
+  it('标记大小写不敏感，且容忍中间空白文本', () => {
+    const content: string = '[img]./mon_202601/01/a.jpg[/img]\n\n[b]mphoto[/b]\n[flash=video]./mon_202601/01/a.mp4[/flash]'
+    const nodes: BBNode[] = parseBBCode(content)
+    const images: BBNode[] = []
+    collectType(nodes, BBNodeType.IMAGE, images)
+    assert.equal(images[0].videoSrc.length > 0, true, '小写标记与空白文本应仍可折叠')
+    assert.equal(countType(nodes, BBNodeType.VIDEO), 0)
+  })
+
+  it('正文中恰好加粗的 MPHOTO 之外文本不误判（标记必须整体等于 MPHOTO）', () => {
+    const content: string = '[img]./mon_202601/01/a.jpg[/img][b]MPHOTO 说明[/b][flash=video]./mon_202601/01/a.mp4[/flash]'
+    const nodes: BBNode[] = parseBBCode(content)
+    assert.equal(countType(nodes, BBNodeType.VIDEO), 1, '标记文字不等于 MPHOTO 时不得折叠')
+  })
+
+  it('列表项内的三元组同样折叠（列表正文直连 parseBlockNodesUntil 的补漏）', () => {
+    const content: string =
+      '[list][*][img]./mon_202601/01/a.jpg[/img][b]MPHOTO[/b][flash=video]./mon_202601/01/a.mp4[/flash][*]普通项[/list]'
+    const nodes: BBNode[] = parseBBCode(content)
+    const images: BBNode[] = []
+    collectType(nodes, BBNodeType.IMAGE, images)
+    assert.equal(images.length, 1)
+    assert.ok(images[0].videoSrc.length > 0, '列表项内的动态照片应折叠出 videoSrc')
+    assert.equal(countType(nodes, BBNodeType.VIDEO), 0, '列表项内视频节点也应被折叠消费')
+    assert.ok(!concatTextNodes(nodes).includes('MPHOTO'), '列表项内 MPHOTO 标记不应残留')
+    assert.ok(concatTextNodes(nodes).includes('普通项'), '同列表的其它项正文不应丢失')
+  })
 })
 
 describe('真实样本结构（demo.txt）', () => {

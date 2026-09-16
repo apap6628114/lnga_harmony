@@ -85,6 +85,10 @@
       "value": "#33FFFFFF"
     },
     {
+      "name": "moving_photo_badge_bg",
+      "value": "#59000000"
+    },
+    {
       "name": "warn_bg",
       "value": "#FFF2E5"
     },

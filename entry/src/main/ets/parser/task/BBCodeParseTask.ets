@@ -21,6 +21,13 @@ interface BBNodeJSON {
   size: number
   /** 媒体地址。 */
   src: string
+  /**
+   * 动态照片的动态部分地址（NGA `[b]MPHOTO[/b]` 三元组折叠结果）。
+   *
+   * 该字段必须随 taskpool JSON 一起往返：解析预热在工作线程执行，
+   * 主线程按本接口逐字段重建节点，漏字段等于折叠结果被丢弃。
+   */
+  videoSrc: string
   /** 块标题。 */
   title: string
   /** 表情分类。 */

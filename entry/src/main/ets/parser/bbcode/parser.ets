@@ -11,6 +11,7 @@ import { handleNuke, handleAlbum } from './block-handlers/handleNuke'
 import { handleFlash } from './block-handlers/handleFlash'
 import { handleImg } from './block-handlers/handleImg'
 import { handleTable } from './block-handlers/handleTable'
+import { foldMovingPhotos } from './moving-photo'
 import {
   handleDice,
   handleFloatLeft,
@@ -226,7 +227,7 @@ function appendInlineSegment(segment: string, result: BBNode[], activeTags: stri
  * @returns 当前层解析得到的语义节点
  */
 function parseBlockNodes(state: ParseState, closeTags: string[] | null): BBNode[] {
-  return parseBlockNodesUntil(state, closeTags).nodes
+  return foldMovingPhotos(parseBlockNodesUntil(state, closeTags).nodes)
 }
 
 /**
@@ -610,13 +611,15 @@ function parseListItems(state: ParseState): BBNode[] {
   const items: BBNode[] = []
   const leading: BlockParseResult = parseBlockNodesUntil(state, LIST_BOUNDARY_TAGS)
   trimListItemWhitespace(leading.nodes)
-  if (leading.nodes.length > 0) items.push(createListItem(leading.nodes))
+  /* 列表项正文直接来自 parseBlockNodesUntil（未经过 parseBlockNodes），
+     动态照片折叠必须在此显式调用，否则 [list] 内的 MPHOTO 三元组不会被折叠。 */
+  if (leading.nodes.length > 0) items.push(createListItem(foldMovingPhotos(leading.nodes)))
 
   let terminator: string = leading.terminator.toLowerCase()
   while (terminator === '[*]') {
     const itemBody: BlockParseResult = parseBlockNodesUntil(state, LIST_BOUNDARY_TAGS)
     trimListItemWhitespace(itemBody.nodes)
-    items.push(createListItem(itemBody.nodes))
+    items.push(createListItem(foldMovingPhotos(itemBody.nodes)))
     terminator = itemBody.terminator.toLowerCase()
   }
   return items

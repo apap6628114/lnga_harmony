@@ -25,6 +25,7 @@ import { common, contextConstant } from '@kit.AbilityKit'
 import type { AiProviderProfile } from '../model/AiConfig'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
+import { movingPhotoCacheDir } from '../common/media/MovingPhotoCache'
 
 @Component
 export struct SettingsPanel {
@@ -219,6 +220,9 @@ export struct SettingsPanel {
       dirs.push(context.cacheDir)
       context.area = contextConstant.AreaMode.EL2
       dirs.push(context.cacheDir)
+      /* 动态照片播放器的封面/视频缓存：位于持久目录 filesDir 下，
+         不在上面的 cacheDir 范围内，必须显式加入，否则"清除缓存"清不掉它。 */
+      dirs.push(movingPhotoCacheDir(context.filesDir))
 
       appContext = context.getApplicationContext()
       originAppArea = appContext.area

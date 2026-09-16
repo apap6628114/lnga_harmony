@@ -63,6 +63,13 @@ export class BBNode {
   size: number = 0
   /** 媒体地址。 */
   src: string = ''
+  /**
+   * 动态照片的动态部分地址（NGA `[b]MPHOTO[/b]` 标记折叠后挂在封面 IMAGE 节点上）。
+   *
+   * NGA 动态照片在正文里是「封面图 + MPHOTO 标记 + 视频」三元组，解析阶段折叠为
+   * 单个 IMAGE 节点：`src` 为封面、`videoSrc` 为动态视频；非动态照片恒为空串。
+   */
+  videoSrc: string = ''
   /** 块标题。 */
   title: string = ''
   /** 表情分类。 */

@@ -23,6 +23,7 @@ function filterBBTags(nodes: BBNode[], skipTypes: BBNodeType[]): BBNode[] {
       n.color = node.color
       n.size = node.size
       n.src = node.src
+      n.videoSrc = node.videoSrc
       n.title = node.title
       n.emotionCat = node.emotionCat
       n.emotionCode = node.emotionCode
@@ -31,6 +32,7 @@ function filterBBTags(nodes: BBNode[], skipTypes: BBNodeType[]): BBNode[] {
       n.colSpan = node.colSpan
       n.rowSpan = node.rowSpan
       n.colWidth = node.colWidth
+      n.inheritedFormatTags = node.inheritedFormatTags
       n.children = filterBBTags(node.children, skipTypes)
       result.push(n)
     } else {

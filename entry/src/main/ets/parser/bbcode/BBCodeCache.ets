@@ -43,6 +43,9 @@ function jsonToBBNode(d: BBNodeJSON): BBNode {
   n.color = d.color
   n.size = d.size
   n.src = d.src
+  /* 防御性回退：taskpool 载荷来自同版本代码，但字段缺失时绝不能把 undefined
+     灌进 string 字段（后续 videoSrc.length 会直接抛错）。 */
+  n.videoSrc = d.videoSrc ?? ''
   n.title = d.title
   n.emotionCat = d.emotionCat
   n.emotionCode = d.emotionCode
