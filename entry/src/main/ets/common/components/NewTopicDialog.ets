@@ -38,7 +38,13 @@ import {
 import fileIo from '@ohos.file.fs'
 import { AlertDialog } from '@kit.ArkUI'
 import { photoAccessHelper } from '@kit.MediaLibraryKit'
-import { Logger, DOMAIN_UI } from '../utils/Logger'
+import {
+  pickAndExportMovingPhoto,
+  releaseExportedMovingPhoto,
+  readExportedFile,
+  ExportedMovingPhoto
+} from '../media/MovingPhotoExport'
+import { Logger, DOMAIN_UI, formatError } from '../utils/Logger'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 import { EditorFormatBar } from './EditorFormatBar'
 
@@ -99,6 +105,9 @@ export struct NewTopicDialog {
 
   /** 是否正在提交。 */
   @State sending: boolean = false
+
+  /** 是否正在导出/上传动态照片（导出+上传耗时较长，防重复触发）。 */
+  @State uploadingMovingPhoto: boolean = false
 
   /** 是否匿名发布。 */
   @State isAnonymous: boolean = false
@@ -328,6 +337,8 @@ export struct NewTopicDialog {
       this.content = ReplyManagerClass.insertAtTag(this.content, this.selStart, this.selEnd)
     } else if (tag === 'img') {
       this.handleImagePick()
+    } else if (tag === 'mphoto') {
+      this.handleMovingPhotoPick()
     } else {
       this.content = ReplyManagerClass.wrapSelectedText(this.content, this.selStart, this.selEnd, tag)
     }
@@ -375,6 +386,48 @@ export struct NewTopicDialog {
       const message: string = error instanceof Error ? error.message : '上传图片失败'
       logger.verbose('[NTPIC] error: %{public}s', message)
       appStore.showToast(message)
+    }
+  }
+
+  /**
+   * 选择并上传一张动态照片，然后把「封面 + MPHOTO 标记 + 视频」三元组插入正文。
+   *
+   * 与普通图片上传的区别只在两端：选择阶段走动态照片专用链路（Picker 过滤
+   * `image/movingPhoto` → 用户选定后由媒体库导出两半到沙箱），上传阶段把两半各传一次
+   * （三元组与附件累积都在 `NewTopicManager.uploadMovingPhoto` 里完成）。
+   */
+  private async handleMovingPhotoPick(): Promise<void> {
+    if (this.uploadingMovingPhoto) {
+      return
+    }
+    this.uploadingMovingPhoto = true
+    let exported: ExportedMovingPhoto | null = null
+    try {
+      const ctx: Context = this.getUIContext().getHostContext() as Context
+      exported = await pickAndExportMovingPhoto(ctx)
+      if (exported === null) {
+        return
+      }
+      const coverData: ArrayBuffer = readExportedFile(exported.coverPath)
+      const videoData: ArrayBuffer = readExportedFile(exported.videoPath)
+      if (coverData.byteLength === 0 || videoData.byteLength === 0) {
+        appStore.showToast('读取动态照片失败')
+        return
+      }
+      appStore.showToast('正在上传动态照片...')
+      const tag: string = await newTopicManager.uploadMovingPhoto(coverData, videoData)
+      this.content = ReplyManagerClass.insertImg(this.content, this.selStart, this.selEnd, tag)
+      appStore.showToast('动态照片已插入')
+    } catch (error) {
+      const message: string = error instanceof Error ? error.message : '上传动态照片失败'
+      /* 用 formatError 打出错误码：线上排查「权限被拒（201）/ 资产不是动态照片」要靠它 */
+      logger.verbose('[MPUP] error: %{public}s', formatError(error))
+      appStore.showToast(message)
+    } finally {
+      if (exported !== null) {
+        releaseExportedMovingPhoto(exported)
+      }
+      this.uploadingMovingPhoto = false
     }
   }
 

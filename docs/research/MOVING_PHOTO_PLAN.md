@@ -319,6 +319,10 @@ loading ──成功──▶ ready ──onPrepared 后播放──▶ playing 
 | `entry/src/main/ets/common/media/MovingPhotoPlayer.ets` | 下载 → `loadMovingPhoto` → `MovingPhotoView` + 状态机 |
 | `entry/src/main/ets/common/components/BBCodeContentView.ets` | 正文图标 + 就地播放 |
 | `entry/src/main/ets/common/components/ImageViewer.ets` | 查看器播放（图标触发）+ 失败回退 + 保存动态照片 |
+| `entry/src/main/ets/common/media/MovingPhotoExport.ets` | 发送用：Picker → PhotoAsset → 导出封面 + 视频到沙箱（§9） |
+| `entry/src/main/ets/service/api/NgaUploader.ets` | 附件上传（图片 / 视频半边）+ 正文三元组拼装 |
+| `entry/src/main/ets/common/managers/ReplyManager.ets`、`NewTopicManager.ets` | `uploadMovingPhoto`：两次上传 + 附件参数累积 |
+| `entry/src/main/ets/common/components/EditorFormatBar.ets` | 工具行「动态照片」入口（回复 / 发新主题共用） |
 
 ### 7.5 测试与门禁
 
@@ -386,3 +390,64 @@ loading ──成功──▶ ready ──onPrepared 后播放──▶ playing 
    若复现"图标亮起但画面不动"（2.5s 后看门狗会复位），改为换源时新建 controller 或补调该接口。
 2. 失败路径手感：临时把某个 mp4 换成不存在的地址，确认正文角标恢复、查看器该页可缩放。
 3. 真机内存：`IMAGE_CACHE_COUNT = 20` 下的内存曲线（见 IMAGE_PIPELINE_AUDIT §6.2）。
+
+---
+
+## 9. 发送动态照片（2026-09-18 实现完成，待线上验证）
+
+### 9.1 协议证据（只读实测真实帖 `tid=47553967`）
+
+| 事实 | 原文 / 取值 | 结论 |
+|---|---|---|
+| 封面附件 | `{url:'mon_.../k2Q43-ikqiK2jT3cSsg-lc.jpg', type:'img', url_utf8_org_name:'upload.jpg'}` | 封面是**普通图片附件** |
+| 视频附件 | `{url:'mon_.../k2Q43-2ul5Z27T6wS1hc-140.mp4', type:'app_video', url_utf8_org_name:'video.mp4'}` | 视频也是**普通附件**（服务端转码后加尺寸后缀），与封面同属一个 `attachments` 数组 |
+| 楼层正文原文 | `[img]./mon_.../xxx.jpg[/img][b]MPHOTO[/b][flash=video]./mon_.../xxx-140.mp4[/flash]` | 配对关系**完全由正文标记表达**，附件元数据里没有任何"动态照片"字段 |
+| 同帖 15 楼 | 发帖人原话「刚发动图**提示格式不对**…现在又可以了」；该楼视频附件 `type:'zip'`（与 `app_video` 不同的上传产物） | 服务端对视频上传**有格式校验**——这是唯一还需要线上确认的点 |
+
+**结论**：动态照片 = 两个普通附件 + 一段固定 BBCode。`[b]MPHOTO[/b]` 就是给客户端看的信号——
+官方网页把它渲染成「图 + 粗体 MPHOTO + video」，官方 App 与本工程按同一串标记识别成一体化控件。
+
+### 9.2 实现链路
+
+```
+EditorFormatBar「动态照片」按钮（tag=mphoto，回复 / 发新主题共用）
+  └─ ReplyDialog / NewTopicDialog  handleMovingPhotoPick()
+       ├─ MovingPhotoExport.pickAndExportMovingPhoto(ctx)
+       │    PhotoViewPicker(MIMEType = image/movingPhoto)          ← 免相册权限
+       │    → getAssets(URI 谓词) 反查 PhotoAsset                  ← 官方「指定URI获取图片或视频资源」写法
+       │    → MediaAssetManager.requestMovingPhoto(...)            ← dataHandler 桥接 + 10s 超时
+       │    → MovingPhoto.requestContent(imageUri, videoUri)       ← 两半落到 cacheDir/mphoto_upload/<ts>/
+       ├─ NgaUploader：封面按图片传（attachment_file1_img=1）、视频按视频传（不带该字段、Content-Type video/mp4）
+       │   两半文件名 `upload.jpg` / `video.mp4`（与官方一致，见上表 url_utf8_org_name）
+       ├─ 两次上传各累积一次 attachments / attachments_check（顺序：封面在前、视频在后，与真实帖一致）
+       └─ buildMovingPhotoTag() → `[img]./<cover>[/img][b]MPHOTO[/b][flash=video]./<video>[/flash]`
+```
+
+- **免权限**：官方在 `requestMovingPhoto` / `requestContent` / `requestVideoFile` 三处接口说明都写了
+  「通过 picker 的方式调用该接口，不需要申请 `ohos.permission.READ_IMAGEVIDEO`」，链路按该写法组织。
+  编译期仍会报 `READ_IMAGEVIDEO` 静态告警（编译器不知道资产来自 Picker），性质同 SaveButton 场景下的
+  `WRITE_IMAGEVIDEO` 告警——**告警不等于运行时缺权限**，以线上实测为准（见 9.3 第 4 条）。
+- 封面标签**不追加 `.medium.jpg`**：与真实帖正文逐字对齐；普通图片插入路径（`[img]./<url>.medium.jpg[/img]`）
+  是既有形态，两者不同、都可用。
+- 导出产物在 `cacheDir/mphoto_upload/<时间戳>/`，上传结束后整体删除（不占用持久目录）。
+
+### 9.3 待线上验证（本地无法验证；按用户要求，实现侧不发任何写请求）
+
+1. **视频上传是否被接受**。若被拒，Dialog 的 toast 会直接显示服务端 `error_code` / `error` 文本
+   （`fillUploadResult` 原样透出）。可调项集中在 `NgaUploader.ngaUploadAttachment`：
+   ① 视频是否该带 `attachment_file1_img`（当前**不带**）、② 分段 Content-Type（当前 `video/mp4`）、
+   ③ `mvimg` 取值（当前恒 `'1'`，官方是"有原图/动图才为 1"）。
+2. **返回的 url 形态**。视频若被服务端转码，正文必须引用**转码后**的名字（真实帖是 `...-140.mp4`）；
+   若响应返回的是转码前的名字，帖子里的 `[flash=video]` 会指向不存在的文件（症状：视频不播）。
+3. **Picker 过滤**：`image/movingPhoto` 在真机上是否把选择器限制到动态照片。若不支持过滤，用户可能选到
+   普通图片，此时 `requestMovingPhoto` 会超时（10s）并提示「导出动态照片失败」。
+4. **免权限链路**：若 `getAssets` / `requestMovingPhoto` 抛 `201 Permission denied`，退路是在
+   `module.json5` 声明 `ohos.permission.READ_IMAGEVIDEO` 并做授权引导（会多一次系统授权弹窗）。
+
+### 9.4 线上验证步骤（建议顺序）
+
+1. 回复任意帖子 → 点工具行「动态照片」→ 在相册里选一张动态照片（系统相机拍的实况 / 动态照片）；
+2. 看 toast：成功为「动态照片已插入」；失败会带服务端错误文本，记下来即可定位（对应 9.3 第 1 条）；
+3. 发布后用**网页版**打开该楼：正文应为 `[img]...[b]MPHOTO[/b][flash=video]...`，
+   且「附件」区里封面与视频两条都在（视频 url 应带尺寸后缀）；
+4. 用**本 App** 与**官方 App** 各打开该楼，确认都渲染成一体化动态照片控件（本工程按三元组折叠，见 §7.1）。

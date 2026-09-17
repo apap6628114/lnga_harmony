@@ -1,6 +1,7 @@
 import type { PostInfo } from '../../model/PostInfo'
 import { PostAuthResult, PostReplyResult } from '../../model/ThreadResult'
-import { getPostAuth, postReply, postComment, uploadAttachment } from '../../service/api/ThreadWriteApi'
+import { getPostAuth, postReply, postComment, uploadAttachment, uploadVideoAttachment } from '../../service/api/ThreadWriteApi'
+import { MOVING_PHOTO_COVER_NAME, MOVING_PHOTO_VIDEO_NAME, buildMovingPhotoTag } from '../../service/api/NgaUploader'
 import type { UploadAttachmentResult } from '../../model/NgaApiResults'
 import { appStore } from '../../store/AppStore'
 import { Logger, DOMAIN_MANAGER } from '../utils/Logger'
@@ -303,13 +304,62 @@ export class ReplyManagerClass {
     if (!uploadResult.ok) {
       throw new Error(uploadResult.error || '上传图片失败')
     }
-    // 累积附件参数（对应 Java PostParam.appendAttachment / L0 拼接：每个非空元素后追加 \t，
-    // 最终串含尾 \t；多次上传形如 "a1\ta2\t"）
+    this.appendAttachment(uploadResult)
+    return uploadResult.url
+  }
+
+  /**
+   * 累积一次上传的附件参数。
+   *
+   * 对应 Java PostParam.appendAttachment / L0 拼接：每个非空元素后追加 `\t`，
+   * 最终串含尾 `\t`；多次上传形如 `"a1\ta2\t"`。
+   *
+   * @param uploadResult 单次上传结果
+   */
+  private appendAttachment(uploadResult: UploadAttachmentResult): void {
     if (uploadResult.attachments.length > 0) {
       this.pendingAttachments += uploadResult.attachments + '\t'
       this.pendingAttachmentsCheck += uploadResult.attachmentsCheck + '\t'
     }
-    return uploadResult.url
+  }
+
+  /**
+   * 上传一张动态照片（封面 + 视频），返回可直接插入正文的 BBCode 三元组。
+   *
+   * 协议形态有实证（见 `MOVING_PHOTO_PLAN.md` §9）：动态照片在服务端就是**两个普通附件**
+   * （封面 `type:'img'`、视频 `type:'app_video'`）加上正文里的一段固定标记，
+   * 因此这里要做的事就是「传两半 → 各累积一次附件参数 → 拼三元组」。
+   *
+   * @param coverData 封面（静态图）二进制数据
+   * @param videoData 视频二进制数据
+   * @returns 可插入正文的 BBCode 三元组
+   */
+  async uploadMovingPhoto(coverData: ArrayBuffer, videoData: ArrayBuffer): Promise<string> {
+    const authResult: PostAuthResult = await this.getOrFetchAuth()
+    if (!authResult.ok) {
+      throw new Error(authResult.error || '获取上传权限失败')
+    }
+    const coverResult: UploadAttachmentResult = await uploadAttachment(
+      appStore.auth.token, authResult.auth, this.ctx.fid, authResult.attachUrl,
+      await this.compressImage(coverData), MOVING_PHOTO_COVER_NAME
+    )
+    logger.verbose('[MPUP] cover ok: %{public}s url: %{public}s err: %{public}s',
+      String(coverResult.ok), String(coverResult.url), String(coverResult.error))
+    if (!coverResult.ok) {
+      throw new Error(coverResult.error || '上传动态照片封面失败')
+    }
+    const videoResult: UploadAttachmentResult = await uploadVideoAttachment(
+      appStore.auth.token, authResult.auth, this.ctx.fid, authResult.attachUrl,
+      videoData, MOVING_PHOTO_VIDEO_NAME
+    )
+    logger.verbose('[MPUP] video ok: %{public}s url: %{public}s err: %{public}s',
+      String(videoResult.ok), String(videoResult.url), String(videoResult.error))
+    if (!videoResult.ok) {
+      throw new Error(videoResult.error || '上传动态照片视频失败')
+    }
+    this.appendAttachment(coverResult)
+    this.appendAttachment(videoResult)
+    return buildMovingPhotoTag(coverResult.url, videoResult.url)
   }
 
   // 发送回复/编辑

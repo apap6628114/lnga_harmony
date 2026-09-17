@@ -6,7 +6,7 @@
  */
 
 import { ngaClient } from '../NgaClient';
-import { ngaUploadFile } from './NgaUploader';
+import { ngaUploadFile, ngaUploadVideoFile } from './NgaUploader';
 import { appStore } from '../../store/AppStore';
 import { parseNgaError } from '../../parser/ErrorParser';
 import { PostAuthResult, PostReplyResult } from '../../model/ThreadResult';
@@ -506,6 +506,37 @@ export async function postComment(token: string, tid: number, pid: number,
 }
 
 /**
+ * 解析上传接口返回的附件信息（图片与视频共用）。
+ *
+ * @param rawText - 接口原始文本
+ * @param attachUrl - 本次使用的上传地址（响应缺 url 时用于拼兜底）
+ * @param result - 待填充的结果对象
+ */
+function fillUploadResult(rawText: string, attachUrl: string, result: UploadAttachmentResult): void {
+  const cleaned: string = rawText
+    .replace('window.script_muti_get_var_store=', '')
+    .trim();
+  const payload: Record<string, Object> = readUploadPayload(cleaned);
+  const errorCode: number = Number(payload['error_code'] ?? 0);
+  if (errorCode !== 0) {
+    const message: string = String(payload['error'] ?? '');
+    result.error = message.length > 0 ? message : '上传被拒绝（错误码 ' + String(errorCode) + '）';
+    return;
+  }
+  result.attachments = String(payload['attachments'] ?? '');
+  result.attachmentsCheck = String(payload['attachments_check'] ?? '');
+  const attachment: string = String(payload['attachment'] ?? '');
+  const returnedUrl: string = String(payload['url'] ?? '');
+  const returnedBase: string = String(payload['attach_url'] ?? attachUrl);
+  result.url = returnedUrl.length > 0 ? returnedUrl : returnedBase + attachment;
+  if (result.attachments.length === 0 && result.attachmentsCheck.length === 0 && result.url.length === 0) {
+    result.error = '上传响应缺少附件字段';
+    return;
+  }
+  result.ok = true;
+}
+
+/**
  * 上传帖子图片附件。
  *
  * @param token - 会话令牌
@@ -531,29 +562,45 @@ export async function uploadAttachment(token: string, auth: string, fid: number,
       { uid: session.uid, cid: session.cid }
     );
     logger.verbose('[NGA][UPLOAD] raw: %{public}s', rawText.slice(0, 300));
-    const cleaned: string = rawText
-      .replace('window.script_muti_get_var_store=', '')
-      .trim();
-    const payload: Record<string, Object> = readUploadPayload(cleaned);
-    const errorCode: number = Number(payload['error_code'] ?? 0);
-    if (errorCode !== 0) {
-      const message: string = String(payload['error'] ?? '');
-      result.error = message.length > 0 ? message : '上传被拒绝（错误码 ' + String(errorCode) + '）';
-      return result;
-    }
-    result.attachments = String(payload['attachments'] ?? '');
-    result.attachmentsCheck = String(payload['attachments_check'] ?? '');
-    const attachment: string = String(payload['attachment'] ?? '');
-    const returnedUrl: string = String(payload['url'] ?? '');
-    const returnedBase: string = String(payload['attach_url'] ?? attachUrl);
-    result.url = returnedUrl.length > 0 ? returnedUrl : returnedBase + attachment;
-    if (result.attachments.length === 0 && result.attachmentsCheck.length === 0 && result.url.length === 0) {
-      result.error = '上传响应缺少附件字段';
-      return result;
-    }
-    result.ok = true;
+    fillUploadResult(rawText, attachUrl, result);
   } catch (error) {
     result.error = readThrownError(error, '上传失败');
+  }
+  return result;
+}
+
+/**
+ * 上传动态照片的视频半边。
+ *
+ * 动态照片在协议上是「封面图附件 + 视频附件 + 正文三元组」，
+ * 两半都走同一个附件接口，视频这半的字段差异见 `NgaUploader.ngaUploadVideoFile`。
+ *
+ * @param token - 会话令牌
+ * @param auth - post/check 返回的上传鉴权码
+ * @param fid - 版块 ID
+ * @param attachUrl - post/check 返回的上传地址
+ * @param videoData - 视频二进制数据
+ * @param fileName - 文件名（动态照片固定 `video.mp4`）
+ * @returns 附件参数与视频 URL
+ */
+export async function uploadVideoAttachment(token: string, auth: string, fid: number,
+  attachUrl: string, videoData: ArrayBuffer, fileName: string): Promise<UploadAttachmentResult> {
+  const result = new UploadAttachmentResult();
+  const session = appStore.getSession(token);
+  if (!session) {
+    result.error = '未登录';
+    return result;
+  }
+
+  try {
+    const rawText: string = await ngaUploadVideoFile(
+      videoData, fileName, auth, fid, attachUrl,
+      { uid: session.uid, cid: session.cid }
+    );
+    logger.verbose('[NGA][UPLOAD] raw video: %{public}s', rawText.slice(0, 300));
+    fillUploadResult(rawText, attachUrl, result);
+  } catch (error) {
+    result.error = readThrownError(error, '上传视频失败');
   }
   return result;
 }
