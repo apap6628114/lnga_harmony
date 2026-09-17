@@ -214,6 +214,10 @@ export struct SettingsPanel {
     try {
       context = this.getUIContext().getHostContext() as common.UIAbilityContext
       originArea = context.area
+      /* filesDir 随 `area` 变化，必须在切换分区**之前**取：播放器写缓存用的是默认分区的
+         filesDir（见 `MovingPhotoCache`）。若在 `area = EL2` 之后再读，一旦默认分区不是
+         EL2，这里算出的就是另一个目录，"清除缓存"会静默失效。 */
+      const abilityFilesDir: string = context.filesDir
       const dirs: string[] = []
 
       context.area = contextConstant.AreaMode.EL1
@@ -221,8 +225,10 @@ export struct SettingsPanel {
       context.area = contextConstant.AreaMode.EL2
       dirs.push(context.cacheDir)
       /* 动态照片播放器的封面/视频缓存：位于持久目录 filesDir 下，
-         不在上面的 cacheDir 范围内，必须显式加入，否则"清除缓存"清不掉它。 */
-      dirs.push(movingPhotoCacheDir(context.filesDir))
+         不在上面的 cacheDir 范围内，必须显式加入，否则"清除缓存"清不掉它。
+         另注：整目录删除不避让正在播放的实例（播放器下次点播放会报错并收起），
+         缓存淘汰路径本身是避让的（见 MovingPhotoCache 的占用计数）。 */
+      dirs.push(movingPhotoCacheDir(abilityFilesDir))
 
       appContext = context.getApplicationContext()
       originAppArea = appContext.area

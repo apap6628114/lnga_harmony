@@ -237,11 +237,12 @@ API 23+）原文：
 大小与当时内存压力）而非必现。
 
 **修法**：`EntryAbility.onWindowStageCreate` 的 `loadContent` 回调内调
-`UIContext.setImageCacheCount(10)` + `setImageRawDataCacheSize(64MB)`（见
-`enableImageDecodeCache`）。取 10 而非更大值的理由写在常量注释里：缓存是 **LRU**，
-被挤掉的总是最久未用的，而本诉求只关心"刚看过的那几张"；且正文图片 `autoResize`
-默认为 **false**（按原图尺寸解码，见 §2.2 G6），单张位图内存成本高。
-**这是"内存 ↔ 闪烁"的取舍旋钮**，真机验证后可调。
+`UIContext.setImageCacheCount(20)` + `setImageRawDataCacheSize(64MB)`（见
+`enableImageDecodeCache`）。取 20 的理由写在常量注释里：缓存是 **LRU**，被挤掉的总是最久
+未用的，而本诉求只关心"刚看过的那几张"（正文可见图 + 查看器相邻三张），20 张足够覆盖并留
+余量；且正文图片 `autoResize` 默认为 **false**（按原图尺寸解码，见 §2.2 G6），单张位图内存
+成本高——这也是**不能**取更大值的原因。**这是"内存 ↔ 闪烁"的取舍旋钮**：真机发现内存压力
+优先下调（如 10），仍偶发闪烁再上调；改值须同步常量注释与本节记录。
 
 **仍待真机确认**：6.2 是从官方"默认不缓存"+ 查看器解码三张大图推得的最强解释，能解释
 偶发性，但改后需在真机反复进出查看器复核。若仍偶发，需再查"正文 `Image` 是否被重新创建"。

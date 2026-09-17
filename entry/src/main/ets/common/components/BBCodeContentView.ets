@@ -5,7 +5,7 @@ import { AudioPlayer } from '../media/AudioPlayer'
 import { MutedVideo } from '../media/MutedVideo'
 import { ImageSize, getCachedImageSize, setCachedImageSize } from '../media/ImageSizeUtil'
 import { MovingPhotoPlayer } from '../media/MovingPhotoPlayer'
-import { getMovingPhotoVideo, registerMovingPhoto } from '../media/MovingPhotoRegistry'
+import { registerMovingPhoto } from '../media/MovingPhotoRegistry'
 import { fetchVideoSize, getCachedVideoSize } from '../media/VideoSizeUtil'
 import { shouldUsePassive } from '../utils/NetworkUtil'
 import { LengthMetrics } from '@kit.ArkUI'
@@ -706,7 +706,7 @@ export struct BBCodeContentView {
   @Builder
   RenderImage(node: BBNode, ctx: RenderContext) {
     if (node.src.length > 0 && !(this.hideFailedImages && this.failedImages.has(node.src))) {
-      this.RenderImageContent(node.src, ctx.inQuote, node.videoSrc.length > 0)
+      this.RenderImageContent(node.src, ctx.inQuote, node.videoSrc)
     }
   }
 
@@ -715,10 +715,12 @@ export struct BBCodeContentView {
    *
    * @param src 图片地址
    * @param inQuote 是否位于引用块内
-   * @param isMovingPhoto 是否为动态照片（NGA `[b]MPHOTO[/b]` 折叠而来，解析层挂在 videoSrc）
+   * @param videoSrc 动态照片的动态视频地址（解析层折叠后挂在 IMAGE 节点的 `videoSrc` 上），
+   *                 非动态照片传空串。**直接取节点字段、不查 `MovingPhotoRegistry`**：
+   *                 注册表可能因容量淘汰而查不到，那会让正文里的动态照片退化成"点了没反应"。
    */
   @Builder
-  RenderImageContent(src: string, inQuote: boolean, isMovingPhoto: boolean) {
+  RenderImageContent(src: string, inQuote: boolean, videoSrc: string) {
     if (shouldUsePassive(this.imageLoadStrategy)) {
       /* 被动式：紧凑占位图。 */
       Row() {
@@ -732,7 +734,7 @@ export struct BBCodeContentView {
         .borderRadius(6)
         .backgroundColor(AppColors.bgSecondary)
 
-        Text(isMovingPhoto ? '点击查看动态照片' : '点击查看图片').fontSize(13).fontColor(AppColors.textTertiary).margin({ left: 8 })
+        Text(videoSrc.length > 0 ? '点击查看动态照片' : '点击查看图片').fontSize(13).fontColor(AppColors.textTertiary).margin({ left: 8 })
       }
       .padding({ left: 10, right: 10 })
       .height(40)
@@ -768,7 +770,7 @@ export struct BBCodeContentView {
             .width('100%').height('100%')
             /* 动态照片恒用 Contain：须与播放用的 MovingPhotoView（固定 Contain）同几何，
                否则引用块里 Cover 的封面与 Contain 的播放画面会大小不一。 */
-            .objectFit(inQuote && !isMovingPhoto ? ImageFit.Cover : ImageFit.Contain)
+            .objectFit(inQuote && videoSrc.length === 0 ? ImageFit.Cover : ImageFit.Contain)
             .borderRadius(inQuote ? 6 : 8)
             /* 长按不注册操作：Image 自 API 10 起 draggable 默认 true，长按会被系统当成拖拽图片。 */
             .draggable(false)
@@ -789,12 +791,12 @@ export struct BBCodeContentView {
             })
         }
 
-        if (isMovingPhoto && this.playingMovingPhotoSrc === src) {
+        if (videoSrc.length > 0 && this.playingMovingPhotoSrc === src) {
           /* 就地播放：点击图片左上角图标后展开播放器，播放一遍后自动收起回静态封面。
              叠在封面之上（不是替换）：封面节点始终不动，播放结束只卸载本层。 */
           MovingPhotoPlayer({
             coverUrl: src,
-            videoUrl: getMovingPhotoVideo(src),
+            videoUrl: videoSrc,
             /* 与正文静态图标同位置同尺寸：接管前后图标不跳动。 */
             iconTop: 6,
             iconLeft: 6,
@@ -802,6 +804,13 @@ export struct BBCodeContentView {
             autoPlayOnce: true,
             onPlaybackFinish: (): void => {
               this.playingMovingPhotoSrc = ''
+            },
+            onPrepareFailed: (coverUrl: string): void => {
+              /* 准备失败（下载失败/loadMovingPhoto 拒绝）：收起播放器回到静态角标，
+                 否则会停在一块"没有播放入口"的静态封面上（角标已隐藏、播放器图标也不显示）。 */
+              if (this.playingMovingPhotoSrc === coverUrl) {
+                this.playingMovingPhotoSrc = ''
+              }
             },
             onBodyClick: (): void => {
               /* 播放态点图片与静态封面行为一致：收起就地播放器并打开查看器。 */
@@ -815,7 +824,7 @@ export struct BBCodeContentView {
             .height('100%')
         }
 
-        if (isMovingPhoto && this.playingMovingPhotoSrc !== src) {
+        if (videoSrc.length > 0 && this.playingMovingPhotoSrc !== src) {
           /* 图片左上角 Live Photo 图标按钮：圆形实底 + 一圈细描边（按钮底板形态，
              与视频右上角静音按钮同款），点击就地播放一次。 */
           Stack() {

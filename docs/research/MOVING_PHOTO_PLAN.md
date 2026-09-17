@@ -241,7 +241,14 @@ loading ──成功──▶ ready ──onPrepared 后播放──▶ playing 
 | loading | 常驻，半透明 0.55 | 排队（就绪后播放一次） | 帖子内 → 收起播放器并打开查看器；查看器内 → 无操作 | 无操作 |
 | ready | 常驻，白色 | **播放一次** | 同上 | 无操作 |
 | playing | 常驻，**琥珀色高亮** | **忽略**（不重播、不终止） | 同上 | 无操作 |
-| failed | 不显示 | 忽略 | 同上 | 无操作 |
+| failed | 不显示 | 忽略 | 同上 | **父组件必须据此回退**（见下） |
+
+失败态的处理分两侧，缺一不可：播放器侧只负责"不显示图标"（不误导用户可播放），
+**回退由父组件通过 `onPrepareFailed(coverUrl)` 完成**——正文收起就地播放器、回到静态角标
+（点一下即可重试），查看器把当前页标记为不可播放并回落成普通 `Image`（捏合/双击缩放恢复）。
+不接这个回调的后果是：正文停在一块"没有入口"的静态封面上，查看器停在一张既不能播也不能
+缩放的图片上（缩放守卫按"是不是动态照片"提前 return，与播放器状态无关）。
+回调带封面地址而非读"当前页"：切图会复用播放器实例，回调到达时当前页可能已经变了。
 
 实现要点：
 
@@ -262,9 +269,17 @@ loading ──成功──▶ ready ──onPrepared 后播放──▶ playing 
 - **图片点击透传**：内部图片不绑定点击，事件穿透到根 `Stack`，由 `onBodyClick` 交给父组件
   （帖子内 ＝ 收起播放器并打开查看器；查看器内不传回调 ＝ 无操作）。
 - **播放一次** = `autoPlay(false)` + `repeatPlay(false)` + `startPlayback()`（官方语义：播完回静态帧）。
+- **不可见即不播**：`autoPlayOnce` 的排队会先看可见性（`onVisibleAreaChange` 维护），
+  下载期间滚出屏幕就丢弃这次排队——不产生看不见的 AVPlayer，也不占全局播放权。
 - **沙箱缓存**：`filesDir/mphoto/`（`MovingPhotoCache.ets` 单源；官方指南的 `loadMovingPhoto`
   示例也用 `filesDir`）。并发下载按目标路径去重、写 `.part` 后 `renameSync` 原子替换、
-  缓存命中校验 `size > 0`；超过 120 个文件按 mtime 淘汰最旧一半；该目录已接入设置页「清除缓存」。
+  **校验响应状态码与响应体非空**（`http.request` 对 4xx/5xx 同样成功 resolve，不判状态码会把
+  错误页当媒体文件永久缓存）、命中校验 `size > 0`。淘汰口径是**体积预算 256MB 为主 +
+  文件数 80 为兜底**（只限文件数挡不住"少数几个大视频"，只限体积挡不住"大量小封面"），
+  按 mtime 从旧到新删到两个上限的一半（留余量摊销成本），**跳过有占用的文件与下载中的文件**。
+  `ensureMovingPhotoFiles` 返回的文件对会占用（引用计数），调用方必须 `releaseMovingPhotoFiles`。
+  该目录已接入设置页「清除缓存」（整目录删除，不避让正在播放的实例——播放器下次点播放会
+  报错并收起，属可接受行为）。
 - 图标位置与尺寸：帖子内贴图片左上角 `position(6,6)`、**40vp**；查看器贴内容区左上角 `position(16,12)`、**44vp**。
 
 ### 7.3 图标
@@ -299,10 +314,11 @@ loading ──成功──▶ ready ──onPrepared 后播放──▶ playing 
 | `tools/bbcode-ts/src/parser/bbcode/parser.ts` | `parseBlockNodes` 出口接入折叠 |
 | `entry/src/main/ets/parser/task/BBCodeParseTask.ets` | taskpool 传输契约补字段 |
 | `entry/src/main/ets/parser/bbcode/BBCodeCache.ets` | 重建时拷贝字段 |
-| `entry/src/main/ets/common/media/MovingPhotoRegistry.ets` | 封面 → 视频 进程内注册表 |
+| `entry/src/main/ets/common/media/MovingPhotoRegistry.ets` | 封面 → 视频 进程内注册表（查看器反查用） |
+| `entry/src/main/ets/common/media/MovingPhotoCache.ets` | 沙箱缓存单源：路径 / 下载校验 / 原子替换 / 体积与占用治理（播放器与查看器保存共用） |
 | `entry/src/main/ets/common/media/MovingPhotoPlayer.ets` | 下载 → `loadMovingPhoto` → `MovingPhotoView` + 状态机 |
 | `entry/src/main/ets/common/components/BBCodeContentView.ets` | 正文图标 + 就地播放 |
-| `entry/src/main/ets/common/components/ImageViewer.ets` | 查看器播放（自动一次 + 图标常驻） |
+| `entry/src/main/ets/common/components/ImageViewer.ets` | 查看器播放（图标触发）+ 失败回退 + 保存动态照片 |
 
 ### 7.5 测试与门禁
 
@@ -340,7 +356,33 @@ loading ──成功──▶ ready ──onPrepared 后播放──▶ playing 
 
 **记录待决策（未改）**：`docs/research` 文档是否收敛为 `docs/*_DESIGN.md` 并入索引；
 `registerMovingPhoto` 目前挂在 `collectUrls()` 内（方法是查询语义却带登记副作用）；
-`PHASE_*` 是否改为工程惯用的 `enum`；查看器「保存/分享」对动态照片只导出静态封面；
-`draggable(false)` 属全量行为变更（本次按需求"长按不注册操作"施加到所有正文图与查看器图）。
+`PHASE_*` 是否改为工程惯用的 `enum`；查看器「分享」对动态照片仍只导出静态封面（保存已按
+动态照片实现，见 §8.1）；`draggable(false)` 属全量行为变更（本次按需求"长按不注册操作"施加到所有正文图与查看器图）。
 另有既有隐患（非本次引入）：`BBCodeCache.preWarmBatchAwait` 在 `addTask` 失败时
 `results` 与 `toParse` 索引错位，会串位写缓存。
+
+### 8.1 第二轮审查与修复（2026-09-18）
+
+第一轮之后的复查（只读审查 + 官方文档/SDK 声明/`.d.ts` 交叉核对），又发现 7 项：
+前 6 项是本次新增能力自身的边角，第 7 项是第一轮记录待决策的「保存」项。
+
+| 问题 | 后果 | 处理 |
+|---|---|---|
+| 下载不校验 HTTP 状态码 | `http.request` 对 4xx/5xx 同样成功 resolve，错误页被当媒体文件落盘；命中校验只看 `size > 0`，坏文件**永久命中** → 该动态照片再也播不出来 | ✅ `downloadToFile` 判 `responseCode === OK` 且响应体非空；显式设 `maxLimit`（官方两处文档对默认上限自相矛盾：`request()` 说明写 50MB、`maxLimit` 字段写默认 5MB）；`ImageViewer` 保存/分享两处同源漏判一并补上 |
+| 准备失败无出口 | 正文角标不再出现（只能点图片绕进查看器）；查看器该页永久处于"不能播也不能缩放" | ✅ 播放器新增 `onPrepareFailed(coverUrl)`：正文收起回静态角标（可重试），查看器标记该页并回落普通 `Image`（捏合/双击恢复），换页清标记 |
+| 内联播放依赖注册表 | `MovingPhotoRegistry` 容量淘汰后查不到 → `videoUrl` 为空 → 直接失败 | ✅ 内联改为直接取节点 `videoSrc`（`RenderImageContent` 第三个参数由布尔改为视频地址），注册表只服务查看器 |
+| 下载期间滚出屏幕仍会起播 | 不可见地播一遍，短暂占住全局播放权 | ✅ `isVisible` 闸门：`prepare()` 末尾与 `flushPendingAutoPlay()` 双重判断 |
+| 缓存按"文件个数"限流 | 120 个文件（=60 组）体积由视频主导，最坏 GB 级；目录在持久区且不计入设置页显示的缓存大小 | ✅ 改为**体积预算 256MB 为主 + 文件数 80 兜底**，淘汰到上限一半（留余量摊销），跳过占用中与下载中的文件 |
+| `SettingsPanel` 在 `area = EL2` 之后读 `filesDir` | `filesDir` 随分区变化，只靠"默认分区恰好是 EL2"才删对目录 | ✅ 切换分区前先取 `abilityFilesDir`，并注释说明这一依赖 |
+| 查看器「保存」只导出静态封面 | 存下来没有动态效果 | ✅ 改为 `createAssetRequest(subtype: MOVING_PHOTO)` + `addResource` 两次（图片/视频）写入相册，**复用播放器同一份沙箱缓存**不重下视频；任一步失败自动降级存静图 |
+
+**分享仍为静态封面**：系统分享只接受「一个 uri + 一个 utd」，而动态照片是两个文件，
+本 SDK 也没有动态照片的 utd 与分享通路（`image/movingPhoto` 只作为媒体库选择器的过滤 MIME 存在）。
+
+**待真机复验（本地无法验证）**：
+1. 查看器里相邻两张动态照片之间滑动后，第二张点角标是否正常播放——播放器的 `controller`
+   跨资源复用（`movingPhoto` 经 `undefined` 重建节点，但 controller 是同一实例），
+   官方为"同一 controller 换数据"提供了 `refreshMovingPhoto()`，实现未调用；
+   若复现"图标亮起但画面不动"（2.5s 后看门狗会复位），改为换源时新建 controller 或补调该接口。
+2. 失败路径手感：临时把某个 mp4 换成不存在的地址，确认正文角标恢复、查看器该页可缩放。
+3. 真机内存：`IMAGE_CACHE_COUNT = 20` 下的内存曲线（见 IMAGE_PIPELINE_AUDIT §6.2）。

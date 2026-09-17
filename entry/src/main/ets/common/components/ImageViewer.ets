@@ -8,6 +8,7 @@ import { appStore } from '../../store/AppStore';
 import { AppColors } from '../constants/Constants';
 import { UIMaterialManager } from '../managers/UIMaterialManager';
 import { MovingPhotoPlayer } from '../media/MovingPhotoPlayer';
+import { ensureMovingPhotoFiles, releaseMovingPhotoFiles, MovingPhotoPair } from '../media/MovingPhotoCache';
 import { getMovingPhotoVideo } from '../media/MovingPhotoRegistry';
 import { Logger, DOMAIN_UI, formatError } from '../utils/Logger';
 
@@ -32,6 +33,13 @@ export struct ImageViewer {
   @StorageProp('navBarHeight') navBarHeight: number = 0
   @State saving: boolean = false
   @State sharing: boolean = false
+  /**
+   * 当前页准备失败的动态照片封面地址（仅对当前页有效，换页即清空）。
+   *
+   * 失败页要立刻回落成普通图片：否则既不能播（图标已隐藏）也不能缩放
+   * （捏合/双击守卫按"是不是动态照片"提前返回），变成一张永久卡住的图。
+   */
+  @State private failedMovingPhotoUrl: string = ''
 
   private isPageAnimating: boolean = false
 
@@ -70,14 +78,35 @@ export struct ImageViewer {
   }
 
   /**
-   * 当前页的动态视频地址；非动态照片返回空串。
+   * 当前页**可播放**的动态视频地址；非动态照片、或本页已准备失败时返回空串。
    *
    * 正文渲染时已把「动态照片封面 → 动态视频」登记到 `MovingPhotoRegistry`，
    * 查看器按当前封面地址反查即可，无需给点击回调链层层加参数。
    *
+   * 失败页返回空串是渲染分支与手势守卫共用的判据：渲染回落到普通 `Image`，
+   * 捏合/双击随之放行。
+   *
    * @returns 动态视频地址或空串
    */
   private currentMovingPhotoVideo(): string {
+    if (this.currentIndex < 0 || this.currentIndex >= this.urls.length) {
+      return ''
+    }
+    const url: string = this.urls[this.currentIndex]
+    if (this.failedMovingPhotoUrl === url) {
+      return ''
+    }
+    return getMovingPhotoVideo(url)
+  }
+
+  /**
+   * 当前页的动态视频地址（不做过失败过滤，供「保存动态照片」使用）。
+   *
+   * 播放准备失败不等于文件取不到：保存走同一份沙箱缓存，仍有机会成功。
+   *
+   * @returns 动态视频地址或空串
+   */
+  private rawMovingPhotoVideo(): string {
     if (this.currentIndex < 0 || this.currentIndex >= this.urls.length) {
       return ''
     }
@@ -98,33 +127,23 @@ export struct ImageViewer {
     return 'jpg'
   }
 
+  /**
+   * 保存当前页到相册。
+   *
+   * 动态照片优先按「封面 + 视频」两条资源写入媒体库（保留动态效果），
+   * 任一步失败则降级为保存静态封面（与普通图片同路径）。
+   */
   private async saveCurrentImage(): Promise<void> {
     if (this.saving) return
     this.saving = true
     try {
-      let url: string = this.urls[this.currentIndex]
-      let ext: string = this.getExtension(url)
-      let ctx: Context = this.getUIContext().getHostContext() as Context
-      let sandboxDir: string = ctx.filesDir
-      let fileName: string = `temp_${Date.now()}.${ext}`
-      let sandboxFileUri: string = `file://${sandboxDir}/${fileName}`
-
-      let httpRequest: http.HttpRequest = http.createHttp()
-      let response: http.HttpResponse = await httpRequest.request(url, {
-        method: http.RequestMethod.GET
-      })
-      httpRequest.destroy()
-
-      let result: ArrayBuffer = response.result as ArrayBuffer
-      let file: fileIo.File = await fileIo.open(sandboxFileUri,
-        fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE)
-      await fileIo.write(file.fd, result)
-      fileIo.close(file)
-
-      let phAccessHelper = photoAccessHelper.getPhotoAccessHelper(ctx)
-      let assetChangeRequest = photoAccessHelper.MediaAssetChangeRequest.createImageAssetRequest(
-        ctx, sandboxFileUri)
-      await phAccessHelper.applyChanges(assetChangeRequest)
+      const url: string = this.urls[this.currentIndex]
+      const videoUrl: string = this.rawMovingPhotoVideo()
+      if (videoUrl.length > 0 && await this.saveMovingPhotoToAlbum(url, videoUrl)) {
+        appStore.showToast('已保存到相册')
+        return
+      }
+      await this.saveStillToAlbum(url)
       appStore.showToast('已保存到相册')
     } catch (err) {
       logger.error('[ImageViewer] save failed: %{public}s', formatError(err))
@@ -134,6 +153,97 @@ export struct ImageViewer {
     }
   }
 
+  /**
+   * 按动态照片写入相册（`subtype: MOVING_PHOTO` + 图片/视频两条资源）。
+   *
+   * 复用播放器同一份沙箱缓存（见 `MovingPhotoCache`），不重复下载视频；
+   * 该缓存可能已被淘汰、也可能因播放失败而缺失，此时直接返回 false 交给调用方降级。
+   *
+   * @param coverUrl 封面地址
+   * @param videoUrl 动态视频地址
+   * @returns 是否保存成功
+   */
+  private async saveMovingPhotoToAlbum(coverUrl: string, videoUrl: string): Promise<boolean> {
+    const ctx: Context = this.getUIContext().getHostContext() as Context
+    let pair: MovingPhotoPair | null = null
+    try {
+      pair = await ensureMovingPhotoFiles(ctx, coverUrl, videoUrl)
+      if (pair === null) {
+        return false
+      }
+      const options: photoAccessHelper.CreateOptions = {
+        title: `nga_mphoto_${Date.now()}`,
+        subtype: photoAccessHelper.PhotoSubtype.MOVING_PHOTO
+      }
+      const assetChangeRequest: photoAccessHelper.MediaAssetChangeRequest =
+        photoAccessHelper.MediaAssetChangeRequest.createAssetRequest(
+          ctx, photoAccessHelper.PhotoType.IMAGE, this.getExtension(coverUrl), options)
+      /* 动态照片的固定写法：图片与视频各 addResource 一次（官方注释原文）。 */
+      assetChangeRequest.addResource(photoAccessHelper.ResourceType.IMAGE_RESOURCE,
+        fileUri.getUriFromPath(pair.coverPath))
+      assetChangeRequest.addResource(photoAccessHelper.ResourceType.VIDEO_RESOURCE,
+        fileUri.getUriFromPath(pair.videoPath))
+      const phAccessHelper = photoAccessHelper.getPhotoAccessHelper(ctx)
+      await phAccessHelper.applyChanges(assetChangeRequest)
+      return true
+    } catch (err) {
+      logger.warn('[ImageViewer] save moving photo failed, fallback to still: %{public}s', formatError(err))
+      return false
+    } finally {
+      if (pair !== null) {
+        releaseMovingPhotoFiles(pair)
+      }
+    }
+  }
+
+  /**
+   * 保存静态图片到相册（普通图片路径，也是动态照片保存失败时的降级路径）。
+   *
+   * 必须校验响应：`http.request` 对 4xx/5xx 同样成功 resolve，不判状态码会把错误页
+   * 当成照片存进相册。
+   *
+   * @param url 图片地址
+   */
+  private async saveStillToAlbum(url: string): Promise<void> {
+    const ext: string = this.getExtension(url)
+    const ctx: Context = this.getUIContext().getHostContext() as Context
+    const sandboxDir: string = ctx.filesDir
+    const fileName: string = `temp_${Date.now()}.${ext}`
+    const sandboxFileUri: string = `file://${sandboxDir}/${fileName}`
+    const httpRequest: http.HttpRequest = http.createHttp()
+    try {
+      const response: http.HttpResponse = await httpRequest.request(url, {
+        method: http.RequestMethod.GET
+      })
+      if (response.responseCode !== http.ResponseCode.OK) {
+        throw new Error(`download failed with http ${response.responseCode}`)
+      }
+      const result: ArrayBuffer = response.result as ArrayBuffer
+      if (result.byteLength === 0) {
+        throw new Error('download failed with empty body')
+      }
+      const file: fileIo.File = await fileIo.open(sandboxFileUri,
+        fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE)
+      await fileIo.write(file.fd, result)
+      fileIo.close(file)
+      const phAccessHelper = photoAccessHelper.getPhotoAccessHelper(ctx)
+      const assetChangeRequest = photoAccessHelper.MediaAssetChangeRequest.createImageAssetRequest(
+        ctx, sandboxFileUri)
+      await phAccessHelper.applyChanges(assetChangeRequest)
+    } finally {
+      httpRequest.destroy()
+    }
+  }
+
+  /**
+   * 分享当前页。
+   *
+   * **动态照片分享的是静态封面**：系统分享只吃「一个 uri + 一个 utd」，
+   * 而动态照片是「图片 + 视频」两个文件，本 SDK 也没有动态照片的 utd 与分享通路
+   * （`image/movingPhoto` 仅作为媒体库选择器的过滤 MIME 存在）。要完整分享动态照片
+   * 需先落到相册再分享媒体库资产，本工程不做。保存走 {@link saveMovingPhotoToAlbum}，
+   * 动态效果不丢。
+   */
   private async shareCurrentImage(): Promise<void> {
     if (this.sharing) return
     this.sharing = true
@@ -150,8 +260,14 @@ export struct ImageViewer {
         method: http.RequestMethod.GET
       })
       httpRequest.destroy()
+      if (response.responseCode !== http.ResponseCode.OK) {
+        throw new Error(`download failed with http ${response.responseCode}`)
+      }
 
       let result: ArrayBuffer = response.result as ArrayBuffer
+      if (result.byteLength === 0) {
+        throw new Error('download failed with empty body')
+      }
       let file: fileIo.File = await fileIo.open(sandboxFileUri,
         fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE)
       await fileIo.write(file.fd, result)
@@ -275,6 +391,8 @@ export struct ImageViewer {
     let dir: number = targetIndex > this.currentIndex ? 1 : -1
     let oldSwipeX: number = this.swipeTranslateX
     this.currentIndex = targetIndex
+    /* 换页清空失败标记：回到该页会重建播放器并重下一次（瞬时失败不至于被判死刑）。 */
+    this.failedMovingPhotoUrl = ''
     this.zoomScale = 1
     this.zoomOffsetX = 0
     this.zoomOffsetY = 0
@@ -321,7 +439,15 @@ export struct ImageViewer {
                  （不随图片位置/尺寸变化），图片本体点击/长按不注册操作。 */
               iconTop: 12,
               iconLeft: 16,
-              iconSize: 44
+              iconSize: 44,
+              onPrepareFailed: (coverUrl: string): void => {
+                /* 只认当前页的失败：回调到达时当前页可能已经翻走（切图会复用播放器实例），
+                   否则会把别的页误标成失败。标记后本页回落到普通图片分支（可缩放）。 */
+                if (this.currentIndex >= 0 && this.currentIndex < this.urls.length &&
+                  this.urls[this.currentIndex] === coverUrl) {
+                  this.failedMovingPhotoUrl = coverUrl
+                }
+              }
             })
               .width('100%').height('100%')
               .translate({ x: this.swipeTranslateX })

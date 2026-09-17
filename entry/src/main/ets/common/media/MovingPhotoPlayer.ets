@@ -1,16 +1,11 @@
-import { http } from '@kit.NetworkKit'
-import { fileIo } from '@kit.CoreFileKit'
 import { photoAccessHelper, MovingPhotoView, MovingPhotoViewController } from '@kit.MediaLibraryKit'
 import { AppColors } from '../constants/Constants'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 import { Logger, DOMAIN_UI, formatError } from '../utils/Logger'
 import { PageScope } from '../concurrency/PageScope'
-import { movingPhotoCacheDir } from './MovingPhotoCache'
+import { ensureMovingPhotoFiles, releaseMovingPhotoFiles, MovingPhotoPair } from './MovingPhotoCache'
 
 const logger = new Logger(DOMAIN_UI, 'MovingPhotoPlayer')
-
-/** 缓存文件数上限：超过后按修改时间淘汰最旧的一半（不是全清空）。 */
-const MAX_CACHE_FILES: number = 120
 
 /** 发出 `startPlayback()` 后等待 `onStart` 的上限：超时视为播放器未就绪（打空），复位图标。 */
 const PLAYBACK_START_TIMEOUT_MS: number = 2500
@@ -29,73 +24,6 @@ const PHASE_READY: string = 'ready'
 const PHASE_PLAYING: string = 'playing'
 /** 失败：保持静态封面且不显示图标（不误导用户可播放）。 */
 const PHASE_FAILED: string = 'failed'
-
-/**
- * 计算 URL 的稳定短哈希，用于沙箱缓存文件名。
- *
- * FNV-1a 32 位 + URL 长度前缀：只用哈希不用原 URL 作文件名（NGA 附件名可能带
- * 查询串与特殊字符，直接落盘有非法字符与超长风险），长度前缀进一步降低不同 URL
- * 命中同一缓存文件的概率（纯 32 位截断哈希存在静默串图风险）。
- *
- * @param url 资源地址
- * @returns 36 进制哈希字符串
- */
-function hashUrl(url: string): string {
-  let hash: number = 0x811c9dc5
-  for (let i: number = 0; i < url.length; i++) {
-    hash = hash ^ url.charCodeAt(i)
-    hash = (hash * 0x01000193) | 0
-  }
-  if (hash < 0) {
-    hash = -hash
-  }
-  return `${url.length.toString(36)}${hash.toString(36)}`
-}
-
-/**
- * 取 URL 的扩展名（小写、不含点）。
- *
- * @param url 资源地址
- * @param fallback 无法识别时的回退扩展名
- * @returns 扩展名
- */
-function extensionOf(url: string, fallback: string): string {
-  const match: RegExpMatchArray | null = url.match(/\.(\w{2,5})(?:[?#]|$)/)
-  if (match === null) {
-    return fallback
-  }
-  const ext: string = match[1].toLowerCase()
-  if (ext === 'jpeg') {
-    return 'jpg'
-  }
-  return ext
-}
-
-/**
- * 进行中的下载表（目标文件路径 → 下载 Promise）。
- *
- * 同一资源可能被多个组件同时需要（查看器相邻两张都是动态照片时 `@Watch` 会触发两次；
- * 正文就地播放下载中又打开查看器），若各自以目标文件名直接写，后到者会读到**尚未写完**
- * 的文件并把坏文件永久留在缓存里，失败分支还会删掉别人正在用的文件。
- */
-const inFlightDownloads: Map<string, Promise<boolean>> = new Map<string, Promise<boolean>>()
-
-/** 缓存淘汰项（文件路径 + 修改时间）。 */
-class CacheEntry {
-  /** 文件绝对路径。 */
-  path: string = ''
-  /** 修改时间（秒，`fileIo.Stat.mtime`）。 */
-  mtime: number = 0
-
-  /**
-   * @param path 文件绝对路径
-   * @param mtime 修改时间（秒）
-   */
-  constructor(path: string, mtime: number) {
-    this.path = path
-    this.mtime = mtime
-  }
-}
 
 /**
  * 全局播放仲裁器。
@@ -179,6 +107,17 @@ const arbiter: PlaybackArbiter = new PlaybackArbiter()
  * - **只有 ready 响应图标点击**：playing 期间点击一律忽略——既不重播也不终止。
  * - **播放一次**：`autoPlay(false)` + `repeatPlay(false)` 下 `startPlayback()`
  *   即"播放一遍后回到静态封面"（官方语义），不会循环。
+ * - **失败必须通知父组件**（`onPrepareFailed`）：失败态图标不显示（不误导用户可播放），
+ *   但父组件必须据此回退——正文收起播放器回到静态角标（可重试），查看器把该页标记为
+ *   「不可播放」并按普通图片渲染（缩放恢复可用）。不接这个回调的后果是：正文停在一块
+ *   没有入口的静态封面、查看器停在一张既不能播也不能缩放的图片上。
+ * - **不可见即不播**：下载期间滚出屏幕会丢弃排队的自动播放（不产生不可见的 AVPlayer）；
+ *   滚回来再点一次角标即可。
+ *
+ * ## 沙箱缓存
+ * 下载、原子替换、体积与占用治理统一在 `MovingPhotoCache`：本组件只负责
+ * 「取得文件对（占用）→ `loadMovingPhoto` → 组件销毁/换源时释放」。
+ * 文件对持有期间不会被缓存淘汰删除。
  *
  * ## 已知约束（官方声明）
  * `MovingPhotoView` 不支持预览器与 `expandSafeArea`，内部使用 AVPlayer 且同时开启
@@ -206,6 +145,14 @@ export struct MovingPhotoPlayer {
   /** 图片本体点击回调（帖子内用于打开查看器；查看器内不传，点击即无操作）。 */
   onBodyClick: () => void = () => {}
 
+  /**
+   * 准备失败回调（封面/视频下载失败或 `loadMovingPhoto` 拒绝）。
+   *
+   * 参数为准备失败的封面地址：父组件可能正在滑动切图，必须按地址判断，
+   * 不能读"当前页"（回调到达时当前页可能已经变了）。
+   */
+  onPrepareFailed: (coverUrl: string) => void = (_coverUrl: string) => {}
+
   /** 当前播放阶段（loading / ready / playing / failed）。 */
   @State private phase: string = PHASE_LOADING
   /** 构造完成的动态照片对象；为空表示尚未准备就绪。 */
@@ -215,6 +162,15 @@ export struct MovingPhotoPlayer {
   private controller: MovingPhotoViewController = new MovingPhotoViewController()
   /** 组件存活会话作用域（代际校验，防止快速切图时旧结果覆盖新源）。 */
   private scope: PageScope = new PageScope()
+  /** 当前占用的缓存文件对（封面 + 视频）；为空表示未占用。 */
+  private activePair: MovingPhotoPair | null = null
+  /**
+   * 组件当前是否可见（`onVisibleAreaChange` 维护）。
+   *
+   * 默认 true：`autoPlayOnce` 只在内联点角标时使用，组件挂载那一刻必然可见，
+   * 首次回调到达前的默认值因此是安全的。
+   */
+  private isVisible: boolean = true
   /**
    * 待播放标记（自动播放或加载中点击排队）。
    *
@@ -237,7 +193,7 @@ export struct MovingPhotoPlayer {
     this.prepare()
   }
 
-  /** 组件消失时结束会话、释放播放权并停止播放。 */
+  /** 组件消失时结束会话、释放播放权与缓存占用并停止播放。 */
   aboutToDisappear(): void {
     this.scope.end()
     arbiter.release(this.coverUrl)
@@ -245,6 +201,7 @@ export struct MovingPhotoPlayer {
     this.clearPendingTimer()
     this.clearWatchdog()
     this.safeStop()
+    this.releaseActivePair()
   }
 
   /**
@@ -260,6 +217,7 @@ export struct MovingPhotoPlayer {
     this.clearPendingTimer()
     this.clearWatchdog()
     this.safeStop()
+    this.releaseActivePair()
     this.movingPhoto = undefined
     this.phase = PHASE_LOADING
     this.prepare()
@@ -267,37 +225,41 @@ export struct MovingPhotoPlayer {
 
   /**
    * 下载封面与视频到沙箱并构造 `MovingPhoto`。
+   *
+   * 所有失败出口都收敛到 `failPrepare()`：失败必须让父组件知道，
+   * 否则会停在一块没有入口的静态封面上（见类注释"失败必须通知父组件"）。
    */
   private async prepare(): Promise<void> {
     if (this.coverUrl.length === 0 || this.videoUrl.length === 0) {
-      this.phase = PHASE_FAILED
+      logger.warn('[MovingPhotoPlayer] prepare skipped: empty source')
+      this.failPrepare()
       return
     }
     const generation: number = this.scope.begin()
     try {
       const hostContext = this.getUIContext().getHostContext()
       if (hostContext === undefined) {
-        this.phase = PHASE_FAILED
+        this.failPrepare()
         return
       }
       const ctx: Context = hostContext as Context
-      const dir: string = movingPhotoCacheDir(ctx.filesDir)
-      if (!fileIo.accessSync(dir)) {
-        fileIo.mkdirSync(dir, true)
-      }
-      this.pruneCache(dir)
-      const coverPath: string = `${dir}/${hashUrl(this.coverUrl)}.${extensionOf(this.coverUrl, 'jpg')}`
-      const videoPath: string = `${dir}/${hashUrl(this.videoUrl)}.${extensionOf(this.videoUrl, 'mp4')}`
-      const coverReady: boolean = await this.ensureFile(this.coverUrl, coverPath)
-      const videoReady: boolean = await this.ensureFile(this.videoUrl, videoPath)
-      if (!coverReady || !videoReady || !this.scope.isActive(generation)) {
+      const pair: MovingPhotoPair | null = await ensureMovingPhotoFiles(ctx, this.coverUrl, this.videoUrl)
+      if (pair === null) {
         if (this.scope.isActive(generation)) {
-          this.phase = PHASE_FAILED
+          this.failPrepare()
         }
         return
       }
+      if (!this.scope.isActive(generation)) {
+        /* 下载期间已换源：本次结果作废，立刻归还占用（否则这两个文件永久免于淘汰）。 */
+        releaseMovingPhotoFiles(pair)
+        return
+      }
+      this.releaseActivePair()
+      this.activePair = pair
       const photo: photoAccessHelper.MovingPhoto =
-        await photoAccessHelper.MediaAssetManager.loadMovingPhoto(ctx, `file://${coverPath}`, `file://${videoPath}`)
+        await photoAccessHelper.MediaAssetManager.loadMovingPhoto(ctx,
+          `file://${pair.coverPath}`, `file://${pair.videoPath}`)
       if (!this.scope.isActive(generation)) {
         return
       }
@@ -308,149 +270,34 @@ export struct MovingPhotoPlayer {
       arbiter.acquire(this.coverUrl, (): void => {
         this.handleInterrupted()
       })
-      if (this.autoPlayOnce) {
+      /* 不可见时不排队：下载期间滚出屏幕的情形由这里与 flushPendingAutoPlay 双重兜住。 */
+      if (this.autoPlayOnce && this.isVisible) {
         this.requestPendingAutoPlay()
       }
     } catch (err) {
       if (this.scope.isActive(generation)) {
         logger.warn('[MovingPhotoPlayer] prepare failed: %{public}s', formatError(err))
-        this.phase = PHASE_FAILED
+        this.failPrepare()
       }
     }
   }
 
   /**
-   * 缓存目录容量保护：超过上限时按修改时间淘汰最旧的一半。
+   * 准备失败：置失败态并通知父组件。
    *
-   * 不做"全清空"：全清会让已有的动态照片全部需要重新下载（流量与等待），
-   * 且删除瞬间可能删掉另一个组件正在使用/播放的文件。
-   *
-   * @param dir 缓存目录绝对路径
+   * 回调放在最后——父组件可能在回调里卸载本组件（正文收起就地播放器），
+   * 此后不得再触碰组件状态。
    */
-  private pruneCache(dir: string): void {
-    try {
-      const names: string[] = fileIo.listFileSync(dir)
-      if (names.length <= MAX_CACHE_FILES) {
-        return
-      }
-      const entries: CacheEntry[] = []
-      for (let i: number = 0; i < names.length; i++) {
-        try {
-          const stat: fileIo.Stat = fileIo.statSync(`${dir}/${names[i]}`)
-          entries.push(new CacheEntry(`${dir}/${names[i]}`, stat.mtime))
-        } catch (statErr) {
-          /* 单个文件 stat 失败（可能正被删除）不影响其它条目。 */
-        }
-      }
-      entries.sort((a: CacheEntry, b: CacheEntry): number => a.mtime - b.mtime)
-      const removeCount: number = names.length - Math.floor(MAX_CACHE_FILES / 2)
-      for (let i: number = 0; i < removeCount && i < entries.length; i++) {
-        if (inFlightDownloads.has(entries[i].path)) {
-          continue
-        }
-        try {
-          fileIo.unlinkSync(entries[i].path)
-        } catch (unlinkErr) {
-          /* 已被其它路径删除则忽略。 */
-        }
-      }
-    } catch (err) {
-      logger.verbose('[MovingPhotoPlayer] prune failed: %{public}s', formatError(err))
-    }
+  private failPrepare(): void {
+    this.phase = PHASE_FAILED
+    this.onPrepareFailed(this.coverUrl)
   }
 
-  /**
-   * 确保沙箱内已有可用的目标文件（无则下载，同一文件并发请求会复用同一次下载）。
-   *
-   * @param url 资源地址
-   * @param filePath 沙箱目标路径
-   * @returns 文件是否可用
-   */
-  private async ensureFile(url: string, filePath: string): Promise<boolean> {
-    if (this.cachedFileUsable(filePath)) {
-      return true
-    }
-    const pending: Promise<boolean> | undefined = inFlightDownloads.get(filePath)
-    if (pending !== undefined) {
-      return pending
-    }
-    const task: Promise<boolean> = this.downloadToFile(url, filePath)
-    inFlightDownloads.set(filePath, task)
-    try {
-      return await task
-    } finally {
-      inFlightDownloads.delete(filePath)
-    }
-  }
-
-  /**
-   * 判断缓存文件是否可用（存在且非空）。
-   *
-   * 只判断存在会踩到"半成品文件"：并发写入期间或写入中断后，文件存在但内容不完整。
-   *
-   * @param filePath 沙箱文件路径
-   * @returns 是否可直接复用
-   */
-  private cachedFileUsable(filePath: string): boolean {
-    try {
-      if (!fileIo.accessSync(filePath)) {
-        return false
-      }
-      return fileIo.statSync(filePath).size > 0
-    } catch (err) {
-      return false
-    }
-  }
-
-  /**
-   * 下载到临时文件后原子替换目标文件。
-   *
-   * 先写 `xxx.part` 再 rename：写入过程对其它组件不可见，杜绝"读到半个文件"；
-   * 失败时只清理自己的临时文件，绝不删除目标文件（那可能是别的组件正在用的）。
-   *
-   * @param url 资源地址
-   * @param filePath 沙箱目标路径
-   * @returns 是否下载成功
-   */
-  private async downloadToFile(url: string, filePath: string): Promise<boolean> {
-    const tempPath: string = `${filePath}.part`
-    const httpRequest: http.HttpRequest = http.createHttp()
-    let file: fileIo.File | undefined = undefined
-    try {
-      const response: http.HttpResponse = await httpRequest.request(url, {
-        method: http.RequestMethod.GET,
-        expectDataType: http.HttpDataType.ARRAY_BUFFER
-      })
-      const data: ArrayBuffer = response.result as ArrayBuffer
-      file = await fileIo.open(tempPath,
-        fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC)
-      await fileIo.write(file.fd, data)
-      fileIo.closeSync(file)
-      file = undefined
-      if (fileIo.accessSync(filePath)) {
-        fileIo.unlinkSync(filePath)
-      }
-      fileIo.renameSync(tempPath, filePath)
-      return true
-    } catch (err) {
-      logger.warn('[MovingPhotoPlayer] download failed: %{public}s', formatError(err))
-      return false
-    } finally {
-      if (file !== undefined) {
-        try {
-          fileIo.closeSync(file)
-        } catch (closeErr) {
-          logger.verbose('[MovingPhotoPlayer] close failed: %{public}s', formatError(closeErr))
-        }
-      }
-      try {
-        if (fileIo.accessSync(tempPath)) {
-          fileIo.unlinkSync(tempPath)
-        }
-      } catch (cleanupErr) {
-        logger.verbose('[MovingPhotoPlayer] cleanup failed: %{public}s', formatError(cleanupErr))
-      }
-      httpRequest.destroy()
+  /** 归还当前占用的缓存文件对（未占用时无操作）。 */
+  private releaseActivePair(): void {
+    if (this.activePair !== null) {
+      releaseMovingPhotoFiles(this.activePair)
+      this.activePair = null
     }
   }
 
@@ -493,6 +340,9 @@ export struct MovingPhotoPlayer {
 
   /**
    * 消费"待播放"标记（`onPrepared` 或兜底定时器调用）。
+   *
+   * 不可见时丢弃这一次排队：排队期间被滚出屏幕仍起播会得到一个看不见的 AVPlayer，
+   * 白占播放器实例与全局播放权（滚回来再点一次角标即可）。
    */
   private flushPendingAutoPlay(): void {
     if (!this.pendingAutoPlay) {
@@ -500,6 +350,9 @@ export struct MovingPhotoPlayer {
     }
     this.pendingAutoPlay = false
     this.clearPendingTimer()
+    if (!this.isVisible) {
+      return
+    }
     this.playOnce()
   }
 
@@ -681,8 +534,10 @@ export struct MovingPhotoPlayer {
       this.onBodyClick()
     })
     /* 离屏即停：楼层列表用 LazyForEach + cachedCount，滚出屏幕的组件不会销毁，
-       不主动停播会让 AVPlayer 实例持续累积（官方建议同时不超过 3 个）。 */
+       不主动停播会让 AVPlayer 实例持续累积（官方建议同时不超过 3 个）。
+       可见性同时用于自动播放闸门（见 flushPendingAutoPlay）。 */
     .onVisibleAreaChange([0.0, 1.0], (_isVisible: boolean, ratio: number) => {
+      this.isVisible = ratio > 0
       if (ratio <= 0) {
         this.handleInterrupted()
       }
