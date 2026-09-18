@@ -34,6 +34,7 @@ import {
   ReadingTypography
 } from '../common/typography/ReadingTypography'
 import { AuthScope } from '../store/AuthScope'
+import { PageScope } from '../common/concurrency/PageScope'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 import { pidLocateProgress } from '../common/media/PidLocateProgress'
@@ -188,6 +189,45 @@ export struct TopicListPanel {
 
   private scroller: Scroller = new Scroller()
 
+  /** 面板存活令牌（异步回顶回调的守卫：面板销毁后不得再操作 scroller，见 PageScope 用法）。 */
+  private scope: PageScope = new PageScope()
+
+  /**
+   * 数据源重建后把列表显式滚回起点（刷新 / 换版块 / 切换排序模式 / 提交后重载）。
+   *
+   * **不能依赖「清空数据源 → 系统把偏移夹回起点」这条隐含路径**（`TITLE_LIST_DESIGN` 坑点 7 要求显式回顶）：
+   * 加载占位项高度 `getStateViewHeight()` 是按 `sortBarBottomY` 动态算出的，而 `sortBarBottomY` 的采样
+   * 时机不可控——`onAreaChange` 只响应**布局变化**引起的区域变化（SDK `common.d.ts`：translate/offset
+   * 等绘制类变化不触发），它在滚动中何时被触发、采样到的是哪一时刻的窗口坐标，官方均未定义。
+   * 设 C = contentStartOffset、itemH = 排序条 ListItem 高，清空数据后的滚动上界
+   * `U = C + itemH − sortBarBottomY`，于是判据是 `不回顶 ⟺ yOffset ≤ itemH − sortBarBottomY`：
+   * 「是否回顶」取决于**最后一次采样时刻与按键时刻之间的位移**这个窄窗口（而非刷新本身），
+   * 且排序条滚出屏幕后 `sortBarBottomY <= 0` 走首帧兜底、内容不足一屏才会被夹回起点。
+   *
+   * 回顶原语用 `scrollToIndex(0, false, ScrollAlign.START)`（项目先例见 `ThreadPanel`）：官方对
+   * `scrollToIndex` 明确写了「`ScrollAlign.START` 时指定 item 首部与容器 `contentStartOffset` 处对齐」，
+   * 而对 `scrollEdge` 只写了「滚动到容器边缘」、**未定义**它与 `contentStartOffset` 的关系——那是
+   * 「内容起点」与「首项贴屏幕上边界」（该位置 progress 已饱和为 1）两种不同落点，不能靠猜。
+   *
+   * 延迟一帧执行并做二次校准：命令发出时列表可能尚未完成重建（未挂载时定位类命令静默无效，
+   * 见 `THREAD_DESIGN`），且这次程序化滚动是否触发 `onDidScroll` 也没有文档保证；回顶后按
+   * `currentOffset()` 回算一次进度，既覆盖「命令未生效」的情形（此时校准值就是原位置的真值），
+   * 也避免进度与位置长期不一致。
+   */
+  private scrollListToTop(): void {
+    setTimeout((): void => {
+      if (!this.scope.isAlive()) {
+        return
+      }
+      this.scroller.scrollToIndex(0, false, ScrollAlign.START)
+      setTimeout((): void => {
+        if (this.scope.isAlive()) {
+          this.syncTitleScrollEffect()
+        }
+      }, 0)
+    }, 0)
+  }
+
   /** 按列表绝对滚动偏移同步标题栏视觉效果。 */
   private syncTitleScrollEffect(): void {
     const progress: number = TitleScrollEffect.getProgress(
@@ -231,6 +271,7 @@ export struct TopicListPanel {
   }
 
   aboutToAppear(): void {
+    this.scope.begin()
     this.showSort = !this.authorid && !this.favor
     if (this.favor.length > 0) {
       this.handledFavoriteMutationVersion = appStore.favoriteStore.getFolderMutationVersion(this.favor)
@@ -243,6 +284,8 @@ export struct TopicListPanel {
   }
 
   aboutToDisappear(): void {
+    // 先失效在途的异步回顶回调，再停其他监听
+    this.scope.end()
     this.stopHoldingHandMonitoring()
     // 推进分页代际，使未完成的分页/预取异步回调失效，避免回写已销毁页面
     this.mgr.reset()
@@ -277,6 +320,9 @@ export struct TopicListPanel {
 
   /**
    * 响应其他页面完成的服务端主题收藏关系变更。
+   *
+   * 属**被动刷新**（用户没按刷新，可能是别的入口改了收藏关系）：不显式回顶，避免把正在阅读的
+   * 长列表拽回顶部（`scrollToTop = false`）。
    */
   private onFavoriteTopicVersionChange(): void {
     if (this.favor.length === 0) {
@@ -287,7 +333,7 @@ export struct TopicListPanel {
       return
     }
     this.handledFavoriteMutationVersion = mutationVersion
-    this.loadTopics(1)
+    this.loadTopics(1, false)
   }
 
   /**
@@ -662,7 +708,15 @@ export struct TopicListPanel {
     this.isLoadingMore = false
   }
 
-  private async loadTopics(page: number): Promise<void> {
+  /**
+   * 加载主题列表页。
+   *
+   * @param page - 目标页码（1 基）；`page === 1` 表示整表重建
+   * @param scrollToTop - 整表重建后是否显式回顶。**被动刷新必须传 false**：本方法也由
+   *   `onFavoriteTopicVersionChange`（其他入口改动了服务端收藏关系）触发，此时用户并未要求刷新，
+   *   把长列表拽回顶部会直接打断阅读（见 scrollListToTop 的契约）
+   */
+  private async loadTopics(page: number, scrollToTop: boolean = true): Promise<void> {
     const gen: number = this.mgr.nextGeneration()
     const authScope: AuthScope = AuthScope.capture(appStore.auth, 0)
     const favoriteFolderId: string = this.favor
@@ -684,6 +738,10 @@ export struct TopicListPanel {
       // 也防止过期会话期间残留列表被渲染/翻页混排
       this.mgr.threads = []
       this.threadsDataSource.clear()
+      if (scrollToTop) {
+        // 数据源重建后显式回顶：隐含夹紧的位置相关行为不可靠（见 scrollListToTop）
+        this.scrollListToTop()
+      }
       if (this.sortMode === 'hot') {
         await this.loadTwentyFourTopics()
         return
@@ -785,6 +843,10 @@ export struct TopicListPanel {
       this.twentyFourCache = []
     }
     this.threadsDataSource.replaceAll(state.threads)
+    // 切换排序/时间窗同样属「切换数据源」：进度先归零（坑点 5，避免旧进度残留在新内容上），
+    // 再按坑点 7 显式回顶，回顶后由 scrollListToTop 的二次校准按真实偏移收敛
+    this.titleScrollEffectProgress = 0
+    this.scrollListToTop()
     this.hasError = false
     this.isLoading = false
     this.isLoadingMore = false

@@ -213,8 +213,20 @@ private getStateViewHeight(): number {
 5. **加载/切页时 `titleScrollEffectProgress` 归零**：否则旧进度残留在新内容上（标题区提前压暗）。
 6. **已读/局部状态更新用 `updateAt` 局部刷新**，不要 `replaceAll` 整体重建列表（会打断滚动、
    闪屏）；轮询增量同步用 `prependAll` 语义（旧列表是缓存后缀时仅插头部新增，见 6.3）。
-7. **切 tab/切换数据源后回顶**：`setTimeout(0)` 后 `scroller.scrollEdge(Edge.Top)`（内容已重建，
-   立即调用可能无效）。
+7. **切 tab/切换数据源后回顶**：用 `scrollToIndex(0, false, ScrollAlign.START)`（延迟一帧执行，
+   内容重建中立即调用可能无效）。**用 `scrollToIndex` 而不是 `scrollEdge(Edge.Top)`**：官方对前者
+   写明「`ScrollAlign.START` 时指定 item 首部与容器 `contentStartOffset` 处对齐」，对后者只写
+   「滚动到容器边缘」而未定义它与 `contentStartOffset` 的关系——落点差一个 `contentStartOffset`
+   就是「内容起点」与「首项贴屏幕上边界」（该位置 progress 已饱和为 1）两种视觉结果。回顶后**再延迟
+   一帧 `syncTitleScrollEffect()` 按真实偏移校准**标题区联动（程序化滚动是否触发 `onDidScroll`
+   无官方保证）。**被动刷新不要回顶**：由其他入口（如他处改动服务端收藏关系）触发的整表重建，
+   不应把用户正在阅读的列表拽回顶部。**必须显式回顶，不得依赖「清空数据源 → 系统把偏移夹回起点」
+   的隐含路径**——加载占位高度 `getStateViewHeight()` 按 `sortBarBottomY` 动态算出，而 `onAreaChange`
+   只响应布局变化引起的区域变化（SDK `common.d.ts`），采样时机不可控，判据是
+   `不回顶 ⟺ yOffset ≤ 排序条item高 − sortBarBottomY`，即是否回顶只取决于「最后一次采样距按键时刻的
+   位移」这个窄窗口（详见 6.5）。同一套 `sortBarBottomY` + `getStateViewHeight()` 还出现在
+   `NotificationPanel` / `FavoriteSavedPanel` / `FollowListPanel`，各面板的"数据源重建"入口都要按本条
+   逐一核对。
 8. **沉浸光感（IMMERSIVE_LIGHT_DESIGN.md）**：任何 `systemMaterial` 组件不得叠加不透明背景色；
    `systemMaterial` 必须放在其他样式属性之后。颜色一律走 `sys.color.*` / 应用资源（不得硬编码）——
    但这**不等于**会自动反色：反色白名单只认 SDK 明确列举的属性（§6.2），排序条的
@@ -262,6 +274,42 @@ private getStateViewHeight(): number {
 - 已改为帖子列表同款算法：实测 `sortBarBottomY`（`globalPosition.y + height`），
   首帧兜底 `contentStartOffset + 50`，下限 400。
 
+### 6.5 【严重】刷新后不回顶 + 标题区模糊消失（2026-09）
+
+- **现象**（`TopicListPanel`）：滚到任意位置按刷新会回到顶部；但排序条（列表首元素）仍在屏幕内、
+  尤其恰好贴近屏幕上边界时按刷新，列表**停在原地**不回顶，且标题区渐变模糊与压暗**消失**，
+  手动滑动一下才恢复。
+- **根因**（两处叠加）：
+  1. **回顶没有显式写入位置**：`loadTopics(1)` 全流程不含任何滚动位置 API，回顶被派生化给
+     "清空数据源 → 加载占位内容塌缩 → 系统把越界偏移夹回合法范围"。而加载占位高度
+     `getStateViewHeight()` 是按 `sortBarBottomY` 动态算出的，该测量值的**采样时机不可控**
+     （`onAreaChange` 只响应布局变化引起的区域变化，SDK `common.d.ts`；它在滚动中何时触发、
+     采到哪一时刻的窗口坐标，官方均未定义）。设 C = `contentStartOffset`、itemH = 排序条
+     `ListItem` 高，清空后的滚动上界 `U = C + itemH − sortBarBottomY`，判据即
+     **`不回顶 ⟺ yOffset ≤ itemH − sortBarBottomY`** —— 是否回顶只取决于「最后一次采样时刻与
+     按键时刻之间的位移」这个窄窗口（约 6vp 量级），与刷新动作本身无关。排序条滚出屏幕后
+     `sortBarBottomY <= 0` 走首帧兜底（C + 50）、内容不足一屏，才会被夹回起点，于是表现为
+     "位置相关"。**List 在数据重建/内容塌缩时如何夹紧偏移，官方无任何文档说明**，这条隐含依赖
+     本就不可靠——这正是 §5.7 要求显式回顶的原因。
+  2. **标题区联动进度只在滚动事件里同步**：`loadTopics(1)` 把 `titleScrollEffectProgress` 置 0
+     （坑点 5），而同步点只有 `onDidScroll` / `onAppear`；位置没变就没有滚动事件，进度停在 0
+     → 模糊半径 `16 × 0 = 0`、压暗层（`progress > 0` 才渲染）整块消失。该位置**正确**的 progress
+     本应是 1（`getProgress(0, statusBar)` 已饱和），所以 0/1 落差最大、症状最醒目。
+- **修复**：新增 `TopicListPanel.scrollListToTop()` —— `setTimeout(0)` +
+  `scroller.scrollToIndex(0, false, ScrollAlign.START)`（落点语义有官方定义，见坑点 7）+
+  面板存活令牌 `PageScope`，**并在回顶后再延迟一帧 `syncTitleScrollEffect()` 按真实偏移校准**
+  （程序化滚动是否触发 `onDidScroll` 无官方保证；若命令因故未生效，校准值就是该位置的真值，
+  不会留下"位置没变、模糊却消失"的错配）。调用点：`loadTopics(1)` 清空数据源后（覆盖刷新按钮 /
+  错误重试 / 换版块 / 子版块筛选 / 发帖后重载 / 热门模式）、`restoreModeState()`（切排序 / 时间窗
+  命中缓存，同时补进度归零）；`loadTopics(page, scrollToTop)` 的 `scrollToTop = false` 供**被动刷新**
+  （`onFavoriteTopicVersionChange`：他处改动收藏关系）使用，避免打断阅读。
+- **教训**：① 凡"数据源重建"就必须**显式写入滚动位置**（坑点 7），不得把回顶结果交给"内容高度 ×
+  未文档化的夹紧行为"的耦合；② 与位置绑定的联动状态不能只在滚动事件里同步——程序改写位置（回顶、
+  恢复缓存、视口 / 状态栏变化）之后必须有"按真实偏移回算"的收敛点，否则状态与位置会永久不一致。
+- **未验证项**：本条定量判据（`U = C + itemH − sortBarBottomY`）与"采样时机"推断由代码与 SDK 声明
+  推导，尚未经设备实测；`scrollEdge` 对含 `contentStartOffset` 的 List 的精确落点也无官方定义
+  （修复用二次校准同时兜住两种落点，不依赖该假设）。
+
 ---
 
 ## 7. 页面使用现状
@@ -275,6 +323,9 @@ private getStateViewHeight(): number {
 
 新面板接入模板：复制 `TopicListPanel` 的骨架（Stack{Column{List}, PanelNavBar}）、
 List 属性链、`syncTitleScrollEffect`、`getStateViewHeight`，再替换业务列表项。
+**数据源重建（刷新/切 tab/换版块/切排序/缓存恢复）必须显式回顶**：延迟一帧
+`scrollToIndex(0, false, ScrollAlign.START)`，回顶后再延迟一帧 `syncTitleScrollEffect()` 校准；
+被动刷新（用户未发起的重建）不传回顶（见坑点 7）。
 
 ---
 
