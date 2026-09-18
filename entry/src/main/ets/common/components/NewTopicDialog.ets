@@ -37,12 +37,12 @@ import {
 } from '../media/EmotionResources'
 import fileIo from '@ohos.file.fs'
 import { AlertDialog } from '@kit.ArkUI'
-import { photoAccessHelper } from '@kit.MediaLibraryKit'
 import {
-  pickAndExportMovingPhoto,
+  pickImage,
   releaseExportedMovingPhoto,
   readExportedFile,
-  ExportedMovingPhoto
+  ExportedMovingPhoto,
+  PickedImage
 } from '../media/MovingPhotoExport'
 import { Logger, DOMAIN_UI, formatError } from '../utils/Logger'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
@@ -106,8 +106,8 @@ export struct NewTopicDialog {
   /** 是否正在提交。 */
   @State sending: boolean = false
 
-  /** 是否正在导出/上传动态照片（导出+上传耗时较长，防重复触发）。 */
-  @State uploadingMovingPhoto: boolean = false
+  /** 是否正在选择/上传图片（含动态照片导出，耗时较长，防重复触发）。 */
+  @State uploadingImage: boolean = false
 
   /** 是否匿名发布。 */
   @State isAnonymous: boolean = false
@@ -337,97 +337,117 @@ export struct NewTopicDialog {
       this.content = ReplyManagerClass.insertAtTag(this.content, this.selStart, this.selEnd)
     } else if (tag === 'img') {
       this.handleImagePick()
-    } else if (tag === 'mphoto') {
-      this.handleMovingPhotoPick()
     } else {
       this.content = ReplyManagerClass.wrapSelectedText(this.content, this.selStart, this.selEnd, tag)
     }
   }
 
-  /** 选择并上传图片，然后将图片标签插入正文。 */
+  /**
+   * 选择并上传图片：**一个入口自适应动态照片**。
+   *
+   * 判断只在 `MovingPhotoExport.pickImage` 里做一次（按 Picker 返回的 URI 反查资产子类型），
+   * 是动态照片就顺手把「封面 + 视频」导出到沙箱。这里只按结果分流：拿到两半就走动态照片上传
+   * （三元组与附件累积都在 `NewTopicManager.uploadMovingPhoto` 里完成），否则把这一张静态图传上去。
+   *
+   * 动态照片**导出**失败会自动降级为普通图片（封面本来就躺在所选 URI 上），并且明说一句，
+   * 不让用户以为发出去的是动态照片；两半已经拿到之后的**上传**失败则照旧报错、不降级——
+   * 那种情况用户要的是重试，而不是悄悄发出半张图。
+   */
   private async handleImagePick(): Promise<void> {
+    if (this.uploadingImage) {
+      return
+    }
+    this.uploadingImage = true
+    let picked: PickedImage | null = null
     try {
-      const photoPicker: photoAccessHelper.PhotoViewPicker = new photoAccessHelper.PhotoViewPicker()
-      const pickResult: photoAccessHelper.PhotoSelectResult = await photoPicker.select({
-        MIMEType: photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE,
-        maxSelectNumber: 1
-      })
-      const photoUris: string[] = pickResult.photoUris
-      if (photoUris.length === 0) {
+      const ctx: Context = this.getUIContext().getHostContext() as Context
+      picked = await pickImage(ctx)
+    } catch (error) {
+      /* 选择本身失败（选择器打不开 / 反查异常）：不占用后续流程，提示后收工 */
+      logger.verbose('[NTPIC] pick error: %{public}s', formatError(error))
+      appStore.showToast(error instanceof Error ? error.message : '选择图片失败')
+      this.uploadingImage = false
+      return
+    }
+    try {
+      if (picked === null) {
         return
       }
-      const uri: string = photoUris[0]
-      if (uri.length === 0) {
-        return
+      const exported: ExportedMovingPhoto | null = picked.movingPhoto
+      /*
+       * 「本该发动态照片、最终只能发静态图」的两种情况：
+       *   ① `movingPhotoExportFailed`：导出抛错（超时 / 被拒 / 内容为空）；
+       *   ② `picked.movingPhoto !== null`：导出成功，但下面读完发现两半有空的（防御分支）。
+       * ② 不是冗余条件：走到下面时 ① 为 false 而 ② 成立是可能的，去掉它就会漏掉这次提示。
+       */
+      const movingPhotoFallback: boolean =
+        picked.movingPhotoExportFailed || picked.movingPhoto !== null
+      if (exported !== null) {
+        const coverData: ArrayBuffer = readExportedFile(exported.coverPath)
+        const videoData: ArrayBuffer = readExportedFile(exported.videoPath)
+        if (coverData.byteLength > 0 && videoData.byteLength > 0) {
+          appStore.showToast('正在上传动态照片...')
+          const tag: string = await newTopicManager.uploadMovingPhoto(coverData, videoData)
+          this.content = ReplyManagerClass.insertImg(this.content, this.selStart, this.selEnd, tag)
+          appStore.showToast('动态照片已插入')
+          return
+        }
+        logger.warn('[NTPIC] exported content empty, fallback to still image')
       }
-      const fileName: string = uri.split('/').pop() ?? 'image.jpg'
-      appStore.showToast('正在上传图片...')
+      await this.uploadStillImage(picked.uri, picked.fileName, movingPhotoFallback)
+    } catch (error) {
+      const message: string = error instanceof Error ? error.message : '上传失败'
+      /* 用 formatError 打出错误码：线上排查「权限被拒（201）/ 资产不是动态照片」要靠它 */
+      logger.verbose('[MPUP] error: %{public}s', formatError(error))
+      appStore.showToast(message)
+    } finally {
+      if (picked !== null && picked.movingPhoto !== null) {
+        releaseExportedMovingPhoto(picked.movingPhoto)
+      }
+      this.uploadingImage = false
+    }
+  }
 
-      let buffer: ArrayBuffer = new ArrayBuffer(0)
+  /**
+   * 把所选 URI 当成一张静态图上传并插入正文。
+   *
+   * 动态照片降级时也走这里——Picker 返回的 URI 读出来本来就是这个资产的封面图。
+   * 失败只提示、不抛出：本方法跑在动态照片分支之后，抛出会被外层再包装成一次重复提示。
+   *
+   * @param uri 资产 URI
+   * @param fileName 上传用的原始文件名
+   * @param movingPhotoDegraded 是否为「本该发动态照片、降级成静态图」，成功与失败提示都据此改写
+   */
+  private async uploadStillImage(uri: string, fileName: string, movingPhotoDegraded: boolean): Promise<void> {
+    appStore.showToast('正在上传图片...')
+    let buffer: ArrayBuffer = new ArrayBuffer(0)
+    try {
+      const file = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY)
       try {
-        const file = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY)
         const stat = fileIo.statSync(uri)
         buffer = new ArrayBuffer(stat.size)
         fileIo.readSync(file.fd, buffer)
+      } finally {
+        /* fd 必须成对关闭：`statSync` / `readSync`（大图分配失败）都会抛，漏在这里就是 fd 泄漏 */
         fileIo.closeSync(file)
-      } catch (readError) {
-        logger.verbose('[NTPIC] read error: %{public}s', String(readError))
-        appStore.showToast('读取图片失败')
-        return
       }
-
+    } catch (readError) {
+      logger.verbose('[NTPIC] read error: %{public}s', String(readError))
+      appStore.showToast('读取图片失败')
+      return
+    }
+    try {
       logger.verbose('[NTPIC] calling uploadImage, size: %{public}s', String(buffer.byteLength))
       const imageUrl: string = await newTopicManager.uploadImage(buffer, fileName)
       logger.verbose('[NTPIC] upload success, url: %{public}s', imageUrl)
       const imageTag: string = '[img]./' + imageUrl + '.medium.jpg[/img]'
       this.content = ReplyManagerClass.insertImg(this.content, this.selStart, this.selEnd, imageTag)
-      appStore.showToast('图片已插入')
+      appStore.showToast(movingPhotoDegraded ? '动态照片未能发送，已按普通图片发送' : '图片已插入')
     } catch (error) {
       const message: string = error instanceof Error ? error.message : '上传图片失败'
       logger.verbose('[NTPIC] error: %{public}s', message)
-      appStore.showToast(message)
-    }
-  }
-
-  /**
-   * 选择并上传一张动态照片，然后把「封面 + MPHOTO 标记 + 视频」三元组插入正文。
-   *
-   * 与普通图片上传的区别只在两端：选择阶段走动态照片专用链路（Picker 过滤
-   * `image/movingPhoto` → 用户选定后由媒体库导出两半到沙箱），上传阶段把两半各传一次
-   * （三元组与附件累积都在 `NewTopicManager.uploadMovingPhoto` 里完成）。
-   */
-  private async handleMovingPhotoPick(): Promise<void> {
-    if (this.uploadingMovingPhoto) {
-      return
-    }
-    this.uploadingMovingPhoto = true
-    let exported: ExportedMovingPhoto | null = null
-    try {
-      const ctx: Context = this.getUIContext().getHostContext() as Context
-      exported = await pickAndExportMovingPhoto(ctx)
-      if (exported === null) {
-        return
-      }
-      const coverData: ArrayBuffer = readExportedFile(exported.coverPath)
-      const videoData: ArrayBuffer = readExportedFile(exported.videoPath)
-      if (coverData.byteLength === 0 || videoData.byteLength === 0) {
-        appStore.showToast('读取动态照片失败')
-        return
-      }
-      appStore.showToast('正在上传动态照片...')
-      const tag: string = await newTopicManager.uploadMovingPhoto(coverData, videoData)
-      this.content = ReplyManagerClass.insertImg(this.content, this.selStart, this.selEnd, tag)
-      appStore.showToast('动态照片已插入')
-    } catch (error) {
-      const message: string = error instanceof Error ? error.message : '上传动态照片失败'
-      /* 用 formatError 打出错误码：线上排查「权限被拒（201）/ 资产不是动态照片」要靠它 */
-      logger.verbose('[MPUP] error: %{public}s', formatError(error))
-      appStore.showToast(message)
-    } finally {
-      if (exported !== null) {
-        releaseExportedMovingPhoto(exported)
-      }
-      this.uploadingMovingPhoto = false
+      /* 降级场景连失败一起说清楚：否则用户只看到"上传失败"，永远不知道选的是动态照片 */
+      appStore.showToast(movingPhotoDegraded ? '动态照片未发出，普通图片也上传失败：' + message : message)
     }
   }
 

@@ -1,14 +1,37 @@
 /**
- * 发送动态照片：从相册选择一张动态照片，并把「封面 + 视频」两半导出到应用沙箱。
+ * 相册发图：一个「图片」入口，**自适应动态照片**。
  *
- * ## 为什么是这条链路
+ * ## 一个入口，两种结果
+ * 用户在编辑器里只看到「图片」一个按钮（见 `EditorFormatBar`），选中什么就按什么规则发：
+ *
+ * - 选中**动态照片** → 自动导出「封面 + 视频」两半到沙箱，调用方按动态照片上传；
+ * - 选中**普通图片**（或动态照片导出失败）→ 就地上传这一张静态图。
+ *
+ * ## 怎么判断是不是动态照片
+ * 子类型是资产自身的属性，与封面/视频内容无关：
+ *
+ * ```
+ * asset.get(PhotoKeys.PHOTO_SUBTYPE) === PhotoSubtype.MOVING_PHOTO   // 3
+ * ```
+ *
+ * `PhotoAsset.get()` 的声明里写明：除 `'uri'` / `'media_type'` / `'subtype'` / `'display_name'`
+ * 四个成员外，其余成员都必须先写进 `fetchColumns`。因此 `'subtype'` **免 fetchColumns**
+ * 直接可取，判定不需要额外列、也不需要相册读取权限。
+ *
+ * 选择器另有一条 API 22+ 的角标通路（`PhotoSelectOptions.isMovingPhotoBadgeShown` +
+ * `PhotoSelectResult.movingPhotoBadgeStates`）：本模块只把它当**视觉提示**（让用户选之前
+ * 就能看出哪张是动态照片），判定仍以 `subtype` 为准——用户在系统相册里关掉「动态效果」
+ * 时角标状态是 `MOVING_PHOTO_DISABLED`，那依然是一张动态照片。
+ *
+ * ## 为什么导出链路是这一串
  * Picker 只给一个 URI，而 `MediaAssetManager.requestMovingPhoto` 要的是 `PhotoAsset`。
  * 官方给出的免权限组合（三处接口说明都写了「通过 picker 的方式调用该接口，不需要申请
  * `ohos.permission.READ_IMAGEVIDEO`」）是：
  *
  * ```
- * PhotoViewPicker（MIMEType = image/movingPhoto）
+ * PhotoViewPicker（MIMEType = image/*，含动态照片）
  *   → getAssets(URI 谓词) 反查 PhotoAsset
+ *   → 判 subtype
  *   → MediaAssetManager.requestMovingPhoto(...)
  *   → MovingPhoto.requestContent(imageFileUri, videoFileUri)   // 两半落到沙箱
  * ```
@@ -23,6 +46,7 @@ import { photoAccessHelper } from '@kit.MediaLibraryKit'
 import { fileIo } from '@kit.CoreFileKit'
 import { dataSharePredicates } from '@kit.ArkData'
 import { withTimeout } from '../utils/TimeoutUtils'
+import { removeDirRecursively } from '../utils/FileUtils'
 import { Logger, DOMAIN_UI, formatError } from '../utils/Logger'
 
 const logger = new Logger(DOMAIN_UI, 'MovingPhotoExport')
@@ -38,6 +62,17 @@ export const EXPORT_VIDEO_NAME: string = 'video.mp4'
 
 /** 等待 `onDataPrepared` 的上限：超时视为该资产不是可用动态照片。 */
 const REQUEST_TIMEOUT_MS: number = 10000
+
+/**
+ * 历史导出目录的判定阈值（秒）。
+ *
+ * 正常流程上传一结束就删目录，所以年龄超过这个值的残留必定来自异常退出（被系统回收 /
+ * 崩溃）；清理时留足余量，不去碰本次刚建好的产物。
+ */
+const STALE_EXPORT_AGE_SECONDS: number = 600
+
+/** 单次进入选择入口时最多清理的残留目录数（主线程同步 IO，分批消化）。 */
+const MAX_PRUNE_PER_RUN: number = 8
 
 /** 导出到沙箱的动态照片两半。 */
 export class ExportedMovingPhoto {
@@ -57,6 +92,40 @@ export class ExportedMovingPhoto {
     this.coverPath = coverPath
     this.videoPath = videoPath
     this.dirPath = dirPath
+  }
+}
+
+/**
+ * 一次「图片」入口的选择结果。
+ *
+ * 调用方拿到它之后只有两条路：`movingPhoto !== null` 走动态照片上传，否则按普通图片上传
+ * （此时 {@link uri} 指向该资产的静态图——动态照片时它就是封面图，普通图片时就是它本身）。
+ */
+export class PickedImage {
+  /** Picker 返回的资产 URI；普通图片上传与动态照片降级上传都用它读字节。 */
+  uri: string = ''
+
+  /** 资产文件名（含扩展名），作为上传时的原始文件名。 */
+  fileName: string = ''
+
+  /** 动态照片导出产物；`null` 表示按普通图片发送。 */
+  movingPhoto: ExportedMovingPhoto | null = null
+
+  /**
+   * 所选资产**是动态照片、但两半没能导出**。
+   *
+   * 与「本来就是普通图片」区分开：这种情况用户预期发动态照片，结果只会发出去一张静态图，
+   * 调用方必须提示，不能静默降级。
+   */
+  movingPhotoExportFailed: boolean = false
+
+  /**
+   * @param uri 资产 URI
+   * @param fileName 资产文件名
+   */
+  constructor(uri: string, fileName: string) {
+    this.uri = uri
+    this.fileName = fileName
   }
 }
 
@@ -94,15 +163,20 @@ class MovingPhotoDataHandler implements photoAccessHelper.MediaAssetDataHandler<
 }
 
 /**
- * 打开相册选择一张动态照片（Picker 已按 `image/movingPhoto` 过滤）。
+ * 打开相册选择一张图片（`image/*`，动态照片混在其中）。
+ *
+ * `isMovingPhotoBadgeShown` 打开选择器里的动态照片角标（API 22+，本工程 API 26 可用）：
+ * 用户在点选之前就能看出哪张是动态照片，避免「以为发的是静态图、结果发出动态照片」这类
+ * 预期错位。它只影响展示，判定仍走 {@link isMovingPhotoAsset}。
  *
  * @returns 所选资产的 URI；用户取消时返回空串
  */
-async function pickMovingPhotoUri(): Promise<string> {
+async function pickImageUri(): Promise<string> {
   const picker: photoAccessHelper.PhotoViewPicker = new photoAccessHelper.PhotoViewPicker()
   const result: photoAccessHelper.PhotoSelectResult = await picker.select({
-    MIMEType: photoAccessHelper.PhotoViewMIMETypes.MOVING_PHOTO_IMAGE_TYPE,
-    maxSelectNumber: 1
+    MIMEType: photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE,
+    maxSelectNumber: 1,
+    isMovingPhotoBadgeShown: true
   })
   const uris: string[] = result.photoUris
   return uris.length > 0 ? uris[0] : ''
@@ -136,6 +210,23 @@ async function findAssetByUri(ctx: Context, uri: string): Promise<photoAccessHel
     return undefined
   } finally {
     fetchResult.close()
+  }
+}
+
+/**
+ * 判断资产是不是动态照片（见文件头「怎么判断是不是动态照片」）。
+ *
+ * @param asset 媒体库资产
+ * @returns 是否动态照片
+ */
+function isMovingPhotoAsset(asset: photoAccessHelper.PhotoAsset): boolean {
+  try {
+    const subtype: number = asset.get(photoAccessHelper.PhotoKeys.PHOTO_SUBTYPE) as number
+    return subtype === photoAccessHelper.PhotoSubtype.MOVING_PHOTO
+  } catch (err) {
+    /* 取不到 subtype 时按普通图片处理：宁可发一张静态图，也不要卡住整条发送流程 */
+    logger.warn('[MovingPhotoExport] read subtype failed: %{public}s', formatError(err))
+    return false
   }
 }
 
@@ -177,54 +268,111 @@ function isUsableFile(filePath: string): boolean {
 }
 
 /**
- * 递归删除导出目录（忽略失败）。
+ * 把一张已判定为动态照片的资产导出成沙箱里的两半。
  *
- * @param dirPath 目录绝对路径
+ * **目录一旦建出来，任何一步失败都必须把它删掉**：不能只把 `requestContent` 包起来——
+ * 末尾的 `statSync`（乃至以后在此追加的逻辑）抛出去，调用方只会看到"降级成静态图"，
+ * 而目录会永久留在 `cacheDir` 里（视频可达数十 MB）。
+ *
+ * @param ctx 应用上下文
+ * @param asset 媒体库资产
+ * @returns 导出结果（失败抛错，由 {@link pickImage} 转成降级）
  */
-function removeDir(dirPath: string): void {
+async function exportMovingPhoto(ctx: Context, asset: photoAccessHelper.PhotoAsset): Promise<ExportedMovingPhoto> {
+  const photo: photoAccessHelper.MovingPhoto = await requestMovingPhoto(ctx, asset)
+  const dirPath: string = `${ctx.cacheDir}/${EXPORT_DIR_NAME}/${Date.now()}`
+  fileIo.mkdirSync(dirPath, true)
   try {
-    if (fileIo.accessSync(dirPath)) {
-      fileIo.rmdirSync(dirPath)
+    const coverPath: string = `${dirPath}/${EXPORT_COVER_NAME}`
+    const videoPath: string = `${dirPath}/${EXPORT_VIDEO_NAME}`
+    await photo.requestContent(`file://${coverPath}`, `file://${videoPath}`)
+    if (!isUsableFile(coverPath) || !isUsableFile(videoPath)) {
+      throw new Error('导出动态照片失败（内容为空）')
     }
+    logger.info('[MovingPhotoExport] exported cover=%{public}d video=%{public}d',
+      fileIo.statSync(coverPath).size, fileIo.statSync(videoPath).size)
+    return new ExportedMovingPhoto(coverPath, videoPath, dirPath)
   } catch (err) {
-    logger.verbose('[MovingPhotoExport] remove dir failed: %{public}s', formatError(err))
+    logger.warn('[MovingPhotoExport] export failed: %{public}s', formatError(err))
+    removeDirRecursively(dirPath)
+    throw err instanceof Error ? err : new Error('导出动态照片失败')
   }
 }
 
 /**
- * 选择并导出一张动态照片。
+ * 清理 `cacheDir/mphoto_upload` 下的历史残留。
+ *
+ * 正常流程上传结束即删（见文件头），残留只有一个来源：进程在导出后被系统回收或崩溃。
+ * 清理放在选择入口（幂等，且同一时刻只可能有一次选择流程），只删**年龄超过阈值**的目录，
+ * 避免误伤本次刚建好的产物。
+ *
+ * 这里全是**主线程同步 IO**，所以每次最多清 {@link MAX_PRUNE_PER_RUN} 个：正常情况残留是 0 个，
+ * 一次 `accessSync` + 一次 `listFileSync` 就结束；只有在异常路径反复触发、残留堆积时才会分批消化，
+ * 不至于让「点图片按钮」本身变成可感知的卡顿。
  *
  * @param ctx 应用上下文
- * @returns 导出结果；用户取消时返回 null（其余失败抛错，由调用方提示）
  */
-export async function pickAndExportMovingPhoto(ctx: Context): Promise<ExportedMovingPhoto | null> {
-  const uri: string = await pickMovingPhotoUri()
+function pruneStaleExports(ctx: Context): void {
+  const root: string = `${ctx.cacheDir}/${EXPORT_DIR_NAME}`
+  try {
+    if (!fileIo.accessSync(root)) {
+      return
+    }
+    const names: string[] = fileIo.listFileSync(root)
+    const nowSeconds: number = Date.now() / 1000
+    let removed: number = 0
+    for (let i = 0; i < names.length && removed < MAX_PRUNE_PER_RUN; i++) {
+      const childPath: string = `${root}/${names[i]}`
+      try {
+        if (nowSeconds - fileIo.statSync(childPath).mtime > STALE_EXPORT_AGE_SECONDS) {
+          removeDirRecursively(childPath)
+          removed += 1
+        }
+      } catch (err) {
+        logger.verbose('[MovingPhotoExport] prune entry failed: %{public}s', formatError(err))
+      }
+    }
+  } catch (err) {
+    logger.verbose('[MovingPhotoExport] prune failed: %{public}s', formatError(err))
+  }
+}
+
+/**
+ * 「图片」入口的唯一选择函数：选一张图，是动态照片就顺手导出两半。
+ *
+ * 导出失败不抛错、也不阻断流程，而是置 {@link PickedImage.movingPhotoExportFailed} 让调用方
+ * 降级为普通图片上传——用户手里那张封面静态图仍然可读，重选一遍是白费操作。
+ *
+ * @param ctx 应用上下文
+ * @returns 选择结果；用户取消时返回 null
+ */
+export async function pickImage(ctx: Context): Promise<PickedImage | null> {
+  pruneStaleExports(ctx)
+  const uri: string = await pickImageUri()
   if (uri.length === 0) {
     return null
   }
+  const picked: PickedImage = new PickedImage(uri, uri.split('/').pop() ?? 'image.jpg')
   const asset: photoAccessHelper.PhotoAsset | undefined = await findAssetByUri(ctx, uri)
   if (asset === undefined) {
-    throw new Error('未找到所选的动态照片')
+    /*
+     * 反查不到资产（结果集为空 / 201 权限 / 系统内部错误）：只能按普通图片发。
+     * 这条路径用户在界面上看不出区别，所以必须留下 **warn** 级痕迹——线上「选了动态照片
+     * 却发出静态图」的第一现场就在这里。
+     */
+    logger.warn('[MovingPhotoExport] asset lookup failed, treat as still image')
+    return picked
   }
-  const photo: photoAccessHelper.MovingPhoto = await requestMovingPhoto(ctx, asset)
-  const dirPath: string = `${ctx.cacheDir}/${EXPORT_DIR_NAME}/${Date.now()}`
-  fileIo.mkdirSync(dirPath, true)
-  const coverPath: string = `${dirPath}/${EXPORT_COVER_NAME}`
-  const videoPath: string = `${dirPath}/${EXPORT_VIDEO_NAME}`
+  if (!isMovingPhotoAsset(asset)) {
+    return picked
+  }
   try {
-    await photo.requestContent(`file://${coverPath}`, `file://${videoPath}`)
+    picked.movingPhoto = await exportMovingPhoto(ctx, asset)
   } catch (err) {
-    logger.warn('[MovingPhotoExport] requestContent failed: %{public}s', formatError(err))
-    removeDir(dirPath)
-    throw new Error('导出动态照片失败')
+    logger.warn('[MovingPhotoExport] export failed, fallback to still image: %{public}s', formatError(err))
+    picked.movingPhotoExportFailed = true
   }
-  if (!isUsableFile(coverPath) || !isUsableFile(videoPath)) {
-    removeDir(dirPath)
-    throw new Error('导出动态照片失败（内容为空）')
-  }
-  logger.info('[MovingPhotoExport] exported cover=%{public}d video=%{public}d',
-    fileIo.statSync(coverPath).size, fileIo.statSync(videoPath).size)
-  return new ExportedMovingPhoto(coverPath, videoPath, dirPath)
+  return picked
 }
 
 /**
@@ -233,7 +381,7 @@ export async function pickAndExportMovingPhoto(ctx: Context): Promise<ExportedMo
  * @param exported 导出结果
  */
 export function releaseExportedMovingPhoto(exported: ExportedMovingPhoto): void {
-  removeDir(exported.dirPath)
+  removeDirRecursively(exported.dirPath)
 }
 
 /**

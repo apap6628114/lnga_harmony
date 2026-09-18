@@ -26,6 +26,7 @@ import type { AiProviderProfile } from '../model/AiConfig'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { movingPhotoCacheDir } from '../common/media/MovingPhotoCache'
+import { removeDirRecursively } from '../common/utils/FileUtils'
 
 @Component
 export struct SettingsPanel {
@@ -238,11 +239,9 @@ export struct SettingsPanel {
       dirs.push(appContext.cacheDir)
 
       for (let i = 0; i < dirs.length; i++) {
-        if (fileIo.accessSync(dirs[i])) {
-          try {
-            fileIo.rmdirSync(dirs[i])
-          } catch (e) {}
-        }
+        /* 必须递归删：`fileIo.rmdirSync` 只删空目录（13900032 Directory not empty），
+           而这些目录里必然有文件——直接用它只会静默失败，「缓存已清除」名不副实 */
+        removeDirRecursively(dirs[i])
       }
       this.refreshCacheSize()
       appStore.showToast('缓存已清除')

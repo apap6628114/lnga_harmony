@@ -319,10 +319,10 @@ loading ──成功──▶ ready ──onPrepared 后播放──▶ playing 
 | `entry/src/main/ets/common/media/MovingPhotoPlayer.ets` | 下载 → `loadMovingPhoto` → `MovingPhotoView` + 状态机 |
 | `entry/src/main/ets/common/components/BBCodeContentView.ets` | 正文图标 + 就地播放 |
 | `entry/src/main/ets/common/components/ImageViewer.ets` | 查看器播放（图标触发）+ 失败回退 + 保存动态照片 |
-| `entry/src/main/ets/common/media/MovingPhotoExport.ets` | 发送用：Picker → PhotoAsset → 导出封面 + 视频到沙箱（§9） |
+| `entry/src/main/ets/common/media/MovingPhotoExport.ets` | 发送用：**图片入口单源**——Picker → 反查 PhotoAsset → 判 `subtype` → 动态照片才导出封面 + 视频到沙箱（§9） |
 | `entry/src/main/ets/service/api/NgaUploader.ets` | 附件上传（图片 / 视频半边）+ 正文三元组拼装 |
 | `entry/src/main/ets/common/managers/ReplyManager.ets`、`NewTopicManager.ets` | `uploadMovingPhoto`：两次上传 + 附件参数累积 |
-| `entry/src/main/ets/common/components/EditorFormatBar.ets` | 工具行「动态照片」入口（回复 / 发新主题共用） |
+| `entry/src/main/ets/common/components/EditorFormatBar.ets` | 工具行「图片」入口（回复 / 发新主题共用；动态照片在同一条入口内自适应，见 §9.2） |
 
 ### 7.5 测试与门禁
 
@@ -393,7 +393,7 @@ loading ──成功──▶ ready ──onPrepared 后播放──▶ playing 
 
 ---
 
-## 9. 发送动态照片（2026-09-18 实现完成，待线上验证）
+## 9. 发送动态照片（2026-09-18 实现完成；2026-09-19 并入单一「图片」入口，待线上验证）
 
 ### 9.1 协议证据（只读实测真实帖 `tid=47553967`）
 
@@ -410,19 +410,40 @@ loading ──成功──▶ ready ──onPrepared 后播放──▶ playing 
 ### 9.2 实现链路
 
 ```
-EditorFormatBar「动态照片」按钮（tag=mphoto，回复 / 发新主题共用）
-  └─ ReplyDialog / NewTopicDialog  handleMovingPhotoPick()
-       ├─ MovingPhotoExport.pickAndExportMovingPhoto(ctx)
-       │    PhotoViewPicker(MIMEType = image/movingPhoto)          ← 免相册权限
-       │    → getAssets(URI 谓词) 反查 PhotoAsset                  ← 官方「指定URI获取图片或视频资源」写法
-       │    → MediaAssetManager.requestMovingPhoto(...)            ← dataHandler 桥接 + 10s 超时
-       │    → MovingPhoto.requestContent(imageUri, videoUri)       ← 两半落到 cacheDir/mphoto_upload/<ts>/
-       ├─ NgaUploader：封面按图片传（attachment_file1_img=1）、视频按视频传（不带该字段、Content-Type video/mp4）
+EditorFormatBar「图片」按钮（tag=img，回复 / 发新主题共用）
+  └─ ReplyDialog / NewTopicDialog  handleImagePick()
+       ├─ MovingPhotoExport.pickImage(ctx)
+       │    PhotoViewPicker(MIMEType = image/*，isMovingPhotoBadgeShown = true)  ← 免相册权限
+       │    → getAssets(URI 谓词) 反查 PhotoAsset                            ← 官方「指定URI获取图片或视频资源」写法
+       │    → asset.get(PhotoKeys.PHOTO_SUBTYPE) === PhotoSubtype.MOVING_PHOTO ← 判定（见下）
+       │         ├─ 是 → MediaAssetManager.requestMovingPhoto(...)           ← dataHandler 桥接 + 10s 超时
+       │         │      → MovingPhoto.requestContent(imageUri, videoUri)     ← 两半落到 cacheDir/mphoto_upload/<ts>/
+       │         └─ 否 → PickedImage.movingPhoto = null（按普通图片上传同一张图）
+       ├─ 动态照片分支：NgaUploader 封面按图片传（attachment_file1_img=1）、视频按视频传（不带该字段、Content-Type video/mp4）
        │   两半文件名 `upload.jpg` / `video.mp4`（与官方一致，见上表 url_utf8_org_name）
        ├─ 两次上传各累积一次 attachments / attachments_check（顺序：封面在前、视频在后，与真实帖一致）
        └─ buildMovingPhotoTag() → `[img]./<cover>[/img][b]MPHOTO[/b][flash=video]./<video>[/flash]`
 ```
 
+- **一个入口，自适应**：工具行只保留「图片」按钮（2026-09-19 起移除 `mphoto` 按钮）。
+  用户在点选之前不必先想清楚自己选的是哪种照片，`pickImage` 按资产子类型分流。
+- **判定依据**：`PhotoKeys.PHOTO_SUBTYPE`（`'subtype'`）与 `PhotoSubtype.MOVING_PHOTO`（`3`）。
+  `PhotoAsset.get()` 的声明写明除 `'uri'` / `'media_type'` / `'subtype'` / `'display_name'` 外都要先写进
+  `fetchColumns`，所以 `'subtype'` 免 fetchColumns 直接可取，判定不额外查库、不额外要权限。
+  选择器的角标通路（`isMovingPhotoBadgeShown` → `PhotoSelectResult.movingPhotoBadgeStates`，API 22+）
+  只用作**视觉提示**（用户选之前能看出哪张是动态照片），判定不依赖它——用户在系统相册里关掉
+  「动态效果」时角标状态是 `MOVING_PHOTO_DISABLED`，那依然是一张动态照片。
+- **导出失败降级**：`pickImage` 在「是动态照片但两半导出失败」时置 `movingPhotoExportFailed = true`，
+  调用方按普通图片上传同一张封面并提示「动态照片未能发送，已按普通图片发送」（措辞不区分"导出抛错"
+  与"导出内容为空"两种原因，对用户是同一件事）——Picker 返回的 URI 读出来本来就是封面图，
+  不让用户重选一遍。两半已拿到之后的**上传**失败不降级，照旧报错（用户要的是重试）；
+  降级后再上传失败时，提示会连降级事实一起说清，避免用户只看到「上传失败」而不知道选的是动态照片。
+- **目录清理**：正常路径上传结束即删；导出中途抛错由 `exportMovingPhoto` 自己删；此外
+  `pickImage` 每次进入时清掉 `cacheDir/mphoto_upload/` 下**年龄超过 10 分钟**的残留目录
+  （唯一的残留来源是进程被系统回收/崩溃），单次最多清 8 个，保证「用完即删」在异常路径上也成立。
+  **注意删除必须递归**：`fileIo.rmdirSync` 只删空目录（`13900032 Directory not empty`），
+  公共工具 `common/utils/FileUtils.removeDirRecursively` 负责先清内容再删目录；
+  `SettingsPanel` 的「清除缓存」原先直接用 `rmdirSync`，属同类问题，已一并改到该工具上。
 - **免权限**：官方在 `requestMovingPhoto` / `requestContent` / `requestVideoFile` 三处接口说明都写了
   「通过 picker 的方式调用该接口，不需要申请 `ohos.permission.READ_IMAGEVIDEO`」，链路按该写法组织。
   编译期仍会报 `READ_IMAGEVIDEO` 静态告警（编译器不知道资产来自 Picker），性质同 SaveButton 场景下的
@@ -439,15 +460,27 @@ EditorFormatBar「动态照片」按钮（tag=mphoto，回复 / 发新主题共�
    ③ `mvimg` 取值（当前恒 `'1'`，官方是"有原图/动图才为 1"）。
 2. **返回的 url 形态**。视频若被服务端转码，正文必须引用**转码后**的名字（真实帖是 `...-140.mp4`）；
    若响应返回的是转码前的名字，帖子里的 `[flash=video]` 会指向不存在的文件（症状：视频不播）。
-3. **Picker 过滤**：`image/movingPhoto` 在真机上是否把选择器限制到动态照片。若不支持过滤，用户可能选到
-   普通图片，此时 `requestMovingPhoto` 会超时（10s）并提示「导出动态照片失败」。
+3. **`image/*` 是否包含动态照片**：合并入口后 Picker 用 `MIMEType = image/*`（不再是 `image/movingPhoto`）。
+   按 MIME 通配语义应当包含（动态照片在库里 `photoType = IMAGE`、mime 为 `image/movingPhoto`），但官方文档
+   未明写。若真机上选不到动态照片，改用 API 20+ 的 `combinedMediaTypeFilter: ['image|*|*']`
+   （格式 `photoType | photoSubType | mimeType`，`*` 表示该级不过滤）显式表达「所有图片，含动态照片」。
 4. **免权限链路**：若 `getAssets` / `requestMovingPhoto` 抛 `201 Permission denied`，退路是在
    `module.json5` 声明 `ohos.permission.READ_IMAGEVIDEO` 并做授权引导（会多一次系统授权弹窗）。
+   注意 `pickImage` 对"反查不到资产"的处理是**降级为静态图 + `warn` 日志**，不会报错——
+   排查用户「选了动态照片却发成静图」时，先看有没有 `asset lookup failed, treat as still image`。
+5. **视频上传失败会遗留孤儿封面附件**：`uploadMovingPhoto` 先传封面、再传视频，视频失败直接抛错且
+   **没有回滚**，封面此时已经落在服务端。本改动明确「两半拿到之后的上传失败不降级、让用户重试」
+   （见 9.2），代价就是重试一次多一个孤儿附件。彻底修法是失败时记下已上传的封面 URL、重试复用；
+   在修之前先登记在此，便于线上看到重复附件时能对上号。
 
 ### 9.4 线上验证步骤（建议顺序）
 
-1. 回复任意帖子 → 点工具行「动态照片」→ 在相册里选一张动态照片（系统相机拍的实况 / 动态照片）；
+1. 回复任意帖子 → 点工具行「图片」→ 在相册里选一张动态照片（系统相机拍的实况 / 动态照片；选择器里应带
+   动态照片角标，见 §9.2 判定依据）；
 2. 看 toast：成功为「动态照片已插入」；失败会带服务端错误文本，记下来即可定位（对应 9.3 第 1 条）；
+   若出现「动态照片未能发送，已按普通图片发送」，说明**判定为动态照片但导出或读取失败**，
+   同时到日志里找 `export failed, fallback to still image`（导出阶段失败）或
+   `asset lookup failed, treat as still image`（连资产都没反查到，对应 9.3 第 4 条）；
 3. 发布后用**网页版**打开该楼：正文应为 `[img]...[b]MPHOTO[/b][flash=video]...`，
    且「附件」区里封面与视频两条都在（视频 url 应带尺寸后缀）；
 4. 用**本 App** 与**官方 App** 各打开该楼，确认都渲染成一体化动态照片控件（本工程按三元组折叠，见 §7.1）。
