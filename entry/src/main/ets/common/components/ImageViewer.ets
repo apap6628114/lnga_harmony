@@ -7,7 +7,7 @@ import { common } from '@kit.AbilityKit';
 import { appStore } from '../../store/AppStore';
 import { AppColors } from '../constants/Constants';
 import { UIMaterialManager } from '../managers/UIMaterialManager';
-import { MovingPhotoPlayer } from '../media/MovingPhotoPlayer';
+import { MovingPhotoPlayer, PHASE_FAILED, PHASE_LOADING, PHASE_PLAYING } from '../media/MovingPhotoPlayer';
 import { ensureMovingPhotoFiles, releaseMovingPhotoFiles, MovingPhotoPair } from '../media/MovingPhotoCache';
 import { getMovingPhotoVideo } from '../media/MovingPhotoRegistry';
 import { Logger, DOMAIN_UI, formatError } from '../utils/Logger';
@@ -40,6 +40,20 @@ export struct ImageViewer {
    * （捏合/双击守卫按"是不是动态照片"提前返回），变成一张永久卡住的图。
    */
   @State private failedMovingPhotoUrl: string = ''
+  /**
+   * 当前页动态照片的播放阶段（由 `MovingPhotoPlayer` 上报，取值见 `PHASE_*`）。
+   *
+   * 查看器里的播放图标**不由播放器渲染**，而是和右上角关闭按钮同层画在 UI 层：
+   * 图标因此不随图片平移、也不被内容区 `clip(true)` 裁剪；代价是显示与配色要
+   * 在这里按阶段自己推导。
+   */
+  @State private movingPhotoPhase: string = PHASE_LOADING
+  /**
+   * 播放请求序号：点击 UI 层播放图标即自增，命令经 @Prop 下发给播放器（见
+   * `MovingPhotoPlayer.playRequestId`）。下行命令用数据而非回调，避免构造参数
+   * 尚未落到子组件属性上时命令丢失。
+   */
+  @State private movingPhotoPlayRequestId: number = 0
 
   private isPageAnimating: boolean = false
 
@@ -111,6 +125,23 @@ export struct ImageViewer {
       return ''
     }
     return getMovingPhotoVideo(this.urls[this.currentIndex])
+  }
+
+  /**
+   * UI 层播放图标是否显示。
+   *
+   * 只有「当前页是可播放的动态照片」且「尚未准备失败」时显示：失败页已按普通图片
+   * 渲染（不再可播），留着图标只会误导用户点。
+   *
+   * @returns 是否显示播放图标
+   */
+  private movingPhotoIconVisible(): boolean {
+    return this.currentMovingPhotoVideo().length > 0 && this.movingPhotoPhase !== PHASE_FAILED
+  }
+
+  /** 请求播放当前页动态照片（UI 层图标点击：按钮在这里，命令靠序号下发给播放器）。 */
+  private requestMovingPhotoPlay(): void {
+    this.movingPhotoPlayRequestId += 1
   }
 
   private getExtension(url: string): string {
@@ -393,6 +424,9 @@ export struct ImageViewer {
     this.currentIndex = targetIndex
     /* 换页清空失败标记：回到该页会重建播放器并重下一次（瞬时失败不至于被判死刑）。 */
     this.failedMovingPhotoUrl = ''
+    /* 新页尚未准备：UI 层图标先回加载态（播放器复用实例时会上报新阶段，这里兜住
+       "新旧两页阶段恰好相同、@Watch 不上报"的情形）。 */
+    this.movingPhotoPhase = PHASE_LOADING
     this.zoomScale = 1
     this.zoomOffsetX = 0
     this.zoomOffsetY = 0
@@ -435,11 +469,15 @@ export struct ImageViewer {
             MovingPhotoPlayer({
               coverUrl: this.urls[this.currentIndex],
               videoUrl: this.currentMovingPhotoVideo(),
-              /* 不自动播放：播放全部由左上角图标触发；图标固定在内容区左上角
-                 （不随图片位置/尺寸变化），图片本体点击/长按不注册操作。 */
-              iconTop: 12,
-              iconLeft: 16,
-              iconSize: 44,
+              /* 图标不在播放器里画：播放器在本层会跟着 swipeTranslateX 一起平移、又落在
+                 clip(true) 的内容区里，图标留在里面就成了"图片的一部分"。改由本组件在
+                 UI 层渲染（见下方播放按钮），阶段靠 onPhaseChanged 上报、播放靠
+                 playRequestId 下发。 */
+              showIcon: false,
+              playRequestId: this.movingPhotoPlayRequestId,
+              onPhaseChanged: (phase: string): void => {
+                this.movingPhotoPhase = phase
+              },
               onPrepareFailed: (coverUrl: string): void => {
                 /* 只认当前页的失败：回调到达时当前页可能已经翻走（切图会复用播放器实例），
                    否则会把别的页误标成失败。标记后本页回落到普通图片分支（可缩放）。 */
@@ -633,6 +671,28 @@ export struct ImageViewer {
           if ((newValue.width as number) > 0) this.containerW = newValue.width as number
           if ((newValue.height as number) > 0) this.containerH = newValue.height as number
         })
+
+        /* 动态照片播放按钮：**与右上角关闭按钮同层同款**（都在 UI 层，不在图片层）。
+           位置对称（左上 / 右上同一基线）、尺寸与玻璃底一致，滑动切图时纹丝不动。
+           加载中半透明、就绪常态、播放中主题色高亮（配色规则与正文角标一致）。 */
+        if (this.movingPhotoIconVisible()) {
+          Stack() {
+            Image($r('app.media.icon_live_photo'))
+              .width(20).height(20)
+              .fillColor(this.movingPhotoPhase === PHASE_PLAYING
+                ? AppColors.primary : UIMaterialManager.onDarkForeground)
+              // Image 的 draggable 自 API 10 起默认为 true：长按会被系统当成"拖拽图片"（见 §12.9）
+              .draggable(false)
+          }
+          .width(38).height(38).borderRadius(19)
+          .opacity(this.movingPhotoPhase === PHASE_LOADING ? 0.55 : 1)
+          .position({ top: 4, left: 16 })
+          .accessibilityText(this.movingPhotoPhase === PHASE_PLAYING ? '动态照片播放中' : '播放动态照片')
+          .attributeModifier(UIMaterialManager.closeButtonMaterial)
+          .onClick(() => {
+            this.requestMovingPhotoPlay()
+          })
+        }
 
         Stack() {
           Image($r('app.media.icon_close'))

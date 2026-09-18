@@ -17,13 +17,13 @@ const PLAYBACK_TIMEOUT_MS: number = 15000
 const AUTO_PLAY_FALLBACK_MS: number = 1200
 
 /** 准备中：正在下载封面/视频并构造 MovingPhoto。 */
-const PHASE_LOADING: string = 'loading'
+export const PHASE_LOADING: string = 'loading'
 /** 就绪：停在静态封面，图标常态，可点击播放。 */
-const PHASE_READY: string = 'ready'
+export const PHASE_READY: string = 'ready'
 /** 播放中：图标高亮，点击不响应（不重播、不终止）。 */
-const PHASE_PLAYING: string = 'playing'
+export const PHASE_PLAYING: string = 'playing'
 /** 失败：保持静态封面且不显示图标（不误导用户可播放）。 */
-const PHASE_FAILED: string = 'failed'
+export const PHASE_FAILED: string = 'failed'
 
 /**
  * 全局播放仲裁器。
@@ -97,8 +97,12 @@ const arbiter: PlaybackArbiter = new PlaybackArbiter()
  *   之间换枝。换枝会销毁并重建封面节点，重新解码期间出现空白帧——这正是"播放态 ↔ 未播放态
  *   切换闪一下"的成因。本体（`build`）与正文（`BBCodeContentView.RenderImageContent`）
  *   两处都按此写法，改动其一时另一处必须同步。
- * - **图标常驻**左上角（由父组件用 `iconLeft/iconTop` 决定贴图片还是贴内容区）：
- *   loading 半透明、ready 常态白、playing 高亮主题色、failed 不显示。
+ * - **图标有两处渲染位置，二选一**：正文里由本组件自己渲染（`showIcon: true`，默认），
+ *   贴在图片左上角随图片滚动；查看器里**不在本组件渲染**（`showIcon: false`），改由父组件
+ *   在 UI 层（与右上角关闭按钮同一层）渲染——本组件在查看器里会跟着 `swipeTranslateX`
+ *   一起平移、又被内容区 `clip(true)` 裁剪，图标留在里面就会"跟着图片走"而不像按钮。
+ *   父组件渲染时必须接 `onPhaseChanged` 拿阶段、用 `playRequestId` 下发播放命令。
+ * - **图标外观**：loading 半透明、ready 常态白、playing 高亮主题色、failed 不显示。
  * - **图标带圆形底板**（半透明黑 + 1vp 细描边）：图标叠在图片内容上，没有底板时图形直接
  *   和画面纹理混在一起、读不出"这是个按钮"；底板参数与正文静态角标完全一致（见 7.3）。
  * - **图标是唯一的播放入口**：图片本体的**长按**不注册操作（`hitTestBehavior(None)`
@@ -138,6 +142,28 @@ export struct MovingPhotoPlayer {
   @Prop iconLeft: number = 10
   /** 就绪后是否自动播放一次（帖子内点图标展开播放器时用）。 */
   @Prop autoPlayOnce: boolean = false
+  /**
+   * 是否由本组件渲染左上角播放图标。
+   *
+   * 正文（`BBCodeContentView`）用默认 true：图标贴图片左上角，随图片滚动。
+   * 查看器（`ImageViewer`）置 false：图标改由查看器在 UI 层渲染（见类注释"图标有两处渲染位置"）。
+   */
+  @Prop showIcon: boolean = true
+  /**
+   * 播放请求序号：父组件在 UI 层渲染图标时，点击一次即自增，本组件据此播放一次。
+   *
+   * 下行命令走**数据**而不是回调：构造参数里的回调在本组件 `aboutToAppear` 期间
+   * 可能还没落到属性上（仍是默认实现），命令会静默丢失；@Prop 变化触发的 @Watch
+   * 没有这个时序问题。
+   */
+  @Prop @Watch('onPlayRequested') playRequestId: number = 0
+
+  /**
+   * 播放阶段变化回调（取值为导出的 `PHASE_*` 常量）。
+   *
+   * 父组件在 UI 层渲染图标时必须接：显示与否、配色、半透明都由这个阶段推导。
+   */
+  onPhaseChanged: (phase: string) => void = (_phase: string) => {}
 
   /** 播放结束/被抢占回调（帖子内用于收起就地播放器、回到静态封面）。 */
   onPlaybackFinish: () => void = () => {}
@@ -153,8 +179,8 @@ export struct MovingPhotoPlayer {
    */
   onPrepareFailed: (coverUrl: string) => void = (_coverUrl: string) => {}
 
-  /** 当前播放阶段（loading / ready / playing / failed）。 */
-  @State private phase: string = PHASE_LOADING
+  /** 当前播放阶段（loading / ready / playing / failed）；每次变化都上报给父组件。 */
+  @State @Watch('notifyPhaseChanged') private phase: string = PHASE_LOADING
   /** 构造完成的动态照片对象；为空表示尚未准备就绪。 */
   @State private movingPhoto: photoAccessHelper.MovingPhoto | undefined = undefined
 
@@ -191,6 +217,24 @@ export struct MovingPhotoPlayer {
   aboutToAppear(): void {
     this.scope.begin()
     this.prepare()
+  }
+
+  /**
+   * 把当前播放阶段上报给父组件（由 `phase` 的 @Watch 驱动）。
+   *
+   * 父组件在 UI 层渲染图标时全靠这条通路（本组件此时不渲染图标，没有第二条路可走）。
+   */
+  private notifyPhaseChanged(): void {
+    this.onPhaseChanged(this.phase)
+  }
+
+  /**
+   * 响应父组件的播放请求（UI 层图标点击 → `playRequestId` 自增 → 本方法）。
+   *
+   * 与直接点本组件图标等价：只有就绪态真的播，加载中排队，播放中忽略。
+   */
+  private onPlayRequested(): void {
+    this.playOnce()
   }
 
   /** 组件消失时结束会话、释放播放权与缓存占用并停止播放。 */
@@ -499,8 +543,10 @@ export struct MovingPhotoPlayer {
           .hitTestBehavior(HitTestMode.None)
       }
 
-      /* 图标常驻左上角（位置由父组件参数决定）：加载中半透明、就绪常态、播放中高亮。 */
-      if (this.iconVisible()) {
+      /* 图标常驻左上角（位置由父组件参数决定）：加载中半透明、就绪常态、播放中高亮。
+         `showIcon: false`（查看器）时本层不渲染，图标由父组件在 UI 层自己画——
+         本组件在查看器里会随图片平移、又被内容区裁剪，图标留在这里就不像按钮了。 */
+      if (this.showIcon && this.iconVisible()) {
         Stack() {
           Image($r('app.media.icon_live_photo'))
             .width(this.iconSize * 0.62)

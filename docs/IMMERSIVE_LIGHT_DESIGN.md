@@ -836,7 +836,7 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 | `dialogFieldMaterial` | 系统材质背板之上的输入框 / 内容层（**不做模糊**） | 无模糊、暖白半透明填充 + 极淡描边 |
 | `dialogActionMaterial` | 系统材质背板之上的**中性次要操作**（子版块筛选面板的「关闭」胶囊） | 无模糊、填充 32% + 描边 |
 | `darkOverlayMaterial` | 图片查看器等固定暗场景浮层 | 48vp、1.2、固定深色填充 32% |
-| `closeButtonMaterial` | 图片查看器关闭按钮 | 同暗场景玻璃 + 轻投影 |
+| `closeButtonMaterial` | 图片查看器角落按钮（右上关闭 / 左上动态照片播放） | 同暗场景玻璃 + 轻投影 |
 
 玻璃的立体感由两层叠加表达：`backgroundColor` 半透明填充之上，再叠一条
 `linearGradient`（顶部受光高光 → 中部透明 → 底部微暗），描边统一为一条极淡的整圈线。
@@ -1263,7 +1263,7 @@ DevEco 编译通过（`BUILD SUCCESSFUL`），**真机已确认材质生效**。
    `false`（`common.d.ts`）——这条只对 `Image` 是例外：**凡是"图标 + 点击"的按钮，图标都要显式写**。
    本轮把这类位置一并清理了：`PanelNavBar.iconPod`（三颗）、`ThreadPanel` 回复按钮、
    `TopicListPanel` 发帖 / 刷新、`WebViewPanel` 前进 / 后退、`SearchPanel` 返回按钮、
-   `ImageViewer` 关闭按钮。**新增图标按钮时不要再漏**。
+   `ImageViewer` 关闭按钮与动态照片播放按钮。**新增图标按钮时不要再漏**。
 4. **角标不再用 `position` 绝对坐标**：容器高度改由 HDS 内容区决定之后，`position({ x: 19, y: 0 })`
    这类"假设容器尺寸"的写法必然失配（同类教训见上文"材质块内的定位点要用 `offset`"）。改法是把
    图标与角标收进一个 **18×18 的 `Stack({ alignContent: TopEnd })`**，角标锚在**图标的右上角**并用
