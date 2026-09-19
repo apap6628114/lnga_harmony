@@ -91,23 +91,20 @@ const SUB_BOARD_BLOCKED_ICON_OPACITY: number = 0.6
  */
 const PREVIEW_IMAGE_RADIUS: number = 8
 
-/** 卡片**内部**左右 padding（vp）：文字/图片与卡片边框之间的距离。 */
-const CARD_HORIZONTAL_PADDING: number = 16
-
 /**
- * 列表左右 padding（vp）：卡片与列表边界之间的距离。
+ * 列表单元**内部**左右 padding（vp）：文字/图片与列表左右边界的距离。
  *
- * 与 {@link CARD_HORIZONTAL_PADDING} 分开定义：两者含义不同（卡片内 vs 卡片外），只是
- * 恰好同值。它们**必须分别存在**——卡片化之后若把横向留白全塞进卡片 padding，卡片就会
- * 紧贴列边界，圆角与描边贴边很难看；全靠列表 padding 则内容会贴着边框。
+ * 横向留白**只由这一层承担**：列表自身没有左右 padding（见 `build()` 里的 `List`），
+ * 条目边界由贯穿整列的分隔横线表达。预览图区宽度也据此扣（见
+ * `TopicCardComponent.previewTileWidth`）。
  */
-const LIST_HORIZONTAL_PADDING: number = 16
+const ITEM_HORIZONTAL_PADDING: number = 16
 
 /**
  * 多图横排最多显示的缩略图张数。
  *
- * 取 3：卡片内一行 3 张时每张约 100~180vp（视列宽），已能辨认内容；再多会让单张过窄、
- * 退化成"色块"。第 4 张起不渲染，仅由右下角「N 图」角标告知总数（点开查看器可看全部）。
+ * 取 3：一行 3 张时每张约 100~180vp（视列宽），已能辨认内容；再多会让单张过窄、
+ * 退化成"色块"。第 4 张起不渲染（不叠数量角标，点开查看器可看全部）。
  * 实测列表附件里带图条目以 1~3 张为主，3 张覆盖绝大多数场景。
  */
 const PREVIEW_IMAGE_MAX_INLINE: number = 3
@@ -115,32 +112,21 @@ const PREVIEW_IMAGE_MAX_INLINE: number = 3
 /**
  * 多图横排的图间距（vp）。
  *
- * 取 6 而非卡片级的 16：一行内的缩略图是**同一组内容**，间距只需区分边界、不需表达层级，
- * 过大会让每张图显著变窄。图片区总宽 = 卡片内容宽 − 间距 ×（张数 − 1）。
+ * 取 6 而非整行级别的 16：一行内的缩略图是**同一组内容**，间距只需区分边界、不需表达层级，
+ * 过大会让每张图显著变窄。图片区总宽 = 内容宽 − 间距 ×（张数 − 1）。
  */
 const PREVIEW_IMAGE_GAP: number = 6
 
-/** 帖子卡片（`ListItem`）圆角（vp）：与预览图 8 同档略大，卡片轮廓更柔和。 */
-const CARD_RADIUS: number = 12
-
 /**
- * 卡片内各区块之间的**统一纵向间距**（vp）。
+ * 列表单元内各区块之间的**统一纵向间距**（vp）。
  *
  * 标题行 / 摘要 / 预览图 / 底栏 之间全部用这一个值，不再各写各的（此前底栏是 12、
  * 图片区是 10 且靠"上一个区块自己带 margin"实现，导致有无摘要时图片与标题的间距不一致）。
  * 统一后"标题→图片""摘要→图片""图片→底栏"的间距在视觉上完全相同。
  *
- * 取 10：与卡片内边距 16 成比例（区块内松、区块间紧），且不改动原有观感基准。
+ * 取 10：与内边距 16 成比例（区块内松、区块间紧），且不改动原有观感基准。
  */
-const CARD_BLOCK_GAP: number = 10
-
-/**
- * 帖子卡片之间的间距（vp，`List.space`）。
- *
- * 卡片化之后相邻卡片由"边框 + 间距"共同分隔，间距取 8：足以让两张卡片的圆角边框互不粘连，
- * 又不会让列表显得松散（对比卡片内上下 padding 各 16）。
- */
-const CARD_SPACE: number = 8
+const ITEM_BLOCK_GAP: number = 10
 
 /** 预加载页面临时结果 — startPrefetch 内部收集用 */
 class PrefetchPageResult {
@@ -242,7 +228,7 @@ export struct TopicListPanel {
   /** 列表当前视口高度。 */
   @State listViewportHeight: number = 1
   /**
-   * 列表实测宽度（vp），由列表自身的 `onAreaChange` 采集后下传给卡片。
+   * 列表实测宽度（vp），由列表自身的 `onAreaChange` 采集后下传给列表条目。
    *
    * 预览图区宽度不能由断点硬编码推出：`sm` 是整窗、`md` 是"窗口 − 侧边栏 180"、
    * `lg` 双列时是"窗口 − 侧边栏 − 活动列"的 40%，任何写死的宽度都会在其中一种形态下失配。
@@ -1163,10 +1149,9 @@ export struct TopicListPanel {
   build() {
     Stack() {
       Column() {
-        /* 卡片间距走 `ListOptions.space`（`list.d.ts:656`：Spacing between list items along the
-           main axis），**不是链式属性**——`ListAttribute` 上没有 `space`（只有 `lanes` 的
-           `gutter`，且那个仅在多列时生效）。它同时用于排序条、卡片与底部提示项之间。 */
-        List({ scroller: this.scroller, space: CARD_SPACE }) {
+        /* 条目之间**不留间距**（`ListOptions.space` 不传即 0）：一条帖子由贯穿整列的分隔横线
+           切分（见列表尾部的 `divider`），横线上下紧贴相邻条目。 */
+        List({ scroller: this.scroller }) {
           if (this.showSort) {
             ListItem() {
               // 排序条与时间窗菜单锚点**同层叠放**：菜单不能挂在排序条这一行上——整行是宽锚点，
@@ -1194,10 +1179,9 @@ export struct TopicListPanel {
                   .bindMenu(this.showHotRangeMenu, this.HotRangeMenu(), this.hotRangeMenuOptions())
               }
               .width('100%')
-              /* 排序条与卡片左/右边缘对齐：列表已提供 LIST_HORIZONTAL_PADDING，这里再补卡片自身的
-                 内边距，排序条的两端就会与卡片内的文字同一条竖线（原来的 4% 比例留白在卡片化后
-                 会与卡片边缘错位）。 */
-              .padding({ left: CARD_HORIZONTAL_PADDING, right: CARD_HORIZONTAL_PADDING })
+              /* 沿用原有 4% 比例留白：条目自带 16vp 内边距，排序条按列表宽度的比例留白，
+                 与整列的观感基准一致（不随列宽变化而显得贴边或过缩）。 */
+              .padding({ left: '4%', right: '4%' })
               .margin({ top: 8, bottom: 6 })
               .onAreaChange((_oldValue: Area, newValue: Area): void => {
                 // 采集排序条底部纵坐标：供状态视图撑满排序条下方的列表可视区
@@ -1217,7 +1201,8 @@ export struct TopicListPanel {
               .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
               .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
             }
-          } else if (this.hasError) {            ListItem() {
+          } else if (this.hasError) {
+            ListItem() {
               Column() {
                 ErrorStateView({ msg: this.errorMsg || '加载失败', onRetry: () => this.loadTopics(1) })
               }
@@ -1257,15 +1242,9 @@ export struct TopicListPanel {
                   }
                 })
               }
-              /* 一条帖子 = 一张圆角卡片：**只用圆角描边**把每个 ListItem 围成独立单元，
-                 取代原来"整列共用一条分隔横线"的写法（列表的 divider 已移除）。
-                 **不设背景色**：卡片与页面同底色，区分完全由线条承担——视觉更轻，
-                 不会在浅色主题下堆出一片比底色更深的色块；暗色下描边同样成立。
-                 描边用 `cardStroke`（比 `separator` 再淡一档，见 AppColors 注释）：
-                 卡片化后线条是唯一的边界信号，强度刻意压到"看得见但不邀请注意"。
-                 浓淡只需改 `app.color.card_stroke` 一个资源值，结构与间距都不受影响。 */
-              .borderRadius(CARD_RADIUS)
-              .border({ width: 1, color: AppColors.cardStroke })
+              /* 一条帖子 = 列表里的一个普通条目：条目边界交给列表自身的分隔横线
+                 （见列表尾部的 `divider({ strokeWidth: 0.5, color: AppColors.separator })`），
+                 条目本体不设圆角、不设描边、不设底色——与页面同底色。 */
             }, (thread: object) => {
               const t = thread as Record<string, Object>
               return String(t['tid'] ?? '')
@@ -1278,21 +1257,16 @@ export struct TopicListPanel {
                 } else if (this.mgr.currentPage >= this.mgr.totalPages) {
                   Text('— 已到底 —').fontSize(12).fontColor(AppColors.textTertiary)
                 }
-              }
-              .width('100%')
-              /* 横向起点与卡片对齐：列表已有 LIST_HORIZONTAL_PADDING，此处只需补上卡片自身的
-                 内边距（卡片里的文字距边框 16，提示文字也应当落在同一条竖线上）。 */
-              .padding({ left: CARD_HORIZONTAL_PADDING, right: CARD_HORIZONTAL_PADDING, top: 16, bottom: 16 })
+              }.width('100%').justifyContent(FlexAlign.Center).padding({ top: 16, bottom: 16 })
             }
           }
         }
         .width('100%').layoutWeight(1)
         .scrollBar(BarState.Off)
-        /* 卡片化后不再用贯穿整列的分隔横线：相邻卡片的边界由「圆角描边 + CARD_SPACE 间距」
-           共同表达（间距见上面的 ListOptions.space）。
-           左右 padding 也移到这里：卡片本体不再自带横向 padding，这样"卡片外间距"与
-           "卡片内间距"各由一处承担，视觉上卡片与列边界也留出与卡片之间同档的 16vp。 */
-        .padding({ left: LIST_HORIZONTAL_PADDING, right: LIST_HORIZONTAL_PADDING })
+        /* 条目边界：一条贯穿整列的 0.5px 分隔横线（与排序条上方的写法一致）。
+           条目之间没有间距（见上面的 `List`），所以横线正好落在两个条目之间，
+           "上下横线 0 间隔"——线即是唯一的边界信号，条目本体不带圆角/描边/底色。 */
+        .divider({ strokeWidth: 0.5, color: AppColors.separator })
         .lanes(new BreakpointType(1, 1, 1).getValue(this.currentBreakpoint), 12)
         .edgeEffect(EdgeEffect.Spring)
         .cachedCount(3)
@@ -1309,7 +1283,7 @@ export struct TopicListPanel {
             newValue.height !== this.listViewportHeight) {
             this.listViewportHeight = newValue.height
           }
-          // 列表实测宽度下传卡片：预览图高度按"图片区宽度 × 图片比例"算，
+          // 列表实测宽度下传条目：预览图高度按"图片区宽度 × 图片比例"算，
           // 而这个宽度只有列表自己知道（sm 整窗 / md 减侧边栏 / lg 双列再乘 40%）
           if (typeof newValue.width === 'number' && newValue.width > 0 &&
             newValue.width !== this.listWidth) {
@@ -1733,7 +1707,7 @@ struct TopicCardComponent {
   /**
    * 列表实测宽度（vp，由 `TopicListPanel` 采集后下传）。
    *
-   * 预览图区宽度 = 本值 − 卡片左右 padding；首帧为 0 时回落
+   * 预览图区宽度 = 本值 − 条目左右内边距（`ITEM_HORIZONTAL_PADDING`）；首帧为 0 时回落
    * `FALLBACK_PREVIEW_AREA_WIDTH`，列表布局完成后即被真实值替换。
    */
   @Prop listWidth: number = 0
@@ -1810,9 +1784,9 @@ struct TopicCardComponent {
   }
 
   /**
-   * 卡片内**横排渲染**的预览图 URL（最多 `PREVIEW_IMAGE_MAX_INLINE` 张）。
+   * 条目内**横排渲染**的预览图 URL（最多 `PREVIEW_IMAGE_MAX_INLINE` 张）。
    *
-   * 多图时只渲染前几张：其余由「N 图」角标告知（点开查看器可看全部）。限制数量既是为
+   * 多图时只渲染前几张，其余不渲染也不叠数量角标（点开查看器可看全部）。限制数量既是为
    * 单张宽度留余量，也避免列表里同时发起过多图片请求（实测最多的条目带 7 张图）。
    *
    * @returns 前 N 张 URL（保序）
@@ -1828,13 +1802,14 @@ struct TopicCardComponent {
    * **高度必须按这个宽度算**而不是按图片区总宽：多图时每张只占 1/N 宽，若仍按整行宽度取高，
    * 3 张 16:9 图会被算成 166vp 高、而实际每张只有约 100vp 宽，画面会被严重裁切。
    *
-   * 可用宽度 = 列表实测宽度 − 列表左右留白 × 2 − 卡片左右 padding × 2（卡片化后这两层都存在）。
+   * 可用宽度 = 列表实测宽度 − 条目左右内边距 × 2（`ITEM_HORIZONTAL_PADDING`；列表自身
+   * 没有左右 padding，横向留白只有这一层）。
    *
    * @returns 单张宽度（vp）
    */
   private previewTileWidth(): number {
     const areaWidth: number = this.listWidth > 0
-      ? this.listWidth - (LIST_HORIZONTAL_PADDING + CARD_HORIZONTAL_PADDING) * 2
+      ? this.listWidth - ITEM_HORIZONTAL_PADDING * 2
       : FALLBACK_PREVIEW_AREA_WIDTH
     const count: number = this.inlinePreviewUrls().length
     if (count <= 1) {
@@ -1968,20 +1943,20 @@ struct TopicCardComponent {
         }
       }
       .width('100%')
-      /* 每个区块自带 `margin top`，值统一为 CARD_BLOCK_GAP：
+      /* 每个区块自带 `margin top`，值统一为 ITEM_BLOCK_GAP：
          标题→摘要、摘要→图片、图片→底栏三处因此完全一致（无摘要时"标题→图片"也是同一值）。
          此前只有图片区没有自己的 margin，它的间距依赖"上一个区块是否带 margin"，
          于是有无摘要会出现两种间距。 */
-      .margin({ top: CARD_BLOCK_GAP })
+      .margin({ top: ITEM_BLOCK_GAP })
     }
   }
 
   /**
-   * 卡片主体（§6.1 的顺序：**标题 → 摘要 → 图片 → 底栏**）。
+   * 列表单元主体（§6.1 的顺序：**标题 → 摘要 → 图片 → 底栏**）。
    *
    * 预览图放在摘要之后、底栏之前：标题与摘要构成"这条帖子讲什么"的信息块，图片作为其佐证，
    * 底栏（作者 / 时间 / 回复数）收尾。标题行因此**不需要**条件性 `margin top`——预览区在它
-   * 下方，无图卡片天然保持紧凑。
+   * 下方，无图条目天然保持紧凑。
    */
   build() {
     Column() {
@@ -2015,7 +1990,7 @@ struct TopicCardComponent {
           Text('该用户已被屏蔽')
             .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.topicFontSize))
             .fontColor(AppColors.textTertiary)
-            .margin({ top: CARD_BLOCK_GAP })
+            .margin({ top: ITEM_BLOCK_GAP })
             .width('100%')
         } else {
           Text(unescapeHtml(String(this.thread['previewSnippet'] ?? '')))
@@ -2027,7 +2002,7 @@ struct TopicCardComponent {
               ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.topicFontSize)
             ))
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .margin({ top: CARD_BLOCK_GAP }).width('100%')
+            .margin({ top: ITEM_BLOCK_GAP }).width('100%')
         }
       }
 
@@ -2050,13 +2025,13 @@ struct TopicCardComponent {
           }
         }.layoutWeight(1)
         Row() { Image($r('app.media.icon_chat_bubble')).width(12).height(12).fillColor(AppColors.textTertiary); Text(` ${this.thread['replies'] ?? 0}`).fontSize(12).fontColor(AppColors.textTertiary) }
-      }.width('100%').justifyContent(FlexAlign.SpaceBetween).margin({ top: CARD_BLOCK_GAP })
+      }.width('100%').justifyContent(FlexAlign.SpaceBetween).margin({ top: ITEM_BLOCK_GAP })
     }
     .width('100%')
-    /* 卡片内边距：横向与列表的 LIST_HORIZONTAL_PADDING 各司其职（见常量注释） */
+    /* 条目内边距：横向留白只由这一层承担（见 `ITEM_HORIZONTAL_PADDING` 常量注释） */
     .padding({
-      left: CARD_HORIZONTAL_PADDING,
-      right: CARD_HORIZONTAL_PADDING,
+      left: ITEM_HORIZONTAL_PADDING,
+      right: ITEM_HORIZONTAL_PADDING,
       top: 16,
       bottom: 16
     })

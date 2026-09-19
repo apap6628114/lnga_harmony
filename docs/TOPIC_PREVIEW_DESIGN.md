@@ -18,7 +18,7 @@
 | 解析 | `parser/TopicParser.ets`（`attachs` → `previewImages` + `previewSize`）、`parser/AppSubjectListParser.ets` 与 `parser/AppUserTopicParser.ets`（`attachPrefix` **解析期内部**透传，见 §4.2；不作为 `TopicListInfo` 字段暴露） | ✅ |
 | UI | `pages/TopicListPanel.ets` → `TopicCardComponent.previewArea()`（开关 + 加载模式双重判定、被动占位、**原图**、失败即隐藏、**比例驱动的响应式高度**、Cover/Contain 分区、**图片左对齐**、多图横排、长图角标） | ✅ |
 | 响应式 | 列表实测宽度下传卡片（`onAreaChange` → `@Prop listWidth`）、比例驱动高度、Cover/Contain 分区、多图横排（见 §6.2 / §6.8） | ✅ |
-| 卡片化 | `ListItem` 圆角 + 描边 + 底色，取代分隔横线；列表 `ListOptions.space` 分隔（见 §6.9） | ✅ |
+| 列表边界 | 条目本体**无圆角/描边/底色**，边界由列表自身的 `List.divider`（0.5px `AppColors.separator`）承担，条目之间 0 间距（见 §6.9） | ✅ |
 | 设置 | `AppStorageKeys.KEY_SHOW_TOPIC_PREVIEW` / `SettingsState.showTopicPreview` / `MediaSettings.setShowTopicPreview` / `SettingsStore` 门面与 AppStorage 同步 / `SettingsPanel` 行 / `SettingsIconColors.topicPreview` / `settings_topic_preview.svg` | ✅ |
 | 测试 | `entry/src/test/AppTopicListUnit.test.ets`：12 个预览用例（7 个原有 + 5 个本轮新增，见 §4.6 清单） | ✅ |
 | 文档 | 本文 + `docs/research/IMAGE_PIPELINE_AUDIT.md` §5.1 与 G2 的复测更正 | ✅ |
@@ -677,23 +677,23 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean,
 
 ### 6.1 布局与尺寸
 
-现有卡片结构（`TopicListPanel.ets` 的 `TopicCardComponent`）与预览区位置：
+现有列表条目结构（`TopicListPanel.ets` 的 `TopicCardComponent`）与预览区位置：
 
 ```text
-ListItem（**一条帖子 = 一张圆角卡片**：radius 12 + 1px separator 描边，**不设底色**；
-           列表用 ListOptions.space = 8 分隔，**已移除贯穿整列的分隔横线**）
-└── Column（卡片内容，padding 左右 16 / 上下 16）
+ListItem（**一条帖子 = 列表里的一个普通条目**：无圆角、无描边、无底色；
+           条目之间 0 间距，边界由贯穿整列的 List.divider 0.5px 横线切分，见 §6.9）
+└── Column（条目内容，padding 左右 16 / 上下 16）
     ├── Row   标题行（[标签] 标题 2 行 … 可选收藏移除按钮）
-    ├── Text  摘要 previewSnippet（可选，margin top CARD_BLOCK_GAP）
-    ├── ▶ 预览图区（margin top CARD_BLOCK_GAP）
+    ├── Text  摘要 previewSnippet（可选，margin top ITEM_BLOCK_GAP）
+    ├── ▶ 预览图区（margin top ITEM_BLOCK_GAP）
     │     Stack(width 100%, height = 按真实比例算出)
     │       ├── Row(左对齐, space 6): Image × N
     │       │     宽度 = 布局给出的 displayWidth（竖图收窄到贴合图片，横图取满分区）
     │       └── Text('长图')  右下角角标（仅单图且比例极端时）
-    └── Row   底栏（作者 · 时间 · 版面 | 回复数，margin top CARD_BLOCK_GAP）
+    └── Row   底栏（作者 · 时间 · 版面 | 回复数，margin top ITEM_BLOCK_GAP）
 ```
 
-**四个区块的纵向间距统一为 `CARD_BLOCK_GAP = 10`**：标题→摘要、摘要→图片、图片→底栏
+**四个区块的纵向间距统一为 `ITEM_BLOCK_GAP = 10`**：标题→摘要、摘要→图片、图片→底栏
 三处完全一致；无摘要时"标题→图片"也是同一值。关键在于**每个区块自带 `margin top`**——
 此前图片区没有自己的 margin、依赖"上一个区块是否带 margin"，于是有摘要与无摘要会出现两种
 间距（正是"图片贴着标题"的成因）。底栏原为 12，一并归到 10。
@@ -704,9 +704,9 @@ ListItem（**一条帖子 = 一张圆角卡片**：radius 12 + 1px separator 描
 **角标**：只保留单图极端比例的「长图」提示。**「N 图」数量角标已移除**——多图横排本身
 "看得见"，再叠一个数字属于重复表达，且会压住最后一张图的角落。
 
-**卡片化（§6.9）**：`ListItem` 自带圆角 + 描边 + 底色，取代原来"整列共用一条分隔横线"的写法。
-横向留白因此分两层——列表 `LIST_HORIZONTAL_PADDING`（卡片与列边界）与卡片
-`CARD_HORIZONTAL_PADDING`（内容与边框），排序条与底部提示项也按同样两层对齐。
+**列表边界（§6.9）**：条目本体不带圆角 / 描边 / 底色，边界完全由列表自身的 `List.divider`
+（0.5px `AppColors.separator`）承担；横向留白**只有一层**——条目内边距
+`ITEM_HORIZONTAL_PADDING = 16`（列表自身没有左右 padding）。
 
 **预览区高度不再是常量**——由「首图真实比例 × 单张缩略图宽度」算出（§6.2 / §6.8）。
 原 `PREVIEW_IMAGE_HEIGHT = 120` 固定值已移除，理由是实测数据（§6.2.1）。
@@ -737,20 +737,20 @@ UI 只消费结果、不做算术：
   若角标也用 0.9 会让 46% 的条目挂上角标，提示立刻失去信息量。
 
 **`W` 的获取方式**：列表自身 `onAreaChange` 采集实测宽度 → `TopicListPanel.listWidth` →
-`@Prop` 下传卡片 → 减去两层横向留白：列表 `LIST_HORIZONTAL_PADDING` 16×2（卡片与列边界的
-距离）与卡片 `CARD_HORIZONTAL_PADDING` 16×2（内容与卡片边框的距离）。**不能由断点硬编码推出**：
+`@Prop` 下传条目 → 减去条目左右内边距 `ITEM_HORIZONTAL_PADDING` 16×2。**不能由断点硬编码推出**：
 `sm` 是整窗、`md` 是「窗口 − 侧边栏 180」、`lg` 双列时还要再乘 40%，任何写死的宽度都会在
-其中一种形态下失配。首帧宽度为 0 时回落 `FALLBACK_PREVIEW_AREA_WIDTH = 296`
-（= sm 360vp 窗口 360 − 两层留白 64）。
+其中一种形态下失配。首帧宽度为 0 时回落 `FALLBACK_PREVIEW_AREA_WIDTH = 328`
+（= sm 360vp 窗口 360 − 条目内边距 32）。
 
-> 两层留白**必须分开存在**（卡片化之后）：全塞进卡片 padding 会让卡片紧贴列边界、圆角与描边
-> 贴边；全靠列表 padding 则内容贴着边框。二者含义不同（卡片外 vs 卡片内），只是恰好同值。
+> 横向留白**只有这一层**（列表自身没有左右 padding）。曾经的卡片化方案把它拆成"列表 padding +
+> 卡片 padding"两层，随圆角描边一起撤销（§6.9）：分隔横线要**贯穿整列**，条目就必须与列边界
+> 齐平，留白只能落在条目内部。
 
 **不给列表设宽度上限**（列表恒 `width('100%')` 撑满所属列）：
 曾经尝试过 `constraintSize({ maxWidth: 600 })` + `Row` 居中，实测在 `lg` 双列下会把帖子列表
 挤到列中间、两侧留出明显空隙，观感变差且与"列表铺满列宽"的既有形态不一致，**已撤销**。
 列宽由 `MainPage` 的列分配机制决定（`lg` 双列时活动列占 40%），列表只负责铺满它；
-图片区宽度因此就是"列宽 − 卡片 padding 32"，宽列就是宽图，不做人为收敛。
+图片区宽度因此就是"列宽 − 条目内边距 32"，宽列就是宽图，不做人为收敛。
 
 **多图时按单张宽度算高度**：`n` 张横排时每张宽 `(图片区宽 − 间距 × (n−1)) / n`，高度按该宽度取
 （见 §6.8）。否则 3 张 16:9 图会按整行宽度算出 150vp 高、而每张实际只有约 95vp 宽，画面被严重裁切。
@@ -781,8 +781,10 @@ UI 只消费结果、不做算术：
 | 尺寸段解码准确率 | **575 / 575 = 100%**：`S{base36宽}-{base36高}` 解出的**像素宽高**与文件头解出的真实值误差 <2%（比例与绝对尺寸**同时**一致，不只是比例吻合） |
 
 **关键结论：p50 = 1.00，近一半是竖图/方图**（模型手办、晒图类版块尤甚），与"横图为主"的
-常见假设相反。在这个分布下，固定 120vp 高度的实测表现（图片区宽度取 **296vp** = sm 360vp
-窗口减去两层留白 64）：
+常见假设相反。在这个分布下，固定 120vp 高度的实测表现（下表"本方案"列取**图片区宽度
+296vp**，即卡片化期间的"sm 360vp 窗口 − 两层留白 64"口径；本轮回退卡片化后实际为
+328vp = 360 − 条目内边距 32，见 §6.9。口径变宽只让横图的绝对高度略增，
+"比例驱动 vs 固定高度"的结论不变）：
 
 | 图片比例 | 固定 120vp 可见内容 | 本方案可见内容 | 本方案高度 | 图片显示宽度 | 填充方式 |
 | --- | --- | --- | --- | --- | --- |
@@ -804,9 +806,10 @@ UI 只消费结果、不做算术：
   所以竖图不再有两侧留白，可见内容即"完整显示"；`MAX_PREVIEW_HEIGHT` 从 200 提到 **240**
   的直接收益也在这里——竖图显示宽度 = 高度 × 比例，上限提高 20% 即宽度提高 20%
   （3:4 竖拍 150vp → 180vp）。
-- **全景图（3.5:1）比固定高度略差（76% vs 78%）**：这是容器变窄（328 → 296vp）后
-  `MIN_PREVIEW_HEIGHT` 下限占比上升的必然结果。它仍是全表唯一的"退步项"，且退步幅度小
-  （2 个百分点），换来的是其余七行的显著改善。
+- **全景图（3.5:1）在本轮口径下不再退步**：表内 76% 是按卡片化期间 296vp 图片区宽算的
+  （超宽图在 `Cover` 下按高度铺满，容器越窄、被裁掉的两端越多）；回退卡片化后图片区回到
+  328vp，同一比例升到约 **84%**，反而高于固定 120vp 的 78%。这是"容器越宽，超宽图越不吃亏"
+  的直接体现。
 
 #### 6.2.2 为什么尺寸在解析期算（而不是等 `onComplete` 回填）
 
@@ -899,7 +902,7 @@ struct TopicCardComponent {
   @StorageProp('imageLoadStrategy') imageLoadStrategy: string = ImageLoadStrategy.ALWAYS
   /** 网络变更版本号：WiFi↔蜂窝切换后重判被动态（NetworkMonitor 已 bump）。 */
   @StorageProp('networkChangeVersion') networkChangeVersion: number = 0
-  /** 列表实测宽度（vp）：预览区宽度 = 本值 − 卡片左右 padding × 2（见 6.2）。 */
+  /** 列表实测宽度（vp）：预览区宽度 = 本值 − 条目左右内边距 × 2（见 6.2）。 */
   @Prop listWidth: number = 0
   onRemoveFav: (tid: number) => void = (_tid: number) => {}
   onCardClick: (tid: string, pid: string) => void = (_tid: string, _pid: string) => {}
@@ -919,7 +922,7 @@ struct TopicCardComponent {
     return value as string[]
   }
 
-  /** 卡片内横排渲染的预览图（最多 PREVIEW_IMAGE_MAX_INLINE 张；不显示数量角标，见 K34）。 */
+  /** 条目内横排渲染的预览图（最多 PREVIEW_IMAGE_MAX_INLINE 张；不显示数量角标，见 K34）。 */
   private inlinePreviewUrls(): string[] {
     const urls: string[] = this.previewImageUrls()
     return urls.length > PREVIEW_IMAGE_MAX_INLINE ? urls.slice(0, PREVIEW_IMAGE_MAX_INLINE) : urls
@@ -940,7 +943,7 @@ struct TopicCardComponent {
    */
   private previewTileWidth(): number {
     const areaWidth: number = this.listWidth > 0
-      ? this.listWidth - CARD_HORIZONTAL_PADDING * 2
+      ? this.listWidth - ITEM_HORIZONTAL_PADDING * 2
       : FALLBACK_PREVIEW_AREA_WIDTH
     const count: number = this.inlinePreviewUrls().length
     if (count <= 1) {
@@ -1028,8 +1031,8 @@ struct TopicCardComponent {
         }
       }
       .width('100%')
-      // 每个区块自带 margin top，值统一 CARD_BLOCK_GAP（K33）
-      .margin({ top: CARD_BLOCK_GAP })
+      // 每个区块自带 margin top，值统一 ITEM_BLOCK_GAP（K33）
+      .margin({ top: ITEM_BLOCK_GAP })
     }
   }
 
@@ -1040,12 +1043,12 @@ struct TopicCardComponent {
         // ...标题行（tag / subject / 收藏移除）不变
       }
       .width('100%').alignItems(VerticalAlign.Top)
-      // ...摘要（margin top CARD_BLOCK_GAP）不变
+      // ...摘要（margin top ITEM_BLOCK_GAP）不变
       this.previewArea()
-      // ...底栏（margin top CARD_BLOCK_GAP）不变
+      // ...底栏（margin top ITEM_BLOCK_GAP）不变
     }
-    // 卡片内边距：横向 16（与列表的 LIST_HORIZONTAL_PADDING 分属两层，见 §6.2）
-    // 卡片外形（圆角/描边/底色）由外层 ListItem 承担，见 §6.9
+    // 条目内边距：横向 16（横向留白只有这一层，见 §6.2）
+    // 条目外形（圆角/描边/底色）**一律没有**：边界由外层列表的 divider 承担，见 §6.9
   }
 }
 ```
@@ -1079,9 +1082,10 @@ struct TopicCardComponent {
    图片请求成倍增长。第 4 张起不渲染、**也不再显示数量角标**（用户明确要求移除「N 图」）——
    点开查看器仍可看全部（查看器消费的是完整 `previewImages`，与列表渲染无关）。
 
-> **列宽与多图的关系**（为什么窄列下多图收益有限）：`lg` 双列时帖子列约 340vp、图片区 276vp，
-> 3 张横排时每张仅约 **88vp**；`sm` 360vp 窗口（图片区 296vp）下每张约 **95vp**，
-> `md` 600vp（388vp）下约 **125vp**。三种形态下 2 图以上的单张高度都会被压到
+> **列宽与多图的关系**（为什么窄列下多图收益有限；图片区宽 = 列宽 − 条目内边距 32）：
+> `lg` 双列时帖子列约 340vp、图片区 308vp，3 张横排时每张仅约 **99vp**；
+> `sm` 360vp 窗口（图片区 328vp）下每张约 **105vp**，`md` 600vp（388vp）下约 **125vp**。
+> 三种形态下 2 图以上的单张高度都会被压到
 > `MIN_PREVIEW_HEIGHT = 112`——即**多图是"小图并排"**，能扫到"有几张、分别是什么"，
 > 但看不清细节。这是列宽的物理约束，不是实现取舍；要更大只能减少张数或改为可滑横条。
 
@@ -1089,60 +1093,51 @@ struct TopicCardComponent {
 `justifyContent(FlexAlign.Start)`——图片贴左、**两侧无多余留白**（不是"在满宽容器里居中"）。
 `Cover`（横图）时容器取满分区宽度，左右自然对齐。多图时每张都按该规则排布。
 
-### 6.9 卡片化边界（取代分隔横线）
+### 6.9 条目边界：分隔横线（卡片化已回退）
 
-原来整列共用一条 `divider` 横线区分条目；现在**一条帖子 = 一张圆角卡片**，
-且**区分只靠线条，不靠颜色**：
+**当前契约**：`ListItem` **不带圆角、不带描边、不带底色**（与页面同底色 `bg`），条目边界由
+列表自身的分隔横线承担，条目之间**0 间距**：
 
 | 元素 | 取值 | 说明 |
 | --- | --- | --- |
-| 圆角 | `CARD_RADIUS = 12` | 比预览图的 8 略大，卡片轮廓更柔和 |
-| 描边 | 1px `AppColors.cardStroke` | 唯一的区分手段；新增资源 `app.color.card_stroke`，浅 `#F0E7D9` / 暗 `#26262A` |
-| 背景 | **不设**（与页面同底色 `bg`） | 有意为之：见下方"为什么不用底色" |
-| 卡片间距 | `CARD_SPACE = 8`（`ListOptions.space`） | 让相邻卡片的圆角互不粘连 |
-| 列表横向留白 | `LIST_HORIZONTAL_PADDING = 16` | 卡片与列边界之间的距离 |
+| 分隔线 | `List.divider({ strokeWidth: 0.5, color: AppColors.separator })` | 贯穿整列；排序条 / 条目 / 底部提示项之间都由它切分 |
+| 条目间距 | **0**（`ListOptions.space` 不传） | 横线上下紧贴相邻条目，"上下横线 0 间隔" |
+| 条目圆角 / 描边 | **无** | 卡片化写法（`CARD_RADIUS = 12` + 1px `AppColors.cardStroke`）已撤销 |
+| 横向留白 | 一层：条目内边距 `ITEM_HORIZONTAL_PADDING = 16` | 列表自身**没有**左右 padding，横线因此能通到列边界 |
+| 排序条留白 | `.padding({ left: '4%', right: '4%' })` | 沿用卡片化之前的比例留白（卡片化期间曾改成 16vp，已还原） |
+| 底部提示项 | `.width('100%').justifyContent(FlexAlign.Center).padding({ top: 16, bottom: 16 })` | 同样还原：不带左右 padding |
 
-**描边强度**：`cardStroke` 比 `separator` 再淡一档——浅色 `#F0E7D9` 对 `bg #FEFAF6` 对比度
-约 **1.1:1**（`separator` 是约 1.24:1），暗色 `#26262A` 对 `#121214` 约 **1.3:1**。
-暗色**刻意不做成与浅色同步的比例**：纯黑底上线条过淡会直接消失，所以暗色只比 `separator`
-降一档而非两档。这个强度是"看得见但不邀请注意"——卡片边界是辅助信息，不该跟标题、图片
-争夺注意力。需要更强边界改 `separator`，更弱继续调 `card_stroke` 一个资源值即可。
+**为什么回退**（决策记录）：圆角描边把每条帖子围成独立单元，观感偏"卡片流"，与本工程其余
+列表的横线分隔形态不一致；而且卡片化之后条目必须与列边界留出 `LIST_HORIZONTAL_PADDING = 16`
+的间距，横线无法贯穿整列，左右对齐还得跟着两层留白走。回退后：横线贯穿整列、条目与列边界
+齐平、左右对齐只有一处口径（条目内边距 16）。
 
-**为什么不用底色区分**（本轮从"底色 + 描边"改回"纯描边"）：
+- **撤销的代码**：`ListItem` 上的 `.borderRadius(CARD_RADIUS)` 与
+  `.border({ width: 1, color: AppColors.cardStroke })`、`List` 构造参数里的 `space: CARD_SPACE`、
+  列表上的 `.padding({ left/right: LIST_HORIZONTAL_PADDING })`。
+- **撤销的资源**：`AppColors.cardStroke` 与 `app.color.card_stroke`（base / dark）**已删除**——
+  该色值只为卡片描边存在，留着就是死资源。
+- **保留的部分**：预览图链路（比例驱动高度 / 多图横排 / 长图角标）与区块间距统一
+  （`ITEM_BLOCK_GAP = 10`）都不属于"卡片外观"，未随本次回退改动。
 
-- 同底色 + 描边是**最轻**的卡片表达——浅色主题下不会堆出一片比背景更深的色块
-  （`bgTertiary #F8F2EA` 比 `bg #FEFAF6` 暗，整屏卡片会连成一片"灰底"）；
-- 描边在深浅两套主题下都成立，不需要为"卡片底色"再维护一组色值；
-- 代价是线条强度必须靠调色值把握（已收敛到 `card_stroke` 一个资源）。
-
-三个实现要点：
-
-1. **间距必须走 `ListOptions.space`，不能写 `.space()`**：`space` 是 `List` 的**构造参数**
-   （`list.d.ts:656`），`ListAttribute` 上**没有**该属性（链式写法编译报
-   `Property 'space' does not exist on type 'ListAttribute'`）。`lanes` 的 `gutter` 也不行——
-   声明明确它"仅在列数/行数大于 1 时生效"。
-2. **`space` 对排序条与底部提示项一并生效**：它们也是 `ListItem`，卡片化后应保持同样的节奏，
-   不要再给它们单独加垂直 margin。
-3. **横向留白分两层、不可合并**：列表 padding（卡片外）+ 卡片 padding（卡片内）。见 §6.2 的说明。
-
-> `border` 的占位语义：SDK 只声明"默认 0 = 不显示边框"，**未定义是否挤占内容区**。ArkUI 实际
-> 按 border-box 处理（边框占内部空间），因此卡片内可用宽度会比 `listWidth − 64` 略小 2vp。
-> 该误差不影响高度公式的观感（高度由宽度算出，2vp 的差在 ≤1vp 高度量级），故不做补偿。
+> `ListOptions.space` 仍是 `List` 的**构造参数**（`list.d.ts:656`），`ListAttribute` 上没有该
+> 属性（链式 `.space()` 编译报 `Property 'space' does not exist on type 'ListAttribute'`）。
+> 当前不传即 0；将来若要恢复条目间距，仍只能走构造参数（见 K31）。
 
 ### 6.10 视觉一致性检查表
 
 | 项 | 要求 |
 | --- | --- |
-| 圆角 | 预览图 8；卡片 12（`CARD_RADIUS`） |
+| 圆角 | 预览图 8（`PREVIEW_IMAGE_RADIUS`）；**条目本体无圆角**（卡片化已回退，见 §6.9） |
 | 占位底色 | **仅被动占位块**用 `AppColors.bgSecondary`；实图（含竖图 `Contain`）不得加底色（K30） |
-| 卡片底色/描边 | **不设底色**（与页面同底），仅 1px `AppColors.cardStroke` 圆角描边（K35） |
-| 间距 | 卡片内四个区块统一 `CARD_BLOCK_GAP = 10`（每个区块自带 `margin top`）；卡片之间 8vp（`ListOptions.space`）；多图横排内 6vp |
-| 横向留白 | 两层：列表 16 + 卡片 16；排序条与底部提示项按同两层对齐 |
+| 条目底色/描边 | **都没有**：与页面同底，边界由 `List.divider`（0.5px `AppColors.separator`）承担（§6.9） |
+| 间距 | 条目内四个区块统一 `ITEM_BLOCK_GAP = 10`（每个区块自带 `margin top`）；条目之间 **0**（横线上下紧贴）；多图横排内 6vp |
+| 横向留白 | 一层：条目内边距 16（`ITEM_HORIZONTAL_PADDING`）；列表自身无左右 padding，排序条走 4% 比例留白 |
 | 图片对齐 | **贴左**（`FlexAlign.Start`）；竖图收窄容器到 `displayWidth`，两侧不留白 |
 | 高度稳定 | 占位态与实图态**同高**（同一个 `previewLayout()`），被动↔主动切换不产生跳动；高度在**解析期**算定，加载过程中也恒定（见 6.2.2） |
 | 高度范围 | 112~240vp（`MIN/MAX_PREVIEW_HEIGHT`）：低于 112 会让全景图退化成"一条线"；240 是竖图显示宽度的直接决定项（显示宽 = 高 × 比例） |
 | 多图 | 最多 3 张横排、行内同高、**高度按单张宽度算**（K28）；行内高度统一取首图比例（K29） |
-| 无图 | 完全不渲染（不留空行、不留背景条），标题行紧贴卡片顶部 |
+| 无图 | 完全不渲染（不留空行、不留背景条），标题行紧贴条目顶部 |
 | 深色模式 | 仅使用 `AppColors` 语义色，无需单独 dark 分支 |
 | 玻璃材质 | **不涉及**：预览图在列表内容层，不使用 `systemMaterial` / `GlassModifier`（详见 `docs/IMMERSIVE_LIGHT_DESIGN.md`：材质只用于浮层与系统控件） |
 | 字体 | 预览区不引入新字号角色；「长图」角标用 11 |
@@ -1451,25 +1446,23 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
   - [ ] **四个区块间距一致**：有摘要时"标题→摘要→图片→底栏"三处等距（10vp）；
         **无摘要时"标题→图片"也是同一值**（不应出现图片贴住标题）
   - [ ] 常规竖图（0.4~0.9，占实测 46%）**不出现**「长图」角标——它们已被 `Contain` 完整显示
-  - [ ] 竖图 `Contain` 的两侧**不出现灰色衬底方块**，直接透出卡片底色（K30）
+  - [ ] 竖图 `Contain` 的两侧**不出现灰色衬底方块**，直接透出页面底色（K30）
   - [ ] 竖图高度上限 240vp：3:4 竖拍的显示宽度约 180vp（此前 200vp 上限时为 150vp）
   - [ ] **多图横排**：2~3 图的条目按各自比例宽度贴左排列、行内同高；4 图以上只显示前 3 张、
         且**不出现任何数量角标**
   - [ ] 多图行内的图片高度按**单张宽度**算（3 张 16:9 不应被拉成整行宽度的高度，见 K28）
-  - [ ] 卡片顺序为「标题 → 摘要 → 图片 → 底栏」
+  - [ ] 条目顺序为「标题 → 摘要 → 图片 → 底栏」
   - [ ] **不给列表设宽度上限**（K25）：`lg` 双列下帖子列表铺满所属列，两侧无额外空隙
-  - [ ] **卡片化**：每条帖子是独立圆角卡片（**圆角 12 + 1px 描边，无底色**），
-        卡片之间有 8vp 间距、圆角互不粘连；**已无贯穿整列的分隔横线**
-  - [ ] 浅色主题下卡片描边**可见但不抢眼**（`card_stroke #F0E7D9`，对比度约 1.1:1）；
-        浓淡只调 `entry/src/main/resources/{base,dark}/element/color.json` 的 `card_stroke`（K35）
-  - [ ] 卡片与列左右边界各留 16vp，内容（标题/摘要/图片）距卡片边框 16vp；
-        排序条与底部「已到底」提示与卡片内容对齐在同一条竖线上
+  - [ ] **条目边界**：每条帖子**没有**圆角 / 描边 / 底色，相邻条目之间是一条贯穿整列的
+        0.5px 分隔横线，横线上下**紧贴**两个条目（0 间距，无卡片式间隙）
+  - [ ] 条目与列左右边界齐平（分隔横线通到列边界），内容（标题/摘要/图片）距边界 16vp；
+        排序条走 4% 比例留白、底部「已到底」提示只带上下 16vp
   - [ ] **图片左对齐**：竖图（`Contain`）贴左且**两侧无多余留白**（容器已收窄到图片宽度），
         不是"在满宽容器里居中"
-  - [ ] 多图横排：各图按自身比例宽度贴左排列、行内同高；窄图与横图混排时不会溢出卡片
+  - [ ] 多图横排：各图按自身比例宽度贴左排列、行内同高；窄图与横图混排时不会溢出条目
   - [ ] **多图条目的右下半区没有角标遮挡**（数量角标已移除，K34）
   - [ ] 没有任何时刻出现"图片陆续加载导致列表高度跳动"（高度在解析期算定，见 §6.2.2）
-  - [ ] 断点切换（拖拽窗口跨 600 / 840vp、折叠屏展开）：卡片与图片区宽度即时跟随、无残留旧宽度的错位
+  - [ ] 断点切换（拖拽窗口跨 600 / 840vp、折叠屏展开）：条目与图片区宽度即时跟随、无残留旧宽度的错位
   - [ ] `lg` 单列与 `md` 下，预览图宽度不超过 568vp（列表 600 − padding 32）
   - [ ] `lg` 双列（板块列 + 活动列同时存在）下右侧列图片区按列宽自适应，不溢出
   - [ ] 老附件（2012~2014 年、文件名无尺寸段）走 16:9 兜底：高度合理、不异常
@@ -1519,11 +1512,11 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
 | K28 | 多图时按"整行宽度"算高度 | 多图是**等宽横排**，每张只占 `1/n` 宽（`n=3` 时约 100vp）。若高度仍按图片区总宽取，3 张 16:9 会被算成 166vp 高、而每张实际只有约 100vp 宽，画面被严重裁切。必须用 `previewTileWidth()`（单张宽度）喂给 `resolvePreviewLayout` |
 | K29 | 多图逐张按各自比例定高 | 一行内会出现高低不齐的锯齿，列表纵向节奏不可预测。**行内高度统一取首图比例**（首图是帖子主图，最能代表这组图），三张同高 |
 | K30 | 竖图 `Contain` 补底色衬底 | 底色衬底在实测观感上属于**多余**（用户明确否决）：`Contain` 下容器宽度已收窄到贴合图片，两侧**本来就没有留白**，再加 `bgSecondary` 反而画出一个比图片更宽的"灰框"。**被动占位块保留灰底**（那是占位语义，不是衬底），实图分支不得加 `backgroundColor` |
-| K31 | 给 `List` 写链式 `.space(n)` | `space` 是 `List` 的**构造参数**（`ListOptions.space`，`list.d.ts:656`：Spacing between list items along the main axis），`ListAttribute` 上**没有**该属性——链式写法编译直接报 `Property 'space' does not exist on type 'ListAttribute'`。正确写法 `List({ scroller, space: CARD_SPACE })`。`lanes` 的 `gutter` 不能替代：声明写明它"仅在列数/行数大于 1 时生效" |
+| K31 | 给 `List` 写链式 `.space(n)` | `space` 是 `List` 的**构造参数**（`ListOptions.space`，`list.d.ts:656`：Spacing between list items along the main axis），`ListAttribute` 上**没有**该属性——链式写法编译直接报 `Property 'space' does not exist on type 'ListAttribute'`。正确写法是构造参数 `List({ scroller, space: n })`；**当前列表不传 `space`**（条目间距恒 0，边界交给 `divider`，见 §6.9）。`lanes` 的 `gutter` 不能替代：声明写明它"仅在列数/行数大于 1 时生效" |
 | K32 | 竖图在满宽容器里靠 `justifyContent` 左对齐 | 只在满宽容器里改对齐方式，竖图左侧贴边、**右侧仍留一整条空白**，观感更差。正解是**收窄容器**到 `displayWidth = height × aspect`（`PreviewLayout.displayWidth`），图片本身即容器宽度，两侧都不留白 |
-| K33 | 区块间距只写在"上方区块"上 | 三个区块若只有前两个带 `margin top`，第三个（预览图）的间距就取决于"上一个区块是否存在"——有摘要时是 10、**无摘要时退化为 0**（图片直接贴住标题，这正是实测反馈的观感问题）。规则：**每个区块自带 `margin top`，值统一用 `CARD_BLOCK_GAP`**，任何区块增删都不影响其余间距 |
+| K33 | 区块间距只写在"上方区块"上 | 三个区块若只有前两个带 `margin top`，第三个（预览图）的间距就取决于"上一个区块是否存在"——有摘要时是 10、**无摘要时退化为 0**（图片直接贴住标题，这正是实测反馈的观感问题）。规则：**每个区块自带 `margin top`，值统一用 `ITEM_BLOCK_GAP`**，任何区块增删都不影响其余间距 |
 | K34 | 给多图叠「N 图」数量角标 | 多图横排本身已"看得见"张数（能数出几张），再叠一个数字属于**重复表达**，且角标会压住最后一张图的角落（用户明确要求移除）。角标只保留**单图极端比例**的「长图」提示——那条信息无法从画面上看出来 |
-| K35 | 用"底色 + 描边"做卡片区分 | 底色（`bgTertiary` 比 `bg` 暗）会让整屏卡片连成一片"灰底"，在浅色主题下尤其明显；且要为卡片底色再维护一组深浅色值。**区分只靠线条**更轻：卡片与页面同底色 + 1px 圆角描边即可。线条强度收敛到单一资源 `app.color.card_stroke`（浅 `#F0E7D9` / 暗 `#26262A`）——要比 `separator` 淡、又要**暗色不同步降比例**（纯黑底上过淡会直接消失），所以不给卡片描边复用 `separator`/`divider_strong`，而是独立一个值便于单独调 |
+| K35 | 用"底色 + 描边"做条目区分（**已回退**） | 卡片化期间曾给 `ListItem` 加 1px 圆角描边（`app.color.card_stroke`：浅 `#F0E7D9` / 暗 `#26262A`，比 `separator` 淡一档）把每条帖子围成独立单元。实测观感偏"卡片流"，且条目必须与列边界留出 16vp 间距、分隔横线无法贯穿整列，左右对齐还要跟两层留白走。**已回退为分隔横线**：条目无圆角/描边/底色，`List.divider`（0.5px `separator`）+ 0 条目间距（§6.9）。`cardStroke` 与 `card_stroke` 资源一并删除，避免死资源 |
 
 ---
 

@@ -201,12 +201,11 @@ const WIDE_IMAGE_ASPECT: number = 3.5
 /**
  * 图片区宽度未知（首帧尚未测得列表宽度）时的兜底值。
  *
- * 取 296 = sm 360vp 窗口的实测列表宽度 360 − 列表左右留白 32 − 卡片左右 padding 32
- * （卡片化后这两层留白都存在，见 `TopicListPanel` 的 `LIST_HORIZONTAL_PADDING` /
- * `CARD_HORIZONTAL_PADDING`）。首帧用它算出的高度与真实值只差几个 vp，且在列表完成
- * 首次布局后立即被真实宽度替换。
+ * 取 328 = sm 360vp 窗口的实测列表宽度 360 − 条目左右内边距 32（见 `TopicListPanel` 的
+ * `ITEM_HORIZONTAL_PADDING`；列表自身没有左右 padding）。首帧用它算出的高度与真实值
+ * 只差几个 vp，且在列表完成首次布局后立即被真实宽度替换。
  */
-export const FALLBACK_PREVIEW_AREA_WIDTH: number = 296
+export const FALLBACK_PREVIEW_AREA_WIDTH: number = 328
 
 /**
  * 尺寸段解码：文件名末尾的 `S{base36宽}-{base36高}` + 扩展名。
