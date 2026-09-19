@@ -504,6 +504,30 @@ export default function appTopicListUnitTest(): void {
       expect((multi as ImageSize).height).assertEqual(600)
     })
 
+    it('decodesVideoSizeSegment', 0, () => {
+      /* 视频附件与图片共用同一套尺寸段规则（本轮实测 6/6：下载 mp4 解析 moov/tkhd 后逐条比对）。
+         下面三条均为真实附件，尺寸段解出的**像素宽高与文件内尺寸完全一致**。 */
+      const landscape: ImageSize | null =
+        parsePreviewSize('mon_202609/14/k2Q43-2ul5Z27T6wS1hc-140.mp4')
+      expect(landscape).not().assertNull()
+      expect((landscape as ImageSize).width).assertEqual(1920)
+      expect((landscape as ImageSize).height).assertEqual(1440)
+      const portrait: ImageSize | null =
+        parsePreviewSize('mon_202609/18/k2Q5-japXiT6wSqu-1ni.mp4')
+      expect((portrait as ImageSize).width).assertEqual(966)
+      expect((portrait as ImageSize).height).assertEqual(2142)
+      /* **尺寸段编码的是旋转后的显示尺寸**：该文件编码为 1280×720 + rotate 90°，
+         尺寸段却是 `Sk0-zk` = 720×1280（竖屏）。列表/正文按它算比例才不会横竖颠倒，
+         且与 AVMetadataExtractor + applyOrientation 的结果一致（详见 TopicPreviewUtils 文件头）。 */
+      const rotated: ImageSize | null =
+        parsePreviewSize('mon_202608/03/k2Q81-97rkXrT6wSk0-zk.mp4')
+      expect((rotated as ImageSize).width).assertEqual(720)
+      expect((rotated as ImageSize).height).assertEqual(1280)
+      /* 档位封面 URL 是"整串追加"（`xxx.mp4` → `xxx.mp4.thumb.jpg`），尺寸段后还跟着 `.thumb`，
+         不满足"紧贴扩展名" → 返回 null。要拿源图尺寸必须传**裸名原图 URL**。 */
+      expect(parsePreviewSize('mon_202608/03/k2Q81-97rkXrT6wSk0-zk.mp4.thumb.jpg')).assertNull()
+    })
+
     it('guardsPreviewSizeErrors', 0, () => {
       /* 2012~2014 年的老附件实测无尺寸段（如 -7202235_5485ecb5a00f5.png）→ null，走兜底比例 */
       expect(parsePreviewSize('mon_201412/09/-7202235_5485ecb5a00f5.png')).assertNull()

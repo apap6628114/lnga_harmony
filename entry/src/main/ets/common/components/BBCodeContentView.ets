@@ -8,6 +8,7 @@ import { MovingPhotoPlayer } from '../media/MovingPhotoPlayer'
 import { registerMovingPhoto } from '../media/MovingPhotoRegistry'
 import { fetchVideoSize, getCachedVideoSize } from '../media/VideoSizeUtil'
 import { shouldUsePassive } from '../utils/NetworkUtil'
+import { parsePreviewSize } from '../utils/TopicPreviewUtils'
 import { LengthMetrics } from '@kit.ArkUI'
 import {
   isInlineNode,
@@ -124,14 +125,22 @@ export struct BBCodeContentView {
   /** 按节点组与继承样式缓存的内联渲染结果。 */
   private inlineRunCache: Map<number, InlineRunCacheEntry> = new Map<number, InlineRunCacheEntry>()
 
-  /** 初始化节点分组并恢复已缓存的媒体尺寸（零网络请求）。 */
+  /**
+   * 初始化节点分组并恢复已缓存的媒体尺寸（零网络请求）。
+   *
+   * 尺寸来源有两条**同步**通路，优先级自上而下：
+   *  1. 进程级缓存（同会话内已加载过的图片 / 已探测过的视频）；
+   *  2. NGA 附件文件名尺寸段 `S{base36宽}-{base36高}`（`parsePreviewSize`）。
+   *
+   * 两条都落空（外站图片 / 无尺寸段的老附件）才回落到 `onImageLoaded` 回填或
+   * `fetchVideoSize` 元数据探测。**不回落到"预热请求"**：图片侧的 Range 预取会让请求数
+   * 翻倍、易触发服务端节流，尺寸段已能覆盖绝大多数 NGA 附件。
+   */
   aboutToAppear(): void {
     this.inlineRunCache.clear()
     this.cachedGroups = this.splitIntoGroups(this.nodes)
     this.groupsReady = true
     this.allImageUrls = this.getImageUrls()
-    /* 仅从缓存恢复已有尺寸：图片尺寸由 onImageLoaded 在加载完成后回填，
-       不再预取（预热每图多一次 Range 请求，请求数翻倍易触发服务端节流）。 */
     const urls: string[] = this.allImageUrls
     for (let i = 0; i < urls.length; i++) {
       const url: string = urls[i]
@@ -139,6 +148,13 @@ export struct BBCodeContentView {
       if (cached) {
         this.imageSizes.set(url, cached)
         this.releasedImages.add(url)
+      } else {
+        /* 尺寸段同步解出 → 首帧即按真实比例定高，`onComplete` 回填时 `imageSizes` 已有值，
+           不再覆盖（见 `onImageLoaded` 的 has 守卫），正文因此不会出现高度跳变。 */
+        const parsed: ImageSize | null = parsePreviewSize(url)
+        if (parsed !== null) {
+          this.imageSizes.set(url, parsed)
+        }
       }
     }
 
@@ -148,8 +164,18 @@ export struct BBCodeContentView {
       const cached: ImageSize | null = getCachedVideoSize(url)
       if (cached) {
         this.videoSizes.set(url, cached)
+        continue
+      }
+      /* 视频与图片同一套尺寸段规则，且尺寸段编码的是**旋转后的显示尺寸**（实测 6/6：
+         编码 1280×720 + rotate 90° 的文件，尺寸段为 `Sk0-zk` = 720×1280），
+         与 `AVMetadataExtractor` + `applyOrientation` 的语义完全一致。 */
+      const parsed: ImageSize | null = parsePreviewSize(url)
+      if (parsed !== null) {
+        this.videoSizes.set(url, parsed)
       }
     }
+    /* 仅对尺寸段解不出的视频（外站视频 / 无尺寸段老附件）发起元数据请求：
+       该网络路径从"每个视频必经"降为"少数兜底"。 */
     for (let i = 0; i < vUrls.length; i++) {
       const url: string = vUrls[i]
       if (!this.videoSizes.has(url)) {
@@ -215,6 +241,10 @@ export struct BBCodeContentView {
   /**
    * 返回图片宽高比，未知时使用安全占位比例。
    *
+   * `aboutToAppear` 已按"缓存 → 尺寸段"顺序预填 `imageSizes`；这里的尺寸段兜底覆盖
+   * 未被 `allImageUrls` 收集到的地址（例如折叠块内的图），保证**任何**能解出尺寸段的图片
+   * 都走同步比例，而不是先按 16:9 撑开、再由 `onComplete` 回填引起高度跳变。
+   *
    * @param src 图片地址
    * @returns 图片宽高比
    */
@@ -222,6 +252,10 @@ export struct BBCodeContentView {
     const size: ImageSize | undefined = this.imageSizes.get(src)
     if (size && size.width > 0 && size.height > 0) {
       return size.width / size.height
+    }
+    const parsed: ImageSize | null = parsePreviewSize(src)
+    if (parsed !== null && parsed.width > 0 && parsed.height > 0) {
+      return parsed.width / parsed.height
     }
     return 16 / 9
   }
@@ -254,6 +288,10 @@ export struct BBCodeContentView {
   /**
    * 返回视频宽高比，未知时使用安全占位比例。
    *
+   * 与图片同一套来源顺序（缓存 → 尺寸段 → 兜底）：尺寸段编码的是**旋转后的显示尺寸**，
+   * 因此 `MutedVideo` 首帧得到的就是正确比例，不必等 `fetchVideoSize` 回来再改
+   * `aspectRatio`（那正是视频区高度跳变的来源）。
+   *
    * @param src 视频地址
    * @returns 视频宽高比
    */
@@ -261,6 +299,10 @@ export struct BBCodeContentView {
     const size: ImageSize | undefined = this.videoSizes.get(src)
     if (size && size.width > 0 && size.height > 0) {
       return size.width / size.height
+    }
+    const parsed: ImageSize | null = parsePreviewSize(src)
+    if (parsed !== null && parsed.width > 0 && parsed.height > 0) {
+      return parsed.width / parsed.height
     }
     return 16 / 9
   }

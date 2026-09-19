@@ -5,6 +5,7 @@ import { MutedVideo } from '../../media/MutedVideo'
 import { ImageSize } from '../../media/ImageSizeUtil'
 import { fetchVideoSize, getCachedVideoSize } from '../../media/VideoSizeUtil'
 import { shouldUsePassive } from '../../utils/NetworkUtil'
+import { parsePreviewSize } from '../../utils/TopicPreviewUtils'
 import { PageScope } from '../../concurrency/PageScope'
 
 /** 视频附件扩展名集合 */
@@ -124,10 +125,24 @@ export struct PostAttachments {
     }
   }
 
+  /**
+   * 返回视频附件的宽高比。
+   *
+   * 三个来源按优先级：已探测/已解析的尺寸表 → 文件名尺寸段（同步）→ 16:9 兜底。
+   * 尺寸段这一级让展开附件的**首帧**就是真实比例（视频实测 6/6 带尺寸段），
+   * 因此不会出现"先按 16:9 撑开、元数据回来后再改高度"的跳变。
+   *
+   * @param url 视频附件地址
+   * @returns 宽高比
+   */
   private getAttachVideoAspectRatio(url: string): number {
     const size: ImageSize | undefined = this.videoSizes.get(url)
     if (size && size.width > 0 && size.height > 0) {
       return size.width / size.height
+    }
+    const parsed: ImageSize | null = parsePreviewSize(url)
+    if (parsed !== null && parsed.width > 0 && parsed.height > 0) {
+      return parsed.width / parsed.height
     }
     return 16 / 9
   }
@@ -159,6 +174,13 @@ export struct PostAttachments {
     }
   }
 
+  /**
+   * 展开附件时补齐视频尺寸。
+   *
+   * 尺寸来源优先级：进程级缓存 → **文件名尺寸段**（同步、零请求）→ 元数据探测（兜底）。
+   * 前两级在同一次点击回调内完成，渲染视频时比例已就位；只有解不出尺寸段的老附件
+   * 才走 `fetchVideoSize` 的网络路径。
+   */
   private fetchAttachVideoSizes(): void {
     for (let i = 0; i < this.post.attachs.length; i++) {
       const att: PostAttachInfo = this.post.attachs[i]
@@ -166,6 +188,11 @@ export struct PostAttachments {
         const cached: ImageSize | null = getCachedVideoSize(att.attachurl)
         if (cached) {
           this.setAttachVideoSize(att.attachurl, cached)
+          continue
+        }
+        const parsed: ImageSize | null = parsePreviewSize(att.attachurl)
+        if (parsed !== null) {
+          this.setAttachVideoSize(att.attachurl, parsed)
         } else if (!this.videoSizes.has(att.attachurl)) {
           fetchVideoSize(att.attachurl).then((size: ImageSize | null) => {
             if (!this.scope.isAlive()) {

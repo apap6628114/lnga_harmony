@@ -13,6 +13,17 @@
  * 与容器宽度算出预览区高度、判定 Cover / Contain。这些函数是"图片比例多样 × 设备形态多样"
  * 的唯一算法出口，UI 层只消费结果，不得内联同样的算式（测试覆盖见 §6.7）。
  *
+ * **尺寸段解码（`parsePreviewSize`）是全工程唯一的出口**，服务三处调用方，不得各自复制正则：
+ *  1. 列表预览图（`TopicParser` 解析期 → `TopicInfo.previewSize`）；
+ *  2. 正文图片（`BBCodeContentView` 的 `imageSizes` 预填与比例兜底）；
+ *  3. 视频附件（`BBCodeContentView` / `PostAttachments` 的 `videoAspectRatio`）。
+ *
+ * 后两处原先依赖运行时回填（`onComplete` / `AVMetadataExtractor`），首帧只能用 16:9 兜底、
+ * 尺寸到位后再改高度，因而产生布局跳变；尺寸段是**同步**可得的，改用后跳变消失，
+ * 且视频侧的元数据请求从"每个视频必经"降为"无尺寸段老附件的兜底"。
+ * 视频尺寸段与图片同规则，编码的是**旋转后的显示尺寸**（实测 6/6：编码 1280×720 + rotate 90°
+ * 的文件尺寸段为 720×1280），与 `AVMetadataExtractor` + `applyOrientation` 语义一致。
+ *
  * 不依赖 AppStore / 网络，只做纯字符串变换与算术。
  */
 
@@ -222,6 +233,10 @@ const SIZE_SEGMENT_PATTERN: RegExp = /S([0-9a-z]{1,4})-([0-9a-z]{1,4})\.[a-z0-9]
  * 只认文件名（先剥 query / fragment），且要求尺寸段**紧贴扩展名**（`…T3cS1uo-11i.jpeg`）——
  * 该形态与实测样本一致；`7Q5-b75pZbT1kSb4-68.png` 这类"多个尺寸段"的文件名取最后一个，
  * 它同样是真实尺寸（实测 400×224 = base36('b4')×base36('68')）。
+ *
+ * **图片与视频共用**（视频见文件头说明）。注意对**服务端缩略档位 URL 会失配**：
+ * `xxx.mp4.thumb.jpg` 的尺寸段后面还跟着 `.thumb`，不满足"紧贴扩展名"，故返回 null ——
+ * 这是刻意的：档位图的真实尺寸与源图不同，要拿源图尺寸必须传**裸名原图 URL**。
  *
  * @param attachurl - 官方附件相对路径或绝对 URL（空串/无尺寸段返回 null）
  * @returns 真实像素尺寸；无法确定时返回 null（调用方走兜底比例）
