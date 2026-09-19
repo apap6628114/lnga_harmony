@@ -4,16 +4,15 @@
  * 数据来源：官方 subject 系列表条目的 `attachs` 数组 + 响应的 `attachPrefix`
  * （实测形状与覆盖率见 docs/TOPIC_PREVIEW_DESIGN.md §2）。
  *
- * 质量档位：本模块复用正文 IMG 链路的**同一形态规则**——先用
- * `Utils.stripImageSuffix` 归一到裸名原图，再整串末尾追加档位后缀：
- *   `name.ext` → `name.ext.thumb.jpg`（实测 ≈1.5~19 KB；详见设计文档 §5.1 矩阵）。
- * 因此对"列表裸名 attachs"与"正文里可能带档位段的 URL"两种输入都正确。
+ * **只产出原图绝对 URL**：列表预览与图片查看器同源同质量（见设计文档 §5.3 / K22）。
+ * 服务端缩略档位（`.thumb.jpg` / `.thumb_s.jpg` / `.medium.jpg` …）的实测规则与"一键切档"
+ * 的实现要点记录在设计文档 §5，**当前生产路径不启用**——需要时按那里实现即可，
+ * 本模块保持最小表面积（不保留无调用方的函数）。
  *
  * 不依赖 AppStore / 网络，只做纯字符串变换。
  */
 
 import { NGA_CDN_BASE } from '../../parser/_shared/AttachUrl'
-import { stripImageSuffix } from './Utils'
 
 /**
  * 可作为预览图的扩展名白名单。
@@ -24,14 +23,6 @@ import { stripImageSuffix } from './Utils'
  * "视频帖也有预览图"，可把 mp4 放入白名单，并接受列表里显示静帧。
  */
 const PREVIEW_IMAGE_EXTS: string[] = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp']
-
-/**
- * 列表预览图使用的缩略图后缀（官方 getThumb(1) = ".thumb.jpg"，实测 ≈1.5~19 KB）。
- *
- * 可选更省档位（改这里即可切换）：`.thumb_s.jpg`（≈2~4 KB）/ `.thumb_ss.jpg`（≈1~1.6 KB）。
- * `.medium.jpg` 不可靠（png/gif 回退原图），`.thumb_m.jpg` 实测不存在。
- */
-export const PREVIEW_THUMB_SUFFIX: string = '.thumb.jpg'
 
 /** 附件前缀缺失时的兜底根（换域时改 NgaDomains.NGA_IMG_BASE 即可）。 */
 const FALLBACK_PREFIX: string = NGA_CDN_BASE + '/'
@@ -138,28 +129,4 @@ export function parsePreviewImages(rawAttachs: Object | null | undefined, prefix
     }
   }
   return urls
-}
-
-/**
- * 产出列表预览图的缩略图 URL。
- *
- * 两步（与正文 IMG 链路的形态规则同源，见设计文档 §5.2）：
- *  1. `stripImageSuffix` 归一到裸名原图——兼容输入可能已带档位段（客户端自插的
- *     `.medium.jpg`、历史 `name.thumb.ext` 等），对裸名输入幂等。该函数位于**镜像文件**
- *     `Utils.ets`（真源 `tools/bbcode-ts/src/common/utils/Utils.ts`），此处只读复用、不修改。
- *  2. 在裸名 URL **整串末尾**追加 `.thumb.jpg`（实测唯一有效写法）。
- *
- * 实测禁用写法（详见设计文档 §5.1/§5.6）：
- *  - 裸后缀 `…jpeg.thumb`（不带 `.jpg`）→ 404
- *  - `applyImageSuffix` 的 `…thumb.jpeg`（尺寸词插在扩展名前）→ 404
- *  - 不 strip 直接追加（输入 `…jpeg.medium.jpg`）→ 叠加后返回 medium 档而非缩略图
- *
- * @param imageUrl - 原图绝对 URL（可带历史档位段）
- * @returns 缩略图绝对 URL
- */
-export function toPreviewThumbUrl(imageUrl: string): string {
-  if (imageUrl.length === 0) {
-    return ''
-  }
-  return stripImageSuffix(imageUrl) + PREVIEW_THUMB_SUFFIX
 }

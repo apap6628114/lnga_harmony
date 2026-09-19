@@ -408,7 +408,6 @@ export function parseSubjectList(raw: object, blacklist: Set<string>, keywords: 
     subBoardList: subs,
     curTime: base.curTime,
     pagination: base.pagination,
-    attachPrefix: attachPrefix,
   };
   return info;
 }

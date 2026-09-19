@@ -61,7 +61,6 @@ export function parseTopicList(raw: object | null, blacklist: Set<string> = new 
     subBoardList: [],
     curTime: Number(rawObj?.['time'] ?? 0),
     pagination: calcPagination(totalRows, rowsPerPage, currentPage),
-    attachPrefix: attachPrefix,
   };
 }
 

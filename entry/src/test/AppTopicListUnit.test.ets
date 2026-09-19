@@ -26,7 +26,6 @@ import {
   buildPreviewUrl,
   normalizeAttachPrefix,
   isPreviewImage,
-  toPreviewThumbUrl,
 } from '../main/ets/common/utils/TopicPreviewUtils'
 import type { TopicListInfo } from '../main/ets/model/Topic'
 import type { SubBoard, Category, ForumSearchItem } from '../main/ets/model/Forum'
@@ -348,9 +347,7 @@ export default function appTopicListUnitTest(): void {
         createSubjectListResponse(), new Set<string>(), [], 1)
       expect(info).not().assertNull()
       const list = info as TopicListInfo
-      /* 附件前缀透传（result.attachPrefix → TopicListInfo.attachPrefix） */
-      expect(list.attachPrefix).assertEqual('https://img.nga.cn/attachments/')
-      /* 首条带 attachs → 预览图绝对 URL（拼前缀） */
+      /* 首条带 attachs → 预览图绝对 URL（前缀取自 result.attachPrefix，拼对即证明读取正确） */
       const first = list.threadPageList[0]
       expect(first.previewImages.length).assertEqual(1)
       expect(first.previewImages[0]).assertEqual(
@@ -388,31 +385,6 @@ export default function appTopicListUnitTest(): void {
         .assertEqual('https://img.nga.cn/attachments/')
     })
 
-    it('buildsTopicPreviewThumbUrl', 0, () => {
-      const base: string = 'https://img.nga.cn/attachments/mon_1/a.jpeg'
-      /* 裸名 → 整串末尾追加 .thumb.jpg（与正文 IMG 链路的形态规则同源） */
-      expect(toPreviewThumbUrl(base)).assertEqual(base + '.thumb.jpg')
-      /* 已带档位段（客户端自插的 .medium.jpg）→ 先 strip 再追加，避免叠加成 medium 档 */
-      expect(toPreviewThumbUrl(base + '.medium.jpg')).assertEqual(base + '.thumb.jpg')
-      /* 历史插入式 name.thumb.ext → 同样归一再追加 */
-      expect(toPreviewThumbUrl('https://img.nga.cn/attachments/mon_1/a.thumb.jpeg'))
-        .assertEqual(base + '.thumb.jpg')
-      expect(toPreviewThumbUrl('')).assertEqual('')
-    })
-
-    it('normalizesThumbSuffixIdempotently', 0, () => {
-      const base: string = 'https://img.nga.cn/attachments/mon_1/a.jpeg'
-      /* 镜像 `Utils.stripImageSuffix` 覆盖的档位：都归一为统一的 .thumb.jpg（不会叠加） */
-      expect(toPreviewThumbUrl(base + '.thumb.jpg')).assertEqual(base + '.thumb.jpg')
-      expect(toPreviewThumbUrl(base + '.thumb_s.jpg')).assertEqual(base + '.thumb.jpg')
-      expect(toPreviewThumbUrl(base + '.medium.jpg')).assertEqual(base + '.thumb.jpg')
-      /* `.thumb_ss` 是镜像 strip **未覆盖**的档位（它只认 thumb_s / thumb_m / medium / thumb），
-         当前行为是"不归一、直接追加"（见设计文档 K21）。该形式在现网 attachs 中不存在
-         （实测为裸名）；即便拼出的 URL 取不到，也会回退到原 URL，仍能显示这张小图。 */
-      expect(toPreviewThumbUrl(base + '.thumb_ss.jpg'))
-        .assertEqual(base + '.thumb_ss.jpg.thumb.jpg')
-    })
-
     it('parsesHotSubjectPreviewPrefix', 0, () => {
       /* subject/hot：attachPrefix 在**响应顶层**，result 是扁平主题数组 */
       const attach: Record<string, Object> = { 'attachurl': 'mon_1/hot.jpg' }
@@ -429,7 +401,7 @@ export default function appTopicListUnitTest(): void {
       const info: TopicListInfo | null = parseHotSubjectList(raw, new Set<string>(), [], 1)
       expect(info).not().assertNull()
       const list = info as TopicListInfo
-      expect(list.attachPrefix).assertEqual('https://img.nga.cn/attachments/')
+      /* 顶层 attachPrefix 的读取正确性由"拼出的绝对 URL"证明 */
       expect(list.threadPageList[0].previewImages.length).assertEqual(1)
       expect(list.threadPageList[0].previewImages[0])
         .assertEqual('https://img.nga.cn/attachments/mon_1/hot.jpg')
@@ -447,7 +419,6 @@ export default function appTopicListUnitTest(): void {
       const info: TopicListInfo | null = parseToppedList(raw, new Set<string>(), [], 1)
       expect(info).not().assertNull()
       const list = info as TopicListInfo
-      expect(list.attachPrefix).assertEqual('')
       expect(list.threadPageList[0].previewImages.length).assertEqual(0)
     })
 

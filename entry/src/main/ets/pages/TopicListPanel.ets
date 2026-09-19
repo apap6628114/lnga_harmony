@@ -46,7 +46,6 @@ import {
   canManageCurrentBoard
 } from '../common/utils/TopicListUtils'
 import { shouldUsePassive } from '../common/utils/NetworkUtil'
-import { toPreviewThumbUrl } from '../common/utils/TopicPreviewUtils'
 
 const logger = new Logger(DOMAIN_UI, 'TopicListPanel')
 
@@ -1640,11 +1639,13 @@ struct TopicCardComponent {
   /** 网络变更版本号：WiFi↔蜂窝切换 / 模式变更后重判被动态。 */
   @StorageProp('networkChangeVersion') networkChangeVersion: number = 0
   /**
-   * 预览图加载阶段：0=缩略图、1=原图（缩略图失败后的回退）、2=彻底失败（隐藏整块）。
+   * 预览图是否已加载失败（失败即整块隐藏，不再尝试其它质量档）。
    *
-   * 组件内状态：LazyForEach 按 tid 复用，条目不变时状态保留；条目被回收重建时重置为 0。
+   * **列表预览统一使用原图**（与 `ImageViewer` / `ThreadPanel` 的图片链路一致，见设计文档
+   * §5.3 / K22）：不走 `.thumb.jpg` 等服务端缩略档位。
+   * 组件内状态：LazyForEach 按 tid 复用，条目不变时状态保留；条目被回收重建时重置为 false。
    */
-  @State private previewStage: number = 0
+  @State private previewFailed: boolean = false
 
   /**
    * 判断当前主题作者是否已被屏蔽。
@@ -1695,34 +1696,24 @@ struct TopicCardComponent {
    * 三级判定（任一不满足即整块不渲染、不占高度）：
    *  1. 设置开关开启（showTopicPreview）；
    *  2. 条目有可用预览图（previewImages 非空）；
-   *  3. 未处于「缩略图与原图都失败」态（previewStage < 2）。
+   *  3. 尚未加载失败（`previewFailed === false`）。
    *
    * 「是否真的发起图片请求」由 `shouldUsePassive` 另行决定——本方法只回答"这块 UI 存不存在"。
    *
    * @returns 是否渲染预览图区
    */
   private shouldRenderPreview(): boolean {
-    return this.showTopicPreview && this.previewImageUrls().length > 0 && this.previewStage < 2
+    return this.showTopicPreview && this.previewImageUrls().length > 0 && !this.previewFailed
   }
 
   /**
-   * 缩略图加载失败 → 回退原图。
+   * 原图加载失败 → 隐藏整块。
    *
-   * **由「缩略图分支」的失败回调独占调用**：失败语义按**所在分支**归属，回调无需携带 URL，
-   * 因此同一次加载即使 `onError` 与 `onComplete` 都触发，也只会推进一级，
-   * 不会从缩略图直接跳到"彻底失败"而**跳过原图回退**（见设计文档 §6.5 / K19）。
+   * **只有这一级**：列表统一用原图，没有更低质量的回退档（见设计文档 §5.3 / K22）。
+   * 置位幂等：同一次加载即使 `onError` 与 `onComplete` 都触发也只隐藏一次。
    */
-  private onThumbFailed(): void {
-    if (this.previewStage === 0) {
-      this.previewStage = 1
-    }
-  }
-
-  /** 原图加载失败 → 隐藏整块（同样按分支归属，重复回调幂等）。 */
-  private onOriginalFailed(): void {
-    if (this.previewStage === 1) {
-      this.previewStage = 2
-    }
+  private onPreviewFailed(): void {
+    this.previewFailed = true
   }
 
   /**
@@ -1747,15 +1738,14 @@ struct TopicCardComponent {
   /**
    * 预览图区（摘要下方、底栏上方）。
    *
-   * 三个互斥分支，顺序即优先级：
+   * 两个互斥分支：
    *  1. **被动加载**（`shouldUsePassive`：手动模式，或"仅 WiFi"模式下的蜂窝网络）→ 占位块。
    *     用 `if / else` 分支隔离：不创建 `Image` 节点就不会发起请求（不能用 `visibility`
    *     隐藏，那仍可能触发加载，见设计文档 §6.3 / K8）。
-   *  2. `previewStage === 0` → 缩略图（`.thumb.jpg`），失败回退原图；
-   *  3. `previewStage === 1` → 原图，失败隐藏整块。
+   *  2. 实图 → **直接使用原图 URL**（与 `ImageViewer` / `ThreadPanel` 的图片链路一致，
+   *     见设计文档 §5.3 / K22）；加载失败即隐藏整块。
    *
-   * 失败回调按**所在分支**归属语义（无需在 @Builder 内捕获 URL，避免引入局部变量与
-   * "按值捕获不刷新"的混淆）；多图角标只在**实图分支**渲染——被动占位下不该透露图片数量。
+   * 多图角标只在**实图分支**渲染——被动占位下不该透露图片数量。
    */
   @Builder
   previewArea() {
@@ -1770,32 +1760,18 @@ struct TopicCardComponent {
           .justifyContent(FlexAlign.Center)
           .borderRadius(PREVIEW_IMAGE_RADIUS).backgroundColor(AppColors.bgSecondary)
         } else {
-          if (this.previewStage === 0) {
-            Image(toPreviewThumbUrl(this.firstPreviewUrl()))
-              .width('100%').height(PREVIEW_IMAGE_HEIGHT)
-              .objectFit(ImageFit.Cover)
-              .borderRadius(PREVIEW_IMAGE_RADIUS)
-              .backgroundColor(AppColors.bgSecondary)
-              /* 404 会被 Image 当作加载成功、onError 不触发，故同时用 onComplete 的尺寸补判 */
-              .onComplete((event) => {
-                if (event && this.isBrokenPreview(event.width, event.height)) {
-                  this.onThumbFailed()
-                }
-              })
-              .onError(() => { this.onThumbFailed() })
-          } else {
-            Image(this.firstPreviewUrl())
-              .width('100%').height(PREVIEW_IMAGE_HEIGHT)
-              .objectFit(ImageFit.Cover)
-              .borderRadius(PREVIEW_IMAGE_RADIUS)
-              .backgroundColor(AppColors.bgSecondary)
-              .onComplete((event) => {
-                if (event && this.isBrokenPreview(event.width, event.height)) {
-                  this.onOriginalFailed()
-                }
-              })
-              .onError(() => { this.onOriginalFailed() })
-          }
+          Image(this.firstPreviewUrl())
+            .width('100%').height(PREVIEW_IMAGE_HEIGHT)
+            .objectFit(ImageFit.Cover)
+            .borderRadius(PREVIEW_IMAGE_RADIUS)
+            .backgroundColor(AppColors.bgSecondary)
+            /* 404 会被 Image 当作加载成功、onError 不触发，故同时用 onComplete 的尺寸补判 */
+            .onComplete((event) => {
+              if (event && this.isBrokenPreview(event.width, event.height)) {
+                this.onPreviewFailed()
+              }
+            })
+            .onError(() => { this.onPreviewFailed() })
 
           if (this.previewImageUrls().length > 1) {
             Text(`${this.previewImageUrls().length} 图`)

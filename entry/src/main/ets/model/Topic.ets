@@ -14,13 +14,6 @@ export interface TopicListInfo {
   curTime: number;
   /** 主题列表分页信息。 */
   pagination: Pagination;
-  /**
-   * 附件图片前缀（官方 subject 系响应 `attachPrefix`，如 https://img.nga.cn/attachments/）。
-   *
-   * 仅版面列表 / 热门榜下发（置顶、搜索、收藏、用户列表均无）；缺失时预览图解析
-   * 回退 `NgaDomains.NGA_IMG_BASE` 拼出的 `NGA_CDN_BASE`。
-   */
-  attachPrefix: string;
 }
 
 export interface ThreadPageInfo {

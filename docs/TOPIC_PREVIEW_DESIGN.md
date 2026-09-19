@@ -15,10 +15,10 @@
 | --- | --- | --- |
 | 模型 | `model/Topic.ets`：`TopicListInfo.attachPrefix`、`ThreadPageInfo.previewImages`（删类型错误的 `attachs?: string`） | ✅ |
 | 工具 | `common/utils/TopicPreviewUtils.ets`（新增，纯函数：前缀归一化 / 图片过滤 / 缩略图 URL） | ✅ |
-| 解析 | `parser/TopicParser.ets`（`attachs` → `previewImages`）、`parser/AppSubjectListParser.ets` 与 `parser/AppUserTopicParser.ets`（`attachPrefix` 透传，见 §4.2 的 6 个写/读点） | ✅ |
-| UI | `pages/TopicListPanel.ets` → `TopicCardComponent.previewArea()`（开关 + 加载模式双重判定、被动占位、缩略图↔原图两分支失败归属、多图角标） | ✅ |
+| 解析 | `parser/TopicParser.ets`（`attachs` → `previewImages`）、`parser/AppSubjectListParser.ets` 与 `parser/AppUserTopicParser.ets`（`attachPrefix` **解析期内部**透传，见 §4.2；不作为 `TopicListInfo` 字段暴露） | ✅ |
+| UI | `pages/TopicListPanel.ets` → `TopicCardComponent.previewArea()`（开关 + 加载模式双重判定、被动占位、**原图**、失败即隐藏、多图角标） | ✅ |
 | 设置 | `AppStorageKeys.KEY_SHOW_TOPIC_PREVIEW` / `SettingsState.showTopicPreview` / `MediaSettings.setShowTopicPreview` / `SettingsStore` 门面与 AppStorage 同步 / `SettingsPanel` 行 / `SettingsIconColors.topicPreview` / `settings_topic_preview.svg` | ✅ |
-| 测试 | `entry/src/test/AppTopicListUnit.test.ets`：9 个用例（见 §4.6 清单） | ✅ |
+| 测试 | `entry/src/test/AppTopicListUnit.test.ets`：7 个用例（见 §4.6 清单） | ✅ |
 | 文档 | 本文 + `docs/research/IMAGE_PIPELINE_AUDIT.md` §5.1 与 G2 的复测更正 | ✅ |
 | 独立 Review | 两个独立 Agent 审查（解析/契约 + ArkTS/ArkUI/设置链路），逐条复核后修正：失败归属（K19）、精确 1×1（K20）、角标配色、URL 形态归一、hot 分支测试覆盖、本文档与代码对齐 | ✅ |
 
@@ -220,11 +220,6 @@ export interface TopicListInfo {
   curTime: number;
   /** 主题列表分页信息。 */
   pagination: Pagination;
-  /**
-   * 附件图片前缀（官方 subject 系响应 attachPrefix，如 https://img.nga.cn/attachments/）。
-   * 仅版面列表/热门榜下发；缺失时预览图解析回退 NGA_CDN_BASE。
-   */
-  attachPrefix: string;
 }
 
 export interface ThreadPageInfo {
@@ -250,7 +245,7 @@ export interface ThreadPageInfo {
 | `subject/hot` | **响应顶层** `attachPrefix`（`result` 是扁平数组，没有 result 对象） |
 | `subject/topped` | 无（该入口也没有 `attachs`） |
 
-改动点共 **6 个写/读点**（前 5 处为写入 `fakeRaw`/透传，最后 1 处为解析层统一读取）：
+改动点共 **6 个写/读点**（前 5 处写入 `fakeRaw`/透传，最后 1 处在解析层读取；**全部发生在解析期内部**，`TopicListInfo` 不暴露 `attachPrefix`——该字段曾加过，因全仓无消费方已删除）：
 
 | # | 位置 | 作用 |
 | --- | --- | --- |
@@ -325,14 +320,6 @@ import { stripImageSuffix } from './Utils'
  * 预览图"，可把 mp4 放入白名单，并接受列表里显示静帧。
  */
 const PREVIEW_IMAGE_EXTS: string[] = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp']
-
-/**
- * 列表预览图使用的缩略图后缀（官方 getThumb(1) = ".thumb.jpg"，实测 ≈1.5~19 KB）。
- *
- * 可选更省档位（改这里即可切换）：`.thumb_s.jpg`（≈2~4 KB）/ `.thumb_ss.jpg`（≈1~1.6 KB）。
- * `.medium.jpg` 不可靠（png/gif 回退原图），`.thumb_m.jpg` 实测不存在。
- */
-export const PREVIEW_THUMB_SUFFIX: string = '.thumb.jpg'
 
 /** 附件前缀缺失时的兜底根（换域时改 NgaDomains.NGA_IMG_BASE 即可）。 */
 const FALLBACK_PREFIX: string = NGA_CDN_BASE + '/'
@@ -421,31 +408,12 @@ export function parsePreviewImages(rawAttachs: Object | undefined, prefix: strin
   }
   return urls
 }
-
-/**
- * 产出列表预览图的缩略图 URL。
- *
- * 两步（与正文 IMG 链路的形态规则同源，见文档 §5.2）：
- *  1. `stripImageSuffix` 归一到裸名原图——兼容输入可能已带档位段（客户端自插的
- *     `.medium.jpg`、历史 `name.thumb.ext` 等），对裸名输入幂等。该函数位于**镜像文件**
- *     `Utils.ets`（真源 `tools/bbcode-ts/src/common/utils/Utils.ts`），此处只读复用、不修改。
- *  2. 在裸名 URL **整串末尾**追加 `.thumb.jpg`（实测唯一有效写法）。
- *
- * 实测禁用写法（详见文档 §5.1/§5.6）：
- *  - 裸后缀 `…jpeg.thumb`（不带 `.jpg`）→ 404
- *  - `applyImageSuffix` 的 `…thumb.jpeg`（尺寸词插在扩展名前）→ 404
- *  - 不 strip 直接追加（输入 `…jpeg.medium.jpg`）→ 叠加后返回 medium 档而非缩略图
- *
- * @param imageUrl - 原图绝对 URL（可带历史档位段）
- * @returns 缩略图绝对 URL
- */
-export function toPreviewThumbUrl(imageUrl: string): string {
-  if (imageUrl.length === 0) {
-    return ''
-  }
-  return stripImageSuffix(imageUrl) + PREVIEW_THUMB_SUFFIX
-}
 ```
+
+> **档位函数已删除**：列表统一用原图后，`toPreviewThumbUrl` / `PREVIEW_THUMB_SUFFIX` 成为
+> 无调用方的死代码，已从 `TopicPreviewUtils.ets` 移除（含 2 个对应单测）。档位规则本身作为
+> **知识**保留在本文档 §5.1/§5.2：需要切档时按那里的规则实现（`stripImageSuffix(url) + '.thumb.jpg'`，
+> 3 行），不要重新"发明"命名形式。
 
 ### 4.4 接入 `parser/TopicParser.ets`
 
@@ -455,7 +423,9 @@ import { parsePreviewImages } from '../common/utils/TopicPreviewUtils'
 export function parseTopicList(raw: object | null, blacklist: Set<string> = new Set(),
   keywords: string[] = [], currentPage: number = 1): TopicListInfo {
   // ...（现有逻辑不变）
-  const attachPrefix: string = String(rawObj?.['attachPrefix'] ?? '')   // ← 新增
+  /* 附件前缀只在解析期用于拼接图片 URL，**不作为 TopicListInfo 字段对外暴露**
+     （UI 消费的 previewImages 已是绝对 URL，无消费方的字段已删除） */
+  const attachPrefix: string = String(rawObj?.['attachPrefix'] ?? '')
   // ...
   return {
     name: String(forumInfo?.['name'] ?? ''),
@@ -463,7 +433,6 @@ export function parseTopicList(raw: object | null, blacklist: Set<string> = new 
     subBoardList: [],
     curTime: Number(rawObj?.['time'] ?? 0),
     pagination: calcPagination(totalRows, rowsPerPage, currentPage),
-    attachPrefix: attachPrefix,                                        // ← 新增
   };
 }
 
@@ -507,14 +476,12 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean,
 
 现有 fixture（`createSubjectListResponse`）**已经带了** `attachPrefix` 与 `attachs` 数组，
 **无需**改 fixture、也**不需要**动 `entry/src/test/List.test.ets`（只是在既有测试函数里追加用例）。
-实际落地的 9 个用例：
+实际落地的 7 个用例：
 
 | 用例 | 保护的行为 |
 | --- | --- |
 | `parsesTopicPreviewImages` | `subject/list`：`result.attachPrefix` 透传 + `attachs → previewImages`；无 attachs 条目为空数组 |
 | `parsesPreviewImageEdgeCases` | 非数组（对象）、`undefined`、非图扩展名、纯数字、空串；前缀缺失回退；无协议前缀补全 |
-| `buildsTopicPreviewThumbUrl` | 裸名追加、`.medium.jpg` 先 strip 再追加、历史插入式归一、空串 |
-| `normalizesThumbSuffixIdempotently` | 已带 `.thumb.jpg` / `.thumb_s.jpg` / `.medium.jpg` 的输入都归一为 `.thumb.jpg`（不叠加）；`.thumb_ss` 的边界行为按实测固化（见 K21） |
 | `parsesHotSubjectPreviewPrefix` | **`subject/hot` 顶层 attachPrefix** 分支（此前零覆盖） |
 | `parsesToppedWithoutPreview` | `subject/topped`：`attachPrefix === ''` 且无预览图（回归锚点） |
 | `parsesPreviewItemGuards` | 元素级守卫（字符串/数字/嵌套数组/缺 attachurl）、JSON `null`、无 `/` 的路径守卫 |
@@ -583,18 +550,26 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean,
   是**硬编码正文文本**（恰好落在有效的追加式上），不是可复用的渲染期转换。
 
 **结论**：预览图不是另起一套体系，而是**正文链路同一形态规则的另一档**。
-`TopicPreviewUtils.toPreviewThumbUrl` 因此定义为 `stripImageSuffix(url) + '.thumb.jpg'`
+档位 URL 的产出口径因此是 `stripImageSuffix(url) + '.thumb.jpg'`
 （先归一到裸名、再追加档位），对"列表裸名 `attachs`"与"正文任意档位 URL"**两种输入都正确**。
 
-### 5.3 列表预览的质量选型与回退
+> **当前实现的选择（重要）**：列表预览**直接使用原图**（见 §5.3 / K22），与 `ImageViewer` /
+> `ThreadPanel` 的图片链路同源同质量。因此档位函数**已从生产代码移除**（无调用方即死代码），
+> 只作为**知识**保留在本章：需要切档时按本节规则实现
+> （`stripImageSuffix(url) + '.thumb.jpg'`，3 行）。
 
-| 用途 | URL | 实测 |
+### 5.3 列表预览的质量选型：**统一使用原图**（当前实现）
+
+**决策**：列表预览图与 `ImageViewer` / `ThreadPanel` 的图片链路**保持一致——直接用原图**
+（`previewImages[i]` 本身就是原图绝对 URL）。**不使用**服务端缩略档位（`.thumb.jpg` 等）。
+理由与代价见 K22。
+
+| 用途 | URL | 说明 |
 | --- | --- | --- |
-| 列表预览（默认） | `toPreviewThumbUrl(imageUrl)` | ≈1.5~19 KB（见 §5.1 矩阵） |
-| 可选更省档 | `stripImageSuffix(url) + '.thumb_s.jpg'` | ≈2~4 KB（56px 级，120vp 高度下会略糊） |
-| 回退一级 | `imageUrl`（原图） | 缩略图 404 时用（`Image.onError` 驱动） |
-| 回退二级 | 整块隐藏 | 两级都失败即不占高度 |
-| 查看器大图（将来） | 原图；或 `.medium.jpg`（**勿用于 png/gif**） | 交给既有 `openImageViewer` |
+| 列表预览（**当前实现**） | `firstPreviewUrl()`（原图） | 与查看器、正文同源同质量；点开查看器无二次下载（`Image` 缓存命中） |
+| 加载失败 | 整块隐藏 | **只有这一级**（`previewFailed`），无更低质量回退档 |
+| 可选档位（**当前未实现**） | 按 §5.2 规则：`stripImageSuffix(url) + '.thumb.jpg'`（或 `.thumb_s.jpg` / `.medium.jpg`） | 规则已实测；实现约 3 行。当前刻意**不保留无调用方代码**（见 K22） |
+| 查看器大图 | 原图（`openImageViewer`） | 与列表同一张图 |
 
 **动图/视频可选增强**：`gif` 与 `*.gif.mp4` 的 `.thumb.jpg` 是**可用的 jpeg 封面**
 （13.9 KB / 19.0 KB）。若希望"视频帖也有预览图"，可把 4.3 的扩展名白名单放宽到含 `mp4`
@@ -637,7 +612,7 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean,
 - 旧域 `img.nga.178.com` 现在**已不可达**（`fetch failed`；本项目 `resolveImgUrl` 的域归一化因此是
   必需的），换到 `img.nga.cn` 后原图与各档位均 200（见 5.1 老 png 行）；
 - 客户端**自己插入**的图片走追加式 `.medium.jpg`（`ReplyDialog.ets:428`），所以"正文可能带档位段"
-  这个前提必须保留 —— 这正是 `toPreviewThumbUrl` 要先 strip 的理由。
+  这个前提必须保留 —— 这也是档位规则要求"先 strip 再追加"的理由（§5.2）。
 
 ### 5.6 与项目既有 URL 工具的关系（重要：勿"顺手复用"）
 
@@ -648,7 +623,7 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean,
 | --- | --- | --- | --- | --- |
 | `resolveAttachUrl` | `parser/_shared/AttachUrl.ets`（**镜像文件**） | `read.php` 帖子附件的 `attachurl`（帖子详情链路） | 裸相对路径 → `NGA_CDN_BASE + path` | 可用（输入形状相同），但列表有服务端 `attachPrefix`，应优先用响应前缀 |
 | `resolveImgUrl` | 同上 | BBCode `[img]` 标签内容 | 域归一化 + `stripImageSuffix` → **原图** | ⚠️ 不能直接当预览 URL（它返回原图、不带档位）；但它内部的 `stripImageSuffix` 正是预览图需要的第一步 |
-| `stripImageSuffix` | `common/utils/Utils.ets:147-150`（**镜像文件**，只读引用） | 正文图片 URL | 去掉 `.thumb_s/.thumb_m/.medium/.thumb` → **裸名原图** | ✅ **预览图复用它的第一步**：`toPreviewThumbUrl = stripImageSuffix(url) + '.thumb.jpg'`（对裸名输入幂等） |
+| `stripImageSuffix` | `common/utils/Utils.ets:147-150`（**镜像文件**，只读引用） | 正文图片 URL | 去掉 `.thumb_s/.thumb_m/.medium/.thumb` → **裸名原图** | ⚠️ 当前生产未使用（列表用原图）；若切档位则是**第一步**：`stripImageSuffix(url) + '.thumb.jpg'`（对裸名输入幂等） |
 | `applyImageSuffix` | `common/utils/Utils.ets:152-158` | ——（**全仓零调用点**） | `name.ext` → **`name.size.ext`**（尺寸词插在扩展名**前**） | ❌ **实测 404，禁止用于预览图** |
 
 实测（2026-09，同一张首帖附件，前缀 `https://img.nga.cn/attachments/`）：
@@ -667,7 +642,7 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean,
 **结论**：
 
 1. 列表附件用**先 strip 再整串追加**的 `.thumb.jpg`（与官方 `AttachsBean.getThumb(1)` 同档），
-   即 `TopicPreviewUtils.toPreviewThumbUrl` **复用 `stripImageSuffix`**、但**不复用 `applyImageSuffix`**；
+   即档位实现应**复用 `stripImageSuffix`**、但**不复用 `applyImageSuffix`**；
 2. 两条实测禁用关系：`applyImageSuffix` 的 `name.size.ext` 形式不存在（404）、
    裸后缀（不带 `.jpg`）不存在（404）——后者正是 5.4 那段旧结论的来源。
 
@@ -721,20 +696,20 @@ const PREVIEW_IMAGE_RADIUS: number = 8
  * 三级判定（任一不满足即整块不渲染，不占高度）：
  *  1. 设置开关开启（showTopicPreview）
  *  2. 条目有可用预览图（previewImages 非空）
- *  3. 未处于「已彻底失败」态（缩略图与原图都加载失败）
+ *  3. 尚未加载失败（previewFailed === false）
  */
 private shouldRenderPreview(): boolean {
-  return this.showTopicPreview && this.previewImageUrls().length > 0 && this.previewStage < 2
+  return this.showTopicPreview && this.previewImageUrls().length > 0 && !this.previewFailed
 }
 ```
 
 | `showTopicPreview` | `ImageLoadStrategy` | 条目有图 | 渲染结果 | 是否发图片请求 |
 | --- | --- | --- | --- | --- |
 | 关 | 任意 | 任意 | **不渲染**（无占位、无高度） | ❌ |
-| 开 | `ALWAYS` | 有 | `Image(缩略图)` | ✅ 1 次（失败再 1 次原图） |
+| 开 | `ALWAYS` | 有 | `Image(原图)` | ✅ 1 次（失败即隐藏，无二次请求） |
 | 开 | `ALWAYS` | 无 | 不渲染 | ❌ |
 | 开 | `MANUAL` | 有 | **被动占位块**（灰图图标 + `bgSecondary`） | ❌ |
-| 开 | `WIFI_ONLY` + WiFi | 有 | `Image(缩略图)` | ✅ |
+| 开 | `WIFI_ONLY` + WiFi | 有 | `Image(原图)` | ✅ |
 | 开 | `WIFI_ONLY` + 蜂窝 | 有 | **被动占位块** | ❌ |
 
 ### 6.3 被动占位态
@@ -788,10 +763,11 @@ struct TopicCardComponent {
   onRemoveFav: (tid: number) => void = (_tid: number) => {}
   onCardClick: (tid: string, pid: string) => void = (_tid: string, _pid: string) => {}
   /**
-   * 预览图加载阶段：0=缩略图、1=原图（缩略图失败后的回退）、2=彻底失败（隐藏整块）。
-   * 组件内状态：LazyForEach 按 tid 复用，条目不变时状态可保留；条目被回收重建时重置为 0。
+   * 预览图是否已加载失败（失败即整块隐藏，不再尝试其它质量档）。
+   * 列表预览**统一用原图**（与 ImageViewer / ThreadPanel 一致，见 §5.3 / K22）。
+   * 组件内状态：LazyForEach 按 tid 复用，条目不变时状态可保留；条目被回收重建时重置为 false。
    */
-  @State private previewStage: number = 0
+  @State private previewFailed: boolean = false
 
   /** 预览图 URL 列表（值拷贝防御：@Prop thread 为 Record，取数组需判型）。 */
   private previewImageUrls(): string[] {
@@ -810,27 +786,15 @@ struct TopicCardComponent {
 
   /** 是否渲染预览图区（见 6.2 判定表）。 */
   private shouldRenderPreview(): boolean {
-    return this.showTopicPreview && this.previewImageUrls().length > 0 && this.previewStage < 2
+    return this.showTopicPreview && this.previewImageUrls().length > 0 && !this.previewFailed
   }
 
   /**
-   * 缩略图加载失败 → 回退原图。
-   *
-   * **由「缩略图分支」的失败回调独占调用**：失败语义按**所在分支**归属，回调无需携带 URL，
-   * 因此同一次加载即使 `onError` 与 `onComplete` 都触发，也只推进一级，
-   * 不会从缩略图直接跳到"彻底失败"而跳过原图回退（见 K19）。
+   * 原图加载失败 → 隐藏整块（**只有这一级**，没有更低质量的回退档）。
+   * 置位幂等：同一次加载即使 `onError` 与 `onComplete` 都触发也只隐藏一次（K19）。
    */
-  private onThumbFailed(): void {
-    if (this.previewStage === 0) {
-      this.previewStage = 1
-    }
-  }
-
-  /** 原图加载失败 → 隐藏整块（同样按分支归属，重复回调幂等）。 */
-  private onOriginalFailed(): void {
-    if (this.previewStage === 1) {
-      this.previewStage = 2
-    }
+  private onPreviewFailed(): void {
+    this.previewFailed = true
   }
 
   /**
@@ -858,33 +822,18 @@ struct TopicCardComponent {
           .justifyContent(FlexAlign.Center)
           .borderRadius(PREVIEW_IMAGE_RADIUS).backgroundColor(AppColors.bgSecondary)
         } else {
-          if (this.previewStage === 0) {
-            // 缩略图：失败（含 1×1 假成功）→ 回退原图
-            Image(toPreviewThumbUrl(this.firstPreviewUrl()))
-              .width('100%').height(PREVIEW_IMAGE_HEIGHT)
-              .objectFit(ImageFit.Cover)
-              .borderRadius(PREVIEW_IMAGE_RADIUS)
-              .backgroundColor(AppColors.bgSecondary)
-              .onComplete((event) => {
-                if (event && this.isBrokenPreview(event.width, event.height)) {
-                  this.onThumbFailed()
-                }
-              })
-              .onError(() => { this.onThumbFailed() })
-          } else {
-            // 原图回退：再失败即隐藏整块
-            Image(this.firstPreviewUrl())
-              .width('100%').height(PREVIEW_IMAGE_HEIGHT)
-              .objectFit(ImageFit.Cover)
-              .borderRadius(PREVIEW_IMAGE_RADIUS)
-              .backgroundColor(AppColors.bgSecondary)
-              .onComplete((event) => {
-                if (event && this.isBrokenPreview(event.width, event.height)) {
-                  this.onOriginalFailed()
-                }
-              })
-              .onError(() => { this.onOriginalFailed() })
-          }
+          // 实图：直接用原图（与 ImageViewer / ThreadPanel 同源同质量，见 §5.3 / K22）
+          Image(this.firstPreviewUrl())
+            .width('100%').height(PREVIEW_IMAGE_HEIGHT)
+            .objectFit(ImageFit.Cover)
+            .borderRadius(PREVIEW_IMAGE_RADIUS)
+            .backgroundColor(AppColors.bgSecondary)
+            .onComplete((event) => {
+              if (event && this.isBrokenPreview(event.width, event.height)) {
+                this.onPreviewFailed()
+              }
+            })
+            .onError(() => { this.onPreviewFailed() })
 
           // 多图角标只在实图分支渲染：被动占位下不透露图片数量（见 m6）
           if (this.previewImageUrls().length > 1) {
@@ -1158,7 +1107,7 @@ export const KEY_SHOW_TOPIC_PREVIEW: string = 'showTopicPreview'
 ### 9.4 副作用纪律
 
 - 卡片**不发网络请求**（预览图由 `Image` 组件按 URL 自行加载；解析期不预取）。
-- 预览图的失败回调（`onThumbFailed` / `onOriginalFailed`）只改本地 `@State`，不写 Store、不弹 Toast（列表内静默降级）。
+- 预览图的失败回调（`onPreviewFailed`）只改本地 `@State`，不写 Store、不弹 Toast（列表内静默降级）。
 - 解析层保持**纯函数**（可被 Hypium 直接覆盖）。
 
 ---
@@ -1169,16 +1118,16 @@ export const KEY_SHOW_TOPIC_PREVIEW: string = 'showTopicPreview'
 | --- | --- |
 | 单页主题数 | 35~54（实测 fid=7 首页 54 条、3 页共 123 条 ≈41/页；合集 35 左右） |
 | 带图条目占比 | ≈29%（fid=7）/ ≈3%（合集） |
-| 单张缩略图 | `.thumb.jpg` ≈10~19 KB；更省的 `.thumb_s.jpg` ≈2~4 KB |
-| 单页新增流量 | ≈29% × 35 × 15 KB ≈ **150 KB**（`.thumb.jpg`）；换 `.thumb_s.jpg` 约 **35 KB** |
-| 与「始终加载 + 帖子内图片」相比 | 微不足道；被动模式下为 0 |
+| 单张预览图（**原图**） | 实测 jpg 75 KB / jpeg 292 KB / webp 80 KB / png 108 KB / gif 903 KB / mp4 1.1 MB |
+| 单页新增流量 | ≈29% × 41 条 ≈ 12 张 × 平均 ≈150 KB ≈ **1~2 MB 量级**（首屏；滚动按 `cachedCount(3)` 视口加载） |
+| 与查看器 | 同一 URL：点开查看器不再重新下载（`Image` 缓存内命中） |
+| 被动模式 | 0（只占位、不创建 `Image` 节点） |
 
 其他：
 
 - `Image` 默认异步加载（无需 `syncLoad`）；`LazyForEach` 复用 + `cachedCount(3)` 已由现有列表配置。
-- 失败回退最多额外 1 次请求（原图），仅在缩略图不存在时发生。
-- `.medium.jpg` **不作为**升级选项：png/gif 源会回退原图（见 §5.1），若将来要"点开看更清晰"，
-  应直接把原图交给查看器。
+- **没有回退档**：原图加载失败（含 404 的 43 B 1×1 GIF）即隐藏整块，最多 1 次请求。
+- 原图在列表内的**解码内存与滚动帧率需真机观察**（见 K22）；若要降级到缩略档，切档方式见 K22。
 
 ---
 
@@ -1211,9 +1160,10 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
 - [ ] 网络从蜂窝切回 WiFi：占位自动变为实图（不滚动、不重进页面）
 - [ ] 热门榜（`subject/hot`）同样显示预览图（验证顶层 `attachPrefix` 透传）
 - [ ] 置顶模式 / 搜索列表 / 收藏夹 / 用户主页：**无**预览区、无崩溃、无空白（数据本就没有）
-- [ ] 缩略图不存在时（可临时把 `PREVIEW_THUMB_SUFFIX` 改成 `.thumb_m.jpg` 造 404）：自动回退原图；
-      原图也不存在时该卡片预览区消失、高度正常回收，**且不出现被 Cover 拉满的白块**（K16 的 1×1 判定生效）
-- [ ] `.thumb.jpg` 请求确实只拉回约 10~20 KB（DevTools 网络面板核对字节数）
+- [ ] 原图不存在的帖子（可临时拼一个不存在的附件路径造 404）：该卡片预览区消失、高度正常回收，
+      **且不出现被 Cover 拉满的白块**（K16/K20 的 1×1 判定生效）
+- [ ] DevTools 网络面板核对：预览图请求的就是**原图**（无 `.thumb.jpg` 后缀），且与点开查看器是同一 URL（缓存命中）
+- [ ] 长列表快速滚动时的帧率与内存（原图档，见 K22）—— 真机观察
 - [ ] 暗色主题下占位底色与图片圆角观感正常；切换主题不残留
 - [ ] 多图条目右下角显示「N 图」角标，位置不压住图片主体内容
 - [ ] 快速滚动长列表无卡顿、无图片错位（LazyForEach 复用）
@@ -1245,9 +1195,10 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
 | K16 | **缩略图 404 时 `Image.onError` 不触发** | CDN 对不存在路径返回 `404 + content-type: image/gif + 43 B 1×1 图`，`Image` 视为**加载成功**（`IMAGE_PIPELINE_AUDIT.md` §5.2）。回退链不能只靠 `onError`，必须同时在 `onComplete` 里用 `width/height ≤ 1` 判失败（见 §6.5），否则会显示一块被 `Cover` 拉满的空白 |
 | K17 | 用 `.medium.jpg` 当"大图"档 | 对 png / gif 源会**回退原图**（字节数与 content-type 同原图），并不省流量；查看器一律给原图，`.medium.jpg` 只在明确知道源是 jpeg/webp 时可选 |
 | K18 | 把 `type` 位13 当作"一定有预览图" | 部分板块（-7 网事杂谈、843 国际新闻）**整站不下发 `attachs`**，位13 却照常置位（见 §1.1）。预览图是否存在**只看 `previewImages` 是否非空**；位13 最多用于"该帖有附件但本板块不给"的提示，且**不得**据此自动拉取 `read.php` 补图 |
-| K19 | 失败回调不带 URL、`stage` 无脑单向 0→1→2 | 同一次加载若 `onError` 与 `onComplete`(1×1) 都触发，会从缩略图**连跳两级**而跳过原图回退（白块/永久无图）。**失败语义必须按所在分支归属**：缩略图分支只调 `onThumbFailed`、原图分支只调 `onOriginalFailed`，且各自幂等（`previewStage` 相等才推进）；不要让回调去猜"当前 URL" |
-| K20 | 用 `≤1` 判"失效占位图" | `onComplete` 的 `width/height` 为 **0 表示尚未解码出尺寸**，`≤1` 会把它误判为失效 → 平白多一次原图回退、最坏隐藏合法图。用**精确 `=== 1 && === 1`** 匹配 43 字节 1×1 GIF（K16） |
+| K19 | 失败信号重复触发被当成两次失败 | 同一次加载可能 `onError` 与 `onComplete`(1×1) **都**触发（K16）。失败处理必须**幂等**——本实现只置 `previewFailed = true`，多触发一次也只是再隐藏一次，不产生错误状态或重复请求。**注**：早期草案是"`stage` 0→1→2 两级回退（缩略图→原图）"，那种写法下双信号会**连跳两级**直接隐藏；列表改用原图后已无此风险，但该教训在将来切回多档时仍然成立 |
+| K20 | 用 `≤1` 判"失效占位图" | `onComplete` 的 `width/height` 为 **0 表示尚未解码出尺寸**，`≤1` 会把它误判为失效 → **平白隐藏一张合法图**。用**精确 `=== 1 && === 1`** 匹配 43 字节 1×1 GIF（K16） |
 | K21 | 以为 `stripImageSuffix` 能归一所有档位 | 镜像 `Utils.stripImageSuffix` 只认 `.thumb_s` / `.thumb_m` / `.medium` / `.thumb` **四种**，**不含 `.thumb_ss`**（CDN 实测存在该档位）：`a.jpeg.thumb_ss.jpg` 会被拼成 `a.jpeg.thumb_ss.jpg.thumb.jpg`。现网 `attachs` 是裸名（实测），不触发；即便拼出的 URL 取不到，也会回退到原 URL（仍显示那张小图），故**不改镜像**（改它要走 bbcode-ts 门禁且会分叉正文语义）。同理主名内嵌扩展名（`xxx.png.jpeg`）会被 strip 成 `xxx`，同样靠回退链兜底 |
+| K22 | 以为列表预览"必须"用缩略档省流量 | **本功能明确选择原图**（与 `ImageViewer` / `ThreadPanel` 的图片链路一致，需求方已确认）：列表与查看器同源，点开无二次下载。**代价**：一屏多张原图会显著抬高解码内存与首屏流量（实测 jpg 75 KB / jpeg 292 KB / png 108 KB / gif 903 KB / mp4 1.1 MB；且官方解码内存优化里 `.gif`/`.webp` **不做** `sourceSize` 降采样），长列表滚动性能需真机观察。**若要切回缩略档**：在 `TopicPreviewUtils` 里按 §5.2 规则实现档位 URL（`stripImageSuffix(url) + '.thumb.jpg'`，约 3 行；注意镜像的 strip 不认 `.thumb_ss`，见 K21），把 `TopicCardComponent.previewArea` 里的 `this.firstPreviewUrl()` 换成它，并恢复"缩略图失败→原图"两级回退（多档时失败回调必须**按分支归属**，见 K19）。**当前刻意不保留该函数与其单测**：无调用方即死代码 |
 
 ---
 
