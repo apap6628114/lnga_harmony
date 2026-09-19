@@ -1698,8 +1698,8 @@ struct TopicCardComponent {
   @StorageProp('blacklistVersion') blacklistVersion: number = 0
   onRemoveFav: (tid: number) => void = (_tid: number) => {}
   onCardClick: (tid: string, pid: string) => void = (_tid: string, _pid: string) => {}
-  /** 「显示帖子预览图」开关（设置页改动即时生效，见 docs/TOPIC_PREVIEW_DESIGN.md §8）。 */
-  @StorageProp('showTopicPreview') showTopicPreview: boolean = false
+  /** 「显示帖子预览图」开关（默认开启；设置页改动即时生效，见 docs/TOPIC_PREVIEW_DESIGN.md §8）。 */
+  @StorageProp('showTopicPreview') showTopicPreview: boolean = true
   /** 图片加载模式：决定预览图主动加载还是被动占位。 */
   @StorageProp('imageLoadStrategy') imageLoadStrategy: string = ImageLoadStrategy.ALWAYS
   /** 网络变更版本号：WiFi↔蜂窝切换 / 模式变更后重判被动态。 */

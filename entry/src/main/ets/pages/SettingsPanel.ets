@@ -39,7 +39,7 @@ export struct SettingsPanel {
   @State clearingCache: boolean = false
   @State imageStrategyBadge: string = '始终加载'
   @State threadNavBadge: string = '无缝加载'
-  @State prefetchPageBadge: string = '3 页'
+  @State prefetchPageBadge: string = '1 页'
   @State aiProviderBadge: string = '未配置 AI'
   /** 标题栏渐变模糊与偏色的滚动联动进度。 */
   @State titleScrollEffectProgress: number = 0

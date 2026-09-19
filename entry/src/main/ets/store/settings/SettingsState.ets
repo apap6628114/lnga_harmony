@@ -33,14 +33,14 @@ export class SettingsState {
   /**
    * 显示帖子预览图（主题列表卡片的首帖附件缩略图）。
    *
-   * 默认关闭：升级后列表视觉与流量不变，由用户显式开启；生效仍受 `imageLoadStrategy`
-   * 约束（手动 / 非 WiFi 的"仅 WiFi"模式下只显示占位）。
+   * 默认开启：列表卡片直接展示首帖预览图，用户可在设置页关闭；生效仍受
+   * `imageLoadStrategy` 约束（手动 / 非 WiFi 的"仅 WiFi"模式下只显示占位）。
    * 设计见 docs/TOPIC_PREVIEW_DESIGN.md §8。
    */
-  showTopicPreview: boolean = false
+  showTopicPreview: boolean = true
   threadNavMode: string = ThreadNavMode.SEAMLESS
   /** 预加载页数（0=关闭，1~5=向前预加载 N 页） */
-  prefetchPageCount: number = 3
+  prefetchPageCount: number = 1
   /** 记录帖子阅读进度：开启后保存最近阅读位置，下次进入帖子时自动恢复 */
   recordReadingProgress: boolean = true
   /** 视频默认是否静音（全局开关，false=有声） */

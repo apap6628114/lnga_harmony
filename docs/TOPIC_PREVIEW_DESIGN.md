@@ -25,8 +25,8 @@
 | 独立 Review | 两个独立 Agent 审查（解析/契约 + ArkTS/ArkUI/设置链路），逐条复核后修正：失败归属（K19）、精确 1×1（K20）、角标配色、URL 形态归一、hot 分支测试覆盖、本文档与代码对齐 | ✅ |
 | 响应式实测 | 582 个真实列表附件的比例分布与尺寸段解码验证（575/575 像素尺寸一致），见 §6.2.1 | ✅ |
 
-默认值：`showTopicPreview = false`（升级后列表视觉与流量不变，由用户显式开启）；若要默认开启，
-改 `SettingsState.showTopicPreview` 一处即可。
+默认值：`showTopicPreview = true`（默认开启，列表卡片直接展示首帖预览图，用户可在设置页关闭）；
+若要改回默认关闭，改 `SettingsState.showTopicPreview` 一处即可。
 
 ---
 
@@ -896,8 +896,8 @@ struct TopicCardComponent {
   @Prop isFavorites: boolean = false
   @StorageProp('topicFontSize') topicFontSize: number = 15
   @StorageProp('blacklistVersion') blacklistVersion: number = 0
-  /** 「显示帖子预览图」开关（设置页改动即时生效）。 */
-  @StorageProp('showTopicPreview') showTopicPreview: boolean = false
+  /** 「显示帖子预览图」开关（默认开启，设置页改动即时生效）。 */
+  @StorageProp('showTopicPreview') showTopicPreview: boolean = true
   /** 图片加载模式（决定主动加载 / 被动占位）。 */
   @StorageProp('imageLoadStrategy') imageLoadStrategy: string = ImageLoadStrategy.ALWAYS
   /** 网络变更版本号：WiFi↔蜂窝切换后重判被动态（NetworkMonitor 已 bump）。 */
@@ -1224,14 +1224,14 @@ export function shouldUsePassive(strategy: string): boolean {
 
 ```ts
   /** 显示帖子预览图（主题列表卡片首帖缩略图；受图片加载模式约束）。 */
-  showTopicPreview: boolean = false
+  showTopicPreview: boolean = true
 ```
 
-**默认值建议 `false`**（保守）：
+**默认值 `true`（跟随官方默认开启）**：
 
-- 升级后已有用户的列表**视觉与流量不变**，符合"设置项由用户显式开启"；
-- 若要跟随官方默认开启，改这一行为 `true` 即可（无迁移逻辑，旧数据缺字段时 `load()` 会跳过，
-  保留默认值）。
+- 列表卡片直接展示首帖预览图，用户可在设置页「显示帖子预览图」显式关闭；
+- 旧数据缺字段时 `load()` 会跳过该字段（`saved.showTopicPreview === undefined`），
+  保留这里的类默认值，**无需迁移逻辑**。
 
 ### 8.2 域 store（`store/settings/domain/MediaSettings.ets`）
 
