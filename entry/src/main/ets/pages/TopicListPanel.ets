@@ -15,7 +15,6 @@ import type { TopicListParams } from '../service/api/ForumApi'
 import type { TopicListResult } from '../model/NgaApiResults'
 import {
   resolvePreviewLayout,
-  isTallPreview,
   FALLBACK_PREVIEW_AREA_WIDTH,
   PreviewLayout
 } from '../common/utils/TopicPreviewUtils'
@@ -1883,9 +1882,10 @@ struct TopicCardComponent {
    * （高度取首图比例算出的值——首图是帖子主图，最能代表这组图），宽度各自按 `displayWidth`
    * 贴左排列。
    *
-   * **不渲染「N 图」数量角标**（用户明确要求移除）：多图已经"看得见"（横排几张一目了然），
-   * 再叠一个数字角标属于重复表达，且会压住最后一张图的角落。仅保留「长图」提示角标——
-   * 那条信息是"列表里看不全、点开才是完整的"，无法从画面上看出来。
+   * **不渲染任何角标**（用户明确要求移除）：多图「N 图」数量角标（多图横排本身"看得见"张数，
+   * 再叠一个数字属于重复表达，且会压住最后一张图的角落）与单图极端比例的「长图」提示角标
+   * **都已删除**。预览区因此只有图片本身（或被动态占位块），右下角不再有任何文字徽标；
+   * 外层容器也不再是"用来叠角标"的 `Stack`，只承担公共宽度与区块间距（`Column`）。
    *
    * 宽度与高度**双向显式**写死（容器与 `Image` 各自 `.width/.height`）：SDK 声明
    * 「`Image` 未设宽高时获取失败或尺寸为 0 会被自动重设为 0，且不遵循父布局约束」
@@ -1894,7 +1894,7 @@ struct TopicCardComponent {
   @Builder
   previewArea() {
     if (this.shouldRenderPreview()) {
-      Stack({ alignContent: Alignment.BottomEnd }) {
+      Column() {
         if (shouldUsePassive(this.imageLoadStrategy)) {
           Row() {
             Image($r('app.media.icon_image')).width(22).height(22)
@@ -1929,17 +1929,6 @@ struct TopicCardComponent {
           .width('100%')
           /* 左对齐：窄图收窄后必须贴左，否则 Row 的默认排布会把它们挤到中间 */
           .justifyContent(FlexAlign.Start)
-
-          // 仅单图的极端比例提示「长图」；多图不再叠数量角标（见上方注释）
-          if (this.previewImageUrls().length === 1 && isTallPreview(this.previewSize())) {
-            Text('长图')
-              .fontSize(11).fontColor(AppColors.white)
-              .backgroundColor(AppColors.movingPhotoBadgeBg)
-              .border({ width: 1, color: AppColors.movingPhotoBadgeBorder })
-              .borderRadius(9)
-              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-              .margin({ right: 6, bottom: 6 })
-          }
         }
       }
       .width('100%')

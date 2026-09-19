@@ -14,13 +14,13 @@
 | 环 | 落点 | 状态 |
 | --- | --- | --- |
 | 模型 | `model/Topic.ets`：`TopicListInfo.attachPrefix`、`ThreadPageInfo.previewImages`（删类型错误的 `attachs?: string`）、`ThreadPageInfo.previewSize`（首图真实像素尺寸，见 §6.2） | ✅ |
-| 工具 | `common/utils/TopicPreviewUtils.ets`（纯函数：前缀归一化 / 图片过滤 / **尺寸段解码 / 布局求解 / 长图判定**） | ✅ |
+| 工具 | `common/utils/TopicPreviewUtils.ets`（纯函数：前缀归一化 / 图片过滤 / **尺寸段解码 / 布局求解**） | ✅ |
 | 解析 | `parser/TopicParser.ets`（`attachs` → `previewImages` + `previewSize`）、`parser/AppSubjectListParser.ets` 与 `parser/AppUserTopicParser.ets`（`attachPrefix` **解析期内部**透传，见 §4.2；不作为 `TopicListInfo` 字段暴露） | ✅ |
-| UI | `pages/TopicListPanel.ets` → `TopicCardComponent.previewArea()`（开关 + 加载模式双重判定、被动占位、**原图**、失败即隐藏、**比例驱动的响应式高度**、Cover/Contain 分区、**图片左对齐**、多图横排、长图角标） | ✅ |
+| UI | `pages/TopicListPanel.ets` → `TopicCardComponent.previewArea()`（开关 + 加载模式双重判定、被动占位、**原图**、失败即隐藏、**比例驱动的响应式高度**、Cover/Contain 分区、**图片左对齐**、多图横排、**无任何角标**） | ✅ |
 | 响应式 | 列表实测宽度下传卡片（`onAreaChange` → `@Prop listWidth`）、比例驱动高度、Cover/Contain 分区、多图横排（见 §6.2 / §6.8） | ✅ |
 | 列表边界 | 条目本体**无圆角/描边/底色**，边界由列表自身的 `List.divider`（0.5px `AppColors.separator`）承担，条目之间 0 间距（见 §6.9） | ✅ |
 | 设置 | `AppStorageKeys.KEY_SHOW_TOPIC_PREVIEW` / `SettingsState.showTopicPreview` / `MediaSettings.setShowTopicPreview` / `SettingsStore` 门面与 AppStorage 同步 / `SettingsPanel` 行 / `SettingsIconColors.topicPreview` / `settings_topic_preview.svg` | ✅ |
-| 测试 | `entry/src/test/AppTopicListUnit.test.ets`：12 个预览用例（7 个原有 + 5 个本轮新增，见 §4.6 清单） | ✅ |
+| 测试 | `entry/src/test/AppTopicListUnit.test.ets`：11 个预览用例（见 §4.6 清单；原 `flagsExtremeRatiosAsTallImage` 已随「长图」角标一并删除） | ✅ |
 | 文档 | 本文 + `docs/research/IMAGE_PIPELINE_AUDIT.md` §5.1 与 G2 的复测更正 | ✅ |
 | 独立 Review | 两个独立 Agent 审查（解析/契约 + ArkTS/ArkUI/设置链路），逐条复核后修正：失败归属（K19）、精确 1×1（K20）、角标配色、URL 形态归一、hot 分支测试覆盖、本文档与代码对齐 | ✅ |
 | 响应式实测 | 582 个真实列表附件的比例分布与尺寸段解码验证（575/575 像素尺寸一致），见 §6.2.1 | ✅ |
@@ -489,7 +489,7 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean,
 
 现有 fixture（`createSubjectListResponse`）**已经带了** `attachPrefix` 与 `attachs` 数组，
 **无需**改 fixture、也**不需要**动 `entry/src/test/List.test.ets`（只是在既有测试函数里追加用例）。
-实际落地的 7 个用例：
+实际落地的 11 个用例：
 
 | 用例 | 保护的行为 |
 | --- | --- |
@@ -504,7 +504,6 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean,
 | `guardsPreviewSizeErrors` | 无尺寸段（老附件）→ null、空串、query/fragment 不干扰、尺寸段不紧贴扩展名不认、越界像素与荒谬比例拒绝、边界合法值照常解码 |
 | `parsesPreviewSizeIntoModel` | 解析期产出：主题模型带首图真实尺寸；无 attachs 条目无尺寸 |
 | `resolvesPreviewLayoutByAspect` | 横图 Cover 高度公式、竖图 Contain 且封顶 240、全景压到 112、尺寸未知走 16:9 兜底、宽度未测得回落 `FALLBACK_PREVIEW_AREA_WIDTH` |
-| `flagsExtremeRatiosAsTallImage` | 「长图」角标只给真正看不全的极端比例（>3.5 超宽、<0.4 长截图）；常规竖图（0.55/0.75）不标（`Contain` 已完整显示）；尺寸未知不标 |
 
 ---
 
@@ -704,10 +703,10 @@ ListItem（**一条帖子 = 列表里的一个普通条目**：无圆角、无�
     ├── Row   标题行（[标签] 标题 2 行 … 可选收藏移除按钮）
     ├── Text  摘要 previewSnippet（可选，margin top ITEM_BLOCK_GAP）
     ├── ▶ 预览图区（margin top ITEM_BLOCK_GAP）
-    │     Stack(width 100%, height = 按真实比例算出)
-    │       ├── Row(左对齐, space 6): Image × N
-    │       │     宽度 = 布局给出的 displayWidth（竖图收窄到贴合图片，横图取满分区）
-    │       └── Text('长图')  右下角角标（仅单图且比例极端时）
+    │     Column(width 100%；只承担公共宽度与区块间距，不再是"用来叠角标"的 Stack)
+    │       └── Row(左对齐, space 6): Image × N
+    │             宽度 = 布局给出的 displayWidth（竖图收窄到贴合图片，横图取满分区）
+    │             （被动模式时换成占位块：bgSecondary 灰底 + icon_image 图标，与实图同高）
     └── Row   底栏（作者 · 时间 · 版面 | 回复数，margin top ITEM_BLOCK_GAP）
 ```
 
@@ -719,8 +718,9 @@ ListItem（**一条帖子 = 列表里的一个普通条目**：无圆角、无�
 **顺序为「标题 → 摘要 → 图片 → 底栏」**：标题与摘要构成"这条帖子讲什么"的信息块，
 图片作为其佐证，底栏（作者 / 时间 / 回复数）收尾。
 
-**角标**：只保留单图极端比例的「长图」提示。**「N 图」数量角标已移除**——多图横排本身
-"看得见"，再叠一个数字属于重复表达，且会压住最后一张图的角落。
+**不渲染任何角标**：多图「N 图」数量角标（多图横排本身"看得见"，再叠一个数字属于重复表达，
+且会压住最后一张图的角落）与单图极端比例的「长图」角标**均已移除**（K34）。预览区内部只有
+图片本身（或被动态占位块），右下角不再有任何文字徽标。
 
 **列表边界（§6.9）**：条目本体不带圆角 / 描边 / 底色，边界完全由列表自身的 `List.divider`
 （0.5px `AppColors.separator`）承担；横向留白**只有一层**——条目内边距
@@ -744,15 +744,14 @@ UI 只消费结果、不做算术：
 | --- | --- |
 | `parsePreviewSize(attachurl)` | 文件名尺寸段 → 真实像素尺寸（`ImageSize`）；越界/荒谬值返回 null |
 | `resolvePreviewLayout(size, areaWidth)` | → `PreviewLayout { height, useContain }` |
-| `isTallPreview(size)` | 是否标「长图」角标（比例 < **0.4** 或 > **3.5**） |
 
-**三个阈值不是一个**（`CONTAIN_ASPECT_THRESHOLD = 0.9`、`TALL/WIDE_IMAGE_ASPECT = 0.4 / 3.5`）：
+**只有一个阈值**（`CONTAIN_ASPECT_THRESHOLD = 0.9`）：它决定**填充方式**（`Contain` vs `Cover`）
+——0.9 以下所有竖图完整显示、两侧留底色。
 
-- `0.9` 决定**填充方式**（`Contain` vs `Cover`）——0.9 以下所有竖图完整显示、两侧留底色；
-- `0.4 / 3.5` 决定**是否提示**「长图」角标。角标语义是"列表里看不全，点开才是完整的"，
-  因此只给真正看不全的两种极端比例（超宽图被 `Cover` 裁掉两端、极端长图被 `MaxHeight`
-  压成窄条）。介于其间的竖图是**完整**显示的，标角标反而误导；实测竖图占 46%，
-  若角标也用 0.9 会让 46% 的条目挂上角标，提示立刻失去信息量。
+> 曾另有一组角标阈值 `TALL/WIDE_IMAGE_ASPECT = 0.4 / 3.5` 与 `isTallPreview()`，用于判断是否给
+> **单图极端比例**挂「长图」角标。角标按用户要求移除后，这两个常量与函数**一并删除**（K34）——
+> 比例本身仍参与上面的填充方式判定：超宽图依旧走 `Contain` 或被 `MaxHeight` 封顶，只是不再有
+> 任何提示角标。参考：实测竖图占 46%，当年若把角标阈值也取 0.9，近半条目都会挂上角标。
 
 **`W` 的获取方式**：列表自身 `onAreaChange` 采集实测宽度 → `TopicListPanel.listWidth` →
 `@Prop` 下传条目 → 减去条目左右内边距 `ITEM_HORIZONTAL_PADDING` 16×2。**不能由断点硬编码推出**：
@@ -921,7 +920,7 @@ Row() {
 .justifyContent(FlexAlign.Center)
 .borderRadius(PREVIEW_IMAGE_RADIUS)
 .backgroundColor(AppColors.bgSecondary)
-// 外层 Stack 统一承担 .margin({ top: 10 })，占位态与实图态因此同高同位
+// 外层 Column 统一承担 .width('100%') 与 .margin({ top: ITEM_BLOCK_GAP })，占位态与实图态因此同高同位
 ```
 
 **必须用 `if / else if` 分支而不是 `Image(...).visibility(...)`**：离开渲染树的分支不会创建
@@ -1039,7 +1038,7 @@ struct TopicCardComponent {
   @Builder
   previewArea() {
     if (this.shouldRenderPreview()) {
-      Stack({ alignContent: Alignment.BottomEnd }) {
+      Column() {
         if (shouldUsePassive(this.imageLoadStrategy)) {
           // 被动模式：只占位不加载（分支隔离，不创建 Image 节点）；**与实图态同高**
           // 占位块保留 bgSecondary 灰底（占位语义）；实图分支不得加底色（K30）
@@ -1072,17 +1071,6 @@ struct TopicCardComponent {
           .width('100%')
           // 左对齐：窄图收窄后必须贴左，否则 Row 的默认排布会把它们挤到中间
           .justifyContent(FlexAlign.Start)
-
-          // 角标只在实图分支渲染，且**只保留单图极端比例的「长图」提示**（K34）
-          if (this.previewImageUrls().length === 1 && isTallPreview(this.previewSize())) {
-            Text('长图')
-              .fontSize(11).fontColor(AppColors.white)
-              .backgroundColor(AppColors.movingPhotoBadgeBg)
-              .border({ width: 1, color: AppColors.movingPhotoBadgeBorder })
-              .borderRadius(9)
-              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-              .margin({ right: 6, bottom: 6 })
-          }
         }
       }
       .width('100%')
@@ -1108,21 +1096,21 @@ struct TopicCardComponent {
 }
 ```
 
-> **角标配色**：底色用 `AppColors.movingPhotoBadgeBg`（`#80000000`，50% 黑）+ 1px
-> `movingPhotoBadgeBorder`——这是项目**图片角标**的既有配色（`BBCodeContentView.ets:840`、
-> `MovingPhotoPlayer.ets:563` 同款）。
-> **不要复用 `imageViewerButtonBg`**：它是 `#33FFFFFF`（20% 白，为全屏深色查看器按钮设计），
-> 叠在浅色缩略图或米色占位块上时白字几乎不可读（Review m1）。
+> **角标配色配方已无引用点**：预览区角标全部移除后，`AppColors.movingPhotoBadgeBg`（`#80000000`，
+> 50% 黑）+ `movingPhotoBadgeBorder` 在预览图链路不再被引用；这对常量本身**不是死资源**——
+> 正文动态图角标仍在使用（`BBCodeContentView.ets:882`、`MovingPhotoPlayer.ets:563`），故保留。
+> 原「不要复用 `imageViewerButtonBg`」的结论（`#33FFFFFF` 20% 白在全屏深色查看器里合适，
+> 叠在浅色缩略图上白字几乎不可读）仍然成立：将来若再加角标请沿用 `movingPhotoBadge*`。
 
 ### 6.8 多图横排（首帖附件多张时）
 
 首帖附件常有多张（实测列表附件里带图条目以 1~3 张为主，最多的达 7 张）。渲染规则：
 
-| 张数 | 渲染 | 角标 |
-| --- | --- | --- |
-| 1 | 单张，占满图片区宽度 | 极端比例时标「长图」 |
-| 2~3 | 横排，**按各自比例**的宽度贴左排列，间距 `PREVIEW_IMAGE_GAP = 6` | 无 |
-| >3 | 只渲染**前 3 张**（`PREVIEW_IMAGE_MAX_INLINE`） | 无 |
+| 张数 | 渲染 |
+| --- | --- |
+| 1 | 单张，占满图片区宽度（竖图收窄到 `displayWidth`） |
+| 2~3 | 横排，**按各自比例**的宽度贴左排列，间距 `PREVIEW_IMAGE_GAP = 6` |
+| >3 | 只渲染**前 3 张**（`PREVIEW_IMAGE_MAX_INLINE`） |
 
 三个设计点：
 
@@ -1134,7 +1122,7 @@ struct TopicCardComponent {
    `(图片区宽 − 6 × (n−1)) / n`。否则 3 张 16:9 图会按整行宽算出 166vp 高、而每张实际只有
    约 100vp 宽，画面被严重裁切。
 3. **最多 3 张**（`PREVIEW_IMAGE_MAX_INLINE`）：再多会让单张退化成"色块"，且列表内同时发起的
-   图片请求成倍增长。第 4 张起不渲染、**也不再显示数量角标**（用户明确要求移除「N 图」）——
+   图片请求成倍增长。第 4 张起不渲染、**也不显示任何角标**（数量角标与长图角标均已移除）——
    点开查看器仍可看全部（查看器消费的是完整 `previewImages`，与列表渲染无关）。
 
 > **列宽与多图的关系**（为什么窄列下多图收益有限；图片区宽 = 列宽 − 条目内边距 32）：
@@ -1172,7 +1160,7 @@ struct TopicCardComponent {
   列表上的 `.padding({ left/right: LIST_HORIZONTAL_PADDING })`。
 - **撤销的资源**：`AppColors.cardStroke` 与 `app.color.card_stroke`（base / dark）**已删除**——
   该色值只为卡片描边存在，留着就是死资源。
-- **保留的部分**：预览图链路（比例驱动高度 / 多图横排 / 长图角标）与区块间距统一
+- **保留的部分**：预览图链路（比例驱动高度 / 多图横排）与区块间距统一
   （`ITEM_BLOCK_GAP = 10`）都不属于"卡片外观"，未随本次回退改动。
 
 > `ListOptions.space` 仍是 `List` 的**构造参数**（`list.d.ts:656`），`ListAttribute` 上没有该
@@ -1195,7 +1183,7 @@ struct TopicCardComponent {
 | 无图 | 完全不渲染（不留空行、不留背景条），标题行紧贴条目顶部 |
 | 深色模式 | 仅使用 `AppColors` 语义色，无需单独 dark 分支 |
 | 玻璃材质 | **不涉及**：预览图在列表内容层，不使用 `systemMaterial` / `GlassModifier`（详见 `docs/IMMERSIVE_LIGHT_DESIGN.md`：材质只用于浮层与系统控件） |
-| 字体 | 预览区不引入新字号角色；「长图」角标用 11 |
+| 字体 | 预览区不引入新字号角色（角标已全部移除，不再有 11 号角标文字） |
 | 列宽 | 列表恒 `width('100%')` 铺满所属列，**不设宽度上限**（K25） |
 
 ---
@@ -1496,15 +1484,14 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
   - [ ] 16:9 与 3:2 横图不再被压成 120vp 的窄条（高度应分别约 166 / 197vp，主体完整）
   - [ ] 竖图（3:4 / 9:16 截图）走 `Contain`：完整可见、两侧为 `bgSecondary` 底色、不出现裁成横带
   - [ ] 全景图（>3.5:1）高度压到 112vp 且只裁约 16%
-  - [ ] 长图/超宽图（>3.5 或 <0.4）**单图**时右下角出现「长图」角标
-  - [ ] **多图不再出现「N 图」数量角标**（角标已移除）；长图角标也只在单图时出现
+  - [ ] **预览区无任何角标**：多图条目不出现「N 图」，长图/超宽图（>3.5 或 <0.4）**单图**时
+        右下角也不出现「长图」——两枚角标均已移除（K34）
   - [ ] **四个区块间距一致**：有摘要时"标题→摘要→图片→底栏"三处等距（10vp）；
         **无摘要时"标题→图片"也是同一值**（不应出现图片贴住标题）
-  - [ ] 常规竖图（0.4~0.9，占实测 46%）**不出现**「长图」角标——它们已被 `Contain` 完整显示
   - [ ] 竖图 `Contain` 的两侧**不出现灰色衬底方块**，直接透出页面底色（K30）
   - [ ] 竖图高度上限 240vp：3:4 竖拍的显示宽度约 180vp（此前 200vp 上限时为 150vp）
   - [ ] **多图横排**：2~3 图的条目按各自比例宽度贴左排列、行内同高；4 图以上只显示前 3 张、
-        且**不出现任何数量角标**
+        且**不出现任何角标**
   - [ ] 多图行内的图片高度按**单张宽度**算（3 张 16:9 不应被拉成整行宽度的高度，见 K28）
   - [ ] 条目顺序为「标题 → 摘要 → 图片 → 底栏」
   - [ ] **不给列表设宽度上限**（K25）：`lg` 双列下帖子列表铺满所属列，两侧无额外空隙
@@ -1515,7 +1502,7 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
   - [ ] **图片左对齐**：竖图（`Contain`）贴左且**两侧无多余留白**（容器已收窄到图片宽度），
         不是"在满宽容器里居中"
   - [ ] 多图横排：各图按自身比例宽度贴左排列、行内同高；窄图与横图混排时不会溢出条目
-  - [ ] **多图条目的右下半区没有角标遮挡**（数量角标已移除，K34）
+  - [ ] **预览图右下半区没有任何角标遮挡**（数量角标与长图角标均已移除，K34）
   - [ ] 没有任何时刻出现"图片陆续加载导致列表高度跳动"（高度在解析期算定，见 §6.2.2）
   - [ ] 断点切换（拖拽窗口跨 600 / 840vp、折叠屏展开）：条目与图片区宽度即时跟随、无残留旧宽度的错位
   - [ ] `lg` 单列与 `md` 下，预览图宽度不超过 568vp（列表 600 − padding 32）
@@ -1570,7 +1557,7 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
 | K31 | 给 `List` 写链式 `.space(n)` | `space` 是 `List` 的**构造参数**（`ListOptions.space`，`list.d.ts:656`：Spacing between list items along the main axis），`ListAttribute` 上**没有**该属性——链式写法编译直接报 `Property 'space' does not exist on type 'ListAttribute'`。正确写法是构造参数 `List({ scroller, space: n })`；**当前列表不传 `space`**（条目间距恒 0，边界交给 `divider`，见 §6.9）。`lanes` 的 `gutter` 不能替代：声明写明它"仅在列数/行数大于 1 时生效" |
 | K32 | 竖图在满宽容器里靠 `justifyContent` 左对齐 | 只在满宽容器里改对齐方式，竖图左侧贴边、**右侧仍留一整条空白**，观感更差。正解是**收窄容器**到 `displayWidth = height × aspect`（`PreviewLayout.displayWidth`），图片本身即容器宽度，两侧都不留白 |
 | K33 | 区块间距只写在"上方区块"上 | 三个区块若只有前两个带 `margin top`，第三个（预览图）的间距就取决于"上一个区块是否存在"——有摘要时是 10、**无摘要时退化为 0**（图片直接贴住标题，这正是实测反馈的观感问题）。规则：**每个区块自带 `margin top`，值统一用 `ITEM_BLOCK_GAP`**，任何区块增删都不影响其余间距 |
-| K34 | 给多图叠「N 图」数量角标 | 多图横排本身已"看得见"张数（能数出几张），再叠一个数字属于**重复表达**，且角标会压住最后一张图的角落（用户明确要求移除）。角标只保留**单图极端比例**的「长图」提示——那条信息无法从画面上看出来 |
+| K34 | 给预览图叠文字角标（「N 图」数量角标 / 「长图」提示角标） | **两枚角标都已删除**（用户要求）。①「N 图」数量角标：多图横排本身已"看得见"张数（能数出几张），再叠一个数字属于**重复表达**，且角标会压住最后一张图的角落；②「长图」提示角标（比例 <0.4 或 >3.5 的**单图**）：缩略后本就看不全，一块文字徽标既不精确也干扰观感。清理范围：`TopicListPanel.previewArea()` 的角标分支、只服务它的 `isTallPreview()` 与 `TALL/WIDE_IMAGE_ASPECT`（`TopicPreviewUtils.ets`）、以及 `AppTopicListUnit.test.ets` 的 `flagsExtremeRatiosAsTallImage` 用例。**外层容器随之由 `Stack` 换成 `Column`**——叠层已无用途，容器只承担 `.width('100%')` 与 `.margin({ top: ITEM_BLOCK_GAP })` |
 | K35 | 用"底色 + 描边"做条目区分（**已回退**） | 卡片化期间曾给 `ListItem` 加 1px 圆角描边（`app.color.card_stroke`：浅 `#F0E7D9` / 暗 `#26262A`，比 `separator` 淡一档）把每条帖子围成独立单元。实测观感偏"卡片流"，且条目必须与列边界留出 16vp 间距、分隔横线无法贯穿整列，左右对齐还要跟两层留白走。**已回退为分隔横线**：条目无圆角/描边/底色，`List.divider`（0.5px `separator`）+ 0 条目间距（§6.9）。`cardStroke` 与 `card_stroke` 资源一并删除，避免死资源 |
 | K36 | 把尺寸段当成"图片专有规则" | 视频附件带**同一套**尺寸段（实测 6/6），且编码的是**旋转后的显示尺寸**：编码 1280×720 + `rotate 90°` 的文件尺寸段是 `Sk0-zk` = 720×1280。因此它可直接替代 `AVMetadataExtractor` 元数据探测（后者是一次真实网络请求、正文还会对**所有**视频批量发起），而与 `applyOrientation` 的结果**语义一致**、不会横竖颠倒。此前视频比例只能异步取回、首帧用 16:9 兜底，正是视频区高度跳变的来源；正文图片同理（`.aspectRatio()` 曾以 `onComplete` 回填为**唯一**来源）。**一处出口 `parsePreviewSize` 服务列表预览 / 正文图片 / 视频附件三处**，不得给视频另写一份解析（§6.2.3）。注意档位 URL（`xxx.mp4.thumb.jpg`）**刻意失配**——档位图尺寸与源图不同，要拿源图尺寸必须传裸名原图 URL |
 

@@ -158,8 +158,8 @@ export function parsePreviewImages(rawAttachs: Object | null | undefined, prefix
  *
  * 边界用于挡住两类脏数据：
  * - 恶意的超长 base36（如 `Szzzz-zzzz` = 1679615×1679615）→ 超出 `MAX_PIXELS`；
- * - 比例极端到不可能作为缩略图预览的编码 → 超出 `MIN/MAX_ASPECT`（这会与 §6.3 的
- *   "长图/超宽图"分支重合，但那是**已确认的真实比例**，此处拦的是明显荒谬值）。
+ * - 比例极端到不可能作为缩略图预览的编码 → 超出 `MIN/MAX_ASPECT`（这会与 §6.2 的
+ *   "极端比例（超宽 / 长截图）"说明重合，但那是**已确认的真实比例**，此处拦的是明显荒谬值）。
  */
 const MIN_PIXELS: number = 16
 const MAX_PIXELS: number = 20000
@@ -193,21 +193,6 @@ const PREVIEW_HEIGHT_WIDTH_FACTOR: number = 0.9
  * 代价是容器内出现底色——实测列表附件里竖图占 **46%**，这个代价换来的是"看得到整张图"。
  */
 const CONTAIN_ASPECT_THRESHOLD: number = 0.9
-
-/**
- * 角标阈值：比例低于/高于此值时标「长图」，提示用户"列表里看不全"。
- *
- * **必须与 `CONTAIN_ASPECT_THRESHOLD` 分开取值**：`Contain` 是 0.9 以下的所有竖图
- * （完整显示、不裁切），而那已经足够表达"这是一张竖图"；若角标也用 0.9，实测 46% 的
- * 条目都会挂上角标，提示立刻失去信息量。
- *
- * 更关键的是**角标的语义**：它说的是"列表里看不全，点开才是完整的"，因此只对真正看不全的
- * 两种极端比例出现——超宽图被 `Cover` 裁掉两端（3.5:1 以上裁掉约 16%），极端长图被
- * `MaxHeight` 压到很窄的一条（0.4 以下只剩约 1/3 宽度）。介于其间的竖图是**完整**显示的，
- * 标角标反而误导。
- */
-const TALL_IMAGE_ASPECT: number = 0.4
-const WIDE_IMAGE_ASPECT: number = 3.5
 
 /**
  * 图片区宽度未知（首帧尚未测得列表宽度）时的兜底值。
@@ -309,20 +294,6 @@ export function resolvePreviewLayout(size: ImageSize | null, areaWidth: number):
   layout.useContain = useContain
   layout.displayWidth = useContain ? height * aspect : width
   return layout
-}
-
-/**
- * 该比例是否值得标「长图」角标（列表中必然看不全的极端比例）。
- *
- * @param size - 真实像素尺寸（null → 不标）
- * @returns 是否标角标
- */
-export function isTallPreview(size: ImageSize | null): boolean {
-  if (size === null || size.width <= 0 || size.height <= 0) {
-    return false
-  }
-  const aspect: number = size.width / size.height
-  return aspect < TALL_IMAGE_ASPECT || aspect > WIDE_IMAGE_ASPECT
 }
 
 /**

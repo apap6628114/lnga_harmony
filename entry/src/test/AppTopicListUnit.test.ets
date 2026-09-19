@@ -28,7 +28,6 @@ import {
   isPreviewImage,
   parsePreviewSize,
   resolvePreviewLayout,
-  isTallPreview,
   FALLBACK_PREVIEW_AREA_WIDTH,
   PreviewLayout,
 } from '../main/ets/common/utils/TopicPreviewUtils'
@@ -595,30 +594,6 @@ export default function appTopicListUnitTest(): void {
       const fallbackWidth: PreviewLayout = resolvePreviewLayout(wide, 0)
       expect(fallbackWidth.height)
         .assertEqual(resolvePreviewLayout(wide, FALLBACK_PREVIEW_AREA_WIDTH).height)
-    })
-
-    it('flagsExtremeRatiosAsTallImage', 0, () => {
-      /* 夹具自检：确认尺寸对象被正确构造（否则后面的比例断言会失去意义） */
-      const tallSize: ImageSize = makeSize(567, 1024)
-      expect(tallSize.width).assertEqual(567)
-      expect(tallSize.height).assertEqual(1024)
-      /* 比例锚点：把「Contain 阈值 0.9」与「角标阈值 0.4/3.5」的差别钉在断言里 */
-      const tallAspect: number = tallSize.width / tallSize.height
-      expect(tallAspect > 0.4 && tallAspect < 0.9).assertTrue()   // 0.554：Contain 但不标角标
-      const panoSize: ImageSize = makeSize(821, 189)
-      expect(panoSize.width / panoSize.height > 3.5).assertTrue() // 4.34：超宽，标角标
-      const squareSize: ImageSize = makeSize(100, 100)
-      expect(squareSize.width).assertEqual(100)
-      expect(squareSize.height).assertEqual(100)
-      /* 角标语义是"列表里看不全"：只给真正看不全的极端比例 */
-      expect(isTallPreview(tallSize)).assertFalse()               // 0.554 竖图 → 不标（Contain 已完整显示）
-      expect(isTallPreview(panoSize)).assertTrue()                // 4.34 超宽 → 标（Cover 裁掉两端）
-      expect(isTallPreview(makeSize(2400, 1350))).assertFalse()   // 1.78 常规横图 → 不标
-      expect(isTallPreview(makeSize(750, 1000))).assertFalse()    // 0.75 竖拍 → 不标
-      expect(isTallPreview(squareSize)).assertFalse()             // 1.00 方图 → 不标
-      expect(isTallPreview(makeSize(400, 1600))).assertTrue()     // 0.25 长截图 → 标（被压成窄条）
-      /* 尺寸未知时不标（老附件不该被误标「长图」） */
-      expect(isTallPreview(null)).assertFalse()
     })
 
     it('parsesSubjectSubBoards', 0, () => {
