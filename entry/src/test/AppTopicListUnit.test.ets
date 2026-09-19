@@ -26,7 +26,13 @@ import {
   buildPreviewUrl,
   normalizeAttachPrefix,
   isPreviewImage,
+  parsePreviewSize,
+  resolvePreviewLayout,
+  isTallPreview,
+  FALLBACK_PREVIEW_AREA_WIDTH,
+  PreviewLayout,
 } from '../main/ets/common/utils/TopicPreviewUtils'
+import { ImageSize } from '../main/ets/common/media/ImageSizeUtil'
 import type { TopicListInfo } from '../main/ets/model/Topic'
 import type { SubBoard, Category, ForumSearchItem } from '../main/ets/model/Forum'
 import type { TopicListParams } from '../main/ets/service/api/ForumApi'
@@ -154,6 +160,20 @@ function createSubjectListResponse(): Record<string, Object> {
     '__CURRENT_ORDER': '',
   }
   return response
+}
+
+/**
+ * 构造图片像素尺寸（预览布局用例的输入）。
+ *
+ * @param width - 像素宽
+ * @param height - 像素高
+ * @returns 尺寸对象
+ */
+function makeSize(width: number, height: number): ImageSize {
+  const size: ImageSize = new ImageSize()
+  size.width = width
+  size.height = height
+  return size
 }
 
 /**
@@ -465,6 +485,116 @@ export default function appTopicListUnitTest(): void {
       expect(urls[0]).assertEqual(prefix + 'mon_1/a.jpg')
       expect(urls[1]).assertEqual(prefix + 'mon_1/b.webp')
       expect(urls[2]).assertEqual('https://img.nga.cn/attachments/mon_1/c.jpeg')
+    })
+
+    it('decodesPreviewSizeSegment', 0, () => {
+      /* 真实样本（596 张列表附件实测，解码与原图比例逐一比对见 docs/TOPIC_PREVIEW_DESIGN.md §6.2.1）：
+         base36('1uo')=2400 / base36('11i')=1350（该附件原图 2400×1350） */
+      const size: ImageSize | null = parsePreviewSize('mon_202608/19/7Q68-jpq0ZtT3cS1uo-11i.jpeg')
+      expect(size).not().assertNull()
+      expect((size as ImageSize).width).assertEqual(2400)
+      expect((size as ImageSize).height).assertEqual(1350)
+      /* 尺寸段前面**没有**分隔符（`T3c` 紧跟 `S`）——这是真实形态，正则不得要求前置分隔符 */
+      const png: ImageSize | null = parsePreviewSize('mon_202002/24/7Q5-b75pZbT1kSb4-68.png')
+      expect((png as ImageSize).width).assertEqual(400)
+      expect((png as ImageSize).height).assertEqual(224)
+      /* 文件名里出现多个尺寸段时取紧贴扩展名的最后一个（实测样本即如此） */
+      const multi: ImageSize | null = parsePreviewSize('mon_1/7Q5-aaaZbT1kSsg-go.jpg')
+      expect((multi as ImageSize).width).assertEqual(1024)
+      expect((multi as ImageSize).height).assertEqual(600)
+    })
+
+    it('guardsPreviewSizeErrors', 0, () => {
+      /* 2012~2014 年的老附件实测无尺寸段（如 -7202235_5485ecb5a00f5.png）→ null，走兜底比例 */
+      expect(parsePreviewSize('mon_201412/09/-7202235_5485ecb5a00f5.png')).assertNull()
+      expect(parsePreviewSize('mon_1/a.jpg')).assertNull()
+      expect(parsePreviewSize('')).assertNull()
+      /* query / fragment 不干扰尾部匹配 */
+      expect(parsePreviewSize('mon_1/7Q68-aZtT3cSsg-go.jpg?x=1')).not().assertNull()
+      expect(parsePreviewSize('mon_1/7Q68-aZtT3cSsg-go.jpg#frag')).not().assertNull()
+      /* 尺寸段必须紧贴扩展名：中间夹了别的段就不认（宁可走兜底比例，也不猜） */
+      expect(parsePreviewSize('mon_1/7Q68-aZtT3cSsg-go.thumb.jpg')).assertNull()
+      /* 越界与荒谬比例一律拒绝：base36('zzzz')=1679615 超过像素上限；比例超出 1/24~24 的编码 */
+      expect(parsePreviewSize('mon_1/aZtT3cSzzzz-zzzz.jpg')).assertNull()
+      expect(parsePreviewSize('mon_1/aZtT3cSg-zzzz.jpg')).assertNull()
+      /* 边界内照常解码：16 像素下限通过；比例 16/140 ≈ 0.114 仍在 1/24 以上，不应被比例守卫误杀 */
+      const tiny: ImageSize | null = parsePreviewSize('mon_1/aZtT3cSg-3w.jpg')
+      expect((tiny as ImageSize).width).assertEqual(16)
+      expect((tiny as ImageSize).height).assertEqual(140)
+      /* 比例守卫本身：16:600（≈0.027）落在 1/24 之下 → 拒绝 */
+      expect(parsePreviewSize('mon_1/aZtT3cSg-go.jpg')).assertNull()
+    })
+
+    it('parsesPreviewSizeIntoModel', 0, () => {
+      /* 解析期产出：subject/list 首条的主题模型应带首图真实尺寸（卡片高度据此算定） */
+      const info: TopicListInfo | null = parseSubjectList(
+        createSubjectListResponse(), new Set<string>(), [], 1)
+      const first = (info as TopicListInfo).threadPageList[0]
+      const size: ImageSize | undefined = first.previewSize
+      expect(size).not().assertUndefined()
+      expect((size as ImageSize).width).assertEqual(2400)
+      expect((size as ImageSize).height).assertEqual(1350)
+      /* 无 attachs 条目：无尺寸（null/undefined 均可，卡片走兜底比例） */
+      const second = (info as TopicListInfo).threadPageList[1]
+      expect(second.previewSize === undefined || second.previewSize === null).assertTrue()
+    })
+
+    it('resolvesPreviewLayoutByAspect', 0, () => {
+      /* 用显式宽度做断言（不依赖 FALLBACK 兜底值），避免兜底值调整时用例失稳 */
+      const width: number = 296
+      /* 横图 Cover：高度 = 0.90 × 宽 / 比例，且被 240vp 封顶、112vp 兜底 */
+      const wide: ImageSize = makeSize(2400, 1350)
+      const wideLayout: PreviewLayout = resolvePreviewLayout(wide, width)
+      expect(wideLayout.useContain).assertFalse()
+      expect(wideLayout.height > 145 && wideLayout.height < 155).assertTrue()
+      /* 横图容器取满分区宽度 */
+      expect(wideLayout.displayWidth).assertEqual(width)
+      /* 竖图 Contain：封顶到最大高度 240，且改用完整显示、容器收窄到贴合图片 */
+      const tall: ImageSize = makeSize(567, 1024)
+      const tallLayout: PreviewLayout = resolvePreviewLayout(tall, width)
+      expect(tallLayout.useContain).assertTrue()
+      expect(tallLayout.height).assertEqual(240)
+      /* 收窄：宽 = 高 × 比例（240 × 567/1024 ≈ 132.9），必须小于分区宽度 */
+      expect(tallLayout.displayWidth < width).assertTrue()
+      expect(tallLayout.displayWidth > 130 && tallLayout.displayWidth < 136).assertTrue()
+      /* 超宽全景：压到最小高度 */
+      const pano: ImageSize = makeSize(821, 189)
+      const panoLayout: PreviewLayout = resolvePreviewLayout(pano, width)
+      expect(panoLayout.useContain).assertFalse()
+      expect(panoLayout.height).assertEqual(112)
+      expect(panoLayout.displayWidth).assertEqual(width)
+      /* 尺寸未知（老附件）：16:9 兜底，不退回固定高度、也不因缺失而异常 */
+      const fallback: PreviewLayout = resolvePreviewLayout(null, width)
+      expect(fallback.useContain).assertFalse()
+      expect(fallback.height > 145 && fallback.height < 155).assertTrue()
+      /* 图片区宽度未测得（首帧 0）：回落 FALLBACK_PREVIEW_AREA_WIDTH，与显式传入同值同高 */
+      const fallbackWidth: PreviewLayout = resolvePreviewLayout(wide, 0)
+      expect(fallbackWidth.height)
+        .assertEqual(resolvePreviewLayout(wide, FALLBACK_PREVIEW_AREA_WIDTH).height)
+    })
+
+    it('flagsExtremeRatiosAsTallImage', 0, () => {
+      /* 夹具自检：确认尺寸对象被正确构造（否则后面的比例断言会失去意义） */
+      const tallSize: ImageSize = makeSize(567, 1024)
+      expect(tallSize.width).assertEqual(567)
+      expect(tallSize.height).assertEqual(1024)
+      /* 比例锚点：把「Contain 阈值 0.9」与「角标阈值 0.4/3.5」的差别钉在断言里 */
+      const tallAspect: number = tallSize.width / tallSize.height
+      expect(tallAspect > 0.4 && tallAspect < 0.9).assertTrue()   // 0.554：Contain 但不标角标
+      const panoSize: ImageSize = makeSize(821, 189)
+      expect(panoSize.width / panoSize.height > 3.5).assertTrue() // 4.34：超宽，标角标
+      const squareSize: ImageSize = makeSize(100, 100)
+      expect(squareSize.width).assertEqual(100)
+      expect(squareSize.height).assertEqual(100)
+      /* 角标语义是"列表里看不全"：只给真正看不全的极端比例 */
+      expect(isTallPreview(tallSize)).assertFalse()               // 0.554 竖图 → 不标（Contain 已完整显示）
+      expect(isTallPreview(panoSize)).assertTrue()                // 4.34 超宽 → 标（Cover 裁掉两端）
+      expect(isTallPreview(makeSize(2400, 1350))).assertFalse()   // 1.78 常规横图 → 不标
+      expect(isTallPreview(makeSize(750, 1000))).assertFalse()    // 0.75 竖拍 → 不标
+      expect(isTallPreview(squareSize)).assertFalse()             // 1.00 方图 → 不标
+      expect(isTallPreview(makeSize(400, 1600))).assertTrue()     // 0.25 长截图 → 标（被压成窄条）
+      /* 尺寸未知时不标（老附件不该被误标「长图」） */
+      expect(isTallPreview(null)).assertFalse()
     })
 
     it('parsesSubjectSubBoards', 0, () => {

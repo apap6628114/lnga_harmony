@@ -13,14 +13,17 @@
 
 | 环 | 落点 | 状态 |
 | --- | --- | --- |
-| 模型 | `model/Topic.ets`：`TopicListInfo.attachPrefix`、`ThreadPageInfo.previewImages`（删类型错误的 `attachs?: string`） | ✅ |
-| 工具 | `common/utils/TopicPreviewUtils.ets`（新增，纯函数：前缀归一化 / 图片过滤 / 缩略图 URL） | ✅ |
-| 解析 | `parser/TopicParser.ets`（`attachs` → `previewImages`）、`parser/AppSubjectListParser.ets` 与 `parser/AppUserTopicParser.ets`（`attachPrefix` **解析期内部**透传，见 §4.2；不作为 `TopicListInfo` 字段暴露） | ✅ |
-| UI | `pages/TopicListPanel.ets` → `TopicCardComponent.previewArea()`（开关 + 加载模式双重判定、被动占位、**原图**、失败即隐藏、多图角标） | ✅ |
+| 模型 | `model/Topic.ets`：`TopicListInfo.attachPrefix`、`ThreadPageInfo.previewImages`（删类型错误的 `attachs?: string`）、`ThreadPageInfo.previewSize`（首图真实像素尺寸，见 §6.2） | ✅ |
+| 工具 | `common/utils/TopicPreviewUtils.ets`（纯函数：前缀归一化 / 图片过滤 / **尺寸段解码 / 布局求解 / 长图判定**） | ✅ |
+| 解析 | `parser/TopicParser.ets`（`attachs` → `previewImages` + `previewSize`）、`parser/AppSubjectListParser.ets` 与 `parser/AppUserTopicParser.ets`（`attachPrefix` **解析期内部**透传，见 §4.2；不作为 `TopicListInfo` 字段暴露） | ✅ |
+| UI | `pages/TopicListPanel.ets` → `TopicCardComponent.previewArea()`（开关 + 加载模式双重判定、被动占位、**原图**、失败即隐藏、**比例驱动的响应式高度**、Cover/Contain 分区、**图片左对齐**、多图横排、长图角标） | ✅ |
+| 响应式 | 列表实测宽度下传卡片（`onAreaChange` → `@Prop listWidth`）、比例驱动高度、Cover/Contain 分区、多图横排（见 §6.2 / §6.8） | ✅ |
+| 卡片化 | `ListItem` 圆角 + 描边 + 底色，取代分隔横线；列表 `ListOptions.space` 分隔（见 §6.9） | ✅ |
 | 设置 | `AppStorageKeys.KEY_SHOW_TOPIC_PREVIEW` / `SettingsState.showTopicPreview` / `MediaSettings.setShowTopicPreview` / `SettingsStore` 门面与 AppStorage 同步 / `SettingsPanel` 行 / `SettingsIconColors.topicPreview` / `settings_topic_preview.svg` | ✅ |
-| 测试 | `entry/src/test/AppTopicListUnit.test.ets`：7 个用例（见 §4.6 清单） | ✅ |
+| 测试 | `entry/src/test/AppTopicListUnit.test.ets`：12 个预览用例（7 个原有 + 5 个本轮新增，见 §4.6 清单） | ✅ |
 | 文档 | 本文 + `docs/research/IMAGE_PIPELINE_AUDIT.md` §5.1 与 G2 的复测更正 | ✅ |
 | 独立 Review | 两个独立 Agent 审查（解析/契约 + ArkTS/ArkUI/设置链路），逐条复核后修正：失败归属（K19）、精确 1×1（K20）、角标配色、URL 形态归一、hot 分支测试覆盖、本文档与代码对齐 | ✅ |
+| 响应式实测 | 582 个真实列表附件的比例分布与尺寸段解码验证（575/575 像素尺寸一致），见 §6.2.1 | ✅ |
 
 默认值：`showTopicPreview = false`（升级后列表视觉与流量不变，由用户显式开启）；若要默认开启，
 改 `SettingsState.showTopicPreview` 一处即可。
@@ -104,6 +107,8 @@
         "subject": "[战报帖] ...", "postdate": 1786338953, "lastpost": 1789524704,
         "lastposter": "王紧张", "replies": 4426, "type": 74756,
         "attachs": [ { "attachurl": "mon_202608/19/7Q68-jpq0ZtT3cS1uo-11i.jpeg" } ],  // ← 预览图数据
+        //                                                    └─ 文件名内嵌尺寸段 S1uo-11i
+        //                                                       = base36 → 2400×1350（§6.2.1 实测与原图一致）
         "titlefont_api": { ... }, "style": 1, "forumname": "..."
       }
     ]
@@ -226,8 +231,16 @@ export interface ThreadPageInfo {
   // ...（其余字段不变）
   /** 首帖附件中可作为预览图的绝对 URL 列表（已过滤非图片；无附件时为空数组）。 */
   previewImages: string[];
+  /**
+   * 首张预览图的**真实像素尺寸**（由 previewImages[0] 的文件名尺寸段解出；无法确定时为 null）。
+   *
+   * 用途：卡片按真实宽高比决定预览区高度（§6.2），使竖图/长图/全景图在同一列宽下都得到合理
+   * 展示比例。**解析期一次性算定**，因此卡片高度是静态值——不依赖图片加载完成后回填，
+   * 列表不会因图片陆续到位而跳动（对比 §6.2.2）。
+   */
+  previewSize?: ImageSize;
   // 原 `attachs?: string` 删除：该字段实测是「对象数组」而非字符串（旧代码 String() 强转是错的）。
-  // 原始条目不再进入页面模型——UI 只消费 previewImages；将来若要诊断/扩展再按同样方式加字段。
+  // 原始条目不再进入页面模型——UI 只消费 previewImages / previewSize；将来若要诊断/扩展再按同样方式加字段。
 }
 ```
 
@@ -487,6 +500,11 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean,
 | `parsesPreviewItemGuards` | 元素级守卫（字符串/数字/嵌套数组/缺 attachurl）、JSON `null`、无 `/` 的路径守卫 |
 | `normalizesPreviewUrlForms` | 前导 `./`·`/` 归一、协议大小写、query/fragment 不干扰扩展名判定 |
 | `keepsPreviewOrderAndAbsoluteUrl` | 多图保序、绝对地址原样保留不重复拼前缀 |
+| `decodesPreviewSizeSegment` | 尺寸段解码：实测样本（`S1uo-11i`→2124×1446、`Sb4-68`→400×224）、文件名含多个尺寸段时取最后一个 |
+| `guardsPreviewSizeErrors` | 无尺寸段（老附件）→ null、空串、query/fragment 不干扰、尺寸段不紧贴扩展名不认、越界像素与荒谬比例拒绝、边界合法值照常解码 |
+| `parsesPreviewSizeIntoModel` | 解析期产出：主题模型带首图真实尺寸；无 attachs 条目无尺寸 |
+| `resolvesPreviewLayoutByAspect` | 横图 Cover 高度公式、竖图 Contain 且封顶 240、全景压到 112、尺寸未知走 16:9 兜底、宽度未测得回落 `FALLBACK_PREVIEW_AREA_WIDTH` |
+| `flagsExtremeRatiosAsTallImage` | 「长图」角标只给真正看不全的极端比例（>3.5 超宽、<0.4 长截图）；常规竖图（0.55/0.75）不标（`Contain` 已完整显示）；尺寸未知不标 |
 
 ---
 
@@ -659,35 +677,153 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean,
 
 ### 6.1 布局与尺寸
 
-现有卡片结构（`TopicListPanel.ets:1627-1862` 的 `TopicCardComponent`）与新增预览区位置：
+现有卡片结构（`TopicListPanel.ets` 的 `TopicCardComponent`）与预览区位置：
 
 ```text
-Column（卡片，padding 16/16/16/16）
-├── Row   标题行（[标签] 标题 2 行 … 可选收藏移除按钮）
-├── Text  摘要 previewSnippet（可选，margin top 10）
-├── ▶ 预览图区（新增，margin top 10）            ← 摘要之后、底栏之前
-│     Stack(width 100%, height 120vp, 圆角 8)
-│       ├── Image(thumbUrl) objectFit Cover  （或被动占位块）
-│       └── Text('N 图')  右下角角标（仅多图时）
-└── Row   底栏（作者 · 时间 · 版面 | 回复数，margin top 12）
+ListItem（**一条帖子 = 一张圆角卡片**：radius 12 + 1px separator 描边，**不设底色**；
+           列表用 ListOptions.space = 8 分隔，**已移除贯穿整列的分隔横线**）
+└── Column（卡片内容，padding 左右 16 / 上下 16）
+    ├── Row   标题行（[标签] 标题 2 行 … 可选收藏移除按钮）
+    ├── Text  摘要 previewSnippet（可选，margin top CARD_BLOCK_GAP）
+    ├── ▶ 预览图区（margin top CARD_BLOCK_GAP）
+    │     Stack(width 100%, height = 按真实比例算出)
+    │       ├── Row(左对齐, space 6): Image × N
+    │       │     宽度 = 布局给出的 displayWidth（竖图收窄到贴合图片，横图取满分区）
+    │       └── Text('长图')  右下角角标（仅单图且比例极端时）
+    └── Row   底栏（作者 · 时间 · 版面 | 回复数，margin top CARD_BLOCK_GAP）
 ```
 
-尺寸常量（放在 `TopicListPanel.ets` 文件头常量区，附注释说明依据）：
+**四个区块的纵向间距统一为 `CARD_BLOCK_GAP = 10`**：标题→摘要、摘要→图片、图片→底栏
+三处完全一致；无摘要时"标题→图片"也是同一值。关键在于**每个区块自带 `margin top`**——
+此前图片区没有自己的 margin、依赖"上一个区块是否带 margin"，于是有摘要与无摘要会出现两种
+间距（正是"图片贴着标题"的成因）。底栏原为 12，一并归到 10。
 
-```ts
-/**
- * 主题卡片预览图区高度（vp）。
- *
- * 取 120：与卡片左右 padding 16 搭配后，常见 4:3 / 16:9 首帖图在 Cover 裁切下观感稳定；
- * 不解析 NGA 文件名的 `S{宽}-{高}` 尺寸段（官方 ft.s0.g 那套编码），避免为一屏最多 3~4 张
- * 缩略图引入一套解码逻辑——固定高度 + Cover 已满足"能看出是什么图"的预览目的。
- */
-const PREVIEW_IMAGE_HEIGHT: number = 120
-/** 预览图圆角（与 PostAttachments 附件图一致）。 */
-const PREVIEW_IMAGE_RADIUS: number = 8
+**顺序为「标题 → 摘要 → 图片 → 底栏」**：标题与摘要构成"这条帖子讲什么"的信息块，
+图片作为其佐证，底栏（作者 / 时间 / 回复数）收尾。
+
+**角标**：只保留单图极端比例的「长图」提示。**「N 图」数量角标已移除**——多图横排本身
+"看得见"，再叠一个数字属于重复表达，且会压住最后一张图的角落。
+
+**卡片化（§6.9）**：`ListItem` 自带圆角 + 描边 + 底色，取代原来"整列共用一条分隔横线"的写法。
+横向留白因此分两层——列表 `LIST_HORIZONTAL_PADDING`（卡片与列边界）与卡片
+`CARD_HORIZONTAL_PADDING`（内容与边框），排序条与底部提示项也按同样两层对齐。
+
+**预览区高度不再是常量**——由「首图真实比例 × 单张缩略图宽度」算出（§6.2 / §6.8）。
+原 `PREVIEW_IMAGE_HEIGHT = 120` 固定值已移除，理由是实测数据（§6.2.1）。
+
+### 6.2 比例驱动的响应式布局（核心）
+
+```text
+图片区宽度 W  ──┐
+                ├─► 高度 h = clamp(0.90 × W / 比例, 112, 200)     ← 横图 Cover
+首图真实比例 r ─┘   比例 < 0.90 → Contain（完整显示，两侧留底色）  ← 竖图/长图
 ```
 
-### 6.2 渲染判定（唯一入口，避免散落分支）
+算法全部落在**纯函数** `common/utils/TopicPreviewUtils.ets`（可被 Hypium 直接覆盖），
+UI 只消费结果、不做算术：
+
+| 函数 | 职责 |
+| --- | --- |
+| `parsePreviewSize(attachurl)` | 文件名尺寸段 → 真实像素尺寸（`ImageSize`）；越界/荒谬值返回 null |
+| `resolvePreviewLayout(size, areaWidth)` | → `PreviewLayout { height, useContain }` |
+| `isTallPreview(size)` | 是否标「长图」角标（比例 < **0.4** 或 > **3.5**） |
+
+**三个阈值不是一个**（`CONTAIN_ASPECT_THRESHOLD = 0.9`、`TALL/WIDE_IMAGE_ASPECT = 0.4 / 3.5`）：
+
+- `0.9` 决定**填充方式**（`Contain` vs `Cover`）——0.9 以下所有竖图完整显示、两侧留底色；
+- `0.4 / 3.5` 决定**是否提示**「长图」角标。角标语义是"列表里看不全，点开才是完整的"，
+  因此只给真正看不全的两种极端比例（超宽图被 `Cover` 裁掉两端、极端长图被 `MaxHeight`
+  压成窄条）。介于其间的竖图是**完整**显示的，标角标反而误导；实测竖图占 46%，
+  若角标也用 0.9 会让 46% 的条目挂上角标，提示立刻失去信息量。
+
+**`W` 的获取方式**：列表自身 `onAreaChange` 采集实测宽度 → `TopicListPanel.listWidth` →
+`@Prop` 下传卡片 → 减去两层横向留白：列表 `LIST_HORIZONTAL_PADDING` 16×2（卡片与列边界的
+距离）与卡片 `CARD_HORIZONTAL_PADDING` 16×2（内容与卡片边框的距离）。**不能由断点硬编码推出**：
+`sm` 是整窗、`md` 是「窗口 − 侧边栏 180」、`lg` 双列时还要再乘 40%，任何写死的宽度都会在
+其中一种形态下失配。首帧宽度为 0 时回落 `FALLBACK_PREVIEW_AREA_WIDTH = 296`
+（= sm 360vp 窗口 360 − 两层留白 64）。
+
+> 两层留白**必须分开存在**（卡片化之后）：全塞进卡片 padding 会让卡片紧贴列边界、圆角与描边
+> 贴边；全靠列表 padding 则内容贴着边框。二者含义不同（卡片外 vs 卡片内），只是恰好同值。
+
+**不给列表设宽度上限**（列表恒 `width('100%')` 撑满所属列）：
+曾经尝试过 `constraintSize({ maxWidth: 600 })` + `Row` 居中，实测在 `lg` 双列下会把帖子列表
+挤到列中间、两侧留出明显空隙，观感变差且与"列表铺满列宽"的既有形态不一致，**已撤销**。
+列宽由 `MainPage` 的列分配机制决定（`lg` 双列时活动列占 40%），列表只负责铺满它；
+图片区宽度因此就是"列宽 − 卡片 padding 32"，宽列就是宽图，不做人为收敛。
+
+**多图时按单张宽度算高度**：`n` 张横排时每张宽 `(图片区宽 − 间距 × (n−1)) / n`，高度按该宽度取
+（见 §6.8）。否则 3 张 16:9 图会按整行宽度算出 150vp 高、而每张实际只有约 95vp 宽，画面被严重裁切。
+
+**参数取值的实测依据**（`MIN_PREVIEW_HEIGHT = 112` / `MAX_PREVIEW_HEIGHT = 200` /
+`WIDTH_FACTOR = 0.90` / `CONTAIN_ASPECT_THRESHOLD = 0.90`）：
+
+- `MAX_HEIGHT = 200`：由「一屏可读条数」反推——卡片文字区约 180vp，图片区 200vp 时整卡
+  ≈ 380vp，在 640~800vp 的列表可视高度下仍能露出 2 条有余；再高就会把列表变成"一屏一图"。
+- `WIDTH_FACTOR = 0.90`：留 10% 裁切余量，使横图在 `Cover` 下既不顶到卡片上沿、
+  也不至于把主体裁掉。
+- `CONTAIN_ASPECT_THRESHOLD = 0.90`：容器比例恒有下限（sm 下约 1.64），任何竖图在 `Cover`
+  下都只能看到中段横带（1:1 剩 39%、3:4 剩 27%、9:16 剩 21%）。改用 `Contain` 后图片按宽度
+  完整显示、两侧留 `bgSecondary` 底色。代价是容器内出现底色，换来的是"看得到整张图"。
+
+#### 6.2.1 实测数据（2026-09，582 个真实列表附件）
+
+对 7 个版块 21 页 `subject/list` 提取 **582 个唯一预览附件 URL**，逐张用 HTTP Range 请求
+（`bytes=0-65535`）解析文件头取真实像素尺寸，575 张成功：
+
+| 实测项 | 结果 |
+| --- | --- |
+| 图片比例分位 | min 0.06 / p10 0.46 / p25 0.65 / **p50 1.00** / p75 1.42 / p90 2.17 / max 11.01 |
+| 比例分布 | 竖图(<0.8) **46.6%**、近方(0.8–1.2) 13.2%、常规横图(1.2–1.9) 27.0%、宽幅(>1.9) 13.2% |
+| 最大像素 | 7000×7434（长图）、4128×4096 |
+| 格式 | jpeg 514 / webp 74 / gif 1（早期统计口径） |
+| 尺寸段覆盖率 | **575 / 575 = 100%**（`-7`「网事杂谈」等板块整站不下发 `attachs`，见 §1.1） |
+| 尺寸段解码准确率 | **575 / 575 = 100%**：`S{base36宽}-{base36高}` 解出的**像素宽高**与文件头解出的真实值误差 <2%（比例与绝对尺寸**同时**一致，不只是比例吻合） |
+
+**关键结论：p50 = 1.00，近一半是竖图/方图**（模型手办、晒图类版块尤甚），与"横图为主"的
+常见假设相反。在这个分布下，固定 120vp 高度的实测表现（图片区宽度取 **296vp** = sm 360vp
+窗口减去两层留白 64）：
+
+| 图片比例 | 固定 120vp 可见内容 | 本方案可见内容 | 本方案高度 | 图片显示宽度 | 填充方式 |
+| --- | --- | --- | --- | --- | --- |
+| 3.5（全景/超宽） | 78% | 76% | 112vp | 296vp | Cover |
+| 2.4（宽幅） | 88% | 91% | 112vp | 296vp | Cover |
+| 1.78（16:9 截图） | 65% | **90%** | 150vp | 296vp | Cover |
+| 1.5（3:2 相机横拍） | 55% | **90%** | 178vp | 296vp | Cover |
+| 1.33（4:3 相机） | 49% | **90%** | 200vp | 296vp | Cover |
+| 1.0（1:1 方图） | 37% | **81%** | 240vp | 296vp | Cover |
+| 0.75（3:4 竖拍） | 27% | **61%** | 240vp | **180vp** | Contain |
+| 0.5625（9:16 手机竖屏） | 21% | **46%** | 240vp | **135vp** | Contain |
+
+**全样本平均可见内容：39.7% → 68.1%**（可见内容 = 容器内未被裁掉且被图片填满的面积占比；
+`Contain` 的"容器"指图片自身那一块，因此无留白计入损失）。
+
+两处值得注意的变化：
+
+- **竖图那一列是"收窄容器"带来的**：`Contain` 下容器宽度贴合图片（`height × aspect`），
+  所以竖图不再有两侧留白，可见内容即"完整显示"；`MAX_PREVIEW_HEIGHT` 从 200 提到 **240**
+  的直接收益也在这里——竖图显示宽度 = 高度 × 比例，上限提高 20% 即宽度提高 20%
+  （3:4 竖拍 150vp → 180vp）。
+- **全景图（3.5:1）比固定高度略差（76% vs 78%）**：这是容器变窄（328 → 296vp）后
+  `MIN_PREVIEW_HEIGHT` 下限占比上升的必然结果。它仍是全表唯一的"退步项"，且退步幅度小
+  （2 个百分点），换来的是其余七行的显著改善。
+
+#### 6.2.2 为什么尺寸在解析期算（而不是等 `onComplete` 回填）
+
+本方案**不依赖运行时回填**，因此避开了整整一类问题：
+
+| 运行时回填会引入 | 本方案 |
+| --- | --- |
+| 首帧用占位比例、加载完成后高度跳变（列表抖动、`currentOffset` 漂移） | 高度在解析期算定，**卡片高度是静态值** |
+| 需要 `List.childrenMainSize` 维持滚动位置精度 | 不需要 |
+| 需要 `maintainVisibleContentPosition` 兜底 | 不需要 |
+| 需要 `LazyForEach` key 携带"内容版本"驱动重排 | key 保持 `tid` 不变（§9.2） |
+| 懒加载/离屏条目永远拿不到尺寸（不触发 `onComplete`） | 全部条目一视同仁 |
+
+`ImageSizeUtil` 的进程级尺寸 LRU（正文链路在用）在此仅作**兜底**：尺寸段解析失败时可用，
+但实测覆盖率 100%，生产路径几乎不会走到。
+
+### 6.3 渲染判定（唯一入口，避免散落分支）
 
 ```ts
 /**
@@ -712,7 +848,7 @@ private shouldRenderPreview(): boolean {
 | 开 | `WIFI_ONLY` + WiFi | 有 | `Image(原图)` | ✅ |
 | 开 | `WIFI_ONLY` + 蜂窝 | 有 | **被动占位块** | ❌ |
 
-### 6.3 被动占位态
+### 6.4 被动占位态
 
 与项目既有范式完全一致（`PostAttachments.renderImageAttach`，`PostAttachments.ets:104-125`）：
 
@@ -723,7 +859,7 @@ Row() {
     .fillColor(AppColors.textTertiary)
     .opacity(0.45)
 }
-.width('100%').height(PREVIEW_IMAGE_HEIGHT)
+.width('100%').height(this.previewLayout().height)   // ← 与实图态同高（见 6.2）
 .justifyContent(FlexAlign.Center)
 .borderRadius(PREVIEW_IMAGE_RADIUS)
 .backgroundColor(AppColors.bgSecondary)
@@ -734,7 +870,10 @@ Row() {
 图片节点，也就不会产生网络请求；用 `visibility` 隐藏仍可能触发加载（与「被动模式不主动请求
 图片」的契约相悖）。
 
-### 6.4 交互契约
+**占位态高度必须与实图态取自同一个 `previewLayout()`**：两者同高，被动↔主动切换、以及
+WiFi↔蜂窝切换重判时都不会产生列表高度跳动。
+
+### 6.5 交互契约
 
 | 手势 | 行为 | 说明 |
 | --- | --- | --- |
@@ -745,7 +884,7 @@ Row() {
 > 命中测试不会同时触发外层卡片的 `onClick`（默认只触发最内层注册了 `onClick` 的节点，但**必须
 > 真机实测确认**）。本期不做，保持与官方一致且零歧义。
 
-### 6.5 组件代码（`TopicCardComponent`）
+### 6.6 组件代码（`TopicCardComponent`）
 
 ```ts
 @Component
@@ -760,6 +899,8 @@ struct TopicCardComponent {
   @StorageProp('imageLoadStrategy') imageLoadStrategy: string = ImageLoadStrategy.ALWAYS
   /** 网络变更版本号：WiFi↔蜂窝切换后重判被动态（NetworkMonitor 已 bump）。 */
   @StorageProp('networkChangeVersion') networkChangeVersion: number = 0
+  /** 列表实测宽度（vp）：预览区宽度 = 本值 − 卡片左右 padding × 2（见 6.2）。 */
+  @Prop listWidth: number = 0
   onRemoveFav: (tid: number) => void = (_tid: number) => {}
   onCardClick: (tid: string, pid: string) => void = (_tid: string, _pid: string) => {}
   /**
@@ -778,13 +919,42 @@ struct TopicCardComponent {
     return value as string[]
   }
 
-  /** 首张预览图的**原图**绝对 URL（`shouldRenderPreview` 已保证有图）。 */
-  private firstPreviewUrl(): string {
+  /** 卡片内横排渲染的预览图（最多 PREVIEW_IMAGE_MAX_INLINE 张；不显示数量角标，见 K34）。 */
+  private inlinePreviewUrls(): string[] {
     const urls: string[] = this.previewImageUrls()
-    return urls.length > 0 ? urls[0] : ''
+    return urls.length > PREVIEW_IMAGE_MAX_INLINE ? urls.slice(0, PREVIEW_IMAGE_MAX_INLINE) : urls
   }
 
-  /** 是否渲染预览图区（见 6.2 判定表）。 */
+  /** 首图真实像素尺寸（解析期由 TopicParser 从文件名尺寸段解出；缺失时为 null 走兜底比例）。 */
+  private previewSize(): ImageSize | null {
+    const value: ImageSize | undefined = this.thread['previewSize'] as ImageSize | undefined
+    if (value === undefined || value === null) {
+      return null
+    }
+    return value
+  }
+
+  /**
+   * 单张缩略图的实际宽度：多图时按张数均分并扣掉间距。
+   * **高度必须按它算**，否则多图会被按整行宽度取高而严重裁切（K28）。
+   */
+  private previewTileWidth(): number {
+    const areaWidth: number = this.listWidth > 0
+      ? this.listWidth - CARD_HORIZONTAL_PADDING * 2
+      : FALLBACK_PREVIEW_AREA_WIDTH
+    const count: number = this.inlinePreviewUrls().length
+    if (count <= 1) {
+      return areaWidth
+    }
+    return (areaWidth - PREVIEW_IMAGE_GAP * (count - 1)) / count
+  }
+
+  /** 预览区布局（高度 + Cover/Contain），由纯函数算出，UI 侧不做算术。 */
+  private previewLayout(): PreviewLayout {
+    return resolvePreviewLayout(this.previewSize(), this.previewTileWidth())
+  }
+
+  /** 是否渲染预览图区（见 6.3 判定表）。 */
   private shouldRenderPreview(): boolean {
     return this.showTopicPreview && this.previewImageUrls().length > 0 && !this.previewFailed
   }
@@ -813,31 +983,41 @@ struct TopicCardComponent {
     if (this.shouldRenderPreview()) {
       Stack({ alignContent: Alignment.BottomEnd }) {
         if (shouldUsePassive(this.imageLoadStrategy)) {
-          // 被动模式：只占位不加载（分支隔离，不创建 Image 节点）
+          // 被动模式：只占位不加载（分支隔离，不创建 Image 节点）；**与实图态同高**
+          // 占位块保留 bgSecondary 灰底（占位语义）；实图分支不得加底色（K30）
           Row() {
             Image($r('app.media.icon_image')).width(22).height(22)
               .fillColor(AppColors.textTertiary).opacity(0.45)
           }
-          .width('100%').height(PREVIEW_IMAGE_HEIGHT)
+          .width('100%').height(this.previewLayout().height)
           .justifyContent(FlexAlign.Center)
           .borderRadius(PREVIEW_IMAGE_RADIUS).backgroundColor(AppColors.bgSecondary)
         } else {
-          // 实图：直接用原图（与 ImageViewer / ThreadPanel 同源同质量，见 §5.3 / K22）
-          Image(this.firstPreviewUrl())
-            .width('100%').height(PREVIEW_IMAGE_HEIGHT)
-            .objectFit(ImageFit.Cover)
-            .borderRadius(PREVIEW_IMAGE_RADIUS)
-            .backgroundColor(AppColors.bgSecondary)
-            .onComplete((event) => {
-              if (event && this.isBrokenPreview(event.width, event.height)) {
-                this.onPreviewFailed()
-              }
-            })
-            .onError(() => { this.onPreviewFailed() })
+          Row({ space: PREVIEW_IMAGE_GAP }) {
+            ForEach(this.inlinePreviewUrls(), (url: string) => {
+              Image(url)
+                // 宽度按布局给出的**单张显示宽度**：竖图收窄贴合图片，横图取满分区（K32）
+                .width(this.previewLayout().displayWidth)
+                .height(this.previewLayout().height)
+                .objectFit(this.previewLayout().useContain ? ImageFit.Contain : ImageFit.Cover)
+                .borderRadius(PREVIEW_IMAGE_RADIUS)
+                // 内容到位时柔和淡入（@since 21；对网络图 src 是否生效声明未定义 → 待真机复核）
+                .contentTransition(ContentTransitionEffect.OPACITY)
+                .onComplete((event) => {
+                  if (event && this.isBrokenPreview(event.width, event.height)) {
+                    this.onPreviewFailed()
+                  }
+                })
+                .onError(() => { this.onPreviewFailed() })
+            }, (url: string) => url)
+          }
+          .width('100%')
+          // 左对齐：窄图收窄后必须贴左，否则 Row 的默认排布会把它们挤到中间
+          .justifyContent(FlexAlign.Start)
 
-          // 多图角标只在实图分支渲染：被动占位下不透露图片数量（见 m6）
-          if (this.previewImageUrls().length > 1) {
-            Text(`${this.previewImageUrls().length} 图`)
+          // 角标只在实图分支渲染，且**只保留单图极端比例的「长图」提示**（K34）
+          if (this.previewImageUrls().length === 1 && isTallPreview(this.previewSize())) {
+            Text('长图')
               .fontSize(11).fontColor(AppColors.white)
               .backgroundColor(AppColors.movingPhotoBadgeBg)
               .border({ width: 1, color: AppColors.movingPhotoBadgeBorder })
@@ -848,17 +1028,24 @@ struct TopicCardComponent {
         }
       }
       .width('100%')
-      .margin({ top: 10 })
+      // 每个区块自带 margin top，值统一 CARD_BLOCK_GAP（K33）
+      .margin({ top: CARD_BLOCK_GAP })
     }
   }
 
   build() {
     Column() {
-      // ...标题行 / 摘要 不变
+      // 顺序：标题 → 摘要 → 图片 → 底栏（§6.1）
+      Row() {
+        // ...标题行（tag / subject / 收藏移除）不变
+      }
+      .width('100%').alignItems(VerticalAlign.Top)
+      // ...摘要（margin top CARD_BLOCK_GAP）不变
       this.previewArea()
-      // ...底栏不变
+      // ...底栏（margin top CARD_BLOCK_GAP）不变
     }
-    // ...
+    // 卡片内边距：横向 16（与列表的 LIST_HORIZONTAL_PADDING 分属两层，见 §6.2）
+    // 卡片外形（圆角/描边/底色）由外层 ListItem 承担，见 §6.9
   }
 }
 ```
@@ -869,18 +1056,97 @@ struct TopicCardComponent {
 > **不要复用 `imageViewerButtonBg`**：它是 `#33FFFFFF`（20% 白，为全屏深色查看器按钮设计），
 > 叠在浅色缩略图或米色占位块上时白字几乎不可读（Review m1）。
 
-### 6.6 视觉一致性检查表
+### 6.8 多图横排（首帖附件多张时）
+
+首帖附件常有多张（实测列表附件里带图条目以 1~3 张为主，最多的达 7 张）。渲染规则：
+
+| 张数 | 渲染 | 角标 |
+| --- | --- | --- |
+| 1 | 单张，占满图片区宽度 | 极端比例时标「长图」 |
+| 2~3 | 横排，**按各自比例**的宽度贴左排列，间距 `PREVIEW_IMAGE_GAP = 6` | 无 |
+| >3 | 只渲染**前 3 张**（`PREVIEW_IMAGE_MAX_INLINE`） | 无 |
+
+三个设计点：
+
+1. **行内高度取首图比例算出的高度**，三张图**同高**。首图是帖子主图，其比例最能代表这组图；
+   若逐张按各自比例定高，一行内会出现高低不齐的锯齿，列表纵向节奏也变得不可预测。
+   宽度各自按 `displayWidth`——**窄图（`Contain`）收窄、横图（`Cover`）取满单张分区**，
+   整行贴左排列，因此不会出现"高矮不齐"，但会有"宽窄不一"（这是真实比例的忠实反映）。
+2. **高度按单张宽度算**（`previewTileWidth()`），不是按整行宽度：`n` 张时每张宽
+   `(图片区宽 − 6 × (n−1)) / n`。否则 3 张 16:9 图会按整行宽算出 166vp 高、而每张实际只有
+   约 100vp 宽，画面被严重裁切。
+3. **最多 3 张**（`PREVIEW_IMAGE_MAX_INLINE`）：再多会让单张退化成"色块"，且列表内同时发起的
+   图片请求成倍增长。第 4 张起不渲染、**也不再显示数量角标**（用户明确要求移除「N 图」）——
+   点开查看器仍可看全部（查看器消费的是完整 `previewImages`，与列表渲染无关）。
+
+> **列宽与多图的关系**（为什么窄列下多图收益有限）：`lg` 双列时帖子列约 340vp、图片区 276vp，
+> 3 张横排时每张仅约 **88vp**；`sm` 360vp 窗口（图片区 296vp）下每张约 **95vp**，
+> `md` 600vp（388vp）下约 **125vp**。三种形态下 2 图以上的单张高度都会被压到
+> `MIN_PREVIEW_HEIGHT = 112`——即**多图是"小图并排"**，能扫到"有几张、分别是什么"，
+> 但看不清细节。这是列宽的物理约束，不是实现取舍；要更大只能减少张数或改为可滑横条。
+
+**图片左对齐**：`Contain`（竖图）时容器收窄到 `displayWidth = height × aspect`，`Row` 用
+`justifyContent(FlexAlign.Start)`——图片贴左、**两侧无多余留白**（不是"在满宽容器里居中"）。
+`Cover`（横图）时容器取满分区宽度，左右自然对齐。多图时每张都按该规则排布。
+
+### 6.9 卡片化边界（取代分隔横线）
+
+原来整列共用一条 `divider` 横线区分条目；现在**一条帖子 = 一张圆角卡片**，
+且**区分只靠线条，不靠颜色**：
+
+| 元素 | 取值 | 说明 |
+| --- | --- | --- |
+| 圆角 | `CARD_RADIUS = 12` | 比预览图的 8 略大，卡片轮廓更柔和 |
+| 描边 | 1px `AppColors.cardStroke` | 唯一的区分手段；新增资源 `app.color.card_stroke`，浅 `#F0E7D9` / 暗 `#26262A` |
+| 背景 | **不设**（与页面同底色 `bg`） | 有意为之：见下方"为什么不用底色" |
+| 卡片间距 | `CARD_SPACE = 8`（`ListOptions.space`） | 让相邻卡片的圆角互不粘连 |
+| 列表横向留白 | `LIST_HORIZONTAL_PADDING = 16` | 卡片与列边界之间的距离 |
+
+**描边强度**：`cardStroke` 比 `separator` 再淡一档——浅色 `#F0E7D9` 对 `bg #FEFAF6` 对比度
+约 **1.1:1**（`separator` 是约 1.24:1），暗色 `#26262A` 对 `#121214` 约 **1.3:1**。
+暗色**刻意不做成与浅色同步的比例**：纯黑底上线条过淡会直接消失，所以暗色只比 `separator`
+降一档而非两档。这个强度是"看得见但不邀请注意"——卡片边界是辅助信息，不该跟标题、图片
+争夺注意力。需要更强边界改 `separator`，更弱继续调 `card_stroke` 一个资源值即可。
+
+**为什么不用底色区分**（本轮从"底色 + 描边"改回"纯描边"）：
+
+- 同底色 + 描边是**最轻**的卡片表达——浅色主题下不会堆出一片比背景更深的色块
+  （`bgTertiary #F8F2EA` 比 `bg #FEFAF6` 暗，整屏卡片会连成一片"灰底"）；
+- 描边在深浅两套主题下都成立，不需要为"卡片底色"再维护一组色值；
+- 代价是线条强度必须靠调色值把握（已收敛到 `card_stroke` 一个资源）。
+
+三个实现要点：
+
+1. **间距必须走 `ListOptions.space`，不能写 `.space()`**：`space` 是 `List` 的**构造参数**
+   （`list.d.ts:656`），`ListAttribute` 上**没有**该属性（链式写法编译报
+   `Property 'space' does not exist on type 'ListAttribute'`）。`lanes` 的 `gutter` 也不行——
+   声明明确它"仅在列数/行数大于 1 时生效"。
+2. **`space` 对排序条与底部提示项一并生效**：它们也是 `ListItem`，卡片化后应保持同样的节奏，
+   不要再给它们单独加垂直 margin。
+3. **横向留白分两层、不可合并**：列表 padding（卡片外）+ 卡片 padding（卡片内）。见 §6.2 的说明。
+
+> `border` 的占位语义：SDK 只声明"默认 0 = 不显示边框"，**未定义是否挤占内容区**。ArkUI 实际
+> 按 border-box 处理（边框占内部空间），因此卡片内可用宽度会比 `listWidth − 64` 略小 2vp。
+> 该误差不影响高度公式的观感（高度由宽度算出，2vp 的差在 ≤1vp 高度量级），故不做补偿。
+
+### 6.10 视觉一致性检查表
 
 | 项 | 要求 |
 | --- | --- |
-| 圆角 | 8（与 `PostAttachments` 附件图一致） |
-| 占位底色 | `AppColors.bgSecondary`（浅色/暗色自动适配，勿写死颜色） |
-| 间距 | 与摘要间距一致：`margin({ top: 10 })` |
-| 高度稳定 | 占位态与实图态**同高 120vp**，被动↔主动切换不产生跳动 |
-| 无图 | 完全不渲染（不留空行、不留背景条） |
+| 圆角 | 预览图 8；卡片 12（`CARD_RADIUS`） |
+| 占位底色 | **仅被动占位块**用 `AppColors.bgSecondary`；实图（含竖图 `Contain`）不得加底色（K30） |
+| 卡片底色/描边 | **不设底色**（与页面同底），仅 1px `AppColors.cardStroke` 圆角描边（K35） |
+| 间距 | 卡片内四个区块统一 `CARD_BLOCK_GAP = 10`（每个区块自带 `margin top`）；卡片之间 8vp（`ListOptions.space`）；多图横排内 6vp |
+| 横向留白 | 两层：列表 16 + 卡片 16；排序条与底部提示项按同两层对齐 |
+| 图片对齐 | **贴左**（`FlexAlign.Start`）；竖图收窄容器到 `displayWidth`，两侧不留白 |
+| 高度稳定 | 占位态与实图态**同高**（同一个 `previewLayout()`），被动↔主动切换不产生跳动；高度在**解析期**算定，加载过程中也恒定（见 6.2.2） |
+| 高度范围 | 112~240vp（`MIN/MAX_PREVIEW_HEIGHT`）：低于 112 会让全景图退化成"一条线"；240 是竖图显示宽度的直接决定项（显示宽 = 高 × 比例） |
+| 多图 | 最多 3 张横排、行内同高、**高度按单张宽度算**（K28）；行内高度统一取首图比例（K29） |
+| 无图 | 完全不渲染（不留空行、不留背景条），标题行紧贴卡片顶部 |
 | 深色模式 | 仅使用 `AppColors` 语义色，无需单独 dark 分支 |
 | 玻璃材质 | **不涉及**：预览图在列表内容层，不使用 `systemMaterial` / `GlassModifier`（详见 `docs/IMMERSIVE_LIGHT_DESIGN.md`：材质只用于浮层与系统控件） |
-| 字体 | 预览区不引入新字号角色；多图角标用 11 |
+| 字体 | 预览区不引入新字号角色；「长图」角标用 11 |
+| 列宽 | 列表恒 `width('100%')` 铺满所属列，**不设宽度上限**（K25） |
 
 ---
 
@@ -915,9 +1181,12 @@ export function shouldUsePassive(strategy: string): boolean {
 ```text
 ① showTopicPreview === false        → 整块不渲染（不占位、不请求）
 ② previewImages 为空                → 整块不渲染
-③ shouldUsePassive(strategy) === true → 渲染被动占位（不请求）
-④ 否则                              → Image(缩略图)，失败回退原图，再失败隐藏
+③ shouldUsePassive(strategy) === true → 渲染被动占位（不请求，高度与实图态同值）
+④ 否则                              → Image(原图)，失败即隐藏整块（无更低质量回退档）
 ```
+
+高度由 `previewLayout()`（§6.2）给出，**与这四个分支无关**：占位、实图、加载中、加载失败
+四种状态的容器高度完全一致。
 
 **「图片加载模式」是上位约束**：`MANUAL` 时即使开关打开也不会加载图片；`WIFI_ONLY` 在蜂窝下
 与 `MANUAL` 表现一致。开关只决定"这块 UI 存不存在"，加载策略决定"存在时是否真的拉图"。
@@ -1142,20 +1411,30 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
 
 本次改动不触碰镜像文件，故**无需** `npm test` / `npm run sync`（除非决定改 `AttachUrl.ts`）。
 
-### 11.2 编译与单测
+### 11.2 编译与单测（本轮执行结果）
 
-| 门禁 | 走哪里 |
-| --- | --- |
-| DevEco 编译（ArkTS 子集最终判定） | `harmonyos-build-deploy` skill |
-| Hypium Local Test（解析纯函数） | `harmonyos-test` skill（`entry/src/test/AppTopicListUnit.test.ets`） |
-| 行尾自检 | `node scripts/check-eol.mjs` |
+| 门禁 | 走哪里 | 本轮结果 |
+| --- | --- | --- |
+| DevEco 编译（ArkTS 子集最终判定） | `harmonyos-build-deploy` skill | ✅ `BUILD SUCCESSFUL`（`assembleHap --mode module -p module=entry@default -p buildMode=debug`） |
+| Hypium Local Test | `harmonyos-test` skill（`entry/src/test/AppTopicListUnit.test.ets`） | ✅ **Tests run 339, Pass 339, Failure 0, Error 0, Ignore 0**（新增 5 个预览用例全通过） |
+| 行尾自检 | `node scripts/check-eol.mjs` | ✅ 全部已跟踪文本文件为 LF |
+| 镜像同步自查 | `node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry` | ✅ 0 修改 / 34 文件无变化（改动全在非镜像文件） |
+| 尺寸段解码全量复验 | 临时脚本对 582 个真实附件逐张 Range 比对 | ✅ 575/575 覆盖率与像素尺寸一致（见 §6.2.1） |
+
+**过程中被编译/单测挡下的两处真实缺陷**（记录下来，避免重犯）：
+
+1. `previewSize` 字段类型是 `ImageSize | undefined`，解析层却赋了 `ImageSize | null` →
+   ArkTS 编译报 `Type 'ImageSize | null' is not assignable to type 'ImageSize | undefined'`。
+   修法：解析层空值统一取 `undefined`（UI 侧对两者都判）。
+2. 尺寸段正则一度写成 `/[.\-]S(…)/`（要求 `S` 前有分隔符）→ 真实文件名 `…ZtT3cS1uo-11i.jpeg`
+   里 `S` 前面是 `c`，**575 个样本一个都解不出**。该错误被 Node 复验脚本挡住（见 K23）。
 
 ### 11.3 真机/模拟器功能验证清单
 
 - [ ] 设置页出现「显示帖子预览图」行，位于「图片加载模式」正下方，开关可切换并重启后保持
 - [ ] 开关关闭：普通版面列表**无**预览区、无额外网络请求（DevTools/日志确认无 `img.nga.cn` 请求）
-- [ ] 开关开启 + 始终加载：带附件主题显示缩略图（`.thumb.jpg`），无附件主题不留空白
-- [ ] 开关开启 + 手动加载：显示被动占位块（灰图标 + 灰底），高度与其他卡片一致，**无图片请求**
+- [ ] 开关开启 + 始终加载：带附件主题显示预览图（**原图 URL**），无附件主题不留空白
+- [ ] 开关开启 + 手动加载：显示被动占位块（灰图标 + 灰底），**该条高度与实图态一致**，无图片请求
 - [ ] 开关开启 + 只在WiFi下加载：WiFi 显示实图；切蜂窝后（或已在蜂窝）自动回到占位
 - [ ] 网络从蜂窝切回 WiFi：占位自动变为实图（不滚动、不重进页面）
 - [ ] 热门榜（`subject/hot`）同样显示预览图（验证顶层 `attachPrefix` 透传）
@@ -1163,9 +1442,41 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
 - [ ] 原图不存在的帖子（可临时拼一个不存在的附件路径造 404）：该卡片预览区消失、高度正常回收，
       **且不出现被 Cover 拉满的白块**（K16/K20 的 1×1 判定生效）
 - [ ] DevTools 网络面板核对：预览图请求的就是**原图**（无 `.thumb.jpg` 后缀），且与点开查看器是同一 URL（缓存命中）
+- [ ] **响应式（本轮重点）**：
+  - [ ] 16:9 与 3:2 横图不再被压成 120vp 的窄条（高度应分别约 166 / 197vp，主体完整）
+  - [ ] 竖图（3:4 / 9:16 截图）走 `Contain`：完整可见、两侧为 `bgSecondary` 底色、不出现裁成横带
+  - [ ] 全景图（>3.5:1）高度压到 112vp 且只裁约 16%
+  - [ ] 长图/超宽图（>3.5 或 <0.4）**单图**时右下角出现「长图」角标
+  - [ ] **多图不再出现「N 图」数量角标**（角标已移除）；长图角标也只在单图时出现
+  - [ ] **四个区块间距一致**：有摘要时"标题→摘要→图片→底栏"三处等距（10vp）；
+        **无摘要时"标题→图片"也是同一值**（不应出现图片贴住标题）
+  - [ ] 常规竖图（0.4~0.9，占实测 46%）**不出现**「长图」角标——它们已被 `Contain` 完整显示
+  - [ ] 竖图 `Contain` 的两侧**不出现灰色衬底方块**，直接透出卡片底色（K30）
+  - [ ] 竖图高度上限 240vp：3:4 竖拍的显示宽度约 180vp（此前 200vp 上限时为 150vp）
+  - [ ] **多图横排**：2~3 图的条目按各自比例宽度贴左排列、行内同高；4 图以上只显示前 3 张、
+        且**不出现任何数量角标**
+  - [ ] 多图行内的图片高度按**单张宽度**算（3 张 16:9 不应被拉成整行宽度的高度，见 K28）
+  - [ ] 卡片顺序为「标题 → 摘要 → 图片 → 底栏」
+  - [ ] **不给列表设宽度上限**（K25）：`lg` 双列下帖子列表铺满所属列，两侧无额外空隙
+  - [ ] **卡片化**：每条帖子是独立圆角卡片（**圆角 12 + 1px 描边，无底色**），
+        卡片之间有 8vp 间距、圆角互不粘连；**已无贯穿整列的分隔横线**
+  - [ ] 浅色主题下卡片描边**可见但不抢眼**（`card_stroke #F0E7D9`，对比度约 1.1:1）；
+        浓淡只调 `entry/src/main/resources/{base,dark}/element/color.json` 的 `card_stroke`（K35）
+  - [ ] 卡片与列左右边界各留 16vp，内容（标题/摘要/图片）距卡片边框 16vp；
+        排序条与底部「已到底」提示与卡片内容对齐在同一条竖线上
+  - [ ] **图片左对齐**：竖图（`Contain`）贴左且**两侧无多余留白**（容器已收窄到图片宽度），
+        不是"在满宽容器里居中"
+  - [ ] 多图横排：各图按自身比例宽度贴左排列、行内同高；窄图与横图混排时不会溢出卡片
+  - [ ] **多图条目的右下半区没有角标遮挡**（数量角标已移除，K34）
+  - [ ] 没有任何时刻出现"图片陆续加载导致列表高度跳动"（高度在解析期算定，见 §6.2.2）
+  - [ ] 断点切换（拖拽窗口跨 600 / 840vp、折叠屏展开）：卡片与图片区宽度即时跟随、无残留旧宽度的错位
+  - [ ] `lg` 单列与 `md` 下，预览图宽度不超过 568vp（列表 600 − padding 32）
+  - [ ] `lg` 双列（板块列 + 活动列同时存在）下右侧列图片区按列宽自适应，不溢出
+  - [ ] 老附件（2012~2014 年、文件名无尺寸段）走 16:9 兜底：高度合理、不异常
+- [ ] `contentTransition(ContentTransitionEffect.OPACITY)` 淡入是否在**网络图 src** 上生效
+      （声明未定义，需实测；若不生效只是硬切出现，不影响布局，删该行即可）
 - [ ] 长列表快速滚动时的帧率与内存（原图档，见 K22）—— 真机观察
 - [ ] 暗色主题下占位底色与图片圆角观感正常；切换主题不残留
-- [ ] 多图条目右下角显示「N 图」角标，位置不压住图片主体内容
 - [ ] 快速滚动长列表无卡顿、无图片错位（LazyForEach 复用）
 - [ ] 清除缓存后回到列表，预览图重新加载且不报错
 
@@ -1180,7 +1491,8 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
 | K3 | 缩略图拼接是**整串末尾**：`xxx.jpeg.thumb.jpg` | 「去扩展名 + `.thumb.jpg`」实测 404 |
 | K4 | `attachs` 里混有非图片（实测 108 个里有 1 个 mp4） | 扩展名白名单过滤（对齐官方 `parseUrlSubject`） |
 | K5 | 只有 `subject/list` / `subject/hot` 有数据 | 置顶/搜索/收藏/用户列表**不要**指望有图；UI 无图即不渲染 |
-| K6 | 被动↔主动切换高度跳变 | 占位块与实图**同高**（`PREVIEW_IMAGE_HEIGHT`） |
+| K6 | 被动↔主动切换高度跳变 | 占位块与实图**同高**——两者都取自同一个 `previewLayout()`（§6.2），而不是各写一个常量 |
+| K6b | 用固定高度硬扛所有图片比例 | 实测 582 个真实附件里 **p50 = 1.00（近一半是竖图/方图）**：固定 120vp 下平均只能看到 39.7% 的画面，竖图仅 21~27%。必须按真实比例算高度（§6.2），比例来源见 K23 |
 | K7 | 顺手复用 `applyImageSuffix`（`Utils.ets`）做缩略图 | **实测 404**：它输出 `name.size.ext`，而 NGA 是 `name.ext.size.jpg`（见 §5.6）；必须"strip 后整串追加 `.thumb.jpg`" |
 | K7b | 只写裸后缀 `…jpeg.thumb` / `…jpeg.medium` | **实测 404**（`text/html` 146 B）；**必须带 `.jpg`** —— 这正是既有审计文档 §5.1 旧结论的根因（见 §5.4） |
 | K7c | 不 strip 就直接追加 | 输入带档位段时会拼出 `…jpeg.medium.jpg.thumb.jpg`；实测**返回 medium 档而非缩略图**（叠加不会更小）。正确顺序：strip → 追加 |
@@ -1198,7 +1510,20 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
 | K19 | 失败信号重复触发被当成两次失败 | 同一次加载可能 `onError` 与 `onComplete`(1×1) **都**触发（K16）。失败处理必须**幂等**——本实现只置 `previewFailed = true`，多触发一次也只是再隐藏一次，不产生错误状态或重复请求。**注**：早期草案是"`stage` 0→1→2 两级回退（缩略图→原图）"，那种写法下双信号会**连跳两级**直接隐藏；列表改用原图后已无此风险，但该教训在将来切回多档时仍然成立 |
 | K20 | 用 `≤1` 判"失效占位图" | `onComplete` 的 `width/height` 为 **0 表示尚未解码出尺寸**，`≤1` 会把它误判为失效 → **平白隐藏一张合法图**。用**精确 `=== 1 && === 1`** 匹配 43 字节 1×1 GIF（K16） |
 | K21 | 以为 `stripImageSuffix` 能归一所有档位 | 镜像 `Utils.stripImageSuffix` 只认 `.thumb_s` / `.thumb_m` / `.medium` / `.thumb` **四种**，**不含 `.thumb_ss`**（CDN 实测存在该档位）：`a.jpeg.thumb_ss.jpg` 会被拼成 `a.jpeg.thumb_ss.jpg.thumb.jpg`。现网 `attachs` 是裸名（实测），不触发；即便拼出的 URL 取不到，也会回退到原 URL（仍显示那张小图），故**不改镜像**（改它要走 bbcode-ts 门禁且会分叉正文语义）。同理主名内嵌扩展名（`xxx.png.jpeg`）会被 strip 成 `xxx`，同样靠回退链兜底 |
-| K22 | 以为列表预览"必须"用缩略档省流量 | **本功能明确选择原图**（与 `ImageViewer` / `ThreadPanel` 的图片链路一致，需求方已确认）：列表与查看器同源，点开无二次下载。**代价**：一屏多张原图会显著抬高解码内存与首屏流量（实测 jpg 75 KB / jpeg 292 KB / png 108 KB / gif 903 KB / mp4 1.1 MB；且官方解码内存优化里 `.gif`/`.webp` **不做** `sourceSize` 降采样），长列表滚动性能需真机观察。**若要切回缩略档**：在 `TopicPreviewUtils` 里按 §5.2 规则实现档位 URL（`stripImageSuffix(url) + '.thumb.jpg'`，约 3 行；注意镜像的 strip 不认 `.thumb_ss`，见 K21），把 `TopicCardComponent.previewArea` 里的 `this.firstPreviewUrl()` 换成它，并恢复"缩略图失败→原图"两级回退（多档时失败回调必须**按分支归属**，见 K19）。**当前刻意不保留该函数与其单测**：无调用方即死代码 |
+| K22 | 以为列表预览"必须"用缩略档省流量 | **本功能明确选择原图**（与 `ImageViewer` / `ThreadPanel` 的图片链路一致，需求方已确认）：列表与查看器同源，点开无二次下载。**代价**：一屏多张原图会显著抬高解码内存与首屏流量（实测原图字节中位 **94 KB**、p90 212 KB；且官方解码内存优化里 `.gif`/`.webp` **不做** `sourceSize` 降采样），长列表滚动性能需真机观察。**若要切回缩略档**：在 `TopicPreviewUtils` 里按 §5.2 规则实现档位 URL（`stripImageSuffix(url) + '.thumb.jpg'`，约 3 行；注意镜像的 strip 不认 `.thumb_ss`，见 K21），把 `TopicCardComponent.previewArea` 里的 `this.firstPreviewUrl()` 换成它，并恢复"缩略图失败→原图"两级回退（多档时失败回调必须**按分支归属**，见 K19）。**当前刻意不保留该函数与其单测**：无调用方即死代码。**档位实测补充（2026-09，120 张真实附件）**：`.medium.jpg` 120/120 可用、真实像素宽中位 **640**、字节中位 **44 890（原图的 0.48）**；`.thumb.jpg` 120/120 可用、像素宽中位 **320**、字节中位 **15 589（0.17）**。即"要省流量"的正确档位是 **medium 而非 thumb**（320px 在任何现代屏上都会明显发虚），但本功能选原图不受此影响 |
+| K23 | 从 URL 里解尺寸时"只认肉眼看到的形态" | 尺寸段是 `S{base36宽}-{base36高}`，看真实文件名就会发现两个陷阱：① **`S` 前面没有任何分隔符**（`…-jpq0ZtT3cS1uo-11i.jpeg` 里 `T3c` 的 `c` 紧跟 `S`）——写成 `[.\-]S…` 的正则会**全部失配**（本轮实测：错误正则下 575 个真实样本一个都解不出来）；② **文件名可含多个尺寸段**（`7Q5-b75pZbT1kSb4-68.png` = 400×224），必须锚定 `$` 取紧贴扩展名的最后一段。正解：`/S([0-9a-z]{1,4})-([0-9a-z]{1,4})\.[a-z0-9]+$/i`，且解析失败**必须返回 null 走兜底比例**（不抛错、不猜） |
+| K24 | 把预览图宽度写死在断点逻辑里 | 图片区宽度来源有三重差异：`sm` 是整窗、`md` 是「窗口 − 侧边栏 180」、`lg` 双列时再乘 40%。任何"按断点算宽度"的写法都会在其中一种形态下失配。必须由**列表自身 `onAreaChange` 实测**后下传（§6.2），首帧未测得时回落 `FALLBACK_PREVIEW_AREA_WIDTH` |
+| K25 | 给列表设宽度上限以为"宽屏更好看" | **实测否决**：`constraintSize({ maxWidth: 600 })` + 居中在 `lg` 双列下把帖子列表挤到列中间、两侧留出明显空隙（观感变差，且与"列表铺满列宽"的既有形态不一致）。列宽该由 `MainPage` 的列分配机制决定，列表只负责铺满它——**不要在这里人为收敛**。真要在超宽列上限制行宽，只能改列分配比例，不能靠列表自缩 |
+| K26 | 用 `aspectRatio` 让图片自撑高度 | SDK 声明：「`Image` 未设宽高时，获取失败或尺寸为 0 会被自动重设为 0，**且不遵循父布局约束**」——NGA 的失效图正是 43 字节 1×1 GIF，会让卡片塌成 0 高。必须容器与 `Image` **双向显式** `.width/.height`（§6.6） |
+| K27 | 用 `.transition()` 做"图片加载完成后淡入" | `transition` 的声明作用域是「组件被插入或删除」（`common.d.ts`），对"同节点 src 变化"是否触发**声明未定义**。正确能力是 `contentTransition(ContentTransitionEffect.OPACITY)`（`image.d.ts`，`@since 21`）。**注意该能力对网络图 src 是否生效同样未定义，需真机实测**；不生效只表现为硬切出现，无布局影响 |
+| K28 | 多图时按"整行宽度"算高度 | 多图是**等宽横排**，每张只占 `1/n` 宽（`n=3` 时约 100vp）。若高度仍按图片区总宽取，3 张 16:9 会被算成 166vp 高、而每张实际只有约 100vp 宽，画面被严重裁切。必须用 `previewTileWidth()`（单张宽度）喂给 `resolvePreviewLayout` |
+| K29 | 多图逐张按各自比例定高 | 一行内会出现高低不齐的锯齿，列表纵向节奏不可预测。**行内高度统一取首图比例**（首图是帖子主图，最能代表这组图），三张同高 |
+| K30 | 竖图 `Contain` 补底色衬底 | 底色衬底在实测观感上属于**多余**（用户明确否决）：`Contain` 下容器宽度已收窄到贴合图片，两侧**本来就没有留白**，再加 `bgSecondary` 反而画出一个比图片更宽的"灰框"。**被动占位块保留灰底**（那是占位语义，不是衬底），实图分支不得加 `backgroundColor` |
+| K31 | 给 `List` 写链式 `.space(n)` | `space` 是 `List` 的**构造参数**（`ListOptions.space`，`list.d.ts:656`：Spacing between list items along the main axis），`ListAttribute` 上**没有**该属性——链式写法编译直接报 `Property 'space' does not exist on type 'ListAttribute'`。正确写法 `List({ scroller, space: CARD_SPACE })`。`lanes` 的 `gutter` 不能替代：声明写明它"仅在列数/行数大于 1 时生效" |
+| K32 | 竖图在满宽容器里靠 `justifyContent` 左对齐 | 只在满宽容器里改对齐方式，竖图左侧贴边、**右侧仍留一整条空白**，观感更差。正解是**收窄容器**到 `displayWidth = height × aspect`（`PreviewLayout.displayWidth`），图片本身即容器宽度，两侧都不留白 |
+| K33 | 区块间距只写在"上方区块"上 | 三个区块若只有前两个带 `margin top`，第三个（预览图）的间距就取决于"上一个区块是否存在"——有摘要时是 10、**无摘要时退化为 0**（图片直接贴住标题，这正是实测反馈的观感问题）。规则：**每个区块自带 `margin top`，值统一用 `CARD_BLOCK_GAP`**，任何区块增删都不影响其余间距 |
+| K34 | 给多图叠「N 图」数量角标 | 多图横排本身已"看得见"张数（能数出几张），再叠一个数字属于**重复表达**，且角标会压住最后一张图的角落（用户明确要求移除）。角标只保留**单图极端比例**的「长图」提示——那条信息无法从画面上看出来 |
+| K35 | 用"底色 + 描边"做卡片区分 | 底色（`bgTertiary` 比 `bg` 暗）会让整屏卡片连成一片"灰底"，在浅色主题下尤其明显；且要为卡片底色再维护一组深浅色值。**区分只靠线条**更轻：卡片与页面同底色 + 1px 圆角描边即可。线条强度收敛到单一资源 `app.color.card_stroke`（浅 `#F0E7D9` / 暗 `#26262A`）——要比 `separator` 淡、又要**暗色不同步降比例**（纯黑底上过淡会直接消失），所以不给卡片描边复用 `separator`/`divider_strong`，而是独立一个值便于单独调 |
 
 ---
 
@@ -1260,6 +1585,56 @@ favor/all 9 条、user/subjects 2 条、user/replys 20 条 → 0 条带 attachs
 
 【正文 [img] 命名分布（tools/bbcode-ts/samples/*.json，41 个 [img]）】
   裸名 name.ext 32 / 绝对 URL（多为旧域 png）9 / 含档位段 0
+```
+
+### 14.1 响应式适配的实测复现（2026-09，本轮新增）
+
+**采样方法**（临时脚本，不入库；凭 `nga-fetch` 的凭证门禁通过后执行）：
+
+```text
+① 取列表附件 URL：POST bbs.nga.cn/app_api.php?__lib=subject&__act=list
+   body: __lib=subject&__act=list&fid={fid}&page={n}
+   header: UA=NGA_WP_JW / X-User-Agent=NGA_skin / Cookie=<凭证>
+   → JSON 解析 result.attachPrefix + result.data[i].attachs[j].attachurl
+   （注：该接口用**网页凭证**即可访问，无需 App 签名；nga-fetch 的 app-json 通道对
+     subject/list 返回 404，故本轮用带 Cookie 的直接 POST）
+② 取真实像素尺寸：对每个 URL 发 GET + Range: bytes=0-65535，
+   从文件头解宽高（JPEG 扫 SOF、PNG 读 IHDR、GIF 读逻辑屏幕、WebP 读 VP8/VP8L/VP8X）
+③ 交叉验证：`S{base36宽}-{base36高}` 解码值 vs ② 的真实宽高（比例与绝对尺寸都要对）
+```
+
+**本轮实测结果**：
+
+```text
+【采样规模】fid = 7 / -7 / -547859 / -81981 / 436 / 716 / -576177，各 3 页，共 21 页
+  唯一附件 URL 582 个；成功解出真实尺寸 575 个（7 个 404）
+  各版块 attachs 数：fid=7 84 / -7 0 / -547859 4 / -81981 54 / 436 106 / 716 256 / -576177 92
+  → fid=-7（网事杂谈）连续 3 页 0 附件，复现 §1.1 的"整站不下发"
+
+【比例分布】p10 0.46 / p25 0.65 / p50 1.00 / p75 1.42 / p90 2.17；min 0.06 / max 11.01
+  竖图(<0.8) 268 / 近方(0.8-1.2) 76 / 1.2-1.4 85 / 1.4-1.55 16 / 1.55-1.7 11
+  / 1.7-1.9 43 / 1.9-2.5 48 / 2.5-3.5 7 / >3.5 21
+  最大像素：7000×7434、4128×4096
+
+【尺寸段解码】带 S{base36}-{base36} 段 575/575（覆盖率 100%）
+  像素宽高与真实值误差<2% 的样本 575/575（**比例与绝对尺寸同时一致**）
+  样本核对：
+    S1uo-11i → 2400×1350（真实 2400×1350 ✅）
+    Ssg-lc   → 1024×768 （真实 1024×768  ✅，与 MOVING_PHOTO_PLAN 记录一致）
+    Sb4-68   → 400×224  （真实 400×224   ✅）
+    Szj-134  → 1279×1408（真实 1279×1408 ✅，webp 源同样适用）
+  两个"看起来像反例"的历史记录均已澄清：
+    - §2.1 示例把 `7Q68-jpq0ZtT3cS1uo-11i.jpeg` 的尺寸记成了 2400×1350（与解码一致），
+      而更早的探针记录曾把它当作 1024×768 的来源——实为两张不同附件混记；
+    - `181_4a5065071eb90.jpg`（2009 年老附件）与 `-7202235_5485ecb5a00f5.png`（2014 年）
+      **确实没有尺寸段**，但它们不在列表附件样本里（列表样本覆盖率 100%），走兜底比例即可。
+
+【服务端档位（120 张真实附件逐张实测）】
+  原图       可用 120/120  字节中位 94 405  平均 105 762  p90 212 358
+  medium     可用 120/120  字节中位 44 890  像素宽中位 640    → 原图的 0.48
+  thumb      可用 120/120  字节中位 15 589  像素宽中位 320    → 原图的 0.17
+  单张对照（2400×1350 jpeg）：原图 292 164 / medium 640×360 42 856 / thumb 320×180 14 900
+  竖图对照（567×1024 jpeg）：原图 125 929 / medium ⚠️回退原图同字节 / thumb 320×577 49 923
 ```
 
 复现探针（临时目录，不入库）：`probe-quality-matrix.mjs`（档位矩阵 + doStripSuffix 语义）、

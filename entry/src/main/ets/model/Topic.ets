@@ -1,4 +1,5 @@
 import type { SubBoard } from './Forum';
+import type { ImageSize } from '../common/media/ImageSizeUtil';
 
 /**
  * 主题列表及其所属版块元数据。
@@ -49,6 +50,17 @@ export interface ThreadPageInfo {
    * 旧代码 `String()` 强转只会得到 "[object Object]"。
    */
   previewImages: string[];
+  /**
+   * 首张预览图的**真实像素尺寸**（由 `previewImages[0]` 的文件名尺寸段解出；无法确定时为 null）。
+   *
+   * 用途：主题列表卡片按真实宽高比决定预览区高度（`TopicPreviewUtils.resolvePreviewLayout`），
+   * 使竖图/长图/全景图在同一列宽下都能得到合理的展示比例。**在解析期一次性算定**，
+   * 因此卡片高度是静态值——不依赖图片加载完成后回填，列表不会因图片陆续到位而跳动。
+   *
+   * 与 `ImageSizeUtil`（正文图片的进程级尺寸 LRU）同类型但**不同来源**：这里来自文件名编码，
+   * 零网络成本；`.ets` 侧只在尺寸段解析失败时才可能用到缓存兜底。
+   */
+  previewSize?: ImageSize;
   /** 官方接口受限/占位条目的受限原因（如「帖子发布或回复时间超过限制」）。 */
   error?: string;
 }

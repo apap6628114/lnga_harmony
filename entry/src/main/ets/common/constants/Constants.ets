@@ -55,6 +55,15 @@ export class AppColors {
   static textTertiary: Resource = $r('app.color.text_tertiary')
   static separator: Resource = $r('app.color.separator')
   static dividerStrong: Resource = $r('app.color.divider_strong')
+  /**
+   * 列表卡片（主题列表 `ListItem`）的描边色。
+   *
+   * 比 `separator` 再淡一档：卡片与页面同底色，边界只靠这一条线表达，取"看得见但不邀请注意"
+   * 的强度（浅 `#F0E7D9` 对 `#FEFAF6` 约 1.1:1；暗 `#26262A` 对 `#121214` 约 1.3:1——
+   * 暗色下刻意不做成同步比例，否则线条会消失在纯黑里）。
+   * 需要更强边界时改用 `separator`，需要更弱时继续调这一个资源值即可。
+   */
+  static cardStroke: Resource = $r('app.color.card_stroke')
   static white: Resource = $r('app.color.white')
   static black: Resource = $r('app.color.black')
   static shadow: Resource = $r('app.color.shadow')

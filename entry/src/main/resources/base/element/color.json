@@ -53,6 +53,10 @@
       "value": "#D0C0A8"
     },
     {
+      "name": "card_stroke",
+      "value": "#F0E7D9"
+    },
+    {
       "name": "white",
       "value": "#FFFFFF"
     },
