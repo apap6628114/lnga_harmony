@@ -190,6 +190,9 @@ private getStateViewHeight(): number {
 | `TITLE_BLUR_FADE_DISTANCE` | 32 | 模糊/压暗衰减距离（二者必须一致） |
 | `TITLE_BLUR_RADIUS` | 16 | 最大模糊半径 |
 | `TITLE_ACTION_BUTTON_GAP` | 8 | 标题栏右侧按钮间距 |
+| `TITLE_EDGE_PADDING` | 8 | 标题栏元素（返回 / 右侧操作按钮）距屏幕左右边缘的距离，**左右共用** |
+| `TITLE_TEXT_GAP` | 10 | 返回按钮与标题文本之间的间距（不参与按钮贴边计算） |
+| `TITLE_POD_SIZE` | 36 | 标题栏按钮材质块尺寸；按钮容器宽度必须与之相等，贴边只交给 `margin` |
 
 | 资源（`resources/{base,dark}/element/color.json`） | 值（base） | 用途 |
 | --- | --- | --- |

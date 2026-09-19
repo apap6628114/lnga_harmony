@@ -12,7 +12,14 @@ import type { TopicListParams } from '../service/api/ForumApi'
 import type { TopicListResult, SearchForumResult, SearchUserResult } from '../model/NgaApiResults'
 import type { ForumSearchItem } from '../model/Forum'
 import type { SearchUserItem } from '../model/User'
-import { AppColors, FONT_COLORS, TITLE_BLUR_FADE_DISTANCE } from '../common/constants/Constants'
+import {
+  AppColors,
+  FONT_COLORS,
+  TITLE_BLUR_FADE_DISTANCE,
+  TITLE_EDGE_PADDING,
+  TITLE_POD_SIZE,
+  TITLE_TEXT_GAP
+} from '../common/constants/Constants'
 import { NGA_IMG4_BASE } from '../common/constants/NgaDomains'
 import { formatTime } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
@@ -594,7 +601,10 @@ export struct SearchPanel {
         }
 
         Row() {
-          // 返回按钮（对齐帖子标题区：圆形光感底板 + 按压反馈）
+          // 返回按钮（对齐帖子标题区：圆形光感底板 + 按压反馈）。
+          // 位置与 PanelNavBar 的返回按钮**逐像素同位**：本面板与 TopicListPanel 由 BoardRouter
+          // 在同一槽位互斥切换，两处返回按钮落点不一致会在切换瞬间看到跳动。
+          // 容器与按钮同宽、贴边只交给 margin（不要写居中 + 更宽的容器，见 TITLE_EDGE_PADDING）。
           Row() {
             Stack() {
               Image($r('app.media.icon_back')).width(18).height(18)
@@ -602,13 +612,13 @@ export struct SearchPanel {
                 // Image 的 draggable 自 API 10 起默认为 true：长按会被系统当成"拖拽图片"（见 §12.9）
                 .draggable(false)
             }
-            .width(36).height(36).borderRadius(18)
+            .width(TITLE_POD_SIZE).height(TITLE_POD_SIZE).borderRadius(TITLE_POD_SIZE / 2)
             .attributeModifier(UIMaterialManager.fabMaterial)
             .accessibilityText('返回')
             .onClick(() => routerStore.back())
           }
-          .width(54).height(44).justifyContent(FlexAlign.Center)
-          .margin({ left: 8, right: 10 })
+          .width(TITLE_POD_SIZE).height(44)
+          .margin({ left: TITLE_EDGE_PADDING, right: TITLE_TEXT_GAP })
 
           Row() {
             Image($r('app.media.icon_search')).width(16).height(16)
@@ -640,7 +650,9 @@ export struct SearchPanel {
           .borderRadius(22).alignItems(VerticalAlign.Center)
           // 不设 backgroundColor / border：同名属性会覆盖 attributeModifier 的磨砂玻璃层
           .attributeModifier(UIMaterialManager.inputMaterial)
-          .margin({ right: 16 })
+          // 与左侧返回按钮共用同一条屏幕边距（标题行两端对称；旧值 16 是内容区基准，
+          // 会让这一行右端比左端多缩进 8vp）
+          .margin({ right: TITLE_EDGE_PADDING })
         }.width('100%').padding({ top: 8 + this.statusBarHeight, bottom: 8 }).alignItems(VerticalAlign.Center)
 
         if (this.boardFid !== 0) {
@@ -668,7 +680,10 @@ export struct SearchPanel {
           })
         }
         .width('100%')
-        .padding({ left: '4%', right: '4%' })
+        /* 与列表行、下方提示行同一条竖线：原来用 `'4%'` 比例留白，宽度随窗口变化，
+           与全项目内容区的 16vp 基准、以及本面板列表项的 `padding({ left: 16, right: 16 })`
+           都对不齐（TopicListPanel 的排序条已先一步做过同样的迁移）。 */
+        .padding({ left: 16, right: 16 })
         .margin({ top: 6, bottom: 8 })
       }
       .width('100%')

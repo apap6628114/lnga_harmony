@@ -1269,6 +1269,14 @@ DevEco 编译通过（`BUILD SUCCESSFUL`），**真机已确认材质生效**。
    图标与角标收进一个 **18×18 的 `Stack({ alignContent: TopEnd })`**，角标锚在**图标的右上角**并用
    `offset(8, -9)` 平移——该偏移由旧落点换算而来（旧角标右上角在材质块坐标 `(35, 0)`，图标右上角在
    `(27, 9)`，差值即 `(8, -9)`）；角标宽度变化时右边缘固定，不会再顶出材质块。
+5. **横向落点：左右两侧必须共用 `TITLE_EDGE_PADDING`（8vp）**。旧实现左侧是
+   `Row().width(54).justifyContent(FlexAlign.Center).margin({ left: 8 })`，按钮实际落在
+   `8 + (54-36)/2 = 17vp`，而右侧按钮是 8vp——同一行的两颗按钮距屏幕边界差 9vp，肉眼可见地不对称；
+   而那个 54 容器**不承载点击**（`onClick` 挂在材质块内部的内容节点上），这 9vp 偏移没有任何功能收益。
+   **修法**：返回按钮容器与右侧按钮容器都改成与材质块**同宽**（`TITLE_POD_SIZE`），贴边位置只由
+   `margin` 决定（两侧同为 `TITLE_EDGE_PADDING`）。**不要在比按钮宽的容器里写居中**——它会让按钮
+   相对 `margin` 再内缩，且不会报任何错。`SearchPanel` 的自绘标题区是同一处坑的第二份拷贝，已同步为
+   **逐像素同位**（它与 `TopicListPanel` 由 `BoardRouter` 在同一槽位互斥切换，落点不一致会在切换时跳动）。
 
 **自动反色（`colorInvert`）在本通路不可用**：反色是 ArkUI `uiMaterial.ImmersiveMaterial` 的参数
 （`@ohos.arkui.uiMaterial.d.ts`，`colorInvert?: boolean`，`@since 26.0.0`），HDS 的

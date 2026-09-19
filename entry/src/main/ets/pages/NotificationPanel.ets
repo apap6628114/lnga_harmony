@@ -1112,7 +1112,9 @@ export struct NotificationPanel {
               })
             }
             .width('100%')
-            .padding({ left: '4%', right: '4%' })
+            /* 与列表行同一条竖线：原来用 `'4%'` 比例留白，宽度随窗口变化，与内容区的 16vp
+               基准（本面板列表项 `padding({ left: 16, right: 16 })`）对不齐。 */
+            .padding({ left: 16, right: 16 })
             .margin({ top: 8, bottom: 6 })
             .onAreaChange((_oldValue: Area, newValue: Area): void => {
               // 采集筛选条底部纵坐标：供状态视图撑满筛选条下方的列表可视区

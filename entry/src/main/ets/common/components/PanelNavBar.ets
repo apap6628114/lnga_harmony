@@ -4,7 +4,9 @@ import {
   NAV_BAR_H,
   TITLE_ACTION_BUTTON_GAP,
   TITLE_BLUR_FADE_DISTANCE,
-  TITLE_POD_SIZE
+  TITLE_EDGE_PADDING,
+  TITLE_POD_SIZE,
+  TITLE_TEXT_GAP
 } from '../constants/Constants'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 import { TitleScrollEffect } from '../utils/TitleScrollEffect'
@@ -45,6 +47,15 @@ export interface NavBarMenuItem {
  *
  * 说明：该着色层属于纯视觉层，不占用布局索引、不参与内容区定位；
  * 页面使用方通过 scrollEffectProgress 传递滚动进度，默认 0 保持原有视觉。
+ *
+ * ## 横向坐标约定（同一行两端必须对称）
+ *
+ * 同一行两端元素到屏幕左 / 右边界的距离**一律等于 `TITLE_EDGE_PADDING`**（8vp），左右两侧共用
+ * 这一个常量：返回按钮容器与右侧操作按钮容器都与材质块**同宽**（`TITLE_POD_SIZE`），贴边位置
+ * 只由各自的 `margin` 决定。踩坑记录——旧实现左侧是「`width(54)` + `FlexAlign.Center` +
+ * `margin({ left: 8 })`」，按钮实际落在 `8 + (54-36)/2 = 17vp`，与右侧的 8vp 差 9vp；而那个
+ * 54 容器不承载点击（`onClick` 挂在材质块内部的内容节点上），偏移没有任何功能收益。
+ * 改这里时先算清 `margin + (容器宽 - TITLE_POD_SIZE) / 2`：容器宽不等于按钮宽时**不要写居中**。
  */
 @Component
 export struct PanelNavBar {
@@ -335,15 +346,19 @@ export struct PanelNavBar {
 
       Row() {
         if (this.showBack) {
+          // 返回按钮容器与材质块**同宽**（TITLE_POD_SIZE）：贴边位置只由 margin 决定。
+          // 不要再让容器比按钮宽并 `justifyContent(FlexAlign.Center)` —— 按钮会相对 margin
+          // 额外内缩 `(容器宽 - TITLE_POD_SIZE) / 2`，与右侧按钮贴边不一致（见 TITLE_EDGE_PADDING）。
           Row() {
             this.iconPod(true, false, '返回', () => {
               if (this.onBack) { this.onBack() } else { routerStore.back() }
             })
           }
-          .width(54).height(44).justifyContent(FlexAlign.Center)
-          .margin({ left: 8, right: 10 })
+          .width(TITLE_POD_SIZE).height(NAV_BAR_H)
+          .margin({ left: TITLE_EDGE_PADDING, right: TITLE_TEXT_GAP })
         } else {
-          Blank().width(16)
+          // 无返回按钮时左侧只留一份屏幕边距，标题文本因此靠左（如 md/lg 断点下的板块列）
+          Blank().width(TITLE_EDGE_PADDING)
         }
 
         Text(this.title).fontSize(17).fontWeight(FontWeight.Bold).layoutWeight(1)
@@ -371,10 +386,13 @@ export struct PanelNavBar {
               )
             }
           }
-          .height(44)
-          .margin({ right: 8 })
+          .height(NAV_BAR_H)
+          // 与左侧返回按钮共用同一条屏幕边距：同一行两端元素距屏幕边界的距离完全一致
+          .margin({ right: TITLE_EDGE_PADDING })
         } else {
-          Blank().width(70)
+          // 无操作按钮时右侧同样只留一份屏幕边距。旧值 70 是按"永远预留两颗按钮"估的第三套数值，
+          // 与有按钮时的实际占位（一颗 36 / 两颗 80）都对不上，标题可显示宽度会在页面间跳变
+          Blank().width(TITLE_EDGE_PADDING)
         }
       }
       .width('100%').height(NAV_BAR_H + this.statusBarHeight)

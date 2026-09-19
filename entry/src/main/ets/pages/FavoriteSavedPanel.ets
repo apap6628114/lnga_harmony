@@ -762,7 +762,9 @@ export struct FavoriteSavedPanel {
               })
             }
             .width('100%')
-            .padding({ left: '4%', right: '4%' })
+            /* 与列表行同一条竖线：原来用 `'4%'` 比例留白，宽度随窗口变化，与内容区的 16vp
+               基准（本面板列表项 `padding({ left: 16, right: 16 })`）对不齐。 */
+            .padding({ left: 16, right: 16 })
             .margin({ top: 8, bottom: 6 })
             .onAreaChange((_oldValue: Area, newValue: Area): void => {
               if (typeof newValue.globalPosition.y === 'number' && typeof newValue.height === 'number') {

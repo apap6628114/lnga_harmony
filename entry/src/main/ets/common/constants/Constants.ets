@@ -31,12 +31,37 @@ export const TITLE_BLUR_RADIUS: number = 16
 export const TITLE_ACTION_BUTTON_GAP: number = 8
 
 /**
+ * 标题栏元素（返回按钮 / 右侧操作按钮）距屏幕左右边缘的距离（vp）。
+ *
+ * **左右两侧必须共用本常量**：标题栏同一行两端元素到屏幕边界的距离由它一处决定，
+ * 不允许任何一侧再写独立的 margin。踩坑记录——旧实现左侧是「`width(54)` 容器 +
+ * `justifyContent(FlexAlign.Center)` + `margin({ left: 8 })`」，按钮因此相对 margin 又内缩了
+ * `(54 - 36) / 2 = 9vp`，与右侧按钮的 8vp 并排时肉眼可见地不对称；而那个 54 容器**不承载任何
+ * 点击**（`onClick` 挂在材质块内部的内容节点上），9vp 偏移没有任何功能收益。
+ *
+ * 取值 8 而不是内容区的 16：标题栏按钮是**独立悬浮材质块**，与内容区的文字 / 卡片不是同一条
+ * 竖线；8 让按钮更贴近屏幕圆角，也是右侧按钮一直以来的实际落点，同时与右下角浮动操作按钮
+ * （`TopicListPanel.FloatingActions` / `ThreadPanel.BottomBar`）之外的其它标题栏元素区分开。
+ */
+export const TITLE_EDGE_PADDING: number = 8
+
+/**
+ * 标题栏返回按钮与标题文本之间的间距（vp）。
+ *
+ * 只影响标题文本的起点，不参与按钮贴边计算（贴边一律由 `TITLE_EDGE_PADDING` 决定）。
+ */
+export const TITLE_TEXT_GAP: number = 10
+
+/**
  * 标题栏操作按钮的材质块尺寸（vp，正方形）。
  *
  * HDS 悬浮页签栏**不能像自绘玻璃那样由内容撑开**，`barWidth` / `barHeight` 必须是显式值。
  * 但**内容容器要写 `'100%'`**（跟随 HDS 页签项的内容区），不要用本常量再写一遍显式高度——
  * 真机踩坑：HDS 内容区比 `barHeight` 矮，显式高度会让图标整体偏下（见 `PanelNavBar.iconPod` 约定 2）。
  * 36 是本工程标题栏沿用至今的按钮尺寸，真机已核对材质块可正常显示。
+ *
+ * 按钮容器的宽度必须与本值**相等**，按钮的贴边位置只交给 `margin`：容器比按钮宽时若再写
+ * `justifyContent(FlexAlign.Center)`，按钮会相对 margin 额外内缩（见 `TITLE_EDGE_PADDING`）。
  */
 export const TITLE_POD_SIZE: number = 36
 
