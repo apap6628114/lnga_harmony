@@ -237,9 +237,19 @@ export function parseAppUserTopicList(raw: object, blacklist: Set<string>, keywo
     return null;
   }
   const rawArr: Object[] | null = extractAppUserRawItems(raw);
+  /* 附件前缀：口径同 subject/list（result 内）与 subject/hot（响应顶层）。这些入口现网
+     不下发 attachs，透传只为将来兜底；缺失即空串 → 解析层回退 NGA_CDN_BASE。 */
+  let attachPrefix: string = String(rec['attachPrefix'] ?? '');
+  if (attachPrefix.length === 0) {
+    const resObj: Object | undefined = rec['result'];
+    if (resObj !== undefined && resObj !== null
+      && typeof resObj === 'object' && !Array.isArray(resObj)) {
+      attachPrefix = String((resObj as Record<string, Object>)['attachPrefix'] ?? '');
+    }
+  }
   if (rawArr === null) {
     if (page > 1) {
-      return buildAppTopicListInfo([], page, blacklist, keywords, page);
+      return buildAppTopicListInfo([], page, blacklist, keywords, page, attachPrefix);
     }
     return null;
   }
@@ -257,16 +267,16 @@ export function parseAppUserTopicList(raw: object, blacklist: Set<string>, keywo
     items.push(normalizeAppUserTopicItem(rawArr[i] as Record<string, Object>));
   }
   if (totalPage > 0) {
-    return buildAppTopicListInfo(items, totalPage, blacklist, keywords, page);
+    return buildAppTopicListInfo(items, totalPage, blacklist, keywords, page, attachPrefix);
   }
   if (maxPage > 0) {
     // 调用方声明接口不分页（如 load_topic_by_uid）：第 1 页即到底
-    return buildAppTopicListInfo(items, page, blacklist, keywords, page);
+    return buildAppTopicListInfo(items, page, blacklist, keywords, page, attachPrefix);
   }
   if (rawArr.length === 0) {
-    return buildAppTopicListInfo(items, page, blacklist, keywords, page);
+    return buildAppTopicListInfo(items, page, blacklist, keywords, page, attachPrefix);
   }
-  return buildAppTopicListInfo(items, page + 1, blacklist, keywords, page);
+  return buildAppTopicListInfo(items, page + 1, blacklist, keywords, page, attachPrefix);
 }
 
 /**
@@ -280,7 +290,8 @@ export function parseAppUserTopicList(raw: object, blacklist: Set<string>, keywo
  * @returns 主题列表信息
  */
 function buildAppTopicListInfo(items: Record<string, Object>[], totalPages: number,
-  blacklist: Set<string>, keywords: string[], page: number): TopicListInfo {
+  blacklist: Set<string>, keywords: string[], page: number,
+  attachPrefix: string = ''): TopicListInfo {
   const t: Record<string, Object> = {};
   for (let i = 0; i < items.length; i++) {
     t[String(i)] = items[i];
@@ -294,6 +305,9 @@ function buildAppTopicListInfo(items: Record<string, Object>[], totalPages: numb
   dataObj['__T__ROWS_PAGE'] = 1;
   const fakeRaw: Record<string, Object> = {};
   fakeRaw['data'] = dataObj;
+  /* 附件前缀（口径同 subject/list|hot）：这些入口现网不下发 attachs，透传只是为将来兜底，
+     缺失时空串 → 解析层回退 NGA_CDN_BASE。 */
+  fakeRaw['attachPrefix'] = attachPrefix;
   fakeRaw['time'] = 0;
   return parseTopicList(fakeRaw, blacklist, keywords, page);
 }

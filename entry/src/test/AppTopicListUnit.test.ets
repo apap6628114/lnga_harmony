@@ -21,6 +21,13 @@ import {
   normalizeSubjectFid,
 } from '../main/ets/common/utils/SubjectListQuery'
 import { getHotDays } from '../main/ets/common/utils/TopicListUtils'
+import {
+  parsePreviewImages,
+  buildPreviewUrl,
+  normalizeAttachPrefix,
+  isPreviewImage,
+  toPreviewThumbUrl,
+} from '../main/ets/common/utils/TopicPreviewUtils'
 import type { TopicListInfo } from '../main/ets/model/Topic'
 import type { SubBoard, Category, ForumSearchItem } from '../main/ets/model/Forum'
 import type { TopicListParams } from '../main/ets/service/api/ForumApi'
@@ -334,6 +341,159 @@ export default function appTopicListUnitTest(): void {
       expect(list.pagination.page).assertEqual(1)
       expect(list.pagination.totalRows).assertEqual(106923)
       expect(list.pagination.totalPages).assertEqual(106923)
+    })
+
+    it('parsesTopicPreviewImages', 0, () => {
+      const info: TopicListInfo | null = parseSubjectList(
+        createSubjectListResponse(), new Set<string>(), [], 1)
+      expect(info).not().assertNull()
+      const list = info as TopicListInfo
+      /* 附件前缀透传（result.attachPrefix → TopicListInfo.attachPrefix） */
+      expect(list.attachPrefix).assertEqual('https://img.nga.cn/attachments/')
+      /* 首条带 attachs → 预览图绝对 URL（拼前缀） */
+      const first = list.threadPageList[0]
+      expect(first.previewImages.length).assertEqual(1)
+      expect(first.previewImages[0]).assertEqual(
+        'https://img.nga.cn/attachments/mon_202608/19/7Q68-jpq0ZtT3cS1uo-11i.jpeg')
+      /* 无 attachs 条目：空数组（不残留 undefined） */
+      const second = list.threadPageList[1]
+      expect(second.previewImages.length).assertEqual(0)
+    })
+
+    it('parsesPreviewImageEdgeCases', 0, () => {
+      const prefix: string = 'https://img.nga.cn/attachments/'
+      /* 归一化层对缺失字段写空串 → 非数组一律空结果 */
+      const notArray: Record<string, Object> = { 'attachurl': 'mon_1/a.jpg' }
+      expect(parsePreviewImages(notArray, prefix).length).assertEqual(0)
+      expect(parsePreviewImages(undefined, prefix).length).assertEqual(0)
+      /* 非图片扩展名 / 纯数字 / 空串 全部跳过；webp 保留 */
+      const item1: Record<string, Object> = { 'attachurl': 'mon_1/a.jpg' }
+      const item2: Record<string, Object> = { 'attachurl': 'mon_1/b.mp4' }
+      const item3: Record<string, Object> = { 'attachurl': '12345' }
+      const item4: Record<string, Object> = { 'attachurl': '' }
+      const item5: Record<string, Object> = { 'attachurl': 'mon_1/c.webp' }
+      const items: Object[] = [item1, item2, item3, item4, item5]
+      const urls: string[] = parsePreviewImages(items as Object, prefix)
+      expect(urls.length).assertEqual(2)
+      expect(urls[0]).assertEqual('https://img.nga.cn/attachments/mon_1/a.jpg')
+      expect(urls[1]).assertEqual('https://img.nga.cn/attachments/mon_1/c.webp')
+      /* 已是绝对地址原样保留 */
+      expect(buildPreviewUrl(prefix, 'https://other.example/x.jpg'))
+        .assertEqual('https://other.example/x.jpg')
+      /* 前缀缺失回退 NGA_CDN_BASE（img.nga.cn/attachments） */
+      expect(buildPreviewUrl('', 'mon_1/a.jpg'))
+        .assertEqual('https://img.nga.cn/attachments/mon_1/a.jpg')
+      /* 无协议前缀（thread.php 的 _ATTACH_BASE_VIEW）补协议与尾斜杠 */
+      expect(normalizeAttachPrefix('img.nga.cn/attachments'))
+        .assertEqual('https://img.nga.cn/attachments/')
+    })
+
+    it('buildsTopicPreviewThumbUrl', 0, () => {
+      const base: string = 'https://img.nga.cn/attachments/mon_1/a.jpeg'
+      /* 裸名 → 整串末尾追加 .thumb.jpg（与正文 IMG 链路的形态规则同源） */
+      expect(toPreviewThumbUrl(base)).assertEqual(base + '.thumb.jpg')
+      /* 已带档位段（客户端自插的 .medium.jpg）→ 先 strip 再追加，避免叠加成 medium 档 */
+      expect(toPreviewThumbUrl(base + '.medium.jpg')).assertEqual(base + '.thumb.jpg')
+      /* 历史插入式 name.thumb.ext → 同样归一再追加 */
+      expect(toPreviewThumbUrl('https://img.nga.cn/attachments/mon_1/a.thumb.jpeg'))
+        .assertEqual(base + '.thumb.jpg')
+      expect(toPreviewThumbUrl('')).assertEqual('')
+    })
+
+    it('normalizesThumbSuffixIdempotently', 0, () => {
+      const base: string = 'https://img.nga.cn/attachments/mon_1/a.jpeg'
+      /* 镜像 `Utils.stripImageSuffix` 覆盖的档位：都归一为统一的 .thumb.jpg（不会叠加） */
+      expect(toPreviewThumbUrl(base + '.thumb.jpg')).assertEqual(base + '.thumb.jpg')
+      expect(toPreviewThumbUrl(base + '.thumb_s.jpg')).assertEqual(base + '.thumb.jpg')
+      expect(toPreviewThumbUrl(base + '.medium.jpg')).assertEqual(base + '.thumb.jpg')
+      /* `.thumb_ss` 是镜像 strip **未覆盖**的档位（它只认 thumb_s / thumb_m / medium / thumb），
+         当前行为是"不归一、直接追加"（见设计文档 K21）。该形式在现网 attachs 中不存在
+         （实测为裸名）；即便拼出的 URL 取不到，也会回退到原 URL，仍能显示这张小图。 */
+      expect(toPreviewThumbUrl(base + '.thumb_ss.jpg'))
+        .assertEqual(base + '.thumb_ss.jpg.thumb.jpg')
+    })
+
+    it('parsesHotSubjectPreviewPrefix', 0, () => {
+      /* subject/hot：attachPrefix 在**响应顶层**，result 是扁平主题数组 */
+      const attach: Record<string, Object> = { 'attachurl': 'mon_1/hot.jpg' }
+      const topic: Record<string, Object> = {
+        'tid': 9001, 'fid': 7, 'author': 'a', 'authorid': 1, 'subject': '热帖',
+        'postdate': 1787000000, 'lastpost': 1787000100, 'lastposter': 'b', 'replies': 3,
+        'type': 8192, 'attachs': [attach],
+      }
+      const raw: Record<string, Object> = {
+        'code': 0,
+        'attachPrefix': 'https://img.nga.cn/attachments/',
+        'result': [topic],
+      }
+      const info: TopicListInfo | null = parseHotSubjectList(raw, new Set<string>(), [], 1)
+      expect(info).not().assertNull()
+      const list = info as TopicListInfo
+      expect(list.attachPrefix).assertEqual('https://img.nga.cn/attachments/')
+      expect(list.threadPageList[0].previewImages.length).assertEqual(1)
+      expect(list.threadPageList[0].previewImages[0])
+        .assertEqual('https://img.nga.cn/attachments/mon_1/hot.jpg')
+    })
+
+    it('parsesToppedWithoutPreview', 0, () => {
+      /* 置顶接口实测不下发 attachPrefix 与 attachs：解析结果必须是"无预览图" */
+      const topic: Record<string, Object> = {
+        'tid': 9002, 'fid': 7, 'author': 'a', 'authorid': 1, 'subject': '置顶公告',
+        'postdate': 1787000000, 'lastpost': 1787000100, 'lastposter': 'b',
+        'replies': 0, 'type': 0,
+      }
+      const result: Record<string, Object> = { 'data': [topic] }
+      const raw: Record<string, Object> = { 'code': 0, 'result': result }
+      const info: TopicListInfo | null = parseToppedList(raw, new Set<string>(), [], 1)
+      expect(info).not().assertNull()
+      const list = info as TopicListInfo
+      expect(list.attachPrefix).assertEqual('')
+      expect(list.threadPageList[0].previewImages.length).assertEqual(0)
+    })
+
+    it('parsesPreviewItemGuards', 0, () => {
+      const prefix: string = 'https://img.nga.cn/attachments/'
+      /* 元素级守卫：字符串 / 数字 / 嵌套数组 / 缺 attachurl 全部跳过 */
+      const strItem: Object = 'mon_1/x.jpg'
+      const numItem: Object = 42
+      const arrItem: Object[] = ['mon_1/y.jpg']
+      const noUrlItem: Record<string, Object> = { 'name': 'x' }
+      const items: Object[] = [strItem, numItem, arrItem, noUrlItem]
+      expect(parsePreviewImages(items as Object, prefix).length).assertEqual(0)
+      /* JSON null（与 undefined 区分）同样安全 */
+      expect(parsePreviewImages(null, prefix).length).assertEqual(0)
+      /* 无 `/` 的合法扩展名走路径守卫（'12345' 会被扩展名守卫先拦，故用 'a.jpg' 覆盖该分支） */
+      expect(buildPreviewUrl(prefix, 'a.jpg')).assertEqual('')
+    })
+
+    it('normalizesPreviewUrlForms', 0, () => {
+      const prefix: string = 'https://img.nga.cn/attachments/'
+      /* 前导 `./` 与前导 `/` 归一：不产生 `./` 段或双斜杠 */
+      expect(buildPreviewUrl(prefix, './mon_1/a.jpg')).assertEqual(prefix + 'mon_1/a.jpg')
+      expect(buildPreviewUrl(prefix, '/mon_1/a.jpg')).assertEqual(prefix + 'mon_1/a.jpg')
+      /* 协议判定不区分大小写（否则会拼出 https://HTTPS://…） */
+      expect(normalizeAttachPrefix('HTTPS://img.nga.cn/attachments'))
+        .assertEqual('HTTPS://img.nga.cn/attachments/')
+      expect(buildPreviewUrl(prefix, 'HTTPS://img.nga.cn/attachments/mon_1/a.jpg'))
+        .assertEqual('HTTPS://img.nga.cn/attachments/mon_1/a.jpg')
+      /* query / fragment 不干扰扩展名判定 */
+      expect(isPreviewImage('mon_1/a.jpg?x=1')).assertTrue()
+      expect(isPreviewImage('mon_1/a.jpg#frag')).assertTrue()
+      expect(isPreviewImage('mon_1/a.mp4?x=1')).assertFalse()
+    })
+
+    it('keepsPreviewOrderAndAbsoluteUrl', 0, () => {
+      const prefix: string = 'https://img.nga.cn/attachments/'
+      const a: Record<string, Object> = { 'attachurl': 'mon_1/a.jpg' }
+      const b: Record<string, Object> = { 'attachurl': 'mon_1/b.webp' }
+      const c: Record<string, Object> = { 'attachurl': 'https://img.nga.cn/attachments/mon_1/c.jpeg' }
+      const items: Object[] = [a, b, c]
+      const urls: string[] = parsePreviewImages(items as Object, prefix)
+      expect(urls.length).assertEqual(3)
+      /* 保序（与输入一致）；绝对地址原样保留、不重复拼前缀 */
+      expect(urls[0]).assertEqual(prefix + 'mon_1/a.jpg')
+      expect(urls[1]).assertEqual(prefix + 'mon_1/b.webp')
+      expect(urls[2]).assertEqual('https://img.nga.cn/attachments/mon_1/c.jpeg')
     })
 
     it('parsesSubjectSubBoards', 0, () => {

@@ -14,6 +14,13 @@ export interface TopicListInfo {
   curTime: number;
   /** 主题列表分页信息。 */
   pagination: Pagination;
+  /**
+   * 附件图片前缀（官方 subject 系响应 `attachPrefix`，如 https://img.nga.cn/attachments/）。
+   *
+   * 仅版面列表 / 热门榜下发（置顶、搜索、收藏、用户列表均无）；缺失时预览图解析
+   * 回退 `NgaDomains.NGA_IMG_BASE` 拼出的 `NGA_CDN_BASE`。
+   */
+  attachPrefix: string;
 }
 
 export interface ThreadPageInfo {
@@ -40,9 +47,15 @@ export interface ThreadPageInfo {
   /** 帖子列表摘要所对应回复的作者 UID。 */
   previewAuthorId?: string;
   previewSnippet?: string;
-  previewImages?: string[];
-  /** 官方接口受限/占位条目的附件标记（如「帖子发布或回复时间超过限制」时为空串）。 */
-  attachs?: string;
+  /**
+   * 首帖附件中可作为预览图的绝对 URL 列表（已过滤非图片；无附件时为空数组）。
+   *
+   * 数据来自列表接口条目的 `attachs`（对象数组，元素形如 `{attachurl}`），
+   * 由 `TopicPreviewUtils.parsePreviewImages` 拼接前缀后产出，详见
+   * docs/TOPIC_PREVIEW_DESIGN.md。原 `attachs?: string` 已删除：该字段实测是数组，
+   * 旧代码 `String()` 强转只会得到 "[object Object]"。
+   */
+  previewImages: string[];
   /** 官方接口受限/占位条目的受限原因（如「帖子发布或回复时间超过限制」）。 */
   error?: string;
 }

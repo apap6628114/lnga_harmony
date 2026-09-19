@@ -136,6 +136,8 @@ export class SettingsIconColors {
   static readonly signature: string = '#0D9488'
   /** 图片加载模式的媒体蓝色。 */
   static readonly imageLoading: string = '#3B82F6'
+  /** 显示帖子预览图的玫瑰红。 */
+  static readonly topicPreview: string = '#E11D48'
   /** 字体大小的排版紫红色。 */
   static readonly fontSize: string = '#A21CAF'
   /** 帖子楼层导航的路径橙色。 */

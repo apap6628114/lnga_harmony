@@ -20,6 +20,7 @@ import type { AiProviderProfile } from '../model/AiConfig'
 import {
   KEY_SHOW_SIGNATURE,
   KEY_IMAGE_LOAD_STRATEGY,
+  KEY_SHOW_TOPIC_PREVIEW,
   KEY_VIDEO_MUTED,
   KEY_USE_INTERNAL_WEBVIEW,
   KEY_DEBUG_MODE,
@@ -139,6 +140,7 @@ export class SettingsStore extends BaseStore<SettingsState> {
     }
     AppStorage.setOrCreate(KEY_SHOW_SIGNATURE, this.state.showSignature)
     AppStorage.setOrCreate(KEY_IMAGE_LOAD_STRATEGY, this.state.imageLoadStrategy)
+    AppStorage.setOrCreate(KEY_SHOW_TOPIC_PREVIEW, this.state.showTopicPreview)
     AppStorage.setOrCreate(KEY_VIDEO_MUTED, this.state.videoMuted)
     AppStorage.setOrCreate(KEY_USE_INTERNAL_WEBVIEW, this.state.useInternalWebView)
     AppStorage.setOrCreate(KEY_DEBUG_MODE, this.state.debugMode)
@@ -185,6 +187,8 @@ export class SettingsStore extends BaseStore<SettingsState> {
   setTtsVolume(v: number): void { this.mediaSettings.setTtsVolume(v) }
   setTtsPitch(v: number): void { this.mediaSettings.setTtsPitch(v) }
   setImageLoadStrategy(v: string): void { this.mediaSettings.setImageLoadStrategy(v) }
+  /** 设置是否在主题列表卡片显示帖子预览图 */
+  setShowTopicPreview(enabled: boolean): void { this.mediaSettings.setShowTopicPreview(enabled) }
   setVideoMuted(enabled: boolean): void { this.mediaSettings.setVideoMuted(enabled) }
 
   // --- Internal WebView ---

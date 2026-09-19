@@ -30,6 +30,14 @@ export class SettingsState {
   ttsVolume: number = 1.0
   ttsPitch: number = 1.0
   imageLoadStrategy: string = ImageLoadStrategy.ALWAYS
+  /**
+   * 显示帖子预览图（主题列表卡片的首帖附件缩略图）。
+   *
+   * 默认关闭：升级后列表视觉与流量不变，由用户显式开启；生效仍受 `imageLoadStrategy`
+   * 约束（手动 / 非 WiFi 的"仅 WiFi"模式下只显示占位）。
+   * 设计见 docs/TOPIC_PREVIEW_DESIGN.md §8。
+   */
+  showTopicPreview: boolean = false
   threadNavMode: string = ThreadNavMode.SEAMLESS
   /** 预加载页数（0=关闭，1~5=向前预加载 N 页） */
   prefetchPageCount: number = 3

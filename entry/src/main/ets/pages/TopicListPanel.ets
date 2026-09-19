@@ -17,7 +17,7 @@ import { newTopicManager } from '../common/managers/NewTopicManager'
 import type { PostReplyResult } from '../model/ThreadResult'
 import type { SubBoard } from '../model/Forum'
 import { FavBoard } from '../model/SocialEntries'
-import { AppColors, FONT_COLORS, SORT_MODES, HOT_RANGES, SortMode, BreakpointType, SheetWidthConstants } from '../common/constants/Constants'
+import { AppColors, FONT_COLORS, SORT_MODES, HOT_RANGES, SortMode, BreakpointType, SheetWidthConstants, ImageLoadStrategy } from '../common/constants/Constants'
 import { formatTime } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { PanelNavBar, NavBarMenuItem } from '../common/components/PanelNavBar'
@@ -45,6 +45,8 @@ import {
   currentModeKey,
   canManageCurrentBoard
 } from '../common/utils/TopicListUtils'
+import { shouldUsePassive } from '../common/utils/NetworkUtil'
+import { toPreviewThumbUrl } from '../common/utils/TopicPreviewUtils'
 
 const logger = new Logger(DOMAIN_UI, 'TopicListPanel')
 
@@ -71,6 +73,20 @@ const HOT_RANGE_ANCHOR_HEIGHT: number = 28
  * 因此这里从原来的 0.45 提到 0.6——屏蔽态图标仍可辨认，同时不与未屏蔽行抢注意力。
  */
 const SUB_BOARD_BLOCKED_ICON_OPACITY: number = 0.6
+
+/**
+ * 主题卡片预览图区高度（vp）。
+ *
+ * 取 120：与卡片左右 padding 16 搭配后，常见 4:3 / 16:9 首帖图在 Cover 裁切下观感稳定。
+ * 不解析 NGA 文件名的 `S{宽}-{高}` 尺寸段（官方 ft.s0.g 那套编码），避免为一屏最多几张缩略图
+ * 引入一套解码逻辑——固定高度 + Cover 已满足"能看出是什么图"的预览目的。
+ *
+ * 占位态（被动加载）与实图态**同高**，切换时不产生列表高度跳动。
+ */
+const PREVIEW_IMAGE_HEIGHT: number = 120
+
+/** 预览图圆角（与 `PostAttachments` 附件缩略图保持一致）。 */
+const PREVIEW_IMAGE_RADIUS: number = 8
 
 /** 预加载页面临时结果 — startPrefetch 内部收集用 */
 class PrefetchPageResult {
@@ -1617,6 +1633,18 @@ struct TopicCardComponent {
   @StorageProp('blacklistVersion') blacklistVersion: number = 0
   onRemoveFav: (tid: number) => void = (_tid: number) => {}
   onCardClick: (tid: string, pid: string) => void = (_tid: string, _pid: string) => {}
+  /** 「显示帖子预览图」开关（设置页改动即时生效，见 docs/TOPIC_PREVIEW_DESIGN.md §8）。 */
+  @StorageProp('showTopicPreview') showTopicPreview: boolean = false
+  /** 图片加载模式：决定预览图主动加载还是被动占位。 */
+  @StorageProp('imageLoadStrategy') imageLoadStrategy: string = ImageLoadStrategy.ALWAYS
+  /** 网络变更版本号：WiFi↔蜂窝切换 / 模式变更后重判被动态。 */
+  @StorageProp('networkChangeVersion') networkChangeVersion: number = 0
+  /**
+   * 预览图加载阶段：0=缩略图、1=原图（缩略图失败后的回退）、2=彻底失败（隐藏整块）。
+   *
+   * 组件内状态：LazyForEach 按 tid 复用，条目不变时状态保留；条目被回收重建时重置为 0。
+   */
+  @State private previewStage: number = 0
 
   /**
    * 判断当前主题作者是否已被屏蔽。
@@ -1638,6 +1666,151 @@ struct TopicCardComponent {
     return this.blacklistVersion >= 0 &&
       authorId.length > 0 &&
       appStore.settingsStore.isBlacklisted(authorId)
+  }
+
+  /**
+   * 预览图 URL 列表。
+   *
+   * `@Prop thread` 为 Record，取数组必须判型（缺失/形状不符时返回空数组）。
+   *
+   * @returns 预览图绝对 URL 列表
+   */
+  private previewImageUrls(): string[] {
+    const value: Object | undefined = this.thread['previewImages']
+    if (value === undefined || value === null || !Array.isArray(value)) {
+      return []
+    }
+    return value as string[]
+  }
+
+  /** 首张预览图的**原图**绝对 URL（`shouldRenderPreview` 已保证有图）。 */
+  private firstPreviewUrl(): string {
+    const urls: string[] = this.previewImageUrls()
+    return urls.length > 0 ? urls[0] : ''
+  }
+
+  /**
+   * 是否渲染预览图区。
+   *
+   * 三级判定（任一不满足即整块不渲染、不占高度）：
+   *  1. 设置开关开启（showTopicPreview）；
+   *  2. 条目有可用预览图（previewImages 非空）；
+   *  3. 未处于「缩略图与原图都失败」态（previewStage < 2）。
+   *
+   * 「是否真的发起图片请求」由 `shouldUsePassive` 另行决定——本方法只回答"这块 UI 存不存在"。
+   *
+   * @returns 是否渲染预览图区
+   */
+  private shouldRenderPreview(): boolean {
+    return this.showTopicPreview && this.previewImageUrls().length > 0 && this.previewStage < 2
+  }
+
+  /**
+   * 缩略图加载失败 → 回退原图。
+   *
+   * **由「缩略图分支」的失败回调独占调用**：失败语义按**所在分支**归属，回调无需携带 URL，
+   * 因此同一次加载即使 `onError` 与 `onComplete` 都触发，也只会推进一级，
+   * 不会从缩略图直接跳到"彻底失败"而**跳过原图回退**（见设计文档 §6.5 / K19）。
+   */
+  private onThumbFailed(): void {
+    if (this.previewStage === 0) {
+      this.previewStage = 1
+    }
+  }
+
+  /** 原图加载失败 → 隐藏整块（同样按分支归属，重复回调幂等）。 */
+  private onOriginalFailed(): void {
+    if (this.previewStage === 1) {
+      this.previewStage = 2
+    }
+  }
+
+  /**
+   * 判断解码结果是否为 NGA 的"失效图"占位。
+   *
+   * CDN 对不存在的附件路径返回 `404 + content-type: image/gif` + 43 字节 `GIF89a` **1×1** 图，
+   * ArkUI `Image` 把这次响应当作**加载成功**（`onError` 不触发、`onComplete` 回填 1×1，见
+   * docs/research/IMAGE_PIPELINE_AUDIT.md §5.2）：只靠 `onError` 判失败，失效图会被
+   * `ImageFit.Cover` 拉成一张纯色空白大图。
+   *
+   * **精确匹配 1×1**（不用 `≤1`）：`width/height` 为 0 表示尚未解码出尺寸，
+   * 此时不能判失败，否则会平白多一次原图回退、最坏把合法图隐藏。
+   *
+   * @param width - 解码后图片宽度（px）
+   * @param height - 解码后图片高度（px）
+   * @returns 是否为失效占位图
+   */
+  private isBrokenPreview(width: number, height: number): boolean {
+    return width === 1 && height === 1
+  }
+
+  /**
+   * 预览图区（摘要下方、底栏上方）。
+   *
+   * 三个互斥分支，顺序即优先级：
+   *  1. **被动加载**（`shouldUsePassive`：手动模式，或"仅 WiFi"模式下的蜂窝网络）→ 占位块。
+   *     用 `if / else` 分支隔离：不创建 `Image` 节点就不会发起请求（不能用 `visibility`
+   *     隐藏，那仍可能触发加载，见设计文档 §6.3 / K8）。
+   *  2. `previewStage === 0` → 缩略图（`.thumb.jpg`），失败回退原图；
+   *  3. `previewStage === 1` → 原图，失败隐藏整块。
+   *
+   * 失败回调按**所在分支**归属语义（无需在 @Builder 内捕获 URL，避免引入局部变量与
+   * "按值捕获不刷新"的混淆）；多图角标只在**实图分支**渲染——被动占位下不该透露图片数量。
+   */
+  @Builder
+  previewArea() {
+    if (this.shouldRenderPreview()) {
+      Stack({ alignContent: Alignment.BottomEnd }) {
+        if (shouldUsePassive(this.imageLoadStrategy)) {
+          Row() {
+            Image($r('app.media.icon_image')).width(22).height(22)
+              .fillColor(AppColors.textTertiary).opacity(0.45)
+          }
+          .width('100%').height(PREVIEW_IMAGE_HEIGHT)
+          .justifyContent(FlexAlign.Center)
+          .borderRadius(PREVIEW_IMAGE_RADIUS).backgroundColor(AppColors.bgSecondary)
+        } else {
+          if (this.previewStage === 0) {
+            Image(toPreviewThumbUrl(this.firstPreviewUrl()))
+              .width('100%').height(PREVIEW_IMAGE_HEIGHT)
+              .objectFit(ImageFit.Cover)
+              .borderRadius(PREVIEW_IMAGE_RADIUS)
+              .backgroundColor(AppColors.bgSecondary)
+              /* 404 会被 Image 当作加载成功、onError 不触发，故同时用 onComplete 的尺寸补判 */
+              .onComplete((event) => {
+                if (event && this.isBrokenPreview(event.width, event.height)) {
+                  this.onThumbFailed()
+                }
+              })
+              .onError(() => { this.onThumbFailed() })
+          } else {
+            Image(this.firstPreviewUrl())
+              .width('100%').height(PREVIEW_IMAGE_HEIGHT)
+              .objectFit(ImageFit.Cover)
+              .borderRadius(PREVIEW_IMAGE_RADIUS)
+              .backgroundColor(AppColors.bgSecondary)
+              .onComplete((event) => {
+                if (event && this.isBrokenPreview(event.width, event.height)) {
+                  this.onOriginalFailed()
+                }
+              })
+              .onError(() => { this.onOriginalFailed() })
+          }
+
+          if (this.previewImageUrls().length > 1) {
+            Text(`${this.previewImageUrls().length} 图`)
+              .fontSize(11).fontColor(AppColors.white)
+              .backgroundColor(AppColors.movingPhotoBadgeBg)
+              .border({ width: 1, color: AppColors.movingPhotoBadgeBorder })
+              .borderRadius(9)
+              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+              .margin({ right: 6, bottom: 6 })
+          }
+        }
+      }
+      .width('100%')
+      .margin({ top: 10 })
+    }
   }
 
   build() {
@@ -1685,6 +1858,8 @@ struct TopicCardComponent {
             .textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 10 }).width('100%')
         }
       }
+
+      this.previewArea()
 
       Row() {
         Row() {

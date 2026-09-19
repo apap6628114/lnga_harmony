@@ -3,6 +3,7 @@ import { SettingsState } from '../SettingsState'
 import {
   KEY_IMAGE_LOAD_STRATEGY,
   KEY_NETWORK_CHANGE_VERSION,
+  KEY_SHOW_TOPIC_PREVIEW,
   KEY_VIDEO_MUTED,
 } from '../../../common/constants/AppStorageKeys'
 import { bumpAppStorageVersion } from '../../../common/utils/AppStorageVersion'
@@ -23,6 +24,20 @@ export class MediaSettings {
     this.ctx.state.imageLoadStrategy = v
     AppStorage.setOrCreate(KEY_IMAGE_LOAD_STRATEGY, v)
     bumpAppStorageVersion(KEY_NETWORK_CHANGE_VERSION)
+    this.ctx.persist()
+  }
+
+  /**
+   * 设置是否在主题列表卡片显示帖子预览图。
+   *
+   * 同步 AppStorage 供列表卡片以 `@StorageProp` 响应式读取（开关本身不需要 bump
+   * networkChangeVersion——那是网络语义的版本号），并持久化。
+   *
+   * @param enabled - 是否显示预览图
+   */
+  setShowTopicPreview(enabled: boolean): void {
+    this.ctx.state.showTopicPreview = enabled
+    AppStorage.setOrCreate(KEY_SHOW_TOPIC_PREVIEW, enabled)
     this.ctx.persist()
   }
 
@@ -57,6 +72,9 @@ export class MediaSettings {
   load(saved: SettingsState): void {
     if (saved.imageLoadStrategy !== undefined) {
       this.ctx.state.imageLoadStrategy = saved.imageLoadStrategy
+    }
+    if (saved.showTopicPreview !== undefined) {
+      this.ctx.state.showTopicPreview = saved.showTopicPreview
     }
     if (saved.videoMuted !== undefined) this.ctx.state.videoMuted = saved.videoMuted
     if (saved.ttsPerson !== undefined) this.ctx.state.ttsPerson = saved.ttsPerson

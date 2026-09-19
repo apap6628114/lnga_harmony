@@ -570,6 +570,18 @@ export struct SettingsPanel {
 
               Divider().margin({ left: 60 }).color(AppColors.separator)
 
+              // 显示帖子预览图：本开关决定"这块 UI 存不存在"，上方「图片加载模式」决定"怎么加载"
+              SettingToggleRow({
+                iconRes: $r('app.media.settings_topic_preview'), iconColor: SettingsIconColors.topicPreview,
+                label: '显示帖子预览图',
+                isOn: appStore.settings.showTopicPreview,
+                onChange: (v: boolean) => {
+                  appStore.settingsStore.setShowTopicPreview(v)
+                }
+              })
+
+              Divider().margin({ left: 60 }).color(AppColors.separator)
+
               SettingPickerRow({
                 iconRes: $r('app.media.settings_font_size'), iconColor: SettingsIconColors.fontSize, label: '字体大小',
                 badgeText: `${this.contentFontSize}`,

@@ -120,10 +120,11 @@ export function extractSubjectTopicItems(raw: object): Record<string, Object>[] 
  * @param blacklist - 用户黑名单 UID
  * @param keywords - 标题屏蔽关键词
  * @param page - 当前页码
+ * @param attachPrefix - 附件图片前缀（subject/hot 在**响应顶层**；置顶无 → 传空串）
  * @returns 主题列表信息
  */
 function buildFlatTopicListInfo(rawArr: Record<string, Object>[], blacklist: Set<string>,
-  keywords: string[], page: number): TopicListInfo {
+  keywords: string[], page: number, attachPrefix: string): TopicListInfo {
   const t: Record<string, Object> = {};
   for (let i = 0; i < rawArr.length; i++) {
     t[String(i)] = rawArr[i];
@@ -134,6 +135,8 @@ function buildFlatTopicListInfo(rawArr: Record<string, Object>[], blacklist: Set
   dataObj['__T__ROWS_PAGE'] = rawArr.length;
   const fakeRaw: Record<string, Object> = {};
   fakeRaw['data'] = dataObj;
+  /* 附件前缀交给 parseTopicList 统一读取（缺省空串 → 解析层回退 NGA_CDN_BASE） */
+  fakeRaw['attachPrefix'] = attachPrefix;
   fakeRaw['time'] = Math.floor(Date.now() / 1000);
   return parseTopicList(fakeRaw, blacklist, keywords, page);
 }
@@ -158,7 +161,8 @@ export function parseToppedList(raw: object, blacklist: Set<string>, keywords: s
   if (rawArr === null) {
     return null;
   }
-  return buildFlatTopicListInfo(rawArr, blacklist, keywords, page);
+  /* 置顶接口实测不下发 attachPrefix，也不下发 attachs（预览图必然为空） */
+  return buildFlatTopicListInfo(rawArr, blacklist, keywords, page, '');
 }
 
 /**
@@ -197,7 +201,9 @@ export function parseHotSubjectList(raw: object, blacklist: Set<string>, keyword
     }
     rawArr.push(normalizeSubjectTopicItem(item as Record<string, Object>));
   }
-  return buildFlatTopicListInfo(rawArr, blacklist, keywords, page);
+  /* subject/hot 的 attachPrefix 在**响应顶层**（result 是扁平数组，没有 result 对象） */
+  return buildFlatTopicListInfo(rawArr, blacklist, keywords, page,
+    String(rec['attachPrefix'] ?? ''));
 }
 
 /**
@@ -388,6 +394,9 @@ export function parseSubjectList(raw: object, blacklist: Set<string>, keywords: 
   }
   const fakeRaw: Record<string, Object> = {};
   fakeRaw['data'] = dataObj;
+  /* subject/list|search 的 attachPrefix 在 result 内（供预览图解析拼接图片 URL） */
+  const attachPrefix: string = String(resRec['attachPrefix'] ?? '');
+  fakeRaw['attachPrefix'] = attachPrefix;
   fakeRaw['time'] = Math.floor(Date.now() / 1000);
   const base: TopicListInfo = parseTopicList(fakeRaw, blacklist, keywords, page);
   // 子版块列表（subForum.checked 账号级真实订阅状态）由本解析器填充：
@@ -399,6 +408,7 @@ export function parseSubjectList(raw: object, blacklist: Set<string>, keywords: 
     subBoardList: subs,
     curTime: base.curTime,
     pagination: base.pagination,
+    attachPrefix: attachPrefix,
   };
   return info;
 }

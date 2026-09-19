@@ -60,7 +60,7 @@ ImageViewer.ets                            全屏查看器（前/中/后三张 I
 | # | 缺口 | 证据 / 位置 |
 |---|---|---|
 | G1 | **缓存不可观测、白块时间长**：`Image(src)` 直连网络 URL，虽由 Image 组件自带缓存（机制上依赖 cacheDownload，落在应用 `cache` 目录）承担二次加载，但官方明示该缓存"无法获取当前缓存占用信息/策略不可定制"，接口"后续不再继续演进"；且官方建议"下载的网络图片大于10MB或一次下载的网络图片数量较多时，用 HTTP 工具提前下载" | `guides/.../显示图片 (Image).md:47-61`（官方原文） |
-| G2 | **无缩略图分级**：解析时 `stripImageSuffix()` 反而把 `xxx.medium.jpg` 归一成**原图**；正文渲染与查看器用同一 URL | `common/utils/Utils.ets:147`；`AttachUrl.ets:82` |
+| G2 | **无缩略图分级（服务端能力可用，客户端未用）**：解析时 `stripImageSuffix()` 把 `xxx.medium.jpg` 归一成**原图**；正文渲染与查看器用同一 URL。⚠️ **2026-09 复测更正**：服务端**确实**按后缀提供多档缩略图（`名字.原扩展名.thumb.jpg` / `.thumb_s.jpg` / `.thumb_ss.jpg` 均 200），此前"CDN 不提供缩略图"的结论源于当时只测了**不带 `.jpg` 的裸后缀**（见 §5.1）。主题列表预览图已按此实现，正文/查看器的分级仍是后续可选项 | `common/utils/Utils.ets:147`；`AttachUrl.ets:82`；`docs/TOPIC_PREVIEW_DESIGN.md` §5 |
 | G3 | **动图无任何专门处理**：无角标、无自动播放开关、查看器不能暂停/播放；依赖 Image 组件的默认行为 | `ImageViewer.ets`、`BBCodeContentView.ets:751` |
 | G4 | 查看器保存/分享**重复下载**（http 全量拉取），且临时文件写在 `filesDir`（持久目录，无清理） | `ImageViewer.ets:84-167` |
 | G5 | 查看器无加载进度/失败重试；长图（超高）无专门交互 | `ImageViewer.ets` |
@@ -172,18 +172,34 @@ ImageViewer.ets                            全屏查看器（前/中/后三张 I
 - 样本中出现的 `.gif` 全部来自 `__MEDALS` 勋章图标表（如 `101.gif` 大漩涡、`442.gif` 二十周年），
   **不是帖子正文图片**；真正的帖子动图来自用户上传附件（`./mon_*/*.gif`）与外链图床。
 
-### 5.1 NGA CDN 尺寸变体实测（2026-09）
+### 5.1 NGA CDN 尺寸变体实测（2026-09，**同日复测更正**）
 
-对 6 个真实附件 URL（新旧两种命名，jpg/png/webp）分别请求 `.medium` / `.thumb_s` / `.thumb_m` / `.thumb` 变体：
+**首次记录（测法有偏差，保留备查）**：对 6 个真实附件 URL（新旧两种命名，jpg/png/webp）分别请求
+`.medium` / `.thumb_s` / `.thumb_m` / `.thumb` 变体：
 
 | 变体 | 结果 |
 |---|---|
 | 原图 | `206` + 正确 `content-type`（jpeg/png/webp） |
 | `medium` / `thumb_s` / `thumb_m` / `thumb` | **全部 `404`**，响应体为 43 字节 GIF |
 
-→ **NGA 当前 CDN 不提供任何服务端缩略图**：`Utils.stripImageSuffix()` 只是历史兼容（对现网 URL 无实际作用，
-也不会造成错误）。任何"列表用缩略图、查看器用原图"的方案都必须走**客户端**手段
-（`Image.sourceSize` 解码降采样 / 自行缩放缓存），服务端没有小图可取。
+**复测更正**：有效性取决于**后缀写法**——档位后缀**必须带图片扩展名**
+（`名字.原扩展名` + `.thumb.jpg`）。复测矩阵（真实附件，前缀 `https://img.nga.cn/attachments/`）：
+
+| 请求 | 结果 |
+|---|---|
+| `…jpeg.thumb` / `…jpeg.medium` / `…jpeg.thumb_s` / `…jpeg.thumb_m`（**裸后缀**，即首次测法） | **404**（完全复现首次结论） |
+| `…jpeg.thumb.jpg` | **200** 14 900 B（原图 292 164 B） |
+| `…jpeg.thumb_s.jpg` / `…jpeg.thumb_ss.jpg` | 200 3 965 / 1 528 B |
+| `…jpeg.medium.jpg` | 200 42 856 B |
+| `…jpeg.thumb_m.jpg` | 404（该档位不存在） |
+| 2020 年老 png + `.thumb.jpg` | 200 5 114 B（原图 108 379 B）→ **非近期上线** |
+
+→ **更正**：**服务端按后缀提供多档缩略图**（`.thumb.jpg` / `.thumb_s.jpg` / `.thumb_ss.jpg` 对
+jpg/jpeg/png/gif/webp/mp4 均有效；`.medium.jpg` 对 png/gif 会**回退原图**）。
+`Utils.stripImageSuffix()` 的"去档位 → 原图"语义仍然正确且必要，但"服务端没有小图可取"不成立：
+"列表用缩略图、查看器用原图"可以直接走服务端缩略图（客户端 `sourceSize` 仍是大图解码内存的正解）。
+另两条实测禁用关系：`applyImageSuffix` 的 `name.thumb.ext`（尺寸词插在扩展名前）→ 404；
+**裸后缀**（不带 `.jpg`）→ 404。完整数据与实现见 `docs/TOPIC_PREVIEW_DESIGN.md` §5。
 
 ### 5.2 图片失效时的真实表现（重要，已在现网验证）
 

@@ -1,5 +1,6 @@
 import type { TopicRaw, ThreadPageInfo, TopicListInfo, Pagination } from '../model/Topic';
 import { decodeAnonymousName } from './AnonymousParser';
+import { parsePreviewImages } from '../common/utils/TopicPreviewUtils';
 
 /**
  * 判断内容是否命中关键词屏蔽规则。
@@ -39,13 +40,17 @@ export function parseTopicList(raw: object | null, blacklist: Set<string> = new 
   const tMap = dataObj?.['__T'] as Record<string, Object> ?? {};
   const totalRows = Number(dataObj?.['__ROWS'] ?? 0);
   const rowsPerPage = Number(dataObj?.['__T__ROWS_PAGE'] ?? 35);
+  /* 附件前缀：官方 subject 系响应由 AppSubjectListParser 透传进 fakeRaw；
+     缺失（thread.php 形状 / 置顶/搜索/收藏/用户列表）时为空串，
+     parsePreviewImages 会回退 NGA_CDN_BASE——那些入口本就没有 attachs。 */
+  const attachPrefix = String(rawObj?.['attachPrefix'] ?? '');
 
   const keys = Object.keys(tMap);
   for (const key of keys) {
     const t = tMap[key] as Record<string, Object>;
     if (!t || !t['tid']) continue;
     if (hasKeywordMatch(String(t['subject'] ?? ''), keywords)) continue;
-    topics.push(mapTopicRaw(t, blacklist.has(String(t['authorid']))));
+    topics.push(mapTopicRaw(t, blacklist.has(String(t['authorid'])), attachPrefix));
   }
 
   const forumInfo = dataObj?.['__F'] as Record<string, Object>;
@@ -56,6 +61,7 @@ export function parseTopicList(raw: object | null, blacklist: Set<string> = new 
     subBoardList: [],
     curTime: Number(rawObj?.['time'] ?? 0),
     pagination: calcPagination(totalRows, rowsPerPage, currentPage),
+    attachPrefix: attachPrefix,
   };
 }
 
@@ -81,9 +87,11 @@ function stripBasic(text: string): string {
  *
  * @param raw - 原始主题
  * @param isInBlackList - 作者是否在黑名单中
+ * @param attachPrefix - 附件图片前缀（响应 attachPrefix，可为空串）
  * @returns 页面主题模型
  */
-function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean): ThreadPageInfo {
+function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean,
+  attachPrefix: string): ThreadPageInfo {
   const __P = raw['__P'] as Record<string, Object> | undefined;
   const rawAuthor: string = String(raw['author'] ?? '');
   const isAnonymity: boolean = rawAuthor.startsWith('#anony_');
@@ -135,9 +143,9 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean): Threa
     mirrorBoard: board === '版面镜像',
     previewAuthorId: String(__P?.['authorid'] ?? ''),
     previewSnippet: snippet,
-    previewImages: [],
+    // 首帖附件 → 预览图（拼接前缀、过滤非图片；无附件时为空数组）
+    previewImages: parsePreviewImages(raw['attachs'], attachPrefix),
     // 官方接口受限/占位条目的受限原因透传（普通 thread.php 列表无此字段，为空串）
-    attachs: String(raw['attachs'] ?? ''),
     error: String(raw['error'] ?? ''),
   };
 }

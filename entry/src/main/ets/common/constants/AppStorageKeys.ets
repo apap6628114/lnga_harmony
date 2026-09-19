@@ -42,6 +42,9 @@ export const KEY_SYSTEM_COLOR_MODE: string = 'systemColorMode'
 /** 图片加载策略（参见 ImageLoadStrategy） */
 export const KEY_IMAGE_LOAD_STRATEGY: string = 'imageLoadStrategy'
 
+/** 是否在主题列表卡片显示帖子预览图（首帖附件缩略图；受图片加载模式约束） */
+export const KEY_SHOW_TOPIC_PREVIEW: string = 'showTopicPreview'
+
 /** 视频是否默认静音 */
 export const KEY_VIDEO_MUTED: string = 'videoMuted'
 
