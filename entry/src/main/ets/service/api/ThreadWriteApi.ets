@@ -347,8 +347,10 @@ function parseAttachArrayValue(value: Object | undefined): string {
         return joined.length > 0 ? joined + '\t' : '';
       }
     } catch (error) {
-      // 非 JSON 串（服务端形态差异）：按单值透传
-      return text;
+      // 非 JSON 串（服务端形态差异）：按单值透传，并补尾 `\t` 保持与官方 L0 拼接同形——
+      // 这串后续还会被追加（编辑时再传一张图），缺尾 `\t` 会让两个参数粘连成一个
+      // （"a1\ta2" + "a3\t" → "a1\ta2a3\t"）。
+      return text.charAt(text.length - 1) === '\t' ? text : text + '\t';
     }
   }
   return '';
@@ -487,19 +489,28 @@ export async function postNewTopic(token: string, fid: number, stid: number,
  * 官方发帖编辑器把贴条作为 `post/tietiao` action 提交，签名串仍为 tid+content，
  * 目标楼层通过 pid 传递。
  *
+ * 附件参数**照常提交**：官方 `L0`/`K0` 的 tietiao 分支只 `remove("subject")` 与
+ * `remove("address")`，`attachments` / `attachments_check` 与其它 action 一样随请求发出
+ * （`NetRequestWrapper.java` L1113-1121 / L1221-1225；卡片 §2.1）。编辑器在贴条模式下
+ * 仍渲染图片按钮（`EditorFormatBar`），用户传的图必须跟着贴条一起提交，否则正文里的
+ * `[img]` 与附件参数脱钩。
+ *
  * @param token - 会话令牌
  * @param tid - 主题 ID
  * @param pid - 目标楼层 ID
  * @param fid - 版块 ID
  * @param content - 评论内容
  * @param anony - 是否匿名
+ * @param attachments - 附件参数
+ * @param attachmentsCheck - 附件校验参数
  * @returns 提交结果
  */
 export async function postComment(token: string, tid: number, pid: number,
-  fid: number, content: string, anony: number): Promise<PostReplyResult> {
+  fid: number, content: string, anony: number,
+  attachments: string, attachmentsCheck: string): Promise<PostReplyResult> {
   const normalizedContent: string = normalizePostContent(content);
   const fields: Record<string, string> = buildPostFields(
-    fid, tid, pid, 0, 'tietiao', normalizedContent, '', anony, '', ''
+    fid, tid, pid, 0, 'tietiao', normalizedContent, '', anony, attachments, attachmentsCheck
   );
   return submitPost(token, 'tietiao', fields,
     String(tid) + normalizedContent, tid, '评论失败');

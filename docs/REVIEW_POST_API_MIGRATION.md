@@ -157,3 +157,166 @@
 - `ReplyDialog.doSend` 以 `this.replyText.trim()` 提交（L231），官方新版 L0 不 trim（`getText().toString()`）、旧版 K0 trim——鸿蒙取 trim 语义，属可接受差异（与 K0 一致）。
 - `getPostAuth` 对 tietiao 用 output='12'（对齐详情页 getPost 通道）；官方旧版贴条 check 走 volley 无 output——无 content 提交，12/14/无均无 153 风险，可接受。
 - `NgaUploader` 未手工设 Content-Length（官方 `ct.e.q` 手工计算）：鸿蒙 http 库对 ArrayBuffer extraData 自动按实际字节填充，等效安全。
+
+---
+
+## 7. 追加记录（2026-09-20）：间歇性「附件确认错误，请回报管理员」
+
+> 现象来源：用户在**没有插入任何附件**的回复上，间歇性收到服务端提示「附件确认错误，请回报管理员」。
+> 结论：本报告第 2 节的审查**漏掉了「非 EDIT 入口的会话状态清理」这一维度**（B3 只分析了 EDIT 场景）。
+
+### 7.1 取证：文案来自服务端，两条通路都能产生它
+
+- 该文案**不在 APK 里**。协议核对方对 `apktool-out` 的 11 个 dex + `resources.arsc` + assets + lib
+  做了字节级扫描：「附件确认」**零命中**；含「回报管理员」的串只有 3 条，全部是 `ct/k.java`
+  的上传错误码文案（error_code 4/10/11）。→ 该提示由**服务端下发**。
+- 因此有两条通路都能让用户看到它：
+  1. **上传通路**：`ThreadWriteApi.fillUploadResult` 在 `error_code != 0` 时**优先显示服务端
+     返回的 `error` 字段**——"照抄服务端文案"这条显示通路是鸿蒙独有的（官方 `ct/k.java`
+     只按 error_code 映射自己的文案，从不显示服务端文本）。上传被拒的结果，正是用户描述的
+     「这次回复没有添加附件」+「附件确认错误」。
+  2. **提交通路**：`post` 返回的 `msg`（`readAppError` → toast），即请求里带了服务端不认的
+     附件码。
+- 两条通路的上游是**同一个缺陷家族**：`replyManager` 是进程级单例，它持有的鉴权缓存与
+  附件参数缺少会话边界。
+- 需要留一句诚实的话：**「服务端为何拒」这一环静态不可证**，本文的因果链是从"文案只可能来自
+  服务端"+"客户端状态确实跨会话存活"两条硬事实推出来的；7.5 给了真机判别器。
+
+### 7.2 根因：单例上的会话状态跨编辑器存活
+
+`replyManager`（`ReplyManager.ets` 末尾 `export const replyManager = new ReplyManagerClass()`）
+是进程级单例；修复前它的 `cachedAuth` / `cachedAuthAction` / `pendingAttachments` /
+`pendingAttachmentsCheck` **只在 `startEdit()` 与 `reset()` 里清空**，而 `reset()` 全库零调用方
+（`ThreadPanel` / `TopicListPanel` 里的 `this.mgr.reset()` 属于 `ThreadPaginationManager`），
+`startThreadReply()` / `startFloorReply()` / `startComment()` 三个入口**一个都不清**。两个后果：
+
+- **上传被拒（通路 1）**：`cachedAuth` 只按 action 区分，跨帖复用同一 action 时会拿
+  **A 帖的 `auth` / `attach_url`** 去为 B 帖上传（`uploadAttachment` 传的是
+  `authResult.auth` + `this.ctx.fid`）→ 服务端校验目标不符 → 上传报错、图片插不进来。
+  这条正好对应"回复没有添加附件"的字面现象。
+- **提交带脏参数（通路 2）**：上一次会话累积的附件码残留在单例上，被后续"没插图的回复"
+  一并提交——`ThreadWriteApi.postReply` 的简化通道分流要求两个附件串**同时**为空，
+  只要有一个残留，请求就会切到带 `attachments` 的完整 `post` 通道。
+
+次生问题：`getOrFetchAuth` 的缓存只按 action 失效，跨帖不失效；`pendingAttachments` 是
+两个 tab 拼接串，无法核对"正文里到底还引用着哪几张图"。
+
+### 7.3 官方对照（jadx 逐条取证）
+
+| 项 | 官方 v7.17.17 | 鸿蒙端（修复前） |
+|---|---|---|
+| 附件参数载体 | `PostFragment.mAttachArray` / `mAttachCheckArray` 是 **Fragment 实例 List**（`PostFragment.java:36-37`）；新 UI 为 `PublishParams` 实例 List | 进程级单例上的两个 `string` |
+| 会话身份 | `ActionCheck.buildActionId = uid + "/" + fid + "/" + tid + "/" + pid`（`ActionCheck.java:478-496`），`makeActionCheck` 写入 `currentUid` | 无 |
+| 每次开编辑器 | `PostActivity.newIntent` → 每次 `new PostFragment()`，`onActivityCreated` 重新取 `ActionCheck`（`PostActivity.java:119,180`；`PostFragment.java:784,795-810`） | 同 action 复用 `cachedAuth` |
+| 上传完成 | **成对 `remove(旧码)` + `add(新码)`**（`PostFragment.java:461-470`，替换语义） | 只成对 append（鸿蒙无重传同一张图的入口，影响小） |
+| 删图 / 删附件 | 成对 `remove` + 从正文摘掉 `[img]`/`[flash]` 标签（`PostFragment.java:1043-1061`）；无本地文件时走服务端 `del_attach` | 无删图入口，正文删标签也不回收 |
+| tietiao 的附件 | **带**（只 `remove("subject")` / `remove("address")`，`NetRequestWrapper.java:1113-1121` / `1221-1225`） | `postComment` 硬编码 `'', ''`，且贴条模式下图片按钮仍可用 |
+| 提交拼接 | 两个 List **同一个循环**、各自跳过空元素后 `\t` 连接（`NetRequestWrapper.java:1186-1209`） | 一致（含尾 `\t`） |
+| 客户端配对校验 | **没有**：`PublishActivityPresenter.addAttachArray` 两个 `add` 共用同一个"非空"条件，`attachmentsCheck` 为 null 时塞空串 → 官方自身就能发出两串数量不等的请求 | 初版修复加了硬闸（见 7.4 的"已删除"） |
+| 草稿 | 附件码入 `ActionCheck`（`@DatabaseField`，`ActionCheck.java:85-91`）并在**恢复草稿时重新上传本地图片**（`PostHelper.java:1530-1559`） | 草稿只存正文文本 |
+| 提交成功后 | 不清 List，靠 `finishResult()` 销毁页面 + `deleteDraft()` + `isSend` 互斥 | 需要单例自己清（本次补） |
+
+`NewTopicManager.start()` 在这一点上**本来就是对的**（`TopicListPanel.openNewTopic()` 每次都调，
+清 `cachedAuth` 与附件），回复链路缺的正是这一步；uid 进会话键也与官方 `buildActionId` 同构。
+
+### 7.4 修复（含两轮独立审查后的修正）
+
+两个编辑器（`ReplyDialog.ets` / `NewTopicDialog.ets`）本身不持有附件状态，它们只调各自
+manager 的 `uploadImage` / `send`；两条链路是**两个独立 manager**。
+
+**新增共享模块 `entry/src/main/ets/common/managers/PostAttachments.ets`**
+（两条链路共用，避免同一套逻辑抄两份）：
+
+- `PendingAttachment`：`attachment` / `check` / `url` **三元组**。多出的 `url` 是为了在提交前
+  核对"正文里是否真的还引用着这张图"——官方靠 List 与正文标签成对维护来保证一致，
+  鸿蒙端正文是自由文本框，只能在提交时反查。
+- `appendPendingAttachment`（累积）、`restoreServerAttachments`（编辑回填，`url` 留空）、
+  `buildAttachmentParams`（按 `content.indexOf(url)` 过滤后拼串，`url` 为空的项一律保留）、
+  `splitNonEmpty`。
+
+**`ReplyManager.ets`（回复 / 引用 / 贴条 / 编辑）**
+
+1. 新增 `beginSession(action)` / `clearSession()`，四个 `start*` 入口统一调用：会话目标
+   `action|uid|fid|tid|pid` 变化即作废 `cachedAuth` + 附件（uid 进键与官方
+   `ActionCheck.buildActionId` 同构；登出只走 `appStore.clearAuth()`，碰不到本单例，
+   不含 uid 时"换账号后在同一个帖子回复"会被判为同一会话）。**`modify` 每次进入都作废**
+   （官方每次进编辑器都重新取 `ActionCheck` 回填）。同一目标内保留，是为了让
+   「上传图片 → 放弃 → 重开同一回复框」时草稿里的图片仍能绑定。
+   —— 这是本次线上问题的**主修**。
+2. 附件累积改三元组；提交前按正文引用过滤（`collectAttachmentParams`），未被正文引用的
+   附件码不再随请求发出。
+3. 提交**成功后**立即丢弃附件（单例必须自己等价官方的 `finishResult()`）。
+4. 日志：`[REPLY] submit type=… pending=…`、`[REPLY] reply|modify|tietiao attachments kept=…`、
+   未被引用项丢弃时另有 `dropped`。
+
+**`NewTopicManager.ets`（发新主题）**：改用同一共享模块（`start()` 原本就每次清空），
+补上"成功后丢弃"与 `[NEWTOPIC]` 日志。
+
+**`ThreadWriteApi.ets`**
+
+5. `postComment` 增加 `attachments` / `attachmentsCheck` 参数：官方 `tietiao` 是带附件的
+   （只去掉 `subject`/`address`），鸿蒙原先硬编码 `'', ''` 会让"贴条模式里传的图"变成
+   正文有 `[img]`、参数为空——**这是审查发现的既有协议偏差，与本次 bug 同源**。
+6. `parseAttachArrayValue` 的非 JSON 分支补尾 `\t`：该串后续还会被追加（编辑时再传图），
+   缺尾 `\t` 会让两个元素粘连成一个（`"a1\ta2"` + `"a3\t"` → `"a1\ta2a3\t"`）。
+
+**审查后删除的三处初版改动**（都属"鸿蒙有而官方没有"的多余行为，且方向有害）：
+
+| 初版改动 | 为什么删 |
+|---|---|
+| "重新 check 拿到不同 `auth` 即作废附件码" | 提交请求**根本不含 `auth` 字段**（`buildPostFields` 的字段集里没有），服务端无从按 auth 校验附件码，这条推断没有依据；唯一触发路径是编辑器内切换"回复/贴条"（换 action 即换 auth），结果是**把正文里已经插好的图片附件码清掉**——一处真实回归（正文有 `[img]`、`attachments` 为空） |
+| 提交前"两侧元素个数必须相等"的硬闸 | 官方 `L0` 对两个参数是**各自**跳过空元素拼接的（长度允许不等），官方自身就能发出数量不等的请求；"数量不等即拒"无静态依据。且该闸只返错不清状态，一旦 EDIT 回填到半对状态就会**永久锁死**该楼层（重开对话框还会回填同一坏状态） |
+| 上传响应缺 `attachments_check` 即 `throw` | 同一理由（官方语义允许半对）；抛出会让"这种响应形态下所有插图都发不出去"，比原来的间歇性报错更重 |
+
+### 7.5 验证
+
+- 编译：`hvigorw assembleHap --mode module -p module=entry@default -p buildMode=debug --no-daemon`
+  → `BUILD SUCCESSFUL`。
+- 真机复现/回归路径（修复前应报错、修复后应正常）：
+  1. 在任意帖回复并插入一张图，发送成功 → 立刻**再回复一次纯文字**；
+  2. 在帖子 A 上传图片但**放弃**（草稿保存）→ 到帖子 B 回复纯文字；
+  3. 打开某带附件楼层的「编辑」→ 放弃 → 在任意帖回复纯文字；
+  4. **回复模式传图 → 切贴条 → 再传一张 → 切回回复 → 发送**（初版回归的复现路径，现应正常）；
+  5. 贴条模式下传图 → 发贴条（现在附件会随贴条提交，与官方一致）。
+- **日志判别器**（这是本次唯一能在真机分清"错误到底来自哪条通路"的手段）：
+  - `[REPLY] submit type=… pending=N`：纯文字回复若打出 `N>0`，说明状态又被污染。
+  - `[REPLY] reply|modify|tietiao attachments kept=M` / `[NEWTOPIC] submit … keepAttachments=M`：
+    本次真正发出的附件项数。
+  - **F1（证伪残留假说）** 冷启动后、本进程从未上传过附件的**第一次**回复若仍报该错 ⇒
+    "进程级残留"不成立。
+  - **F2（转移通路）** 修复后仍偶发该错、且 `pending=0` ⇒ 错**不来自 `post` 提交**。
+    此时对齐同一时刻的 `[NGA][UPLOAD] raw: …`（`uploadAttachment` 的 verbose 日志）：
+    上传通路是鸿蒙唯一会**原样显示服务端 `error` 文案**的地方，最该优先排除。
+  - **F3（支持残留假说）** 报错总是紧跟在"上一次会话刚传过图 / 刚编辑过带附件楼层"之后出现。
+
+### 7.6 遗留观察
+
+- **官方有、鸿蒙仍缺**（都不是本次 bug 的成因，但同属附件链路，按价值排序）：
+  1. **草稿持久化附件**：官方把 `attachArray`/`attachCheckArray` 写进 `ActionCheck` 库表，
+     恢复草稿时对每张有本地路径的图**重新上传**（`PostHelper.java:1530-1559`）；鸿蒙草稿只存
+     正文文本 → 草稿里的 `[img]` 跨会话（或跨目标）必然失去附件绑定。要补得先把附件三元组
+     按 `(uid, fid, tid, pid, action)` 持久化（键可直接用官方 `buildActionId` 的形态）。
+  2. **删图 / 删附件**：官方成对 `remove` + 从正文摘标签 + 需要时调 `del_attach`；鸿蒙没有
+     删图入口，用户只能在正文里手删 `[img]`——那种情况下附件码现在会被 7.4 的正文过滤丢掉
+     （不再随请求发出），但服务端那份临时附件仍留在上传区，直到被服务端清理。
+  3. **每次开编辑器重新 check**：官方 `PostActivity.newIntent` 每次都 `new PostFragment` 并取
+     新的 `ActionCheck`；鸿蒙在"同一会话目标"内仍复用 `cachedAuth`。若 `post/check` 的 `auth`
+     在服务端有有效期，这条复用就是超期上传的窗口（官方对此免疫）。
+  4. 提交中互斥：官方有 `isSend` 防重复提交；鸿蒙靠 `ReplyDialog.sending` / `NewTopicDialog.sending`
+     的按钮态兜住，语义接近。
+- **口径差异（有意保留）**：官方 `onActivityCreated` 回填 `attachArray` **不限 action**
+  （`PostFragment.java:832-837`）；鸿蒙只在 `EDIT` 回填。保守一侧更安全（reply/quote 的 check
+  若意外回传附件，鸿蒙不会把帖子已有附件塞进新回复），但严格说与官方不等价。
+- 本报告 G4 所述的「尾随 `\t` 差异」现在**只剩一处历史例外**：`parseAttachArrayValue` 的非
+  JSON 分支原本直接 `return text`（无尾 `\t`），本次补成"补尾 `\t`"；`appendPendingAttachment`
+  与 `buildAttachmentParams` 均按官方 L0「每个非空元素后追加 `\t`」拼接。
+- `startComment()` 全库无调用方（COMMENT 只能从 `toggleMode()` 进入），`reset()` 也仍无调用方
+  ——两者留着是为了语义完整，不是活代码。
+- 横向排查：全工程 7 个模块级单例（`appStore` / `routerStore` / `floatingLayerStore` /
+  `logoutOrchestrator` / `ngaThrottler` / `replyManager` / `newTopicManager`）中，
+  **只有后两个持有服务端签发的临时凭证**（`auth` / `attach_url` / `attachments` /
+  `attachments_check`）；上传接口的调用方也只有这两个 manager，没有旁路。
+- 仍属**未验证假设**的一条：服务端拒绝附件的具体规则（数量不等？会话绑定？正文引用？）。
+  APK 里没有该文案，静态不可证；7.5 的 F1–F3 是把它落到真机上的最小实验，**不需要任何
+  额外的线上请求**。
+

@@ -10,6 +10,12 @@ import { MOVING_PHOTO_COVER_NAME, MOVING_PHOTO_VIDEO_NAME, buildMovingPhotoTag }
 import type { UploadAttachmentResult } from '../../model/NgaApiResults'
 import { appStore } from '../../store/AppStore'
 import { Logger, DOMAIN_MANAGER } from '../utils/Logger'
+import {
+  PendingAttachment,
+  AttachmentParams,
+  appendPendingAttachment,
+  buildAttachmentParams
+} from './PostAttachments'
 
 const logger = new Logger(DOMAIN_MANAGER, 'NewTopicManager')
 
@@ -45,10 +51,8 @@ export class NewTopicManagerClass {
   private ctx: NewTopicContext = new NewTopicContext()
   /** 缓存的发帖鉴权结果（start 时失效）。 */
   private cachedAuth: PostAuthResult | null = null
-  /** 已上传附件的累积参数（tab 分隔）。 */
-  private pendingAttachments: string = ''
-  /** 已上传附件的累积校验参数（tab 分隔）。 */
-  private pendingAttachmentsCheck: string = ''
+  /** 待提交的附件（按上传顺序累积；`start` 清空，提交前按正文引用过滤）。 */
+  private pendingAttachments: PendingAttachment[] = []
   /** 缓存的版块主题分类结果。 */
   private cachedCategories: TopicCategoriesResult | null = null
   /** 分类缓存所属的版块 ID（0 表示未缓存）。 */
@@ -75,8 +79,7 @@ export class NewTopicManagerClass {
     this.ctx.stid = stid
     this.ctx.boardName = boardName
     this.cachedAuth = null
-    this.pendingAttachments = ''
-    this.pendingAttachmentsCheck = ''
+    this.pendingAttachments = []
   }
 
   /**
@@ -149,23 +152,8 @@ export class NewTopicManagerClass {
     if (!uploadResult.ok) {
       throw new Error(uploadResult.error || '上传图片失败')
     }
-    this.appendAttachment(uploadResult)
+    appendPendingAttachment(this.pendingAttachments, uploadResult)
     return uploadResult.url
-  }
-
-  /**
-   * 累积一次上传的附件参数。
-   *
-   * 对应 Java PostParam.appendAttachment / L0 拼接：每个非空元素后追加 `\t`，
-   * 最终串含尾 `\t`；多次上传形如 `"a1\ta2\t"`。
-   *
-   * @param uploadResult - 单次上传结果
-   */
-  private appendAttachment(uploadResult: UploadAttachmentResult): void {
-    if (uploadResult.attachments.length > 0) {
-      this.pendingAttachments += uploadResult.attachments + '\t'
-      this.pendingAttachmentsCheck += uploadResult.attachmentsCheck + '\t'
-    }
   }
 
   /**
@@ -202,8 +190,8 @@ export class NewTopicManagerClass {
     if (!videoResult.ok) {
       throw new Error(videoResult.error || '上传动态照片视频失败')
     }
-    this.appendAttachment(coverResult)
-    this.appendAttachment(videoResult)
+    appendPendingAttachment(this.pendingAttachments, coverResult)
+    appendPendingAttachment(this.pendingAttachments, videoResult)
     return buildMovingPhotoTag(coverResult.url, videoResult.url)
   }
 
@@ -235,12 +223,29 @@ export class NewTopicManagerClass {
       return err
     }
 
+    // 附件参数按正文引用过滤后拼接（`PostAttachments.buildAttachmentParams`）。
+    // 这里不再按"两侧元素个数必须相等"设闸：官方 `L0` 对 `attachments` /
+    // `attachments_check` 是各自跳过空元素拼接的（长度允许不等），本地硬拦会误杀
+    // 合法形态；真正要防的「正文没引用这张图」在过滤阶段处理。
+    const attachParams: AttachmentParams = buildAttachmentParams(this.pendingAttachments, content)
+    if (attachParams.dropped > 0) {
+      logger.verbose('[NEWTOPIC] dropped %{public}d attachment(s) not referenced by content',
+        attachParams.dropped)
+    }
+    logger.verbose('[NEWTOPIC] submit fid=%{public}d keepAttachments=%{public}d',
+      this.ctx.fid, attachParams.kept)
+
     const result: PostReplyResult = await postNewTopic(
       appStore.auth.token, this.ctx.fid, this.ctx.stid,
       trimmedSubject, content,
       isAnonymous ? 1 : 0,
-      this.pendingAttachments, this.pendingAttachmentsCheck
+      attachParams.attachments, attachParams.attachmentsCheck
     )
+    if (result.ok) {
+      // 附件参数随本次提交被服务端消费，成功后立即丢弃：本类是进程级单例，
+      // 留着会让「同一个对话框里重复点发布」这类异常路径把已消费的凭证再提交一次。
+      this.pendingAttachments = []
+    }
     return result
   }
 

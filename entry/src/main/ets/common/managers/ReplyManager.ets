@@ -6,6 +6,13 @@ import type { UploadAttachmentResult } from '../../model/NgaApiResults'
 import { appStore } from '../../store/AppStore'
 import { Logger, DOMAIN_MANAGER } from '../utils/Logger'
 import { decodeHtmlEntities } from '../utils/CodecUtils'
+import {
+  PendingAttachment,
+  AttachmentParams,
+  appendPendingAttachment,
+  restoreServerAttachments,
+  buildAttachmentParams
+} from './PostAttachments'
 
 const logger = new Logger(DOMAIN_MANAGER, 'ReplyManager')
 
@@ -32,8 +39,19 @@ export class ReplyManagerClass {
   private cachedAuth: PostAuthResult | null = null
   /** cachedAuth 对应的 post/check action（reply/quote/tietiao/modify），action 变化时缓存失效。 */
   private cachedAuthAction: string = ''
-  private pendingAttachments: string = ''
-  private pendingAttachmentsCheck: string = ''
+  /**
+   * 待提交的附件（按上传顺序累积）。
+   *
+   * 挂在单例上、跨编辑器会话存活，因此会话边界由 `beginSession` 划（见其注释）；
+   * 提交前还会按正文引用再过滤一次（见 `buildAttachmentParams`）。
+   */
+  private pendingAttachments: PendingAttachment[] = []
+  /**
+   * 当前编辑器会话目标（`action|fid|tid|pid`）。
+   *
+   * 附件参数与鉴权缓存只在该目标内复用，目标一变即作废（见 `beginSession`）。
+   */
+  private sessionTarget: string = ''
 
   get type(): ReplyType {
     return this.ctx.type
@@ -150,6 +168,47 @@ export class ReplyManagerClass {
     return result
   }
 
+  /**
+   * 开启一次新的编辑器会话。
+   *
+   * `auth` / `attach_url` 与 `attachments` / `attachments_check` 都是**服务端按某一次
+   * post/check 会话签发**的临时凭证，只在签发它的那次提交里有效，因此它们只能与
+   * 「同一个编辑器目标」（action + fid + tid + pid）绑定复用：
+   *   - 跨帖 / 跨目标复用：拿 A 帖的 auth 上传、把 A 帖的附件码提交给 B 帖，
+   *     服务端校验不通过 → 「附件确认错误，请回报管理员」；
+   *   - 已提交过的参数再次提交（同帖连续两次回复）：同样被拒。
+   *
+   * 官方客户端把这两项状态挂在发帖页上（`PostFragment.mAttachArray` /
+   * `mAttachCheckArray`，随页面生灭），本类是**进程级单例**，必须自己划会话边界——否则
+   * 一次带图回复之后，后续每一次「没插图」的回复都会带着旧附件参数提交。
+   *
+   * 同一目标内保留（不改动）：用户在编辑器里上传图片后放弃、稍后重新打开同一个
+   * 回复框时，正文草稿里的图片仍靠这份参数绑定，清了会让草稿图片失效。
+   * 编辑（modify）例外——服务端每次 check 都会重新签发 attachArray/attachCheckArray，
+   * 必须每次重新拉取（见 `getOrFetchAuth` 的 EDIT 回填），不能复用上一次的参数。
+   *
+   * @param action - 本次会话的 post/check action
+   */
+  private beginSession(action: string): void {
+    const pid: number = this.ctx.targetPost ? this.ctx.targetPost.pid : 0
+    // uid 也进目标串：登出/换账号走的是 `appStore.clearAuth()`（只重置各 Store 与
+    // WebView Cookie），碰不到本单例——上一个账号的 `auth` 与附件码会原样留下，
+    // 换账号后在同一个帖子回复时目标串若不含 uid 就判为「同一会话」而被复用。
+    const target: string = action + '|' + appStore.auth.uid + '|' + String(this.ctx.fid) + '|' +
+      String(this.ctx.tid) + '|' + String(pid)
+    if (action === 'modify' || target !== this.sessionTarget) {
+      this.clearSession()
+    }
+    this.sessionTarget = target
+  }
+
+  /** 丢弃当前会话的鉴权缓存与附件参数。 */
+  private clearSession(): void {
+    this.cachedAuth = null
+    this.cachedAuthAction = ''
+    this.pendingAttachments = []
+  }
+
   startThreadReply(tid: number, fid: number): void {
     this.ctx.type = ReplyType.THREAD
     this.ctx.tid = tid
@@ -157,6 +216,7 @@ export class ReplyManagerClass {
     this.ctx.page = 0
     this.ctx.targetPost = null
     this.ctx.quotePrefix = ''
+    this.beginSession('reply')
   }
 
   startFloorReply(post: PostInfo, tid: number, fid: number, page: number): void {
@@ -166,6 +226,7 @@ export class ReplyManagerClass {
     this.ctx.page = page
     this.ctx.targetPost = post
     this.ctx.quotePrefix = this.buildQuotePrefix(post, tid, page)
+    this.beginSession('quote')
   }
 
   startComment(post: PostInfo, tid: number, fid: number): void {
@@ -175,6 +236,7 @@ export class ReplyManagerClass {
     this.ctx.page = 0
     this.ctx.targetPost = post
     this.ctx.quotePrefix = ''
+    this.beginSession('tietiao')
   }
 
   startEdit(post: PostInfo, tid: number, fid: number): void {
@@ -184,10 +246,7 @@ export class ReplyManagerClass {
     this.ctx.page = 0
     this.ctx.targetPost = post
     this.ctx.quotePrefix = ''
-    this.cachedAuth = null
-    this.cachedAuthAction = ''
-    this.pendingAttachments = ''
-    this.pendingAttachmentsCheck = ''
+    this.beginSession('modify')
   }
 
   reset(): void {
@@ -197,10 +256,8 @@ export class ReplyManagerClass {
     this.ctx.page = 0
     this.ctx.targetPost = null
     this.ctx.quotePrefix = ''
-    this.cachedAuth = null
-    this.cachedAuthAction = ''
-    this.pendingAttachments = ''
-    this.pendingAttachmentsCheck = ''
+    this.sessionTarget = ''
+    this.clearSession()
   }
 
   // 预览内容：引用楼层时展示 quotePrefix + 用户输入（仅编辑器预览用）
@@ -269,13 +326,18 @@ export class ReplyManagerClass {
     if (authResult.ok) {
       this.cachedAuth = authResult
       this.cachedAuthAction = actionParam
-      // 编辑场景回填服务端返回的旧附件参数：修改带附件帖子时保留既有附件，
-      // 新上传附件在此基础上累积（与官方 PostFragment 对 ActionCheck.attachArray 的
-      // 回填一致）。仅在本地尚无附件参数时回填，避免覆盖上传累积结果。
+      // 编辑场景回填服务端返回的既有附件：修改带附件帖子时保留原有附件，
+      // 新上传附件在此基础上累积（与官方 `PostFragment` 对 `ActionCheck.attachArray` 的
+      // 回填一致）。仅在本地尚无附件时回填，避免覆盖上传累积结果。
+      //
+      // 注意**不要**在这里按 `auth` 变化清空已累积的附件：提交请求根本不含 `auth`
+      // 字段（见 `ThreadWriteApi.postReply` 的字段集），服务端无从按 auth 校验附件码，
+      // 「换 auth 即作废」是没有依据的推断；而在编辑器里切换「回复/贴条」恰好会换 action、
+      // 换 auth，那样做会把正文里已经插好的图片附件码清掉（正文有 `[img]`、参数为空）。
       if (this.ctx.type === ReplyType.EDIT && this.pendingAttachments.length === 0 &&
         authResult.attachments.length > 0) {
-        this.pendingAttachments = authResult.attachments
-        this.pendingAttachmentsCheck = authResult.attachmentsCheck
+        restoreServerAttachments(this.pendingAttachments, authResult.attachments,
+          authResult.attachmentsCheck)
       }
     }
     return authResult
@@ -304,23 +366,23 @@ export class ReplyManagerClass {
     if (!uploadResult.ok) {
       throw new Error(uploadResult.error || '上传图片失败')
     }
-    this.appendAttachment(uploadResult)
+    appendPendingAttachment(this.pendingAttachments, uploadResult)
     return uploadResult.url
   }
 
   /**
-   * 累积一次上传的附件参数。
+   * 按正文引用过滤并拼出提交用的附件参数（实现见 `PostAttachments.buildAttachmentParams`）。
    *
-   * 对应 Java PostParam.appendAttachment / L0 拼接：每个非空元素后追加 `\t`，
-   * 最终串含尾 `\t`；多次上传形如 `"a1\ta2\t"`。
-   *
-   * @param uploadResult 单次上传结果
+   * @param content - 本次提交的正文（FLOOR 场景含服务端引用块）
+   * @returns 过滤后的附件参数对
    */
-  private appendAttachment(uploadResult: UploadAttachmentResult): void {
-    if (uploadResult.attachments.length > 0) {
-      this.pendingAttachments += uploadResult.attachments + '\t'
-      this.pendingAttachmentsCheck += uploadResult.attachmentsCheck + '\t'
+  private collectAttachmentParams(content: string): AttachmentParams {
+    const params: AttachmentParams = buildAttachmentParams(this.pendingAttachments, content)
+    if (params.dropped > 0) {
+      logger.verbose('[REPLY] dropped %{public}d attachment(s) not referenced by content',
+        params.dropped)
     }
+    return params
   }
 
   /**
@@ -357,8 +419,8 @@ export class ReplyManagerClass {
     if (!videoResult.ok) {
       throw new Error(videoResult.error || '上传动态照片视频失败')
     }
-    this.appendAttachment(coverResult)
-    this.appendAttachment(videoResult)
+    appendPendingAttachment(this.pendingAttachments, coverResult)
+    appendPendingAttachment(this.pendingAttachments, videoResult)
     return buildMovingPhotoTag(coverResult.url, videoResult.url)
   }
 
@@ -390,6 +452,12 @@ export class ReplyManagerClass {
       return err
     }
 
+    // 附件参数不在发送层再设闸门：官方 `L0` 对 `attachments` / `attachments_check`
+    // 是各自跳过空元素拼接的（长度允许不等），本地按"两侧数量必须相等"拦截会误杀
+    // 合法形态；真正要防的「正文没引用这张图」在 `buildAttachmentParams` 里按引用过滤。
+    logger.verbose('[REPLY] submit type=%{public}s pending=%{public}d',
+      String(this.ctx.type), this.pendingAttachments.length)
+
     let result: PostReplyResult
     if (this.ctx.type === ReplyType.EDIT) {
       result = await this.sendEdit(userText, isAnonymous)
@@ -397,6 +465,11 @@ export class ReplyManagerClass {
       result = await this.sendComment(userText, isAnonymous)
     } else {
       result = await this.sendReply(userText, isAnonymous)
+    }
+    if (result.ok) {
+      // 附件参数随本次提交被服务端消费，成功后必须立刻丢弃：本类是进程级单例，
+      // 留着会让下一次「没插图」的回复带着旧参数提交（服务端报附件确认错误）。
+      this.pendingAttachments = []
     }
     return result
   }
@@ -422,11 +495,13 @@ export class ReplyManagerClass {
       content = quoteBlock + userText
     }
     const pid: number = this.ctx.targetPost ? this.ctx.targetPost.pid : 0
+    const attachParams: AttachmentParams = this.collectAttachmentParams(content)
+    logger.verbose('[REPLY] reply attachments kept=%{public}d', attachParams.kept)
     return postReply(
       appStore.auth.token, this.ctx.tid, this.ctx.fid,
       content,
       isAnonymous ? 1 : 0,
-      this.pendingAttachments, this.pendingAttachmentsCheck,
+      attachParams.attachments, attachParams.attachmentsCheck,
       0, this.ctx.type === ReplyType.FLOOR ? 'quote' : 'reply', pid, ''
     )
   }
@@ -437,10 +512,12 @@ export class ReplyManagerClass {
       err.error = '未指定目标楼层'
       return err
     }
+    const attachParams: AttachmentParams = this.collectAttachmentParams(userText)
+    logger.verbose('[REPLY] modify attachments kept=%{public}d', attachParams.kept)
     return postReply(
       appStore.auth.token, this.ctx.tid, this.ctx.fid,
       userText, isAnonymous ? 1 : 0,
-      this.pendingAttachments, this.pendingAttachmentsCheck,
+      attachParams.attachments, attachParams.attachmentsCheck,
       0, 'modify', this.ctx.targetPost.pid, ''
     )
   }
@@ -451,10 +528,15 @@ export class ReplyManagerClass {
       err.error = '未指定目标楼层'
       return err
     }
+    // 贴条同样提交附件（官方 tietiao 只是去掉 subject/address，附件参数照发）：
+    // 贴条模式下图片按钮仍可用，丢了附件参数就会让正文的 `[img]` 变成未声明附件。
+    const attachParams: AttachmentParams = this.collectAttachmentParams(userText)
+    logger.verbose('[REPLY] tietiao attachments kept=%{public}d', attachParams.kept)
     return postComment(
       appStore.auth.token, this.ctx.tid, this.ctx.targetPost.pid,
       this.ctx.fid, userText,
-      isAnonymous ? 1 : 0
+      isAnonymous ? 1 : 0,
+      attachParams.attachments, attachParams.attachmentsCheck
     )
   }
 
