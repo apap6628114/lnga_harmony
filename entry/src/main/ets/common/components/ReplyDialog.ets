@@ -563,10 +563,16 @@ export struct ReplyDialog {
       return
     }
     this.sending = true
+    /*
+     * 提交前快照草稿键：提交是长往返，期间用户可能关掉面板、又打开**另一个帖子**的编辑器，
+     * 那时 `clearDraft()` 的"当前键"已经指向那一份草稿，无参清理会删掉别人的草稿 JSON 与
+     * 媒体副本目录（`replyManager.send` 内部已按同一快照清理，这里是把同一条契约补齐）。
+     */
+    const draftKey: string = replyManager.draftKeySnapshot
     this.onSend(this.replyText.trim(), this.isAnonymous).then(() => {
       // 提交成功：清掉草稿（含媒体副本）。此时面板通常已被调用方关闭，
       // 但草稿属于 manager（进程级单例），与组件生命周期无关，必须清。
-      replyManager.clearDraft()
+      replyManager.clearDraft(draftKey)
       if (!this.disposed) {
         this.onClose()
       }

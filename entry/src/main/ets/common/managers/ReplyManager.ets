@@ -47,6 +47,19 @@ export class ReplyContext {
   quotePrefix: string = ''
 }
 
+/**
+ * 「编辑目标标题」的获取结果（见 {@link ReplyManagerClass.ensureEditSubject}）。
+ *
+ * 分开表达"没有标题"与"取标题这一步失败了"：前者是服务端确实没回传（可继续提交，让服务端
+ * 给出真实原因），后者是网络/鉴权失败（提交注定带着空标题，报错文案会指向错误的方向）。
+ */
+class EditSubjectResult {
+  /** 拿到的标题；没拿到时为空串。 */
+  title: string = ''
+  /** 取标题过程中的失败原因；成功或"服务端没给"时为空串。 */
+  error: string = ''
+}
+
 @Observed
 export class ReplyManagerClass implements DraftUploadHost {
   private ctx: ReplyContext = new ReplyContext()
@@ -62,6 +75,24 @@ export class ReplyManagerClass implements DraftUploadHost {
   private pendingAttachments: PendingAttachment[] = []
   /** 当前编辑器会话目标（`action|uid|fid|tid|pid`；仅用于诊断日志）。 */
   private sessionTarget: string = ''
+
+  /**
+   * 编辑目标的**帖子标题**（modify 提交必带，见 {@link ensureEditSubject}）。
+   *
+   * 生命周期与会话同边界：`beginSession` 清空、`getOrFetchAuth` 在 modify 场景回填。
+   * 它是 manager 的会话状态而非渲染数据，因此不放进 `ReplyContext`。
+   */
+  private editSubject: string = ''
+
+  /**
+   * 编辑器会话代数（每次 `beginSession` 自增）。
+   *
+   * 用来丢弃**跨会话迟到的异步结果**：`startEdit` 会异步预取 post/check，用户完全可能
+   * 在这一往返期间关掉编辑器、又打开另一个帖子的编辑器（本类是进程级单例，两次会话共用
+   * 同一份字段）。没有这道守卫时，帖子 A 迟到的响应会把 A 的标题写进帖子 B 的会话，
+   * modify 提交就带上**别的帖子的标题**。
+   */
+  private sessionGeneration: number = 0
 
   get type(): ReplyType {
     return this.ctx.type
@@ -214,8 +245,10 @@ export class ReplyManagerClass implements DraftUploadHost {
     // 不做"同目标复用"。真机上排查「附件确认错误」时要能一眼看到这次提交属于哪个目标。
     logger.verbose('[REPLY] session begin target=%{public}s', this.sessionTarget)
     this.clearSession()
-    // 上一个会话的媒体清单不能带入新会话：它属于另一份草稿键
+    // 上一个会话的媒体清单与编辑标题不能带入新会话：它们属于另一份草稿键 / 另一个帖子
     this.sessionMedia = []
+    this.editSubject = ''
+    this.sessionGeneration++
     // 本类同时只有一个编辑器会话：先清掉上一个会话的活跃登记，避免异常关闭路径
     // （组件销毁时没走 clearDraft）在 `DraftStore` 里留下永久豁免的僵尸键
     draftStore.endAllSessions()
@@ -286,6 +319,74 @@ export class ReplyManagerClass implements DraftUploadHost {
     this.ctx.targetPost = post
     this.ctx.quotePrefix = ''
     this.beginSession('modify')
+    /*
+     * 预取 post/check：编辑提交**必须**带回帖子标题（见 `ensureEditSubject`），标题只在
+     * check 响应里（`ActionCheck.subject`）。在打开编辑器时就把这次请求发出去，等用户改完
+     * 正文点保存时标题早已就位——提交路径因此不必再为标题多等一次往返。
+     *
+     * 顺带把服务端既有附件的回填（`attachArray`）提前到打开时刻，与官方
+     * `PostActivity.newIntent` → 每次进编辑器重新取 `ActionCheck` 同构；失败不影响编辑
+     * （提交时 `sendEdit` 会再取一次并记录真实原因），故这里只记日志、不改 UI 状态。
+     *
+     * 注意**两种失败都要记**：`getPostAuth` 内部自己 try/catch，网络/鉴权失败是
+     * **返回 `ok=false` 而不是抛异常**，只挂 `.catch` 会让这类失败彻底静默。
+     */
+    this.ensureEditSubject().then((result: EditSubjectResult): void => {
+      if (result.title.length === 0) {
+        logger.warn('[REPLY] edit subject prefetch: %{public}s', result.error)
+      }
+    }).catch((error: Object) => {
+      // 预取是"顺手"的一步：意外异常不该影响打开编辑器，提交路径会重新取并给出结论
+      logger.warn('[REPLY] edit subject prefetch threw: %{public}s', String(error))
+    })
+  }
+
+  /**
+   * 确保「编辑目标标题」已就位（modify 提交必带）。
+   *
+   * **为什么必须带**：官方 `NetRequestWrapper.L0/K0` 只在 tietiao 分支
+   * `hashMap.remove(ft.k.X)`（X=`subject`），**modify 分支保留 subject**；官方编辑页把
+   * `ActionCheck.subject`（post/check 回传的帖子标题）回填进标题框（旧版 `PostFragment`
+   * 的 modify 分支），并在提交时原样带回。早先这里对 modify 无条件提交空 `subject`
+   * （`postReply(..., '', ...)`），与官方参数形态不一致。
+   *
+   * **标题只有一个来源：服务端 post/check 回传值**。刻意**不做本地兜底**（不用本页
+   * `PostInfo.subject`、也不用 `threadSubject`）：官方 `ActionCheck.fromDraft` 的兜底源是
+   * 本地**草稿**库里存过的标题，而不是当前页面数据；拿页面数据兜底意味着"服务端这次没给
+   * 标题"时会用一个可能陈旧的本地值去覆盖服务端标题（版主改过标题、页面停留很久都会陈旧），
+   * 这是整条链路上唯一可能**改坏服务端数据**的分支。没拿到就保持空串，与官方旧版
+   * "modify 无 subject 时隐藏标题框、照样提交"的形态一致，并让真实原因留在日志里。
+   *
+   * @returns 标题与（若失败的）失败原因，供调用方决定是"继续提交"还是"报真实原因"
+   */
+  private async ensureEditSubject(): Promise<EditSubjectResult> {
+    const out: EditSubjectResult = new EditSubjectResult()
+    if (this.editSubject.length > 0) {
+      out.title = this.editSubject
+      return out
+    }
+    const generation: number = this.sessionGeneration
+    const authResult: PostAuthResult = await this.getOrFetchAuth()
+    // 迟到结果一律丢弃：这一往返期间用户可能已经换了编辑目标（见 sessionGeneration）
+    if (this.sessionGeneration !== generation) {
+      out.error = '编辑器会话已切换'
+      return out
+    }
+    if (authResult.ok && authResult.subject.length > 0) {
+      this.editSubject = authResult.subject
+      out.title = this.editSubject
+      return out
+    }
+    // 保留真实原因：早先只记 verbose 日志就继续提交空标题，用户看到的是服务端那句报错，
+    // 而真正的原因（鉴权失败 / 服务端未回传）在任何地方都没留下痕迹。
+    // 注意这里**必须**与 title 一起返回，不能被任何兜底分支清空（否则 `sendEdit` 的
+    // "没拿到标题"告警会因为 title 被兜底填上而永远不打印）。
+    if (!authResult.ok) {
+      out.error = authResult.error.length > 0 ? authResult.error : '获取帖子标题失败'
+    } else {
+      out.error = 'server-returned-none'
+    }
+    return out
   }
 
   reset(): void {
@@ -297,8 +398,16 @@ export class ReplyManagerClass implements DraftUploadHost {
     this.ctx.quotePrefix = ''
     this.sessionTarget = ''
     this.sessionMedia = []
+    this.editSubject = ''
     this.clearSession()
     draftStore.endAllSessions()
+    /*
+     * 代数必须自增：`reset()` 是"整体作废会话状态"的出口（登出、换号等场景会用它），
+     * 而此刻可能有 post/check 在途——不作废它们，迟到的结果会通过代际校验，把**上一个
+     * 账号/上一个帖子**的标题（乃至凭证）写回已经清空的会话。当前主代码没有调用 `reset()`，
+     * 但它是唯一"清空全部会话状态"的公开出口，这个不变量必须在它自己身上成立。
+     */
+    this.sessionGeneration++
   }
 
   // 预览内容：引用楼层时展示 quotePrefix + 用户输入（仅编辑器预览用）
@@ -359,11 +468,31 @@ export class ReplyManagerClass implements DraftUploadHost {
     if (this.cachedAuth && this.cachedAuth.ok && this.cachedAuthAction === actionParam) {
       return this.cachedAuth
     }
+    // 记下发起时的会话代数：本次请求可能跨过一次会话切换（用户关掉编辑器又开了另一个
+    // 帖子的编辑器），那样结果属于**上一个会话**，回填进缓存会让新会话拿到别的帖子的
+    // auth/标题（见 sessionGeneration）。
+    const generation: number = this.sessionGeneration
     const authResult: PostAuthResult = await getPostAuth(
       appStore.auth.token, this.ctx.fid, actionParam,
       this.ctx.tid, this.ctx.targetPost ? this.ctx.targetPost.pid : 0,
       0
     )
+    /*
+     * 代际失配 = 这一往返期间编辑器会话已经换过（用户关掉这个编辑器又打开了另一个帖子的），
+     * 这份结果属于**上一个会话**，必须整个丢掉——**包括返回值**。
+     *
+     * 只跳过回填是不够的：调用方拿到它就会用「A 帖的 auth/attach_url + B 帖的 fid」去上传，
+     * 并把 A 的附件凭证追加进 B 的 `pendingAttachments`（`uploadImage` 拿到结果后立刻
+     * `appendPendingAttachment`），提交时就成了跨帖的脏附件参数（§7.2 那类"附件确认错误"）。
+     * 因此这里返回一个**显式失败**的结果，让调用方走各自既有的失败分支（上传抛错、提交报错），
+     * 而不是继续拿着上辈子的凭证干活。
+     */
+    if (this.sessionGeneration !== generation) {
+      logger.verbose('[REPLY] drop stale check result (session switched)')
+      const stale: PostAuthResult = new PostAuthResult()
+      stale.error = '编辑器会话已切换，请重试'
+      return stale
+    }
     if (authResult.ok) {
       this.cachedAuth = authResult
       this.cachedAuthAction = actionParam
@@ -380,6 +509,11 @@ export class ReplyManagerClass implements DraftUploadHost {
         restoreServerAttachments(this.pendingAttachments, authResult.attachments,
           authResult.attachmentsCheck)
       }
+      // 编辑场景记下帖子标题（modify 提交必带，见 `ensureEditSubject`）：
+      // 服务端未回传时保留已取到的值，避免把已知标题覆盖成空串
+      if (this.ctx.type === ReplyType.EDIT && authResult.subject.length > 0) {
+        this.editSubject = authResult.subject
+      }
     }
     return authResult
   }
@@ -392,6 +526,8 @@ export class ReplyManagerClass implements DraftUploadHost {
   // 上传图片：pick → compress → upload → 插入 [img] → 记录附件参数
   async uploadImage(imageData: ArrayBuffer, fileName: string): Promise<string> {
     logger.verbose('[IMGUP] getOrFetchAuth start')
+    // 本方法的两个 await（check + 上传）都可能跨过一次会话切换，快照代数用于最后的登记判定
+    const generation: number = this.sessionGeneration
     const authResult: PostAuthResult = await this.getOrFetchAuth()
     logger.verbose('[IMGUP] getOrFetchAuth ok: %{public}s', String(authResult.ok))
     if (!authResult.ok) {
@@ -406,6 +542,15 @@ export class ReplyManagerClass implements DraftUploadHost {
     logger.verbose('[IMGUP] uploadAttachment ok: %{public}s url: %{public}s err: %{public}s', String(uploadResult.ok), String(uploadResult.url), String(uploadResult.error))
     if (!uploadResult.ok) {
       throw new Error(uploadResult.error || '上传图片失败')
+    }
+    /*
+     * 会计数失配时**不登记**这条凭证：会话已换到另一个帖子，把它追加进 `pendingAttachments`
+     * 会让新会话的 `pendingUrls` 混入上一帖的地址（提交时靠正文引用过滤兜住，但这一族状态
+     * 本就不该跨会话）。图已上传、URL 仍返回给调用方，由调用方按自己的 disposed 判定处理。
+     */
+    if (this.sessionGeneration !== generation) {
+      logger.verbose('[IMGUP] session switched, skip attachment registration')
+      return uploadResult.url
     }
     if (!appendPendingAttachment(this.pendingAttachments, uploadResult)) {
       // 服务端没回 `attachments`（提交参数）：正文会拿到一个地址，而请求里没有对应附件参数
@@ -427,8 +572,21 @@ export class ReplyManagerClass implements DraftUploadHost {
    * @returns 上传后的图片 URL（用于拼 `[img]` 标签）
    */
   async uploadImageWithDraft(imageData: ArrayBuffer, fileName: string): Promise<string> {
+    const generation: number = this.sessionGeneration
+    const draftKey: string = this.draftKey()
     const imageUrl: string = await this.uploadImage(imageData, fileName)
-    const localPath: string = await draftMediaStore.saveCopy(this.draftKey(), imageData, fileName)
+    /*
+     * 落副本与登记**必须过代际**：`uploadImage` 里含 post/check + 上传两个往返，用户完全可能
+     * 在这期间关掉本编辑器、又打开另一个帖子的编辑器。用快照 key 之外的"当前"状态去落盘，
+     * A 帖的图片字节会写进 **B 帖的草稿媒体目录**、幽灵记录会 push 进 B 的 `sessionMedia`，
+     * 之后 B 提交时那条副本还会被当成"正文引用着、但没凭证"的媒体去重传。
+     * 会话已切换时本次上传的结果已无用武之地，直接返回 URL（不落副本、不登记）。
+     */
+    if (this.sessionGeneration !== generation) {
+      logger.verbose('[DRAFT] skip media copy, session switched')
+      return imageUrl
+    }
+    const localPath: string = await draftMediaStore.saveCopy(draftKey, imageData, fileName)
     if (localPath.length === 0) {
       // 副本失败不阻断本次上传：本次发送仍然有效，只是这条媒体失去懒重传能力
       logger.warn('[DRAFT] copy still image failed, re-upload unavailable')
@@ -455,11 +613,24 @@ export class ReplyManagerClass implements DraftUploadHost {
    * @returns 可插入正文的 BBCode 三元组
    */
   async uploadMovingPhotoWithDraft(coverData: ArrayBuffer, videoData: ArrayBuffer): Promise<string> {
+    const generation: number = this.sessionGeneration
+    const draftKey: string = this.draftKey()
     const tag: string = await this.uploadMovingPhoto(coverData, videoData)
-    const coverLocal: string = await draftMediaStore.saveCopy(this.draftKey(), coverData,
+    // 与 `uploadImageWithDraft` 同一把尺：会话已切换就不落副本、不登记（见该方法的说明）
+    if (this.sessionGeneration !== generation) {
+      logger.verbose('[DRAFT] skip media copy, session switched')
+      return tag
+    }
+    const coverLocal: string = await draftMediaStore.saveCopy(draftKey, coverData,
       MOVING_PHOTO_COVER_NAME)
     const videoLocal: string = coverLocal.length === 0 ? ''
-      : await draftMediaStore.saveCopy(this.draftKey(), videoData, MOVING_PHOTO_VIDEO_NAME)
+      : await draftMediaStore.saveCopy(draftKey, videoData, MOVING_PHOTO_VIDEO_NAME)
+    // 第二次落盘后**再复查一次**代数：两半是两次独立 IO，期间同样可能换会话。
+    // 不复查就会把"封面已落进 A 的目录、视频落进 B 的目录、记录 push 进 B"这种劈叉态写出来
+    if (this.sessionGeneration !== generation) {
+      logger.verbose('[DRAFT] skip moving photo record, session switched')
+      return tag
+    }
     if (coverLocal.length === 0 || videoLocal.length === 0) {
       logger.warn('[DRAFT] copy moving photo failed, re-upload unavailable')
       return tag
@@ -571,6 +742,9 @@ export class ReplyManagerClass implements DraftUploadHost {
       err.error = authResult.error || '无权回复'
       return err
     }
+    // 本次提交要清理的草稿键：提交是长往返，期间会话可能已被换成另一个编辑器，
+    // 成功后必须清**这一份**而不是"当时的那一份"（见下面的 clearDraft 注释）
+    const draftKey: string = this.draftKey()
 
     // 附件参数不在发送层再设闸门：官方 `L0` 对 `attachments` / `attachments_check`
     // 是各自跳过空元素拼接的（长度允许不等），本地按"两侧数量必须相等"拦截会误杀
@@ -590,8 +764,15 @@ export class ReplyManagerClass implements DraftUploadHost {
       // 附件参数随本次提交被服务端消费，成功后必须立刻丢弃：本类是进程级单例，
       // 留着会让下一次「没插图」的回复带着旧参数提交（服务端报附件确认错误）。
       this.pendingAttachments = []
-      // 提交成功 = 这份草稿已经变成帖子：草稿 JSON 与媒体副本目录一起回收
-      this.clearDraft()
+      /*
+       * 提交成功 = 这份草稿已经变成帖子：草稿 JSON 与媒体副本目录一起回收。
+       *
+       * **必须按提交前快照的键清，不能用"当前"键**：提交期间用户可能已经关掉这个编辑器、
+       * 又打开了另一个帖子的编辑器（`draftKey()` 随后指向那一份草稿），用当前键清理会删掉
+       * **别人**的草稿 JSON 与媒体副本目录——而那个会话的 `sessionMedia` 仍指向被删的文件，
+       * 它提交时会撞上「本地副本已不存在」的硬失败。
+       */
+      this.clearDraft(draftKey)
     }
     return result
   }
@@ -634,13 +815,31 @@ export class ReplyManagerClass implements DraftUploadHost {
       err.error = '未指定目标楼层'
       return err
     }
+    // 标题必须在提交前就位（见 `ensureEditSubject`）：它只来自 post/check 响应，正常路径下
+    // `startEdit` 已预取；这里再确保一次，覆盖「预取失败 / 编辑器开了很久」两种情形。
+    const subjectResult: EditSubjectResult = await this.ensureEditSubject()
+    if (subjectResult.title.length === 0) {
+      /*
+       * 没拿到标题仍然提交（与官方旧版 modify "无 subject 就隐藏标题框、照样提交"同形态，
+       * 也让服务端给出真实结论），但**必须把原因记到 warn 级**：Release 下
+       * `logger.verbose` 会被 `VERBOSE` 开关整体静默掉，而这条正是真机排查
+       * 「编辑还是失败」时唯一能区分各根因的线索——
+       * `server-returned-none` = 服务端确实没回传；`编辑器会话已切换` = 结果被代数守卫丢弃；
+       * 其余文案 = check 本身失败（注意提交路径上的"未登录"已被 `send` 的鉴权门禁拦下，
+       * 这里能看到的多半是服务端拒绝或网络异常）。
+       */
+      logger.warn('[REPLY] modify without subject target=%{public}s authErr=%{public}s',
+        this.sessionTarget, subjectResult.error)
+    }
     const attachParams: AttachmentParams = this.collectAttachmentParams(userText)
     logger.verbose('[REPLY] modify attachments kept=%{public}d', attachParams.kept)
+    // 用 `subjectResult.title` 而不是 `this.editSubject`：两者当前恒等，但直接消费刚拿到的
+    // 返回值，就不依赖"这个字段一定被回填过"的隐式耦合
     return postReply(
       appStore.auth.token, this.ctx.tid, this.ctx.fid,
       userText, isAnonymous ? 1 : 0,
       attachParams.attachments, attachParams.attachmentsCheck,
-      0, 'modify', this.ctx.targetPost.pid, ''
+      0, 'modify', this.ctx.targetPost.pid, subjectResult.title
     )
   }
 
@@ -883,18 +1082,37 @@ export class ReplyManagerClass implements DraftUploadHost {
   }
 
   /**
+   * 当前会话的草稿键（公开只读视图）。
+   *
+   * 调用方在发起提交**之前**取一份快照，成功后用它清理草稿：提交是长往返，期间用户可能
+   * 已经打开另一个帖子的编辑器，那时"当前键"已经指向那一份草稿，拿它去清会删错东西
+   * （见 `send` 成功分支与 `clearDraft` 的说明）。
+   */
+  get draftKeySnapshot(): string {
+    return this.draftKey()
+  }
+
+  /**
    * 删除草稿（连同媒体副本目录），并注销会话登记。
    *
    * 提交成功、用户明确放弃草稿、"内容为空时关闭"三处调用；"清除缓存"走
    * `SettingsPanel.clearCache` 的目录清单（整目录删除）+ `draftStore.reloadAfterClear`。
+   *
+   * @param key - 要清理的草稿键；省略时取当前会话的键。**异步提交成功后必须传"提交前
+   *   快照的键"**：那时 `ctx` 可能已经指向另一个编辑器，用当前键会删掉别人的草稿与媒体副本
+   *   （见 `send` 成功分支的说明）。
    */
-  clearDraft(): void {
-    const key: string = this.draftKey()
+  clearDraft(key?: string): void {
+    const target: string = key === undefined ? this.draftKey() : key
     // clearDraft 内部会 endSession(key)；这里补一次是为了覆盖"键在会话开始后变化"的异常路径
-    draftStore.clearDraft(key)
-    draftStore.endSession(key)
-    draftMediaStore.removeDraftMedia(key)
-    this.sessionMedia = []
+    draftStore.clearDraft(target)
+    draftStore.endSession(target)
+    draftMediaStore.removeDraftMedia(target)
+    // 只有清的是**当前**会话的草稿时才动本地媒体清单：清了别的键却清空当前清单，
+    // 会让当前会话已上传的媒体失去重传能力
+    if (target === this.draftKey()) {
+      this.sessionMedia = []
+    }
   }
 
   private getStringByteLength(str: string): number {

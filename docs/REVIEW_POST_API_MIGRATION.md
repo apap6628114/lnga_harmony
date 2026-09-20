@@ -343,3 +343,229 @@ manager 的 `uploadImage` / `send`；两条链路是**两个独立 manager**。
   APK 里没有该文案，静态不可证；7.5 的 F1–F3 是把它落到真机上的最小实验，**不需要任何
   额外的线上请求**。
 
+---
+
+## 8. 追加记录（2026-09）：编辑自己的主题时「标题过短 / 帖子不存在」
+
+> 现象来源：用户报告**编辑自己以前发的主帖**（不是回复）时，提示「标题过短…」或
+> 「帖子不存在」。
+> 结论：**编辑（modify）提交丢掉了帖子标题**——官方协议要求 modify 携带 `subject`
+> （逐行证据见 8.1 第 1、2 条），而鸿蒙端把它硬编码为空串。已修复。
+> 因果边界要说清：**「带标题」是协议事实；「空标题正是那两句报错的原因」是推断**，
+> 逐字复现需要一次写提交（本报告不做），只能由 8.4 的真机回归确认。
+> 与帖子是否真的存在、账号是否有权限无关——这两点在只读实测中都已被单独复现并排除
+> （8.1 第 4、5 条）。本次记录的是**第四个**同族缺陷
+> （前三个：会话状态跨编辑器存活 §7、贴条丢附件 §7.4、尾随 `\t` §2 G4）。
+
+### 8.1 取证（全部只读，零写操作）
+
+1. **官方 APK：modify 必带 subject**。`NetRequestWrapper.java` 的 L0/K0 只在 **tietiao**
+   分支 `hashMap.remove(ft.k.X)`（X=`subject`：L0 `:1223`、K0 `:1119`，都在与
+   `POST_TIETIAO` 同一个 else 分支内）；**modify 分支不删**（L0 `:1210-1212`、
+   K0 `:1105-1107`），且 L0 在 `:1159` 无条件 `put(ft.k.X, str6)`。
+   → 官方**所有非贴条提交都携带标题**，modify 在内。
+2. **服务端：modify 鉴权响应回传标题**。只读实测（命令见 8.5）：
+   `post/check`（`action=modify`，output=12）响应 `result` 含 `subject`（本主题原标题）、
+   `content`（编辑回显正文）、`auth`、`attach_url`、`__F`、`force_titletype` 等。
+   官方 `ActionCheck.java:54-56` 正是 `@SerializedName(ft.k.X) String subject`。
+3. **官方编辑页闭环（独立审查复核后补齐的关键一段）**：编辑主帖的真实链路是
+   `ArticleDetailFragment.doPostCheck`（`:1081-1095`，`actionCheck.fromDraft(...)`）→
+   `PostActivity.newIntent` → **`PostFragment`（K0 通道）** →
+   - `PostFragment.java:537-540`：`if (!d1.k(actionCheck.getSubject())) binding.j.setText(...)`
+     ——把服务端 `subject` 回填进标题框（`binding.j`）；
+   - `PostFragment.java:634` 取标题框文本 → `:690 K0(subject, content, mActionCheck, …)` →
+     `NetRequestWrapper.java:1054 hashMap.put(ft.k.X, subject)`。
+   → 官方把"服务端给的标题"原样带回。**注意卡片 §2.2 把 K0/`PostFragment` 标为「旧版」是误导**：
+   它正是编辑主帖在用的通道（L0 那条是 `PublishActivity` 新版发帖页）。
+   同一个 if 里还有一条对本次判断很重要的边界：`PostFragment.java:548-556` 的 modify 分支在
+   `subject` 为空时**隐藏标题框、照样提交空串** —— 说明官方预期并接受"服务端没给标题"这种形态，
+   空 `subject` 至少对**非首帖**不致命。
+4. **鸿蒙端丢掉了它**。`getPostAuth` 只解析 `content`（`ThreadWriteApi.ets` 的
+   `result.content = payload['content']`），不解析 `subject`；
+   编辑提交 `ReplyManager.sendEdit` → `postReply(..., 'modify', pid, '')`
+   第 11 个参数（`postSubject`）**硬编码空串**。即：服务端把标题送回来，客户端当面丢掉，
+   再提交一个空标题回去。
+5. **签名不受影响（本次改动正确性的一条硬证据）**：官方 modify 的 signParams 是
+   `v0(hashMap, tid, content)` = `tid + content`，**不含 subject**（L0 `:1210-1212`）；
+   只有 `new` 是 `fid + subject + content`（`:1215`）。鸿蒙端 `postReply` 的
+   `String(tid) + normalizedContent` 因此无需改动。
+6. **「帖子不存在」与「标题过短」的文案出处**：两句都**不在鸿蒙端**（全项目 grep 无此文案，
+   只出现在本次新增的注释里），只能来自服务端 `msg`（`ThreadWriteApi.ets:54-65` 的
+   `readAppError` 原样透出）。「帖子不存在」的触发已实测定位：服务端 `code=15` →
+   `msg="找不到帖子"`（`post/check(action=modify)` 带不存在的 pid 时返回的正是它，见 8.5）。
+   项目内另有一处相近文案（`SaveThreadDialogs.ets` 的「帖子不存在或已被删除」，离线存档校验用），
+   与本次报错不是同一处。
+7. **顺带核实「首帖 pid」不是嫌疑项**（曾被列为疑似根因，已排除）：
+   - 服务端 `post/check(action=modify)` 用 `pid=0` 才返回 `code=0` + 原标题；
+     用非 0 pid 时按"改某楼层"判定，实测得到 `code=54 只有作者或版主可以修改内容`。
+   - 帖子 HTML（APP `read.php __output=17`）里首帖的锚点就是
+     **`<a id='pid0Anchor'>` / `<a name='l0'>`**（同页其它楼层是 `pid<真实pid>Anchor` / `l1…`），
+     即**首帖的 pid 在服务端表示法里就是 0**；解析侧 `PostArgScanner.ts:134` 取
+     `commonui.postArg.proc` 的第 [10] 参作为 pid，样本中 `lou=0` 一律 `pid=0`。
+   - 鸿蒙端编辑提交的 pid 取自 `targetPost.pid`（`ThreadPanel.ets:2045` →
+     `replyManager.startEdit(p, …)`），与官方 `Edit.pid` 同源，首帖因此同为 `0`。
+   → **pid 一致，不是本次故障的成因**；排除它之后，差别只剩 `subject`。
+
+> 因果边界（**必须与上面的协议事实分开读**）：
+> - **已证实**：官方 modify 携带 `subject`，且它来自服务端 check 回传的标题（第 1–3、5 条）。
+> - **未证实**：服务端在提交阶段"因为 subject 为空"而回「标题过短」。第 3 条末尾那条边界
+>   （官方对无 subject 的 modify 照常提交）说明这句话不能推而广之；逐字复现需要一次
+>   `post` 写提交，本报告按约束不做，交给 8.4 的真机回归。
+> - 另一条与 subject 无关、同样会报 `code=15`「找不到帖子」的可能：提交缺
+>   `__ngaClientChecksum`（见 `ThreadWriteApi.ets:256` 的注释）。鸿蒙端主提交一直带该字段
+>   （`includeClientChecksum=true`），故本次不列为嫌疑，但排查时值得一并核对。
+
+### 8.2 根因
+
+`modify` 是**唯一**被漏掉标题语义的 action：`postNewTopic` 一直带 subject、
+`postComment`（tietiao）本就该去掉 subject，只有编辑提交把 subject 写死为空。
+编辑链路另外两处同源缺口：
+
+- 编辑 UI 不回显标题（`ReplyDialog` 编辑模式只填正文），用户既看不到、也无从修正；
+- 服务端把标题送回来（check 响应 `subject`）却没人接：`getPostAuth` 只解析了 `content`。
+
+> 顺带记录一个**刻意没采用**的兜底源：本页 `PostInfo.subject` 确实有值（`ThreadParser.ets:107`
+> 与 HTML 链路的 `extractPostSubject` 都填，首帖 `pid=0` 时就是主题标题），但官方
+> `ActionCheck.fromDraft` 的兜底源是**本地草稿库**里存过的标题，官方从不把"当前页面数据"
+> 当作提交标题（`ArticleDetailFragment.java:1098-1114` 只把 address/attachs/video 搬进
+> `PostActivity` intent，**不搬 subject**）。用页面数据兜底意味着"服务端这次没给标题"时会拿
+> 一个可能陈旧的值（版主改过标题、页面停留很久）去覆盖服务端标题——那是整条链路上唯一
+> 可能**改坏服务端数据**的分支，因此第一版实现里的本地兜底在审查后已被移除（见 8.6 A1）。
+
+### 8.3 修复（本次）
+
+| 文件 | 改动 |
+|---|---|
+| `entry/src/main/ets/model/ThreadResult.ets` | `PostAuthResult` 新增 `subject`（post/check 回传的帖子标题，带契约注释） |
+| `entry/src/main/ets/service/api/ThreadWriteApi.ets` | `getPostAuth` 解析 `result.subject`（modify 场景） |
+| `entry/src/main/ets/common/managers/ReplyManager.ets` | 新增 `editSubject` + `ensureEditSubject()`：`startEdit` 时预取 post/check（与官方"每次进编辑器重新取 `ActionCheck`"同构，顺带把 `attachArray` 回填提前到打开时刻），预取失败按 `warn` 记录；`getOrFetchAuth` 在 EDIT 分支回填标题；`sendEdit` 提交前确保标题就位并把它交给 `postReply`；`beginSession` / `reset` 清空；新增 `sessionGeneration` 会话代数守卫（见 8.6：审查后已收紧到"返回值 + 迟到上传 + 附件登记"三处） |
+| `entry/src/main/ets/common/components/ReplyDialog.ets` | 提交成功后按**提交前快照**的草稿键清理（`draftKeySnapshot`） |
+| `entry/src/main/ets/service/LogoutOrchestrator.ets` | 登出时补 `replyManager.reset()`（该单例持有服务端签发的临时凭证与会话标题，`appStore.clearAuth()` 碰不到它，见 8.6 A4） |
+
+口径说明：
+- **不编造标题**——标题只有一个来源：服务端 check 回传值。没拿到就保持空串
+  （与修复前一致，也与官方"modify 无 subject 时隐藏标题框、照样提交"的形态一致），
+  绝不拿本地页面数据顶上（理由见 8.2 末段）。
+- **也不假装成功**——没拿到标题仍然提交（让服务端给真实结论），但会把原因按 `warn` 记下来
+  （见 8.6 A2/A3）。
+
+### 8.4 真机回归（需用户执行，本报告不含任何线上写操作）
+
+| # | 步骤 | 修复前 | 期望 |
+|---|---|---|---|
+| 1 | 打开自己发的主题 → 首帖「编辑」→ 改一个字 → 保存 | 提示「标题过短…」或「帖子不存在」 | 「编辑成功」+ 楼层正文更新 |
+| 2 | 同上但**不改内容**直接保存 | 同上 | 成功（服务端容忍同内容 modify） |
+| 3 | 编辑自己的**回复楼层**（非首帖） | 可能已成功 | 仍成功（不回归） |
+| 4 | 编辑带图的首帖/回复 | 可能同上 | 附件不丢（`attachArray` 回填提前到打开时刻后更稳） |
+
+判别日志（**warn 级，Release 也可见**）：
+
+- 正常：`[REPLY] modify attachments kept=N`；
+- 打开编辑器时：`[REPLY] edit subject prefetch: <原因>`（预取就没拿到标题，提前暴露）；
+- 提交时仍未拿到：`[REPLY] modify without subject target=<action|uid|fid|tid|pid> authErr=<原因>`，
+  其中 `authErr=server-returned-none` 表示**服务端确实没回传标题**（这时要留档该主题的
+  `post/check` 原始响应，命令见 8.5），`编辑器会话已切换` 表示结果被会话代数守卫丢弃，
+  其余文案是 check 本身的失败原因。注意提交路径上的"未登录"已被 `send()` 的鉴权门禁
+  提前拦下（直接返回给用户），所以这里看到的多半是服务端拒绝或网络异常。
+
+### 8.5 只读诊断命令（后续排查编辑类问题直接复用）
+
+```bash
+# 凭证门禁
+node tools/nga-data-fetch/bin/nga-fetch.js verify
+
+# modify 鉴权响应（只读；--out 指到临时目录，避免把帖子正文留在仓库里）
+node tools/nga-data-fetch/bin/nga-fetch.js app-json app_api.php \
+  fid= stid= tid=<tid> pid=<pid> action=modify \
+  --output 12 --sign-params modify --query __lib=post --query __act=check --out /tmp/x.json
+```
+
+实测结论矩阵（本机凭证、两个本人主题，2026-09）：
+
+| 请求 | 响应 |
+|---|---|
+| `tid=<本人主题>` `pid=0`（缺 / 空 subject，两种写法） | `code=0`，`result.subject` = 原标题、`result.content` = 编辑回显 |
+| `tid=<本人主题>` `pid=<该帖真实楼层 pid>` | `code=54` `msg="只有作者或版主可以修改内容"`（该账号不是这些楼层的作者） |
+| `pid=<不存在>`（四种 subject 写法） | `code=15` `msg="找不到帖子"` |
+| `tid=<他人主题>` `pid=0` | `code=54` `msg="只有作者或版主可以修改内容"` |
+| `tid=<他人主题>` `pid=<其楼层>` | `code=15` `msg="找不到帖子"`（pid 与 tid 不匹配时同样落这里） |
+
+> 注意第 3、5 行：**「找不到帖子」也可能由 pid 与 tid 不匹配触发**，所以排查编辑失败时要
+> 同时核对 `pid` 是不是当前主题的楼层 id（编辑提交用的是 `targetPost.pid`，首帖为 `pid=0`）。
+>
+> 附带观察：**拿不到"非本人楼层"的成功样本**——即 modify 鉴权在"帖子存在但无权"时给出的是
+> `code=15` / `code=54`，而不是回传 `subject`。因此 §8.1 第 2 条的 `subject` 回传是在**本人主题**
+> 上实测的；「编辑自己的回复楼层（非首帖）是否也回传 subject」尚未取到样本，
+> 但本次修复对两种情形都带上标题（服务端给什么回什么，给不出来就保持空串），
+> 不依赖该样本成立。
+>
+> 另一条只读命令（核对首帖 pid 的表示法，见 §8.1 第 5 条）：
+> ```bash
+> node tools/nga-data-fetch/bin/nga-fetch.js app-json read.php tid=<tid> page=1 --output 17 --out /tmp/t.json
+> # 在返回的 html 中检索：首帖锚点是 <a id='pid0Anchor'>、<a name='l0'>
+> ```
+
+### 8.6 独立审查发现与二次修复（2026-09）
+
+本节改动经过**两个独立审查 agent**（一个只审官方协议与逻辑正确性，一个只审 ArkTS 工程与
+并发安全）复核。协议向结论未被推翻；并发向审查指出**首版 `sessionGeneration` 守卫只做了
+一半**——它挡住了"写回状态"，没挡住"把上个会话的结果交回调用方"，以及另外几处 `await`
+之后写会话状态的路径。逐条如下（均已修复）：
+
+| # | 问题 | 触发序列（同一进程，`replyManager` 是单例） | 修法 |
+|---|---|---|---|
+| **S1**（本次引入） | 守卫失配时仍 `return authResult`，调用方拿到**上一个会话的 auth/attach_url** | 打开 A 帖编辑器（check 在途）→ 关面板 → 打开 B 帖编辑器（代数+1、清附件）→ A 的 check 返回 → `uploadImage` 用「A 的 auth + B 的 fid」上传，并把 A 的附件凭证追进 B 的 `pendingAttachments` | 失配即返回**显式失败**结果（`error='编辑器会话已切换，请重试'`），调用方走既有失败分支（上传抛错 / 提交报错） |
+| **S2**（既有，本次声明要覆盖却漏了） | `uploadImageWithDraft` / `uploadMovingPhotoWithDraft` 在 `await` 之后才用**当前** `draftKey()` 落副本 | A 帖编辑器中上传图片（在途）→ 关面板 → 打开 B 帖编辑器 → A 的上传成功：A 的图片字节落进 **B 的 `draft_media/`**，幽灵记录 push 进 B 的 `sessionMedia` | 入口快照 `generation` + `draftKey`，`await` 后代数失配即返回（不落副本、不登记）；动态照片**两次落盘后各复查一次**（两半是两次独立 IO）。另在 `uploadImage` 的附件登记前加同一判定（避免 A 的凭证进 B 的 `pendingAttachments`） |
+| **S3**（既有） | `reset()` 不自增代数，而它是唯一"整体作废会话"的公开出口；登出链路 `AppStore.clearAuth()` 也不碰 `replyManager` | 将来在登出接上 `reset()`：在途 check 会通过代际校验，把**上个账号/帖子**的标题写回已清空的会话 | `reset()` 末尾 `sessionGeneration++`；并在 `LogoutOrchestrator.logout` 本地清理段补 `replyManager.reset()`（该单例持有服务端临时凭证与会话标题，`clearAuth` 碰不到它） |
+| **S4**（既有） | 提交成功后 `clearDraft()` 用**当前**键 | 编辑 A 点保存（在途）→ 关面板 → 打开 B 编辑器 → A 的响应返回：删掉 **B 的**草稿 JSON 与媒体副本目录（B 会话的 `sessionMedia` 仍指向被删文件，提交时撞"本地副本已不存在"） | `clearDraft(key?)` 增加可选键 + 新增只读 `draftKeySnapshot`；`send` 在提交前快照键、成功后按**快照键**清理（且只在清的是当前键时才清空 `sessionMedia`）；`ReplyDialog.doSend` 的成功分支同样改为用提交前快照（`replyManager.send` 内部虽已清理，这一处是幽灵发送路径下的第二道，必须用同一个键） |
+| **A1**（协议向，**最实质**） | 第一版实现给标题加了"本地兜底"：check 没回传就用本页 `PostInfo.subject` | 服务端某次没回传 `subject` + 本页有值（首帖恒有）→ 提交一个**可能陈旧**的标题（版主改过标题、页面停留很久），服务端据此落库 → 标题被改回旧值 | **移除本地兜底**：标题只认服务端 check 回传值，没拿到就空串。依据：官方 `ActionCheck.fromDraft` 的兜底源是**本地草稿库**而非页面数据，`ArticleDetailFragment.java:1098-1114` 也从不把 post 的 subject 搬进发帖 intent。这是整条链路上唯一能改坏服务端数据的分支，宁可不兜 |
+| **A2**（协议向） | 兜底分支把 `out.error` 清成 `''`，于是"取标题失败"的告警因为 `title` 被兜底填上而**永不打印**（G1 的修法在这一点上落空） | 断网/token 过期时点保存 | 移除兜底后该问题消失；`ensureEditSubject` 现在**总是**给出原因（失败文案 / `server-returned-none` / `编辑器会话已切换`），与 `title` 互不覆盖 |
+| **A3**（协议向） | 预取失败仍然静默：`.catch()` 只在**抛异常**时触发，而 `getPostAuth` 内部 try/catch，网络/鉴权失败是**返回 `ok=false` 不抛** | 打开编辑器时断网 | 改成 `.then(...)` 也判定失败（`title` 为空即 `logger.warn`），异常另挂 `.catch` |
+| **A4**（协议向） | `sendEdit` 用 `this.editSubject` 提交（与返回值恒等，属隐式状态耦合） | — | 改为直接消费 `subjectResult.title` |
+| **G1**（并发向） | `ensureEditSubject` 不看 `authResult.error`，check 失败仍提交空标题，用户看到的是服务端"标题过短"，真实原因无处可查 | 断网/token 过期时点保存 | `EditSubjectResult` 分开表达"服务端没给"与"取标题失败"；失败原因进 warn 日志（仍提交，让服务端给真实结论——**不擅自中止**，见下） |
+| **G2**（并发向） | 判别日志用 `verbose`（Release 被 `VERBOSE` 开关静默），且不区分三种根因、无上下文 | 真机排查时拿不到线索 | 改 `logger.warn` 并带 `target`（`sessionTarget`）与 `authErr`（`server-returned-none` / 会话已切换 / check 的失败原因） |
+| **G3**（并发向） | `startEdit` 里 `.catch(() => {})` 是全工程唯一空函数体，可能命中 `no-empty-function` | — | 改成带参数 catch + `logger.warn`（与 A3 合并为同一个 `.then/.catch` 对） |
+
+审查中**未采纳**的一条与理由：G1 的另一半建议"没标题就中止提交"被否——服务端对
+**非首帖 modify** 是否回传 `subject` 尚无样本（8.5 末段），贸然中止会把"目前可能成功"的
+场景变成失败；等 8.4 的 #1/#3 真机结果再决定要不要收紧。
+
+协议向审查**独立复核**（自己读 jadx 源码 + 自己发只读请求）的结论：§8.1 第 1 条的行号全部
+准确；第 2 条的 `subject` 回传被复测证实；第 6 条的文案出处被独立印证；首帖 `pid=0` 的
+排除成立（`PostArgScanner.ts:134` + 样本 `lou=0 → pid=0`）。它还指出卡片
+`nga-hack/nga-client/docs/cards/8-post-write.md` 里两处会误导后来者的表述，已随之修正
+（见该文件 §2.1 逐行证据注释与 §2.2 的通道归属说明）。
+
+审查同时确认的正面结论：`await ensureEditSubject()` **不会**引入新的可重复点击窗口
+（`ReplyDialog.doSend` 的 `sending=true` 在 await 之前、按钮已禁用，重传期由
+`uploadingImage` 兜住）；错误透出链（toast → rethrow → 保留草稿与面板）完好；
+五条既有提交链路（new / reply / quote / tietiao / modify）参数形态不受影响；
+`sendReply` 仍传空 subject（modify 之外的 action 本就不该带）✓。
+
+代价要认：**每次打开编辑器都会无条件多一次 post/check**（哪怕只看一眼就关）。
+正常编辑仍只多 0 次提交往返（标题随预取就位）；快速点保存最坏多 1 次 check。
+另有一个已知的可选优化：`getOrFetchAuth` 只有"结果缓存"、没有"飞行中 Promise 合并"，
+预取与提交在缓存未命中窗口内可能并发发出两次 check——危害有限（提交请求不含 `auth`，
+附件回填有"本地非空不覆盖"守卫），暂不改。
+
+### 8.7 遗留（本次未做，按价值排序）
+
+1. **编辑首帖时把标题框显示出来**（官方编辑页有标题框，可改标题）。本次只做到"不改标题也
+   能改正文"；要让用户改标题，需在 `ReplyDialog.ets` 编辑模式加一行标题输入（首帖才显示），
+   并把标题纳入 `FloatingLayerStore.editInitialContent` 与草稿结构（草稿目前只存正文，
+   见 `DRAFT_MEDIA_PLAN.md` §9.5 的键设计）。
+2. **`modify_append` / `content_org` 未处理**：对 `tid=45159659` 的 check 响应额外回传了
+   `content_org` 与 `modify_append`（服务端对较老主题可能只允许"追加修改"）。
+   官方 APK 的 L0/K0 参数表里没有这两个字段（只有 post/check 读取），因此暂不实现；
+   若真机上出现"改完没生效/被截断"，从这里查。
+3. `attachArray` 在本次两个主题上均未下发（`undefined`）——与主题有无附件一致，
+   但**带附件首帖的回归（8.4 #4）仍要跑**。
+4. **`getOrFetchAuth` 无 in-flight 合并**（协议向审查提出）：预取与提交在"缓存未命中"窗口内
+   可能并发发出两次 post/check。危害有限（提交请求不含 `auth`；`restoreServerAttachments`
+   有"本地非空不覆盖"守卫），暂不改；要收紧就加一个 `authInFlight: Promise<PostAuthResult>`
+   字段。
+5. **`extractPostSubject` 不做 trim**（`DomMarkerExtractor.ts:52-64`，对照 `extractThreadSubject`
+   有 `.trim()`）：标题来自 HTML 兜底链路时可能带首尾空白。本次已移除"本地兜底"（8.6 A1），
+   该空白不会再进入提交标题，故只作记录；真要修要走 `bbcode-ts` 镜像流程（改 TS 真源 →
+   `npm test` → `npm run sync` → 编译 + Hypium 门禁）。
+

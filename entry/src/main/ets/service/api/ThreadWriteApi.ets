@@ -412,6 +412,10 @@ export async function getPostAuth(token: string, fid: number, action: string,
     // 时必须随 content 带回（官方 K0 的 d1.r(d1.w(actionCheck.getContent())) 拼接）；
     // modify 场景为编辑回显正文。其余 action 通常为空串。
     result.content = String(payload['content'] ?? '');
+    // modify 场景的**帖子原标题**：官方 ActionCheck.subject（`@SerializedName("subject")`）
+    // 由本响应直接填充，编辑页用它回填标题框、提交 modify 时原样带回；服务端按标题
+    // 校验/落库主题，缺失会被判「标题过短」。其余 action 为空串。
+    result.subject = String(payload['subject'] ?? '');
     // 编辑（modify）场景：服务端回传已存在附件的提交参数，供提交时保留旧附件
     result.attachments = parseAttachArrayValue(payload['attachArray']);
     result.attachmentsCheck = parseAttachArrayValue(payload['attachCheckArray']);

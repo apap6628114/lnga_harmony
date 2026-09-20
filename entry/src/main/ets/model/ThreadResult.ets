@@ -41,6 +41,14 @@ export class PostAuthResult extends ApiResult {
    *  BBCode）；提交 quote 时必须随 content 带回（官方 K0/L0 拼接语义）；modify
    *  时为编辑回显正文。其余 action 通常为空串。 */
   content: string = '';
+  /**
+   * post/check 响应 subject：**帖子原标题**（modify 时服务端回传，实测两个本人主题
+   * 均返回）。官方客户端编辑首帖时用它回填标题框，并在提交 modify 时原样带回
+   * （官方 `NetRequestWrapper.L0/K0` 只在 tietiao 分支 `remove("subject")`，
+   * modify 分支保留该字段）——服务端按它校验/保存主题标题，缺了就会被判
+   * 「标题过短」或找不到目标帖。其余 action 通常为空串。
+   */
+  subject: string = '';
   /** 编辑场景已存在附件的提交参数（attachArray 解析后 tab 拼接，编辑提交时回填保留）。 */
   attachments: string = '';
   /** 编辑场景已存在附件的校验参数（attachCheckArray 解析后 tab 拼接）。 */
