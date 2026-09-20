@@ -8,7 +8,7 @@
 import { ngaClient } from '../NgaClient';
 import { ngaUploadFile, ngaUploadVideoFile } from './NgaUploader';
 import { appStore } from '../../store/AppStore';
-import { parseNgaError } from '../../parser/ErrorParser';
+import { parseNgaError, formatUploadErrorCode } from '../../parser/ErrorParser';
 import { PostAuthResult, PostReplyResult } from '../../model/ThreadResult';
 import { UploadAttachmentResult } from '../../model/NgaApiResults';
 import { Logger, DOMAIN_SERVICE } from '../../common/utils/Logger';
@@ -531,7 +531,12 @@ function fillUploadResult(rawText: string, attachUrl: string, result: UploadAtta
   const errorCode: number = Number(payload['error_code'] ?? 0);
   if (errorCode !== 0) {
     const message: string = String(payload['error'] ?? '');
-    result.error = message.length > 0 ? message : '上传被拒绝（错误码 ' + String(errorCode) + '）';
+    // 服务端文案优先（鸿蒙是唯一会原样显示它的地方，见 REVIEW_POST_API_MIGRATION §7.1）；
+    // 服务端没给文案时按**官方上传错误码表**翻译（`formatUploadErrorCode`），而不是只报一个
+    // 数字——例如 13「发帖数超过 5 方可上传附件」是用户自己无法通过重试解决的条件，
+    // 只显示"上传被拒绝（错误码 13）"会让他一直重试（见 DRAFT_MEDIA_PLAN.md 阶段 3）。
+    // 注意用上传专用表：通用错误码（`parseNgaError`）是另一套编号，两套不可混用。
+    result.error = message.length > 0 ? message : formatUploadErrorCode(errorCode);
     return;
   }
   result.attachments = String(payload['attachments'] ?? '');

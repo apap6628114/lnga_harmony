@@ -240,9 +240,12 @@ manager 的 `uploadImage` / `send`；两条链路是**两个独立 manager**。
    `action|uid|fid|tid|pid` 变化即作废 `cachedAuth` + 附件（uid 进键与官方
    `ActionCheck.buildActionId` 同构；登出只走 `appStore.clearAuth()`，碰不到本单例，
    不含 uid 时"换账号后在同一个帖子回复"会被判为同一会话）。**`modify` 每次进入都作废**
-   （官方每次进编辑器都重新取 `ActionCheck` 回填）。同一目标内保留，是为了让
+   （官方每次进编辑器都重新取 `ActionCheck` 回填）。初版在同一目标内**保留**凭证，是为了让
    「上传图片 → 放弃 → 重开同一回复框」时草稿里的图片仍能绑定。
    —— 这是本次线上问题的**主修**。
+   > **2026-09-20 收紧**：那条"同目标保留"的例外**已删除**，`beginSession` 现在无条件作废
+   > 凭证（对齐官方"每次进编辑器重新 check"）。原例外的作用已由草稿媒体副本 + 提交前懒重传
+   > 取代，方案见 [`docs/research/DRAFT_MEDIA_PLAN.md`](research/DRAFT_MEDIA_PLAN.md)。
 2. 附件累积改三元组；提交前按正文引用过滤（`collectAttachmentParams`），未被正文引用的
    附件码不再随请求发出。
 3. 提交**成功后**立即丢弃附件（单例必须自己等价官方的 `finishResult()`）。
@@ -292,18 +295,38 @@ manager 的 `uploadImage` / `send`；两条链路是**两个独立 manager**。
 ### 7.6 遗留观察
 
 - **官方有、鸿蒙仍缺**（都不是本次 bug 的成因，但同属附件链路，按价值排序）：
-  1. **草稿持久化附件**：官方把 `attachArray`/`attachCheckArray` 写进 `ActionCheck` 库表，
+  1. ~~**草稿持久化附件**：官方把 `attachArray`/`attachCheckArray` 写进 `ActionCheck` 库表，
      恢复草稿时对每张有本地路径的图**重新上传**（`PostHelper.java:1530-1559`）；鸿蒙草稿只存
      正文文本 → 草稿里的 `[img]` 跨会话（或跨目标）必然失去附件绑定。要补得先把附件三元组
-     按 `(uid, fid, tid, pid, action)` 持久化（键可直接用官方 `buildActionId` 的形态）。
+     按 `(uid, fid, tid, pid, action)` 持久化（键可直接用官方 `buildActionId` 的形态）。~~
+     **✅ 已实现（2026-09-20）**，方案与实施记录见
+     [`docs/research/DRAFT_MEDIA_PLAN.md`](research/DRAFT_MEDIA_PLAN.md)（阶段 1–4 全部完成，
+     逐阶段编译通过）：草稿落 `filesDir/drafts/<key>.json`（键含 uid 短哈希），媒体副本落
+     `filesDir/draft_media/<key>/`，提交前对"正文仍引用、但本会话已无凭证"的项用副本懒重传
+     并替换正文标签。**连带效果**：7.4 那条"同一目标内保留凭证"的例外已删除
+     （`beginSession` 现在**无条件**作废凭证），也就是把下面第 3 条的窗口一起关掉了。
+     > **四角度审查修复（2026-09-21）**：首版实现跑了四轮独立审查（正确性/竞态、数据生命周期、
+     > 协议一致性、体验/工程质量），命中 30+ 条问题、其中 8 条高危，已全部修复（A 组 8 条 +
+     > B 组 12 条 + C 组清理 8 项）。其中会改变**可观察行为**的三条，引用本节其它结论时要一并注意：
+     > ① 「放弃编辑」确认框的主按钮不再是"删草稿"，而是"关掉编辑器、草稿保留"（与文案一致）；
+     > ② 草稿键改为**按目标划分、不含模式**（回复/贴条共用 `draft_<tid>_p<pid>_<uid>`），
+     > 因此 7.5 那条"回复模式传图 → 切贴条 → 切回回复 → 发送"的回归现在**不会**再产生两个键
+     > 或孤儿媒体目录；③ 媒体副本改为**孤儿即时回收 + 有主一律豁免**，容量淘汰不再动活跃草稿。
+     > 逐条清单与状态见该文档 §9。
   2. **删图 / 删附件**：官方成对 `remove` + 从正文摘标签 + 需要时调 `del_attach`；鸿蒙没有
      删图入口，用户只能在正文里手删 `[img]`——那种情况下附件码现在会被 7.4 的正文过滤丢掉
      （不再随请求发出），但服务端那份临时附件仍留在上传区，直到被服务端清理。
-  3. **每次开编辑器重新 check**：官方 `PostActivity.newIntent` 每次都 `new PostFragment` 并取
+  3. ~~**每次开编辑器重新 check**：官方 `PostActivity.newIntent` 每次都 `new PostFragment` 并取
      新的 `ActionCheck`；鸿蒙在"同一会话目标"内仍复用 `cachedAuth`。若 `post/check` 的 `auth`
-     在服务端有有效期，这条复用就是超期上传的窗口（官方对此免疫）。
+     在服务端有有效期，这条复用就是超期上传的窗口（官方对此免疫）。~~
+     **✅ 已收紧（2026-09-20）**：`ReplyManager.beginSession` 与 `NewTopicManager.start` 现在
+     每次都作废 `cachedAuth` + 附件参数，等价官方"每次进编辑器重新取 `ActionCheck`"。
+     原先保留复用是为了迁就"草稿图片没副本"，该前提已由草稿媒体副本 + 懒重传取代。
   4. 提交中互斥：官方有 `isSend` 防重复提交；鸿蒙靠 `ReplyDialog.sending` / `NewTopicDialog.sending`
-     的按钮态兜住，语义接近。
+     的按钮态兜住，语义接近（重传阶段另有 `uploadingImage` 作二次闸门）。重传在途时关面板的
+     两条缝也已补上：保稿条件把 `uploadingImage` 计入（不再走 `clearDraft`），
+     `doSend` 在 `await` 之后补 `disposed` 检查（销毁后不再提交）——见
+     [`docs/research/DRAFT_MEDIA_PLAN.md`](research/DRAFT_MEDIA_PLAN.md) §9.2 / §9.9。
 - **口径差异（有意保留）**：官方 `onActivityCreated` 回填 `attachArray` **不限 action**
   （`PostFragment.java:832-837`）；鸿蒙只在 `EDIT` 回填。保守一侧更安全（reply/quote 的 check
   若意外回传附件，鸿蒙不会把帖子已有附件塞进新回复），但严格说与官方不等价。

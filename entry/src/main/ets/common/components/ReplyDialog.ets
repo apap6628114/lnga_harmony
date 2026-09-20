@@ -27,6 +27,7 @@ import { AppColors } from '../constants/Constants'
 import { floatingLayerStore } from '../../store/FloatingLayerStore'
 import { BBCodePreviewPane } from './BBCodePreviewPane'
 import { replyManager, ReplyManagerClass, ReplyType } from '../managers/ReplyManager'
+import { PreparedContent } from '../managers/DraftMediaUploader'
 import { appStore } from '../../store/AppStore'
 import {
   getEmotionResource,
@@ -140,6 +141,12 @@ export struct ReplyDialog {
    * 迁移前由 `floatingLayerStore.showReplyConfirm()` 驱动 `FloatingLayerComponent`
    * 用 `Stack` + 遮罩手搓，现改用官方 `AlertDialog`：系统对话框样式、系统返回键与
    * 点击外部关闭均由组件自身承担，不再需要浮层栈里的独立布尔状态。
+   *
+   * **主按钮是「关闭编辑器」而不是「删除草稿」**（A2）：`requestClose` 已经先 `saveDraft`
+   * 了，文案「已保存为草稿，下次编辑可恢复」描述的正是"关掉编辑器、草稿留着"。
+   * 早先主按钮挂的是 `discardDraft()`（删草稿 JSON + 删媒体目录），与文案**恰好相反**——
+   * 用户以为自己在关编辑器，实际把草稿和已经上传好的图片副本一起删了。
+   * 需要真正删除草稿的入口是设置里的「清除缓存」（文案已明示草稿会被删）。
    */
   private abandonDialogController: CustomDialogController = new CustomDialogController({
     backgroundColor: Color.Transparent,
@@ -241,11 +248,21 @@ export struct ReplyDialog {
   private requestClose(): void {
     // 已经开始关闭：撤销补试，避免面板消失过程中又被抢焦点、重弹键盘
     this.cancelAutoFocusRetry()
-    if (this.replyText.trim().length > 0) {
+    /*
+     * 保稿判据（B9 + B12）：
+     * - 正文非空 → 存；
+     * - 正文里还引用着某个已登记的媒体 → 存（"只有图片、没有文字"的草稿必须留住：
+     *   图片已经上传、本地副本已经复制，丢掉它等于让用户白传一次）；
+     * - **有上传/重传在途** → 也要存（B9）。早先漏了这条：用户在图片上传途中关面板会走
+     *   else 分支 `clearDraft()`，随后上传完成又把媒体登记进已经清空的会话，
+     *   磁盘上就出现"有副本目录、没有草稿 JSON"的劈叉态。
+     */
+    if (this.replyText.trim().length > 0 ||
+      replyManager.hasReferencedMedia(this.replyText) || this.uploadingImage) {
       replyManager.saveDraft(this.replyText)
       this.abandonDialogController.open()
     } else {
-      // 内容为空时清掉旧草稿，避免下次打开又恢复已删除的内容
+      // 内容为空且没有任何被引用的媒体时清掉旧草稿，避免下次打开又恢复已删除的内容
       replyManager.clearDraft()
       this.onClose()
     }
@@ -372,7 +389,13 @@ export struct ReplyDialog {
         const videoData: ArrayBuffer = readExportedFile(exported.videoPath)
         if (coverData.byteLength > 0 && videoData.byteLength > 0) {
           appStore.showToast('正在上传动态照片...')
-          const tag: string = await replyManager.uploadMovingPhoto(coverData, videoData)
+          /*
+           * 走 `...WithDraft` 变体：上传成功后立刻把封面与视频两半的字节写成草稿媒体副本。
+           * 两条约束同时成立——① 字节必须此刻拿（`finally` 的 `releaseExportedMovingPhoto`
+           * 会把 `cacheDir/mphoto_upload/<ts>/` 整个删掉）；② 本方法不做 URI 转换，
+           * 视频半边本来就只有沙箱路径、没有持久 URI（见 `DraftMediaStore` 文件头）。
+           */
+          const tag: string = await replyManager.uploadMovingPhotoWithDraft(coverData, videoData)
           this.replyText = ReplyManagerClass.insertImg(this.replyText, this.selStart, this.selEnd, tag)
           appStore.showToast('动态照片已插入')
           return
@@ -423,7 +446,11 @@ export struct ReplyDialog {
     }
     try {
       logger.verbose('[IMGUP] calling uploadImage, size: %{public}s', String(buffer.byteLength))
-      const imageUrl: string = await replyManager.uploadImage(buffer, fileName)
+      /*
+       * 走 `...WithDraft` 变体：上传成功后顺手把这份图片写进草稿媒体目录。
+       * 字节直接用已读到的那一份（不再回头读 Picker URI），见 `DraftMediaStore` 文件头。
+       */
+      const imageUrl: string = await replyManager.uploadImageWithDraft(buffer, fileName)
       logger.verbose('[IMGUP] upload success, url: %{public}s', imageUrl)
       const imageTag: string = '[img]./' + imageUrl + '.medium.jpg[/img]'
       this.replyText = ReplyManagerClass.insertImg(this.replyText, this.selStart, this.selEnd, imageTag)
@@ -436,8 +463,62 @@ export struct ReplyDialog {
     }
   }
 
+  /**
+   * 提交前的媒体准备：对草稿里**正文仍引用、但本会话已无凭证**的图片，用本地副本重新上传，
+   * 并把"哪段地址变成哪段地址"应用到**当前**正文上。
+   *
+   * 这是「草稿持久化 + 本地副本」存在的意义所在：凭证是进程内的临时物，杀进程后必然丢失，
+   * 而正文里的 `[img]` 还在——不重传就会带着"未声明附件"提交。
+   *
+   * **不做整串覆盖**（A4）：`replyText` 是用户在重传期间可能已经改过的当前值，
+   * 只把替换对逐条应用上去。重传一张大图期间用户接着打字/插图都不会丢。
+   *
+   * 失败**不静默跳过**：明确提示并停在编辑器（用户可重选图片或直接改正文），
+   * 与 `DRAFT_MEDIA_PLAN.md` 阶段 3 的验收口径一致。**已完成的替换仍然应用**——
+   * 前面几张已经换了新地址，不回写就会让 UI 与请求体、磁盘草稿三者不一致。
+   *
+   * @returns 是否已就绪（false 表示已提示用户、应中止本次提交）
+   */
+  private async prepareSubmitContent(): Promise<boolean> {
+    if (this.uploadingImage) {
+      return false
+    }
+    this.uploadingImage = true
+    let prepared: PreparedContent | null = null
+    try {
+      prepared = await replyManager.ensureDraftMedia(this.replyText.trim())
+    } catch (error) {
+      appStore.showToast(error instanceof Error ? error.message : '草稿图片处理失败')
+      return false
+    } finally {
+      /*
+       * 组件已被销毁（用户在重传期间下拉关闭并选了「放弃」）时不再改 @State：
+       * 那会让一次"已经关掉的编辑"回头写状态。
+       * 注意 `uploadingImage` 仍要复位——`disposed` 之后组件不再渲染，但保持字段一致
+       * 可以让"销毁后又被复用"这类异常路径不至于一直卡在 true。
+       */
+      this.uploadingImage = false
+    }
+    if (this.disposed || prepared === null) {
+      return false
+    }
+    if (prepared.error.length > 0) {
+      // 失败前已完成的替换也要落到 UI 上（否则正文里新旧地址混在一起）
+      if (prepared.changed) {
+        this.replyText = replyManager.applyMediaReplacements(this.replyText, prepared)
+      }
+      appStore.showToast(prepared.error)
+      return false
+    }
+    if (prepared.changed) {
+      // 正文被改写（标签换了新地址）：必须回写 UI，保证「看到的内容」就是「提交的内容」
+      this.replyText = replyManager.applyMediaReplacements(this.replyText, prepared)
+    }
+    return true
+  }
+
   /** 校验正文并提交回复。 */
-  private doSend(): void {
+  private async doSend(): Promise<void> {
     if (this.onSend === undefined || (this.replyText.trim().length === 0 && !replyManager.shouldQuote)) {
       return
     }
@@ -448,10 +529,27 @@ export struct ReplyDialog {
         return
       }
     }
+    const draftPrepared: boolean = await this.prepareSubmitContent()
+    /*
+     * A1「幽灵发送」：`prepareSubmitContent` 会 `await` 一次可能长达数十秒的重传
+     * （动态照片视频可达数十 MB）。这期间用户下拉关闭 → 确认框选「放弃」→ 面板销毁，
+     * 但 Promise 返回后代码照常往下走，帖子**照样发出**，而用户明确表示过不要了。
+     * 因此在任何状态写入（`sending`）与提交回调之前必须再确认组件还活着。
+     */
+    if (this.disposed) {
+      return
+    }
+    if (!draftPrepared) {
+      return
+    }
     this.sending = true
     this.onSend(this.replyText.trim(), this.isAnonymous).then(() => {
+      // 提交成功：清掉草稿（含媒体副本）。此时面板通常已被调用方关闭，
+      // 但草稿属于 manager（进程级单例），与组件生命周期无关，必须清。
       replyManager.clearDraft()
-      this.onClose()
+      if (!this.disposed) {
+        this.onClose()
+      }
     }).catch(() => {
       // 发送失败：保留内容与草稿（错误提示已由发送方 Toast 完成）
     }).finally(() => {

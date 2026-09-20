@@ -72,19 +72,27 @@ export function splitNonEmpty(joined: string): string[] {
  * 不等），上传响应只回一半属于服务端形态差异；客户端据此判失败，会让「这种响应形态下
  * 所有插图都发不出去」，比间歇性报错更重。
  *
+ * 但 `attachments`（**提交参数**）为空是另一回事：没有它这条上传就不会随提交发出，
+ * 而正文里的 `[img]` 已经指向这次上传的地址 —— 服务端收到的是"正文引用了不存在的附件"。
+ * 早先这里**静默 `return`**（B6）：调用方（含懒重传）以为记下了，正文拿到新地址、
+ * 请求里却没有对应参数，图片在帖子里丢失且没有任何提示。
+ * 现在把「是否真的记下」回报给调用方，由它决定按失败处理。
+ *
  * @param items - 累积列表
  * @param uploadResult - 单次上传结果
+ * @returns 是否记下了（`attachments` 为空时返回 false，调用方必须据此判失败）
  */
 export function appendPendingAttachment(items: PendingAttachment[],
-  uploadResult: UploadAttachmentResult): void {
+  uploadResult: UploadAttachmentResult): boolean {
   if (uploadResult.attachments.length === 0) {
-    return
+    return false
   }
   const item: PendingAttachment = new PendingAttachment()
   item.attachment = uploadResult.attachments
   item.check = uploadResult.attachmentsCheck
   item.url = uploadResult.url
   items.push(item)
+  return true
 }
 
 /**

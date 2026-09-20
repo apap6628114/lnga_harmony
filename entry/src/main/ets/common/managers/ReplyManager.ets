@@ -1,7 +1,11 @@
 import type { PostInfo } from '../../model/PostInfo'
 import { PostAuthResult, PostReplyResult } from '../../model/ThreadResult'
 import { getPostAuth, postReply, postComment, uploadAttachment, uploadVideoAttachment } from '../../service/api/ThreadWriteApi'
-import { MOVING_PHOTO_COVER_NAME, MOVING_PHOTO_VIDEO_NAME, buildMovingPhotoTag } from '../../service/api/NgaUploader'
+import {
+  MOVING_PHOTO_COVER_NAME,
+  MOVING_PHOTO_VIDEO_NAME,
+  buildMovingPhotoTag
+} from '../../service/api/NgaUploader'
 import type { UploadAttachmentResult } from '../../model/NgaApiResults'
 import { appStore } from '../../store/AppStore'
 import { Logger, DOMAIN_MANAGER } from '../utils/Logger'
@@ -13,8 +17,18 @@ import {
   restoreServerAttachments,
   buildAttachmentParams
 } from './PostAttachments'
+import { draftStore, draftUidPart, DraftMedia, EditorDraft } from './DraftStore'
+import { draftMediaStore } from '../media/DraftMediaStore'
+import {
+  DraftUploadHost,
+  PreparedContent,
+  prepareDraftMedia,
+  applyContentReplacements,
+  pendingUrlFromEnd
+} from './DraftMediaUploader'
 
 const logger = new Logger(DOMAIN_MANAGER, 'ReplyManager')
+
 
 export enum ReplyType {
   THREAD = 'reply',
@@ -34,7 +48,7 @@ export class ReplyContext {
 }
 
 @Observed
-export class ReplyManagerClass {
+export class ReplyManagerClass implements DraftUploadHost {
   private ctx: ReplyContext = new ReplyContext()
   private cachedAuth: PostAuthResult | null = null
   /** cachedAuth 对应的 post/check action（reply/quote/tietiao/modify），action 变化时缓存失效。 */
@@ -46,11 +60,7 @@ export class ReplyManagerClass {
    * 提交前还会按正文引用再过滤一次（见 `buildAttachmentParams`）。
    */
   private pendingAttachments: PendingAttachment[] = []
-  /**
-   * 当前编辑器会话目标（`action|fid|tid|pid`）。
-   *
-   * 附件参数与鉴权缓存只在该目标内复用，目标一变即作废（见 `beginSession`）。
-   */
+  /** 当前编辑器会话目标（`action|uid|fid|tid|pid`；仅用于诊断日志）。 */
   private sessionTarget: string = ''
 
   get type(): ReplyType {
@@ -169,6 +179,14 @@ export class ReplyManagerClass {
   }
 
   /**
+   * 当前编辑器会话的媒体清单（草稿媒体：本地副本 + 正文标签 + 上传凭证地址）。
+   *
+   * 与 `pendingAttachments` 的分工：后者是**服务端凭证**（提交参数），寿命由会话边界决定；
+   * 本清单是**本地记录**（副本路径 + 标签），跨会话存活（随草稿落盘），供懒重传重建凭证。
+   */
+  private sessionMedia: DraftMedia[] = []
+
+  /**
    * 开启一次新的编辑器会话。
    *
    * `auth` / `attach_url` 与 `attachments` / `attachments_check` 都是**服务端按某一次
@@ -182,27 +200,48 @@ export class ReplyManagerClass {
    * `mAttachCheckArray`，随页面生灭），本类是**进程级单例**，必须自己划会话边界——否则
    * 一次带图回复之后，后续每一次「没插图」的回复都会带着旧附件参数提交。
    *
-   * 同一目标内保留（不改动）：用户在编辑器里上传图片后放弃、稍后重新打开同一个
-   * 回复框时，正文草稿里的图片仍靠这份参数绑定，清了会让草稿图片失效。
-   * 编辑（modify）例外——服务端每次 check 都会重新签发 attachArray/attachCheckArray，
-   * 必须每次重新拉取（见 `getOrFetchAuth` 的 EDIT 回填），不能复用上一次的参数。
+   * **每次进入编辑器都无条件作废**（不再保留"同一目标内复用"的例外）：这个例外当初的
+   * 唯一作用是让"上传图片 → 放弃 → 重开同一回复框"时草稿里的图片仍能绑定，而该能力现已
+   * 由**草稿媒体副本 + 提交前懒重传**（{@link ReplyManagerClass.ensureDraftMedia}）接管，
+   * 例外只剩下"延长凭证寿命"这一个作用——那正是 7.2 那条间歇性「附件确认错误」的成因之一。
    *
    * @param action - 本次会话的 post/check action
    */
   private beginSession(action: string): void {
-    const pid: number = this.ctx.targetPost ? this.ctx.targetPost.pid : 0
-    // uid 也进目标串：登出/换账号走的是 `appStore.clearAuth()`（只重置各 Store 与
-    // WebView Cookie），碰不到本单例——上一个账号的 `auth` 与附件码会原样留下，
-    // 换账号后在同一个帖子回复时目标串若不含 uid 就判为「同一会话」而被复用。
-    const target: string = action + '|' + appStore.auth.uid + '|' + String(this.ctx.fid) + '|' +
-      String(this.ctx.tid) + '|' + String(pid)
-    if (action === 'modify' || target !== this.sessionTarget) {
-      this.clearSession()
+    this.sessionTarget = action + '|' + appStore.auth.uid + '|' + String(this.ctx.fid) + '|' +
+      String(this.ctx.tid) + '|' + String(this.ctx.targetPost ? this.ctx.targetPost.pid : 0)
+    // 会话目标只用于日志：附件凭证与鉴权缓存**每次都无条件作废**（见上面的注释），
+    // 不做"同目标复用"。真机上排查「附件确认错误」时要能一眼看到这次提交属于哪个目标。
+    logger.verbose('[REPLY] session begin target=%{public}s', this.sessionTarget)
+    this.clearSession()
+    // 上一个会话的媒体清单不能带入新会话：它属于另一份草稿键
+    this.sessionMedia = []
+    // 本类同时只有一个编辑器会话：先清掉上一个会话的活跃登记，避免异常关闭路径
+    // （组件销毁时没走 clearDraft）在 `DraftStore` 里留下永久豁免的僵尸键
+    draftStore.endAllSessions()
+    const key: string = this.draftKey()
+    /*
+     * 活跃键登记（A7）：草稿 JSON 此刻可能还不存在（用户还没关闭过编辑器），
+     * 但媒体副本已经写在 `draft_media/<key>/` 下了。不登记的话，启动清理会把这个
+     * **没有 JSON 认领**的目录当孤儿即时删掉，用户发送时撞"副本已不存在"的硬失败。
+     */
+    draftStore.beginSession(key)
+    /*
+     * 把**草稿里记录的媒体**装回会话：凭证已丢，但本地副本还在，提交时由
+     * `ensureDraftMedia` 用副本重传。
+     *
+     * 编辑（EDIT）同样装回（B3）：编辑模式的图片按钮照常可用、`uploadImageWithDraft` 照常
+     * 把副本登记进 `sessionMedia`，不装回就会出现"编辑里插的图重开后无凭证"。
+     * 编辑正文里**原本就有**的服务端既有附件没有本地副本，它们既不在草稿媒体清单里、
+     * 也不会被懒重传触碰，`attachArray` 回填语义不受影响。
+     */
+    const draft: EditorDraft | null = draftStore.loadDraft(key)
+    if (draft !== null && draft.media.length > 0) {
+      this.sessionMedia = draft.media
     }
-    this.sessionTarget = target
   }
 
-  /** 丢弃当前会话的鉴权缓存与附件参数。 */
+  /** 丢弃当前会话的鉴权缓存与附件参数（不动本地媒体清单）。 */
   private clearSession(): void {
     this.cachedAuth = null
     this.cachedAuthAction = ''
@@ -257,7 +296,9 @@ export class ReplyManagerClass {
     this.ctx.targetPost = null
     this.ctx.quotePrefix = ''
     this.sessionTarget = ''
+    this.sessionMedia = []
     this.clearSession()
+    draftStore.endAllSessions()
   }
 
   // 预览内容：引用楼层时展示 quotePrefix + 用户输入（仅编辑器预览用）
@@ -366,8 +407,83 @@ export class ReplyManagerClass {
     if (!uploadResult.ok) {
       throw new Error(uploadResult.error || '上传图片失败')
     }
-    appendPendingAttachment(this.pendingAttachments, uploadResult)
+    if (!appendPendingAttachment(this.pendingAttachments, uploadResult)) {
+      // 服务端没回 `attachments`（提交参数）：正文会拿到一个地址，而请求里没有对应附件参数
+      // ——图片在帖子里丢失且无提示。按失败处理，让编辑器不要插入这个标签（B6）。
+      throw new Error('服务端未签发附件参数，图片上传失败，请重试')
+    }
     return uploadResult.url
+  }
+
+  /**
+   * 上传一张草稿图片：**上传完成后立刻把本地副本写进草稿媒体目录**，并登记为草稿媒体。
+   *
+   * 副本字节就用本次上传用的那一份 `imageData`（调用方已经把它读进内存了），
+   * 不再回头去读 Picker URI：一来省一次 IO，二来避开 URI 与路径的语义差异（见
+   * `DraftMediaStore` 文件头的复制 API 契约说明）。
+   *
+   * @param imageData - 图片二进制数据（既用于上传，也用于落副本）
+   * @param fileName - 上传用的原始文件名
+   * @returns 上传后的图片 URL（用于拼 `[img]` 标签）
+   */
+  async uploadImageWithDraft(imageData: ArrayBuffer, fileName: string): Promise<string> {
+    const imageUrl: string = await this.uploadImage(imageData, fileName)
+    const localPath: string = await draftMediaStore.saveCopy(this.draftKey(), imageData, fileName)
+    if (localPath.length === 0) {
+      // 副本失败不阻断本次上传：本次发送仍然有效，只是这条媒体失去懒重传能力
+      logger.warn('[DRAFT] copy still image failed, re-upload unavailable')
+      return imageUrl
+    }
+    const media: DraftMedia = new DraftMedia()
+    media.localPath = localPath
+    media.fileName = fileName
+    media.url = imageUrl
+    media.tag = '[img]./' + imageUrl + '.medium.jpg[/img]'
+    this.recordDraftMedia(media)
+    return imageUrl
+  }
+
+  /**
+   * 上传一张草稿动态照片：**上传完成后立刻把封面与视频两半都复制进草稿媒体目录**。
+   *
+   * 两半一起复制、一起登记（服务端把它存成两个普通附件，只留一半会重传出半个动态照片）；
+   * 封面复制失败就不登记这条媒体——留着一个没有封面的登记项会让懒重传走到"副本缺失"的
+   * 硬失败上，用户反而发不出去。
+   *
+   * @param coverData - 封面（静态图）二进制数据
+   * @param videoData - 视频二进制数据
+   * @returns 可插入正文的 BBCode 三元组
+   */
+  async uploadMovingPhotoWithDraft(coverData: ArrayBuffer, videoData: ArrayBuffer): Promise<string> {
+    const tag: string = await this.uploadMovingPhoto(coverData, videoData)
+    const coverLocal: string = await draftMediaStore.saveCopy(this.draftKey(), coverData,
+      MOVING_PHOTO_COVER_NAME)
+    const videoLocal: string = coverLocal.length === 0 ? ''
+      : await draftMediaStore.saveCopy(this.draftKey(), videoData, MOVING_PHOTO_VIDEO_NAME)
+    if (coverLocal.length === 0 || videoLocal.length === 0) {
+      logger.warn('[DRAFT] copy moving photo failed, re-upload unavailable')
+      return tag
+    }
+    // 两半的 URL 从**刚上传的那两个凭证**里取（`pendingAttachments` 末尾两项），
+    // 不做标签反解：标签格式一旦调整，反解会静默取到空值
+    const urls: string[] = this.pendingUrls
+    const coverUrl: string = pendingUrlFromEnd(urls, 2)
+    const videoUrl: string = pendingUrlFromEnd(urls, 1)
+    if (coverUrl.length === 0 || videoUrl.length === 0) {
+      logger.warn('[DRAFT] moving photo urls missing, skip draft media record')
+      return tag
+    }
+    const media: DraftMedia = new DraftMedia()
+    media.localPath = coverLocal
+    media.fileName = MOVING_PHOTO_COVER_NAME
+    media.url = coverUrl
+    media.tag = tag
+    media.videoLocalPath = videoLocal
+    media.videoFileName = MOVING_PHOTO_VIDEO_NAME
+    media.videoUrl = videoUrl
+    media.videoTag = '[flash=video]./' + videoUrl + '[/flash]'
+    this.recordDraftMedia(media)
+    return tag
   }
 
   /**
@@ -419,8 +535,12 @@ export class ReplyManagerClass {
     if (!videoResult.ok) {
       throw new Error(videoResult.error || '上传动态照片视频失败')
     }
-    appendPendingAttachment(this.pendingAttachments, coverResult)
-    appendPendingAttachment(this.pendingAttachments, videoResult)
+    // 两半都必须真的记下（B6）：只记了一半就返回标签，正文会引用没有凭证的那一半
+    const coverTracked: boolean = appendPendingAttachment(this.pendingAttachments, coverResult)
+    const videoTracked: boolean = appendPendingAttachment(this.pendingAttachments, videoResult)
+    if (!coverTracked || !videoTracked) {
+      throw new Error('服务端未签发附件参数，动态照片上传失败，请重试')
+    }
     return buildMovingPhotoTag(coverResult.url, videoResult.url)
   }
 
@@ -470,6 +590,8 @@ export class ReplyManagerClass {
       // 附件参数随本次提交被服务端消费，成功后必须立刻丢弃：本类是进程级单例，
       // 留着会让下一次「没插图」的回复带着旧参数提交（服务端报附件确认错误）。
       this.pendingAttachments = []
+      // 提交成功 = 这份草稿已经变成帖子：草稿 JSON 与媒体副本目录一起回收
+      this.clearDraft()
     }
     return result
   }
@@ -540,34 +662,239 @@ export class ReplyManagerClass {
     )
   }
 
-  // 草稿保存/恢复
+  // ============== 草稿媒体（本地副本 + 懒重传） ==============
+
+  /**
+   * 给当前草稿登记一条媒体（本地副本已复制完成后调用）。
+   *
+   * 只登记、不落盘：落盘发生在关闭编辑器时（`saveDraft`）。这样"用户还在编辑器里"期间
+   * 不会反复写文件，而"关闭 → 杀掉进程"这条路径由 `saveDraft` 一次性写全。
+   *
+   * @param media - 待登记的媒体（本地副本路径由调用方先经 `draftMediaStore.saveCopy` 取得）
+   */
+  recordDraftMedia(media: DraftMedia): void {
+    this.sessionMedia.push(media)
+    logger.verbose('[DRAFT] media recorded kind=%{public}s total=%{public}d',
+      media.videoLocalPath.length > 0 ? 'moving' : 'still', this.sessionMedia.length)
+  }
+
+  /**
+   * 判断**当前正文里是否还引用着某个草稿媒体**（B12）。
+   *
+   * 编辑器用它决定"只有图片、没有文字"的草稿要不要留住。早先的判据是
+   * `draftMediaCount > 0`，那只是数组长度：用户把 `[img]` 标签从正文删掉再清空正文后，
+   * 关闭编辑器照样弹确认框并保存一份空草稿，之后每次开关都弹一次。
+   * 判据换成"正文里是否真的还有某个媒体的地址"后，这类空壳草稿自然不再保留
+   * （清理由 `clearDraft` 负责，副本目录一并回收）。
+   *
+   * @param content - 待判定的正文
+   * @returns 是否仍引用着至少一个已登记的媒体
+   */
+  hasReferencedMedia(content: string): boolean {
+    if (content.length === 0) {
+      return false
+    }
+    for (let i: number = 0; i < this.sessionMedia.length; i++) {
+      const item: DraftMedia = this.sessionMedia[i]
+      const cover: string = item.url.length > 0 ? item.url : item.tag
+      if (cover.length > 0 && content.indexOf(cover) >= 0) {
+        return true
+      }
+      const video: string = item.videoUrl.length > 0 ? item.videoUrl : item.videoTag
+      if (video.length > 0 && content.indexOf(video) >= 0) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /**
+   * 提交前的媒体准备：对**正文仍然引用、且本会话已无凭证**的媒体，用本地副本重新上传，
+   * 并把替换对交给调用方（见 `DRAFT_MEDIA_PLAN.md` 阶段 3）。
+   *
+   * 为什么是"提交前"而不是"打开草稿时"：打开草稿看一眼又关掉很常见，没必要消耗流量与
+   * NGA 上传配额（上传有门槛与频次限制，错误码 13 = 发帖数不足）。
+   *
+   * 边界：
+   * - 本地副本缺失，但**本会话凭证仍在**（用户上传后没关过编辑器）：直接用凭证，不报错；
+   * - 本地副本缺失且凭证也没了（清了缓存 / 文件被删）：**明确失败**，不静默跳过——跳过会让
+   *   正文的 `[img]` 变成未声明附件，正是本次要消灭的那类不一致；
+   * - 编辑（EDIT）也参与：编辑里新插入的图有本地副本（见 `beginSession` 的说明），
+   *   服务端既有附件的凭证由 `attachArray` 回填、不走这条路径。
+   *
+   * @param content - 待提交的正文
+   * @returns 准备结果；失败时以 `result.error` 说明，`replacements` 里带着已完成的替换
+   */
+  async ensureDraftMedia(content: string): Promise<PreparedContent> {
+    const prepared: PreparedContent = await prepareDraftMedia(this, this.sessionMedia, content)
+    if (prepared.changed) {
+      logger.info('[REPLY] draft media re-uploaded count=%{public}d', prepared.reuploaded)
+    }
+    return prepared
+  }
+
+  /**
+   * 把重传得到的替换对应用到**当前**正文上（A4）。
+   *
+   * 调用方必须传"此刻编辑器里的正文"，而不是发起重传时的那份快照：
+   * 重传期间用户可能又打了字、又插了图，整串覆盖会把这些输入静默丢掉。
+   *
+   * @param currentText - 当前正文
+   * @param prepared - `ensureDraftMedia` 的结果
+   * @returns 应用替换后的正文
+   */
+  applyMediaReplacements(currentText: string, prepared: PreparedContent): string {
+    return applyContentReplacements(currentText, prepared.replacements)
+  }
+
+  // ============== DraftUploadHost 实现（懒重传的宿主能力） ==============
+
+  /**
+   * 懒重传使用的凭证地址列表（见 `DraftUploadHost.pendingUrls`）。
+   *
+   * 动态照片登记时也用它回填封面/视频地址，避免从标签反解 URL（标签格式一变就取到空值）。
+   */
+  get pendingUrls(): string[] {
+    const urls: string[] = []
+    for (let i: number = 0; i < this.pendingAttachments.length; i++) {
+      urls.push(this.pendingAttachments[i].url)
+    }
+    return urls
+  }
+
+  /**
+   * 追加一条懒重传拿到的凭证（见 `DraftUploadHost.appendPending`）。
+   *
+   * @param result - 本次上传结果
+   * @returns 是否真的记下了（`attachments` 为空时记不下，调用方据此判失败）
+   */
+  appendPending(result: UploadAttachmentResult): boolean {
+    return appendPendingAttachment(this.pendingAttachments, result)
+  }
+
+  /**
+   * 懒重传开始前的用户可见反馈（见 `DraftUploadHost.onReuploadStart`）。
+   *
+   * manager 层不直接弹提示（它不是 UI 层），但这里是最清楚"要重传"的位置，
+   * 因此复用 `appStore` 的全局 Toast——与编辑器的上传提示同一通路。
+   */
+  onReuploadStart(): void {
+    appStore.showToast('正在重新上传草稿中的图片...')
+  }
+
+  /**
+   * 上传一份图片数据（懒重传用；与 `uploadImage` 同路径，但不登记草稿媒体——
+   * 重传的这条已经登记过了）。
+   *
+   * @param data - 二进制数据
+   * @param fileName - 原始文件名
+   * @param auth - post/check 返回的附件鉴权码
+   * @param attachUrl - post/check 返回的上传地址
+   * @returns 上传结果
+   */
+  async uploadImageData(data: ArrayBuffer, fileName: string, auth: string,
+    attachUrl: string): Promise<UploadAttachmentResult> {
+    return uploadAttachment(appStore.auth.token, auth, this.ctx.fid, attachUrl,
+      await this.compressImage(data), fileName)
+  }
+
+  /**
+   * 上传动态照片的视频半边（懒重传用）。
+   *
+   * @param data - 视频二进制数据
+   * @param fileName - 视频文件名
+   * @param auth - post/check 返回的附件鉴权码
+   * @param attachUrl - post/check 返回的上传地址
+   * @returns 上传结果
+   */
+  async uploadVideoData(data: ArrayBuffer, fileName: string, auth: string,
+    attachUrl: string): Promise<UploadAttachmentResult> {
+    return uploadVideoAttachment(appStore.auth.token, auth, this.ctx.fid, attachUrl,
+      data, fileName)
+  }
+
+  // ============== 草稿保存/恢复（文件持久化） ==============
+
+  /**
+   * 草稿键：**按"目标"划分，不含模式**（A5，见 `DRAFT_MEDIA_PLAN.md` §9.5）。
+   *
+   * 含 **uid 短哈希**：草稿文件不按账号分目录，键里不带 uid 时"换账号后在同一个帖子回复"
+   * 会读到上一个账号的草稿内容与媒体清单（与官方 `ActionCheck.buildActionId` 的 uid 维度同构）。
+   *
+   * 三种目标（**模式开关不再参与**）：
+   * - 编辑某楼层：`draft_<tid>_edit_<pid>_<uid>` —— 编辑与回复是不同操作，保持独立；
+   * - 楼层回复 / 贴条：`draft_<tid>_p<pid>_<uid>` —— 两者都是"针对某楼层的内容"，
+   *   共用同一个键；
+   * - 主题级回复：`draft_<tid>_<uid>`。
+   *
+   * 为什么把模式移出键：`toggleMode()` 只改 `ctx.type`、不重划会话，而**媒体副本目录是绑在
+   * 键上的**。模式参与键时，一次编辑会话会在 `draft_..._floor_...` 与 `draft_..._comment_...`
+   * 之间漂移——草稿正文与媒体清单落在两个键里、副本目录要么共享要么被对方整目录删掉、
+   * 旧键还会留下没有任何引用者的孤儿目录。移出模式后 `toggleMode()` 前后 `draftKey()`
+   * 恒定不变，`clearDraft()` 也只可能删到当前这个键的目录。
+   *
+   * 旧键（含 `_floor_` / `_comment_` / `_reply_`）不兼容、不做迁移：用户明确不要旧草稿数据。
+   *
+   * @returns 文件名安全的草稿键
+   */
   private draftKey(): string {
-    if (this.ctx.type === ReplyType.EDIT && this.ctx.targetPost) {
-      return 'draft_' + String(this.ctx.tid) + '_edit_' + String(this.ctx.targetPost.pid)
+    const uidPart: string = draftUidPart(appStore.auth.uid)
+    const tidPart: string = String(this.ctx.tid)
+    const pid: number = this.ctx.targetPost ? this.ctx.targetPost.pid : 0
+    if (this.ctx.type === ReplyType.EDIT && pid > 0) {
+      return 'draft_' + tidPart + '_edit_' + String(pid) + '_' + uidPart
     }
-    if (this.ctx.type === ReplyType.COMMENT) {
-      return 'draft_' + String(this.ctx.tid) + '_comment'
+    if (pid > 0) {
+      // FLOOR（引用回复）与 COMMENT（贴条）共用：都是"针对某楼层的内容"
+      return 'draft_' + tidPart + '_p' + String(pid) + '_' + uidPart
     }
-    if (this.ctx.type === ReplyType.FLOOR) {
-      return 'draft_' + String(this.ctx.tid) + '_floor'
-    }
-    return 'draft_' + String(this.ctx.tid) + '_reply'
+    return 'draft_' + tidPart + '_' + uidPart
   }
 
+  /**
+   * 保存草稿（正文 + 媒体清单）。
+   *
+   * 正文为空但存在媒体时**同样保存**：图片已经上传、副本已经复制，"只有图片的草稿"必须留住。
+   * 媒体是否"算数"由调用方按 `hasReferencedMedia` 判定（B12）。
+   *
+   * @param text - 正文
+   */
   saveDraft(text: string): void {
-    if (text.length > 0) {
-      AppStorage.setOrCreate<string>(this.draftKey(), text)
+    if (text.length === 0 && this.sessionMedia.length === 0) {
+      return
+    }
+    const draft: EditorDraft = new EditorDraft()
+    draft.key = this.draftKey()
+    draft.content = text
+    draft.media = this.sessionMedia
+    if (!draftStore.saveDraft(draft)) {
+      logger.warn('[DRAFT] save failed key=%{public}s', draft.key)
     }
   }
 
+  /**
+   * 读取草稿正文。
+   *
+   * @returns 正文；无草稿时为空串
+   */
   loadDraft(): string {
-    const key: string = this.draftKey()
-    const stored: string = AppStorage.get<string>(key) ?? ''
-    return stored
+    const draft: EditorDraft | null = draftStore.loadDraft(this.draftKey())
+    return draft === null ? '' : draft.content
   }
 
+  /**
+   * 删除草稿（连同媒体副本目录），并注销会话登记。
+   *
+   * 提交成功、用户明确放弃草稿、"内容为空时关闭"三处调用；"清除缓存"走
+   * `SettingsPanel.clearCache` 的目录清单（整目录删除）+ `draftStore.reloadAfterClear`。
+   */
   clearDraft(): void {
-    AppStorage.delete(this.draftKey())
+    const key: string = this.draftKey()
+    // clearDraft 内部会 endSession(key)；这里补一次是为了覆盖"键在会话开始后变化"的异常路径
+    draftStore.clearDraft(key)
+    draftStore.endSession(key)
+    draftMediaStore.removeDraftMedia(key)
+    this.sessionMedia = []
   }
 
   private getStringByteLength(str: string): number {

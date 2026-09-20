@@ -11,6 +11,13 @@ import { VoteStore } from './VoteStore'
 import { HistoryStore } from './HistoryStore'
 import { FavoriteStore } from './FavoriteStore'
 import { SavedThreadStore } from './SavedThreadStore'
+import { draftStore, DRAFT_RETENTION_DAYS } from '../common/managers/DraftStore'
+import {
+  draftMediaStore,
+  DRAFT_MEDIA_MAX_BYTES,
+  DraftMediaClaim,
+  DraftMediaCleanupResult
+} from '../common/media/DraftMediaStore'
 import { ReadingProgressStore } from './ReadingProgressStore'
 import { floatingLayerStore } from './FloatingLayerStore'
 import { ToastManager } from '../common/feedback/ToastManager'
@@ -48,6 +55,25 @@ class PollingParticipant {
 const logger = new Logger(DOMAIN_APP, 'AppStore')
 
 /**
+ * 草稿清理的启动延迟（ms）。
+ *
+ * 让出启动的前几帧：清理是纯维护动作，晚几百毫秒做完全不影响用户（草稿要 7 天才超期）。
+ */
+const DRAFT_CLEANUP_DELAY_MS: number = 800
+
+/** 每批检查的草稿文件数（分批推进，避免一次性 statSync 大量文件阻塞主线程）。 */
+const DRAFT_CLEANUP_BATCH: number = 8
+
+/**
+ * 单次启动最多推进的清理批数。
+ *
+ * 兜底上限：目录被异常路径撑到极大量时（例如反复写坏文件），也不让它无限占用主线程——
+ * 剩下的留给下次启动继续消化。**游标在批次之间保留**（见 `DraftStore.cleanupStale`），
+ * 所以"这次没跑完"不会像早先那样每批重复检查同一批文件。
+ */
+const DRAFT_CLEANUP_MAX_ROUNDS: number = 4
+
+/**
  * AppStore — 全局状态管理 Facade
  *
  * 各领域职责已拆分到独立 Store，AppStore 只做编排和委托。
@@ -65,6 +91,8 @@ class AppStoreClass {
   private foregroundActive: boolean = false
   /** 前台轮询参与者注册表（新增轮询 Store 时在此登记即可统一启停）。 */
   private pollingParticipants: PollingParticipant[] = []
+  /** 草稿清理链是否在跑（`init` 可能被重入，见 `initDraftCleanup`）。 */
+  private draftCleanupRunning: boolean = false
 
   constructor() {
     this.pollingParticipants = [
@@ -110,6 +138,13 @@ class AppStoreClass {
       // 存档与登录态无关，随应用启动即初始化（不按账号区分）
       await this.savedThreadStore.init(context)
 
+      // 编辑器草稿与草稿媒体副本（键内已含 uid 哈希，目录本身不按账号分）
+      await draftStore.init(context)
+      await draftMediaStore.init(context)
+      // 超期/超容量清理**延后**到启动主流程之外：它要逐文件 statSync（主线程同步 IO），
+      // 放在这里会拖慢冷启动。`initDraftCleanup` 用 setTimeout 让出当前帧并分批推进。
+      this.initDraftCleanup()
+
       // 子 Store 中不依赖 uid 的先初始化（同步赋值引用）
       await this.voteStore.init(this.store, this.writeQueue)
       await this.historyStore.init(this.store, this.writeQueue)
@@ -143,6 +178,72 @@ class AppStoreClass {
   /** 返回 AppStore 及全部用户 Store 是否完成初始化。 */
   get isInitialized(): boolean {
     return this.initialized
+  }
+
+  /**
+   * 启动后的草稿清理（分批、延后）。
+   *
+   * 两件事：① 删掉超过**保留期**的草稿 JSON；② 媒体副本按「孤儿即时回收 + 有主豁免」淘汰
+   * （草稿先清、媒体后清，这样被清掉草稿的那些媒体目录正好成为孤儿一并回收）。
+   *
+   * 分批的粒度是 `DRAFT_CLEANUP_BATCH`（草稿文件数），每批之间用 `setTimeout(0)` 让出主线程：
+   * 正常情况下草稿只有 0 到几个、第一批就结束；只有目录被异常路径撑大时才会连续跑几批。
+   * **媒体清理只在最后一批之后跑一次**：它要遍历 `draft_media` 下每个键目录的每个文件，
+   * 逐批重复调用会把同一棵树扫很多遍。
+   *
+   * 重入守卫：`init` 在账号切换 / 前后台切换路径上可能被再次调用，没有守卫就会同时存在两条
+   * 清理链（各自计轮次、各自 statSync 同一批文件）。守卫在链条真正结束时释放
+   * （用 `finally` 兜住任何意外异常，否则一次抛错会让后续启动的清理永久静默跳过）。
+   *
+   * 清理失败不抛错——它是后台维护动作，不该影响应用可用性。
+   */
+  private initDraftCleanup(): void {
+    if (this.draftCleanupRunning) {
+      logger.verbose('draft cleanup already running, skip')
+      return
+    }
+    this.draftCleanupRunning = true
+    let rounds: number = 0
+    const runBatch: () => void = (): void => {
+      let keepRunning: boolean = false
+      try {
+        rounds++
+        const batch = draftStore.cleanupStale(DRAFT_RETENTION_DAYS, DRAFT_CLEANUP_BATCH)
+        if (batch.hasMore && rounds < DRAFT_CLEANUP_MAX_ROUNDS) {
+          keepRunning = true
+          setTimeout(runBatch, 0)
+          return
+        }
+        this.cleanupDraftMedia()
+      } catch (e) {
+        logger.warn('draft cleanup batch failed: %{public}s', formatError(e))
+      } finally {
+        // 只有链条真正结束才释放守卫：`setTimeout` 排下一批时保持持有
+        if (!keepRunning) {
+          this.draftCleanupRunning = false
+        }
+      }
+    }
+    setTimeout(runBatch, DRAFT_CLEANUP_DELAY_MS)
+  }
+
+  /**
+   * 媒体副本清理（草稿批次跑完之后调用一次）。
+   *
+   * 归属判定用 `DraftMediaClaim`：**实时**确认草稿文件是否还在（`hasDraftFile`），
+   * 并附带启动快照与当前活跃会话键两个兜底判据。这样"清理开始后 800ms 内用户新存的草稿"
+   * 也不会被当成孤儿删掉（A7 的第二道防线）。
+   */
+  private cleanupDraftMedia(): void {
+    const claim: DraftMediaClaim = new DraftMediaClaim()
+    claim.liveKeys = draftStore.listKeys()
+    claim.activeKeys = draftStore.activeKeyList()
+    claim.isClaimed = (key: string): boolean => draftStore.hasDraftFile(key)
+    const result: DraftMediaCleanupResult = draftMediaStore.cleanupStale(claim, DRAFT_MEDIA_MAX_BYTES)
+    if (result.overLimit) {
+      logger.warn('draft media still over %{public}d bytes after orphan reclaim ' +
+        '(claimed dirs=%{public}d kept)', DRAFT_MEDIA_MAX_BYTES, result.protectedCount)
+    }
   }
 
   /** 返回 AppStore 初始化流程是否已经成功或失败地结束。 */

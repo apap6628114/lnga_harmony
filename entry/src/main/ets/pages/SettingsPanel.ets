@@ -26,6 +26,8 @@ import type { AiProviderProfile } from '../model/AiConfig'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { movingPhotoCacheDir } from '../common/media/MovingPhotoCache'
+import { draftStore } from '../common/managers/DraftStore'
+import { draftMediaStore } from '../common/media/DraftMediaStore'
 import { removeDirRecursively } from '../common/utils/FileUtils'
 
 @Component
@@ -69,7 +71,10 @@ export struct SettingsPanel {
     builder: TipsDialog({
       imageRes: $r('app.media.settings_clear_cache'),
       title: '清除缓存',
-      content: '确定要清除所有缓存吗？\n清除后图片等资源需要重新加载',
+      // 文案必须点明草稿：`filesDir/drafts` 是**不可再生的用户数据**（还没发出去的正文），
+      // 与下面那些"能重新下载"的缓存性质不同。原文案只说「图片等资源需要重新加载」，
+      // 会把"草稿一起没"变成用户没预期到的损失（见 DRAFT_MEDIA_PLAN.md 阶段 4 的取舍说明）。
+      content: '确定要清除所有缓存吗？\n清除后图片等资源需要重新加载\n未发送的草稿与草稿中的图片也会被删除',
       primaryButton: {
         value: '清除',
         fontColor: AppColors.white,
@@ -193,14 +198,40 @@ export struct SettingsPanel {
     return gb.toFixed(2) + ' GB'
   }
 
+  /**
+   * 刷新「清除缓存」行的容量徽标。
+   *
+   * 徽标 = 系统 cache 目录 + **草稿占用**（`filesDir/drafts` 与 `filesDir/draft_media`）。
+   * 必须把草稿并进来：`bundleStats.cacheSize` **只统计 cache 目录**，而"清除缓存"会把
+   * 草稿与草稿媒体副本一起删掉——不显示的话用户看到的数字与"清掉的东西"对不上
+   * （`DRAFT_MEDIA_PLAN.md` §8.6 记过这条瑕疵）。
+   */
   private refreshCacheSize(): void {
     storageStatistics.getCurrentBundleStats((err: BusinessError, bundleStats: storageStatistics.BundleStats) => {
+      const draftBytes: number = this.draftBytes()
       if (!err) {
-        this.cacheSizeText = this.formatSize(bundleStats.cacheSize)
+        const total: number = bundleStats.cacheSize + draftBytes
+        this.cacheSizeText = draftBytes > 0
+          ? this.formatSize(total) + ' · 草稿 ' + this.formatSize(draftBytes)
+          : this.formatSize(total)
       } else {
-        this.cacheSizeText = '未知'
+        this.cacheSizeText = draftBytes > 0
+          ? '未知 · 草稿 ' + this.formatSize(draftBytes)
+          : '未知'
       }
     })
+  }
+
+  /**
+   * 统计草稿正文与草稿媒体副本的占用。
+   *
+   * 目录扫描是同步 IO，但目录规模是"用户还没发出去的草稿"级别（0 到几个），
+   * 且只在设置页出现与"清除缓存"之后各调一次。
+   *
+   * @returns 字节数
+   */
+  private draftBytes(): number {
+    return draftStore.totalBytes() + draftMediaStore.totalBytes()
   }
 
   private async clearCache(): Promise<void> {
@@ -230,6 +261,11 @@ export struct SettingsPanel {
          另注：整目录删除不避让正在播放的实例（播放器下次点播放会报错并收起），
          缓存淘汰路径本身是避让的（见 MovingPhotoCache 的占用计数）。 */
       dirs.push(movingPhotoCacheDir(abilityFilesDir))
+      /* 编辑器草稿与草稿媒体副本（同为 filesDir 下的持久目录）。两条都必须在**切换分区之前**
+         取到的 `abilityFilesDir` 上拼，理由与上一行相同；清完还会同步清掉内存里的草稿缓存，
+         否则本次进程内再打开编辑器会读到已被删除的草稿记录。 */
+      dirs.push(draftStore.directory)
+      dirs.push(draftMediaStore.directory)
 
       appContext = context.getApplicationContext()
       originAppArea = appContext.area
@@ -243,6 +279,11 @@ export struct SettingsPanel {
            而这些目录里必然有文件——直接用它只会静默失败，「缓存已清除」名不副实 */
         removeDirRecursively(dirs[i])
       }
+      /* 草稿目录被删后必须同步清内存缓存：`draftStore` 的缓存是"读过就记住"的，
+         不清的话本次进程内再打开编辑器还会恢复出已经被删掉的草稿；
+         `draftMediaStore` 的根目录也要重建（它被整目录删掉了）。 */
+      draftStore.reloadAfterClear()
+      draftMediaStore.reloadAfterClear()
       this.refreshCacheSize()
       appStore.showToast('缓存已清除')
     } catch (e) {
