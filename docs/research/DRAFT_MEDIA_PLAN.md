@@ -311,6 +311,11 @@ export class EditorDraft {
     上传完成后图片仍插进了正文
 23. `[B12]` 传一张图 → 把 `[img]` 从正文删掉 → 清空正文 → 关闭 → **不弹确认框**、不留空草稿；
     再次打开编辑器时是干净的
+24. `[B13]` **编辑**一个已有楼层 → 插一张图 → 关闭编辑器 → 再进入同一楼层的编辑面板 →
+    新插的 `[img]./<url>.medium.jpg[/img]` **仍在正文里**（修复前会被服务端原文覆盖掉）→
+    保存 → 帖子里的新图正常显示；日志里出现一条
+    `[REPLY] draft media re-uploaded count=1`（凭证在重进时已作废，靠副本重传重建）。
+    反向：不做任何修改直接关闭 → 不得把草稿正文改成"不含 `[img]`"的版本
 
 ---
 
@@ -465,6 +470,7 @@ cache 目录**，清掉 `filesDir` 下的草稿后界面数字不会变。
 | B10 | `ReplyManager` 未 `implements DraftUploadHost` | ✅ 已修 |
 | B11 | `prepareSubmitContent` / `shortHash` / `isValidKey` 重复实现 | ✅ 已修 |
 | B12 | 「只有图片没有文字」判定过宽 | ✅ 已修 |
+| B13 | EDIT 模式不接回草稿正文（新插图重开后从正文消失） | ✅ 已修（§9.12） |
 | C1–C9 | 死代码 / `.tmp` 残留 / uid 哈希 / 重入 / 根目录 / 注释 | ✅ 8 项已修，1 项不做（见 §9.10） |
 
 ### 9.2 A1 幽灵发送：`await` 之后的 `disposed` 检查
@@ -634,4 +640,44 @@ export class PreparedContent {
   文案保持原样（用户没有要求改文案）。
 - **本轮改动无法在编译期验证的部分**：清理语义、竞态窗口、替换对的边界
   （同一 URL 出现多次、标签被手改、部分失败）都只有静态走查，必须真机验证，见 §10。
+
+### 9.12 评审后追加（用户实测）：EDIT 模式不接回草稿正文（B13）
+
+**现象**（用户实测报告）：修改已有楼层 → 插入附件 → 退出编辑器 → 再进入编辑器，
+刚插入的 `[img]./<url>.medium.jpg[/img]` 从正文里消失。
+
+**根因**（代码走查，未经真机复现）：`ReplyDialog.aboutToAppear` 的 `editMode` 分支只把
+`initialContent`（`ThreadPanel.onEdit` 传的服务端楼层原文）赋给 `replyText`，**不读草稿**；
+而新回复分支读（`replyManager.loadDraft()`）。于是 §9.8 的 **B3 只完成了一半**——
+`beginSession` 把草稿媒体装回了 `sessionMedia`，正文里的标签却不在。
+
+**后果链**：
+1. `isMediaReferenced` 判不出引用 → 提交时该媒体既不重传、也不进 `buildAttachmentParams`
+   → 图片**静默消失**（"正文没引用这条媒体"在过滤逻辑里是合法形态，不会报错、没有提示）；
+2. `requestClose` 又把这份不含标签的正文 `saveDraft` 回草稿 → 磁盘上唯一记录着 `[img]`
+   的正文被抹掉，媒体副本失去引用者，只能随草稿超期（7 天）被整目录回收。
+
+**修法**：编辑分支改成与新回复分支同一判据——
+
+```ts
+const draft: string = replyManager.loadDraft()
+this.replyText = draft.length > 0 ? draft : this.initialContent
+```
+
+`@Prop initialContent` 的语义随之明确为"**无草稿时的兜底**"（注释已同步）。
+
+**代价（有意接受）**：服务端正文若在别处被改过（网页版 / 另一台设备），草稿会**盖住**它。
+这正是「已保存为草稿，下次编辑可恢复」这句文案的语义（与 §9.3 的确认框行为一致）；
+要以服务端为准，走设置里的「清除缓存」（文案已明示草稿会被删）。
+
+**用户问到的「数据、凭证状态」，两处都没有丢**：
+
+| 状态 | 位置 | 修复前的实际情况 |
+|---|---|---|
+| 草稿正文 + 媒体清单 | `filesDir/drafts/draft_<tid>_edit_<pid>_<uid>.json` | 退出那一刻 `content` 与 `media[]`（`localPath` / `url` / `tag` / 视频两半）都完整落盘；丢的是**再进入之后**：正文被 `initialContent` 覆盖，一关闭就把草稿 `content` 一起覆盖掉 |
+| 服务端凭证 | `ReplyManager.pendingAttachments` | 每次 `beginSession` **无条件作废**（见该方法注释：凭证只对签发它的那次提交有效，不做同目标复用），靠草稿媒体副本在提交前懒重传重建——修复后这条链路才真正可达（修复前正文无标签，重传判定直接跳过） |
+| 媒体副本 | `filesDir/draft_media/<key>/` | 修复前一直躺在磁盘上，只是没有任何正文引用它，不会进提交也不会被单独回收 |
+
+**待办**：真机复验（编辑带图楼层 → 退出 → 重进 → 保存，检查正文标签、`[REPLY] draft media
+re-uploaded` 日志与最终帖子），见 §6 验收清单第 24 条。
 

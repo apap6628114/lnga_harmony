@@ -82,7 +82,11 @@ export struct ReplyDialog {
   /** 是否编辑既有回复。 */
   @Prop editMode: boolean = false
 
-  /** 编辑模式下的初始正文。 */
+  /**
+   * 编辑模式下的**服务端正文**（`ThreadPanel.onEdit` 传入的楼层原文）。
+   *
+   * 它只是**兜底**：本地存有该楼层的草稿时，正文以草稿为准（见 `aboutToAppear`）。
+   */
   @Prop initialContent: string = ''
 
   /** 当前窗口断点。 */
@@ -177,7 +181,23 @@ export struct ReplyDialog {
   aboutToAppear(): void {
     this.disposed = false
     if (this.editMode) {
-      this.replyText = this.initialContent
+      /*
+       * 编辑模式同样接回草稿，判据与新回复分支**完全一致**：有草稿用草稿，没有才用服务端正文。
+       *
+       * 漏掉这一步，「编辑里插的图重开后仍能发出」就是空话：`startEdit` → `beginSession`
+       * 确实把草稿媒体清单装回了 `sessionMedia`（B3），但正文若被 `initialContent`
+       * 整串覆盖，用户刚插入的 `[img]` 标签就不在正文里了——`isMediaReferenced` 判不出引用，
+       * 提交时这条媒体既不重传、也不进附件参数，图片**静默消失**（不报错：正文没引用
+       * 这条媒体在过滤逻辑里是合法形态）；更糟的是 `requestClose` 随后会把这份不含标签的
+       * 正文写回草稿，把磁盘上唯一记录着 `[img]` 的正文一起抹掉，媒体副本从此失去引用者，
+       * 只能等草稿超期（7 天）连目录一起回收。
+       *
+       * 代价要认：服务端正文若在别处被改过（网页版 / 另一台设备），草稿会**盖住**它。
+       * 这正是「已保存为草稿，下次编辑可恢复」这句文案的语义，与"放弃编辑"确认框一致；
+       * 想以服务端为准，走设置里的「清除缓存」（文案已明示草稿会被删）。
+       */
+      const draft: string = replyManager.loadDraft()
+      this.replyText = draft.length > 0 ? draft : this.initialContent
       this.isAnonymous = replyManager.isEditMode && replyManager.targetPost !== null
         ? replyManager.targetPost.isanonymous
         : false
