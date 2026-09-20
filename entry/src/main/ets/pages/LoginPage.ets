@@ -19,6 +19,10 @@ import { PageScope } from '../common/concurrency/PageScope'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { Logger, DOMAIN_UI, formatError } from '../common/utils/Logger'
 import { clearIncognitoWebCookies } from '../common/utils/WebViewCookieUtils'
+import {
+  resolveKeyboardAppearance,
+  resolveWebKeyboardAppearance
+} from '../common/utils/KeyboardAppearanceUtils'
 
 const logger = new Logger(DOMAIN_UI, 'LoginPage')
 
@@ -53,6 +57,14 @@ struct LoginPage {
   @StorageProp('navBarHeight') navBarHeight: number = 0
   /** 当前响应式断点。 */
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
+  /**
+   * 当前生效明暗色模式。
+   *
+   * 登录输入框（用户名 / 密码 / 验证码）与网页登录层 WebView 的键盘沉浸样式都须跟随
+   * **应用主题**而非系统模式，否则应用固定主题与系统模式相反时键盘配色错配
+   * （见 `KeyboardAppearanceUtils` 文件头）。
+   */
+  @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
 
   /** 网页登录 WebView 控制器。 */
   private webController: webview.WebviewController = new webview.WebviewController()
@@ -126,7 +138,7 @@ struct LoginPage {
               .attributeModifier(UIMaterialManager.inputMaterial)
               .borderRadius(10)
               .padding({ left: 16, right: 16 })
-              .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+              .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
               .onChange((value: string) => {
                 this.username = value
               })
@@ -143,7 +155,7 @@ struct LoginPage {
               .borderRadius(10)
               .padding({ left: 16, right: 16 })
               .margin({ top: 12 })
-              .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+              .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
               .onChange((value: string) => {
                 this.password = value
               })
@@ -165,7 +177,7 @@ struct LoginPage {
                   .caretColor(UIMaterialManager.inputForeground)
                   .attributeModifier(UIMaterialManager.inputMaterial)
                   .borderRadius(10)
-                  .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+                  .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
                   .padding({ left: 16, right: 16 })
                   .maxLength(6)
                   .onChange((value: string) => {
@@ -307,6 +319,15 @@ struct LoginPage {
               .domStorageAccess(true)
               .metaViewport(true)
               .overviewModeAccess(true)
+              /**
+               * H5 输入框的键盘沉浸样式。
+               *
+               * Web 组件承载的网页登录层里有账号 / 密码 / 扫码确认等输入框，它们**不受** ArkUI
+               * `TextInput` 那套 `KeyboardAppearance` 约束，须走 Web 侧独立枚举
+               * `WebKeyboardAppearanceMode`（API 26 新增）。同样按**应用主题**取色，
+               * 保证与小艺等输入法的沉浸样式和应用界面一致。
+               */
+              .keyboardAppearance(resolveWebKeyboardAppearance(this.effectiveColorMode))
               .onControllerAttached(() => {
                 // 时机：Web 组件已创建（隐私分区已就绪）、页面尚未加载——此时清空内存 Cookie
                 // 可保证登录页首帧请求就不带任何历史凭证，不依赖隐私分区是否随组件销毁而清空

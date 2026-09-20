@@ -15,6 +15,7 @@ import { isNgaQrLoginUrl } from '../common/utils/NgaQrLoginUtils'
 import { AppColors } from '../common/constants/Constants'
 import { PageScope } from '../common/concurrency/PageScope'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
+import { resolveWebKeyboardAppearance } from '../common/utils/KeyboardAppearanceUtils'
 
 const logger = new Logger(DOMAIN_UI, 'WebViewPanel')
 /** NGA 官方鸿蒙客户端 WebView 标识，供 H5 选择 app Cookie 分支。 */
@@ -29,6 +30,13 @@ const FAB_SIZE: number = 44
 export struct WebViewPanel {
   @Prop url: string = ''
   @StorageProp('navBarHeight') navBarHeight: number = 0
+  /**
+   * 当前生效明暗色模式。
+   *
+   * 供 WebView 内 H5 输入框的键盘沉浸样式取色——H5 输入框不受 ArkUI `TextInput` 的
+   * `KeyboardAppearance` 约束，走 Web 侧独立枚举（见 `KeyboardAppearanceUtils` 文件头）。
+   */
+  @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
   private controller: webview.WebviewController = new webview.WebviewController()
   @State pageTitle: string = ''
   @State isLoading: boolean = true
@@ -357,6 +365,15 @@ export struct WebViewPanel {
           .geolocationAccess(true)
           .zoomAccess(true)
           .overviewModeAccess(true)
+          /**
+           * 网页内 H5 输入框的键盘沉浸样式。
+           *
+           * 本面板承载 App 内浏览网页版，页面里的搜索框 / 回复框等都是 H5 输入框，
+           * 不受 ArkUI `TextInput` 那套 `KeyboardAppearance` 约束，须走 Web 侧独立枚举
+           * `WebKeyboardAppearanceMode`（API 26 新增）。与原生输入框同源取色（应用主题），
+           * 避免网页层与原生层键盘样式不一致。
+           */
+          .keyboardAppearance(resolveWebKeyboardAppearance(this.effectiveColorMode))
           .onControllerAttached(() => {
             try {
               const userAgent: string = this.isQrLoginWebView

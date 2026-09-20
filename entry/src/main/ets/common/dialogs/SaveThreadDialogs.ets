@@ -24,6 +24,7 @@ import { getThread } from '../../service/api/ThreadApi'
 import { appStore } from '../../store/AppStore'
 import { AppColors } from '../constants/Constants'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
+import { resolveKeyboardAppearance } from '../utils/KeyboardAppearanceUtils'
 
 @Component
 export struct SaveThreadContent {
@@ -52,6 +53,13 @@ export struct SaveThreadContent {
   @State private startText: string = '1'
   /** 结束页输入。 */
   @State private endText: string = ''
+  /**
+   * 当前生效明暗色模式。
+   *
+   * 页范围输入框是数字键盘，同样需要按**应用主题**（而非系统模式）决定沉浸样式，
+   * 否则固定主题与系统模式相反时键盘配色错配（见 `KeyboardAppearanceUtils` 文件头）。
+   */
+  @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
 
   aboutToAppear(): void {
     this.fetchThreadInfo()
@@ -183,7 +191,7 @@ export struct SaveThreadContent {
               .fontColor(UIMaterialManager.inputForeground)
               .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
               .caretColor(UIMaterialManager.inputForeground)
-              .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+              .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
               .attributeModifier(UIMaterialManager.dialogFieldMaterial)
               .onChange((value: string) => {
                 this.startText = value
@@ -201,7 +209,7 @@ export struct SaveThreadContent {
               .fontColor(UIMaterialManager.inputForeground)
               .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
               .caretColor(UIMaterialManager.inputForeground)
-              .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+              .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
               .attributeModifier(UIMaterialManager.dialogFieldMaterial)
               .onChange((value: string) => {
                 this.endText = value

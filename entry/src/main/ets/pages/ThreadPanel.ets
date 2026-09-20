@@ -26,6 +26,7 @@ import { LoadingStateView, ErrorStateView } from '../common/components/PageState
 import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
 import { replyManager, ReplyType } from '../common/managers/ReplyManager'
 import { withTimeout } from '../common/utils/TimeoutUtils'
+import { resolveKeyboardAppearance } from '../common/utils/KeyboardAppearanceUtils'
 import { bbNodesToPlainText } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { TtsMediaMetadata } from '../common/media/TtsAvSessionController'
@@ -178,6 +179,13 @@ export struct ThreadPanel {
   @State titleScrollEffectProgress: number = 0
   /** 黑名单变更版本号。 */
   @StorageProp('blacklistVersion') @Watch('onBlacklistVersionChange') blacklistVersion: number = 0
+  /**
+   * 当前生效明暗色模式。
+   *
+   * 页码输入框的键盘沉浸样式须跟随**应用主题**（而非系统模式），否则应用固定主题与
+   * 系统模式相反时键盘配色错配（见 `KeyboardAppearanceUtils` 文件头）。
+   */
+  @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
   @State showPagePicker: boolean = false
   /** 保存帖子对话框控制器（更多菜单「保存帖子」入口）。 */
   private saveDialogController?: CustomDialogController
@@ -2327,7 +2335,7 @@ export struct ThreadPanel {
             .fontColor(UIMaterialManager.inputForeground)
             .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
             .caretColor(UIMaterialManager.inputForeground)
-            .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+            .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
             .onChange((value: string) => { this.pagePickerInput = value })
             .onSubmit(() => { this.jumpToPageByInput() })
             // 高度取 36 而不是 32：TextInput 自带上下内边距，32vp 会把 14vp 的正文/占位文字

@@ -21,6 +21,13 @@
  * 这类「半透明填充 + 极淡描边、不做背景模糊」的玻璃表达层级，不再叠二次模糊；
  * 未激活的工具按钮保持透明底，让材质背板尽量透出来（§12.8）。主操作按钮按 §12.5
  * 走实底主题色 + 高对比文字，它是画面上唯一的视觉重点。
+ *
+ * 草稿取信规则（本组件同时承载"新建"与"编辑"两种语义，两者判据相反）：
+ * - **新回复 / 贴条**：没有服务端内容，草稿是**唯一来源** —— 有草稿一律用草稿；
+ * - **编辑既有帖子 / 回复**：服务端已经有内容，**以服务端原文为准，不读也不写草稿** ——
+ *   草稿只在本地存在，服务端可能在别处（网页版 / 另一台设备 / 版主操作）已被改动，
+ *   拿本地草稿去覆盖等于把别人的修改顶掉。退出编辑器因此也不再承诺"可恢复"，
+ *   确认框文案随之改成"修改将丢失"（见 `requestClose`）。
  */
 
 import { AppColors } from '../constants/Constants'
@@ -46,6 +53,7 @@ import {
   PickedImage
 } from '../media/MovingPhotoExport'
 import { Logger, DOMAIN_UI, formatError } from '../utils/Logger'
+import { resolveKeyboardAppearance } from '../utils/KeyboardAppearanceUtils'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 import { EditorFormatBar } from './EditorFormatBar'
 
@@ -85,7 +93,8 @@ export struct ReplyDialog {
   /**
    * 编辑模式下的**服务端正文**（`ThreadPanel.onEdit` 传入的楼层原文）。
    *
-   * 它只是**兜底**：本地存有该楼层的草稿时，正文以草稿为准（见 `aboutToAppear`）。
+   * 编辑模式**以它为准**：这种语义下本地草稿不被采信（见文件头「草稿取信规则」），
+   * 因此它不是"兜底"，而是唯一来源。
    */
   @Prop initialContent: string = ''
 
@@ -140,7 +149,15 @@ export struct ReplyDialog {
   private disposed: boolean = false
 
   /**
-   * 「放弃编辑」确认框（官方高级对话框模板）。
+   * 打开编辑器时的匿名态（编辑模式取自服务端楼层；新建模式恒为 false）。
+   *
+   * 编辑模式关闭面板前用它判断"用户到底改没改"：只动了匿名开关、正文一字未落时，
+   * 也该走确认框而不是静默关闭（见 `hasUnsavedEdit`）。
+   */
+  private initialAnonymity: boolean = false
+
+  /**
+   * 新建模式（回复 / 贴条）的「放弃编辑」确认框（官方高级对话框模板）。
    *
    * 迁移前由 `floatingLayerStore.showReplyConfirm()` 驱动 `FloatingLayerComponent`
    * 用 `Stack` + 遮罩手搓，现改用官方 `AlertDialog`：系统对话框样式、系统返回键与
@@ -151,14 +168,45 @@ export struct ReplyDialog {
    * 早先主按钮挂的是 `discardDraft()`（删草稿 JSON + 删媒体目录），与文案**恰好相反**——
    * 用户以为自己在关编辑器，实际把草稿和已经上传好的图片副本一起删了。
    * 需要真正删除草稿的入口是设置里的「清除缓存」（文案已明示草稿会被删）。
+   *
+   * 编辑模式**不复用这个文案**：那里没有草稿可恢复（见 `discardEditDialogController`）。
    */
-  private abandonDialogController: CustomDialogController = new CustomDialogController({
+  private savedDraftDialogController: CustomDialogController = new CustomDialogController({
     backgroundColor: Color.Transparent,
     systemMaterial: UIMaterialManager.dialogMaterial,
     maskColor: UIMaterialManager.nestedScrim,
     builder: AlertDialog({
       primaryTitle: '放弃编辑？',
       content: '已保存为草稿，下次编辑可恢复',
+      primaryButton: {
+        value: '放弃',
+        fontColor: AppColors.destructive,
+        action: () => { this.onClose() }
+      },
+      secondaryButton: {
+        value: '继续编辑'
+      }
+    }),
+    autoCancel: true
+  })
+
+  /**
+   * 编辑模式（修改既有帖子 / 回复）的「放弃修改」确认框。
+   *
+   * 与新建模式**必须分成两个实例**：差别不是措辞，而是事实——编辑模式不写草稿
+   * （正文以服务端原文为准，见文件头「草稿取信规则」），关闭就是**真的丢掉**这次修改，
+   * 继续沿用「已保存为草稿，下次编辑可恢复」等于对用户撒谎。
+   *
+   * 也不写成 `content: this.editMode ? ... : ...` 的单实例：那取决于编译器对
+   * 「组件调用表达式作 builder」的求值时机，两个静态实例不依赖这个假设。
+   */
+  private discardEditDialogController: CustomDialogController = new CustomDialogController({
+    backgroundColor: Color.Transparent,
+    systemMaterial: UIMaterialManager.dialogMaterial,
+    maskColor: UIMaterialManager.nestedScrim,
+    builder: AlertDialog({
+      primaryTitle: '放弃修改？',
+      content: '本次修改尚未保存，关闭后将丢失',
       primaryButton: {
         value: '放弃',
         fontColor: AppColors.destructive,
@@ -182,25 +230,28 @@ export struct ReplyDialog {
     this.disposed = false
     if (this.editMode) {
       /*
-       * 编辑模式同样接回草稿，判据与新回复分支**完全一致**：有草稿用草稿，没有才用服务端正文。
+       * 编辑既有帖子 / 回复：正文**只取服务端原文，不读草稿**。
        *
-       * 漏掉这一步，「编辑里插的图重开后仍能发出」就是空话：`startEdit` → `beginSession`
-       * 确实把草稿媒体清单装回了 `sessionMedia`（B3），但正文若被 `initialContent`
-       * 整串覆盖，用户刚插入的 `[img]` 标签就不在正文里了——`isMediaReferenced` 判不出引用，
-       * 提交时这条媒体既不重传、也不进附件参数，图片**静默消失**（不报错：正文没引用
-       * 这条媒体在过滤逻辑里是合法形态）；更糟的是 `requestClose` 随后会把这份不含标签的
-       * 正文写回草稿，把磁盘上唯一记录着 `[img]` 的正文一起抹掉，媒体副本从此失去引用者，
-       * 只能等草稿超期（7 天）连目录一起回收。
+       * 判据与新建分支**刻意相反**，因为两者前提不同：新建时服务端没有这份内容，草稿是唯一
+       * 来源；编辑时服务端已经有权威版本，而本地草稿是**上一次会话没提交成功**的残骸——它的
+       * 基线可能早已过期（网页版 / 另一台设备 / 版主改过这一层），拿它整串覆盖服务端内容，
+       * 就是在用户不知情的情况下把别人对这篇帖子的修改顶掉（标题的取信同理，见
+       * `ReplyManager.ensureEditSubject`：只认服务端 `post/check` 回传的 `subject`）。
        *
-       * 代价要认：服务端正文若在别处被改过（网页版 / 另一台设备），草稿会**盖住**它。
-       * 这正是「已保存为草稿，下次编辑可恢复」这句文案的语义，与"放弃编辑"确认框一致；
-       * 想以服务端为准，走设置里的「清除缓存」（文案已明示草稿会被删）。
+       * 代价同样要认，并且必须在 UI 上说清楚：编辑面板里未提交的修改**不跨会话**——关掉面板
+       * 或进程被杀就丢。因此编辑模式既不写草稿（`requestClose` 不再 `saveDraft`，
+       * `ReplyManager.saveDraft` / `loadDraft` 另有模式拦截做双保险），也不再承诺"下次可恢复"，
+       * 确认框文案随之改成「放弃修改？本次修改尚未保存，关闭后将丢失」。
+       *
+       * 另有一个可感知的后果：上一次编辑里上传成功、但没提交的图片，凭证随 `beginSession`
+       * 作废、正文又只认服务端，重进后只能重新上传。这不再是当初那个"静默丢图"的损坏形态
+       * ——编辑器里显示的就是将要提交的内容，用户看得见那张图不在。
        */
-      const draft: string = replyManager.loadDraft()
-      this.replyText = draft.length > 0 ? draft : this.initialContent
-      this.isAnonymous = replyManager.isEditMode && replyManager.targetPost !== null
+      this.replyText = this.initialContent
+      this.initialAnonymity = replyManager.isEditMode && replyManager.targetPost !== null
         ? replyManager.targetPost.isanonymous
         : false
+      this.isAnonymous = this.initialAnonymity
     } else {
       this.isCommentMode = replyManager.type === ReplyType.COMMENT
       const draft: string = replyManager.loadDraft()
@@ -264,10 +315,30 @@ export struct ReplyDialog {
     }
   }
 
-  /** 请求关闭编辑器，并在存在正文时保留草稿。 */
+  /**
+   * 请求关闭编辑器。
+   *
+   * 两种语义的收尾方式**不同**：
+   * - 新建（回复 / 贴条）：保稿——正文非空、仍引用着已登记的媒体、或有上传在途时存草稿，
+   *   否则清掉空草稿；
+   * - 编辑既有帖子 / 回复：**不写草稿**（正文以服务端原文为准，存了也不会再被读），
+   *   只判断有没有未保存的修改：没有就直接关闭，有则让用户确认丢弃。
+   */
   private requestClose(): void {
     // 已经开始关闭：撤销补试，避免面板消失过程中又被抢焦点、重弹键盘
     this.cancelAutoFocusRetry()
+    if (this.editMode) {
+      /*
+       * 什么都没改就直接关：编辑面板刚打开、看一眼就退出是常态，这种情况弹"修改将丢失"
+       * 只会制造噪音（此时也的确没有修改会丢）。
+       */
+      if (!this.hasUnsavedEdit()) {
+        this.onClose()
+        return
+      }
+      this.discardEditDialogController.open()
+      return
+    }
     /*
      * 保稿判据（B9 + B12）：
      * - 正文非空 → 存；
@@ -280,12 +351,25 @@ export struct ReplyDialog {
     if (this.replyText.trim().length > 0 ||
       replyManager.hasReferencedMedia(this.replyText) || this.uploadingImage) {
       replyManager.saveDraft(this.replyText)
-      this.abandonDialogController.open()
+      this.savedDraftDialogController.open()
     } else {
       // 内容为空且没有任何被引用的媒体时清掉旧草稿，避免下次打开又恢复已删除的内容
       replyManager.clearDraft()
       this.onClose()
     }
+  }
+
+  /**
+   * 编辑模式下是否存在**未保存的修改**。
+   *
+   * 三项判据：正文与服务端原文不同、匿名开关与打开时不同、有上传在途。
+   * 最后一项不能省：上传在途时正文里还没有 `[img]` 标签，若因为"正文没变"就静默关闭，
+   * 用户会以为自己插进去的那张图还在（它随后被登记进一个已经关掉的会话，然后随进程消失）。
+   */
+  private hasUnsavedEdit(): boolean {
+    return this.replyText !== this.initialContent ||
+      this.isAnonymous !== this.initialAnonymity ||
+      this.uploadingImage
   }
 
   /** 切换回复与贴条模式。 */
@@ -410,7 +494,8 @@ export struct ReplyDialog {
         if (coverData.byteLength > 0 && videoData.byteLength > 0) {
           appStore.showToast('正在上传动态照片...')
           /*
-           * 走 `...WithDraft` 变体：上传成功后立刻把封面与视频两半的字节写成草稿媒体副本。
+           * 走 `...WithDraft` 变体：上传成功后立刻把封面与视频两半的字节写成草稿媒体副本
+           * （**编辑模式下 manager 内部跳过**，见 `ReplyManager.uploadMovingPhotoWithDraft`）。
            * 两条约束同时成立——① 字节必须此刻拿（`finally` 的 `releaseExportedMovingPhoto`
            * 会把 `cacheDir/mphoto_upload/<ts>/` 整个删掉）；② 本方法不做 URI 转换，
            * 视频半边本来就只有沙箱路径、没有持久 URI（见 `DraftMediaStore` 文件头）。
@@ -469,6 +554,8 @@ export struct ReplyDialog {
       /*
        * 走 `...WithDraft` 变体：上传成功后顺手把这份图片写进草稿媒体目录。
        * 字节直接用已读到的那一份（不再回头读 Picker URI），见 `DraftMediaStore` 文件头。
+       * **编辑模式下 manager 内部会跳过写副本**（正文以服务端原文为准，草稿不会被读回，
+       * 副本没有认领者），这里保持同一入口即可，不必在 UI 层分流。
        */
       const imageUrl: string = await replyManager.uploadImageWithDraft(buffer, fileName)
       logger.verbose('[IMGUP] upload success, url: %{public}s', imageUrl)
@@ -570,8 +657,12 @@ export struct ReplyDialog {
      */
     const draftKey: string = replyManager.draftKeySnapshot
     this.onSend(this.replyText.trim(), this.isAnonymous).then(() => {
-      // 提交成功：清掉草稿（含媒体副本）。此时面板通常已被调用方关闭，
-      // 但草稿属于 manager（进程级单例），与组件生命周期无关，必须清。
+      /*
+       * 提交成功：清掉草稿（含媒体副本）。此时面板通常已被调用方关闭，
+       * 但草稿属于 manager（进程级单例），与组件生命周期无关，必须清。
+       * 编辑模式本身没有草稿可清（`saveDraft` 不写），这次调用在那里是**兜底**：
+       * 万一还有更早版本遗留的编辑草稿，提交成功这一刻一并回收。
+       */
       replyManager.clearDraft(draftKey)
       if (!this.disposed) {
         this.onClose()
@@ -751,7 +842,7 @@ export struct ReplyDialog {
           .caretColor(UIMaterialManager.inputForeground)
           .borderRadius(16)
           .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
           .onFocus(() => { this.onEditorFocus() })
           .onChange((value: string) => { this.replyText = value })
           .onTextSelectionChange((start: number, end: number) => {

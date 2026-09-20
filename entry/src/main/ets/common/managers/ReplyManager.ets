@@ -252,6 +252,17 @@ export class ReplyManagerClass implements DraftUploadHost {
     // 本类同时只有一个编辑器会话：先清掉上一个会话的活跃登记，避免异常关闭路径
     // （组件销毁时没走 clearDraft）在 `DraftStore` 里留下永久豁免的僵尸键
     draftStore.endAllSessions()
+    /*
+     * 编辑（EDIT）会话**不使用草稿**：既不登记活跃键、也不装回媒体清单。
+     *
+     * 编辑的正文以**服务端原文**为准（见 `ReplyDialog.aboutToAppear`），草稿永远读不回来；
+     * 装回 `sessionMedia` 只会让提交路径对着一份不含这些标签的正文做重传判定
+     * （`isMediaReferenced` 恒 false），在日志里留下误导性的痕迹；登记活跃键则等于给一份
+     * 不会再被读写的草稿目录发永久豁免，让它一直挂到下次启动的清理。
+     */
+    if (this.ctx.type === ReplyType.EDIT) {
+      return
+    }
     const key: string = this.draftKey()
     /*
      * 活跃键登记（A7）：草稿 JSON 此刻可能还不存在（用户还没关闭过编辑器），
@@ -320,6 +331,12 @@ export class ReplyManagerClass implements DraftUploadHost {
     this.ctx.quotePrefix = ''
     this.beginSession('modify')
     /*
+     * 编辑模式不使用草稿：进入时把该楼层**遗留的**编辑草稿与媒体副本一起回收
+     * （见 `discardEditDraft`）。必须放在 `beginSession` 之后——那时 `ctx` 已指向本次目标，
+     * `draftKey()` 取到的才是这一层的编辑键。
+     */
+    this.discardEditDraft()
+    /*
      * 预取 post/check：编辑提交**必须**带回帖子标题（见 `ensureEditSubject`），标题只在
      * check 响应里（`ActionCheck.subject`）。在打开编辑器时就把这次请求发出去，等用户改完
      * 正文点保存时标题早已就位——提交路径因此不必再为标题多等一次往返。
@@ -387,6 +404,28 @@ export class ReplyManagerClass implements DraftUploadHost {
       out.error = 'server-returned-none'
     }
     return out
+  }
+
+  /**
+   * 回收当前编辑目标的**遗留**编辑草稿（草稿 JSON + 媒体副本目录）。
+   *
+   * 编辑模式不使用草稿（正文以服务端原文为准，见 `ReplyDialog` 文件头「草稿取信规则」），
+   * 但历史版本曾在 `draft_<tid>_edit_<pid>_<uid>` 下写过草稿与媒体副本。那些文件再也
+   * 不会被读取：不主动回收就要等 7 天保留期，而期间它们既占磁盘、又被设置里的
+   * 「草稿占用」统计计入，让用户以为"下次编辑可恢复"。
+   *
+   * 只在确实处于编辑目标（有 `targetPost`）时动手：`draftKey()` 在缺 `pid` 时会退化成
+   * 主题级回复键，误清就会删掉用户真正在用的那份回复草稿。
+   */
+  private discardEditDraft(): void {
+    if (this.ctx.type !== ReplyType.EDIT || this.ctx.targetPost === null) {
+      return
+    }
+    const key: string = this.draftKey()
+    draftStore.clearDraft(key)
+    draftStore.endSession(key)
+    draftMediaStore.removeDraftMedia(key)
+    logger.verbose('[DRAFT] edit draft discarded key=%{public}s', key)
   }
 
   reset(): void {
@@ -576,6 +615,15 @@ export class ReplyManagerClass implements DraftUploadHost {
     const draftKey: string = this.draftKey()
     const imageUrl: string = await this.uploadImage(imageData, fileName)
     /*
+     * 编辑模式**不落副本**：它的正文以服务端原文为准、草稿永远不会被读回，副本没有认领者
+     * ——懒重传用不到它（编辑会话的 `sessionMedia` 恒为空），也不会随任何草稿被回收
+     * （`discardEditDraft` 只在进入编辑时清一次）。落下去就是在磁盘上留一堆孤儿目录，
+     * 只能等启动清理回收。上传本身照做：本次会话内提交仍然有效（凭证在 `pendingAttachments`）。
+     */
+    if (this.ctx.type === ReplyType.EDIT) {
+      return imageUrl
+    }
+    /*
      * 落副本与登记**必须过代际**：`uploadImage` 里含 post/check + 上传两个往返，用户完全可能
      * 在这期间关掉本编辑器、又打开另一个帖子的编辑器。用快照 key 之外的"当前"状态去落盘，
      * A 帖的图片字节会写进 **B 帖的草稿媒体目录**、幽灵记录会 push 进 B 的 `sessionMedia`，
@@ -616,6 +664,10 @@ export class ReplyManagerClass implements DraftUploadHost {
     const generation: number = this.sessionGeneration
     const draftKey: string = this.draftKey()
     const tag: string = await this.uploadMovingPhoto(coverData, videoData)
+    // 编辑模式不落副本：两半都不落，理由见 `uploadImageWithDraft` 的同名分支
+    if (this.ctx.type === ReplyType.EDIT) {
+      return tag
+    }
     // 与 `uploadImageWithDraft` 同一把尺：会话已切换就不落副本、不登记（见该方法的说明）
     if (this.sessionGeneration !== generation) {
       logger.verbose('[DRAFT] skip media copy, session switched')
@@ -1021,7 +1073,9 @@ export class ReplyManagerClass implements DraftUploadHost {
    * 会读到上一个账号的草稿内容与媒体清单（与官方 `ActionCheck.buildActionId` 的 uid 维度同构）。
    *
    * 三种目标（**模式开关不再参与**）：
-   * - 编辑某楼层：`draft_<tid>_edit_<pid>_<uid>` —— 编辑与回复是不同操作，保持独立；
+   * - 编辑某楼层：`draft_<tid>_edit_<pid>_<uid>` —— 编辑**不使用草稿**（见 `saveDraft` /
+   *   `loadDraft` 的模式拦截），这个键现在只有一个用途：`discardEditDraft` 用它回收历史
+   *   版本遗留的编辑草稿与媒体副本；
    * - 楼层回复 / 贴条：`draft_<tid>_p<pid>_<uid>` —— 两者都是"针对某楼层的内容"，
    *   共用同一个键；
    * - 主题级回复：`draft_<tid>_<uid>`。
@@ -1059,6 +1113,16 @@ export class ReplyManagerClass implements DraftUploadHost {
    * @param text - 正文
    */
   saveDraft(text: string): void {
+    /*
+     * 编辑模式不写草稿（正文以服务端原文为准，见文件头「草稿取信规则」与
+     * `ReplyDialog.aboutToAppear`）：这里做**防御性**拦截，而不是指望调用方记得别调。
+     * 写下去也没人会读（`loadDraft` 同样拦），却会在磁盘上留下一份"看着能恢复、
+     * 点进去是旧内容"的假草稿，还把设置里的「草稿占用」统计带偏。
+     */
+    if (this.ctx.type === ReplyType.EDIT) {
+      logger.verbose('[DRAFT] save skipped in edit mode')
+      return
+    }
     if (text.length === 0 && this.sessionMedia.length === 0) {
       return
     }
@@ -1077,6 +1141,11 @@ export class ReplyManagerClass implements DraftUploadHost {
    * @returns 正文；无草稿时为空串
    */
   loadDraft(): string {
+    // 编辑模式没有"草稿"这一来源（正文取自服务端原文）：返回空串让调用方天然落到它的
+    // 服务端分支，而不是回退成"有草稿用草稿"（与 `saveDraft` 的模式拦截成对）
+    if (this.ctx.type === ReplyType.EDIT) {
+      return ''
+    }
     const draft: EditorDraft | null = draftStore.loadDraft(this.draftKey())
     return draft === null ? '' : draft.content
   }

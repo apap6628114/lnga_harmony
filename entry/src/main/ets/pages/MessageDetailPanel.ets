@@ -21,6 +21,7 @@ import { PanelNavBar } from '../common/components/PanelNavBar'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 import { KEY_MESSAGE_VERSION } from '../common/constants/AppStorageKeys'
 import { bumpAppStorageVersion } from '../common/utils/AppStorageVersion'
+import { resolveKeyboardAppearance } from '../common/utils/KeyboardAppearanceUtils'
 import { BBCodeContentView } from '../common/components/BBCodeContentView'
 import { getCachedBBNodes } from '../parser/bbcode/BBCodeCache'
 
@@ -40,6 +41,13 @@ export struct MessageDetailPanel {
   @StorageProp('navBarHeight') navBarHeight: number = 0
   /** 状态栏高度。 */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
+  /**
+   * 当前生效明暗色模式。
+   *
+   * 底部回复框的键盘沉浸样式须跟随**应用主题**（而非系统模式），否则应用固定主题与
+   * 系统模式相反时键盘配色错配（见 `KeyboardAppearanceUtils` 文件头）。
+   */
+  @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
   /** 标题栏渐变模糊与偏色的滚动联动进度。 */
   @State titleScrollEffectProgress: number = 0
   /** 列表当前视口高度。 */
@@ -347,7 +355,7 @@ export struct MessageDetailPanel {
               .caretColor(UIMaterialManager.inputForeground)
               .height(40).padding({ left: 12, right: 12 })
               .attributeModifier(UIMaterialManager.inputMaterial)
-              .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+              .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
               .onChange((value: string) => { this.replyText = value })
               .onSubmit(() => this.handleReply())
             Button('发送')

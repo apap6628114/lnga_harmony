@@ -30,6 +30,7 @@ import type { MessageSendResult } from '../../model/MessageResult'
 import { AppColors, SheetWidthConstants } from '../constants/Constants'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 import { DOMAIN_UI, formatError, Logger } from '../utils/Logger'
+import { resolveKeyboardAppearance } from '../utils/KeyboardAppearanceUtils'
 
 /** 写私信面板日志。 */
 const logger = new Logger(DOMAIN_UI, 'ComposeMessageSheet')
@@ -49,6 +50,14 @@ export struct ComposeMessageSheet {
   @StorageProp('currentBreakpoint') currentBreakpoint: string = 'sm'
   /** 当前窗口宽度（vp）：面板宽度按窗口收敛的依据（见 `SheetWidthConstants`）。 */
   @StorageProp('windowWidthVp') windowWidthVp: number = 0
+  /**
+   * 当前生效明暗色模式，用于让键盘沉浸样式跟随**应用主题**而非系统模式。
+   *
+   * 本组件承载的是私信编辑器，输入框获焦即弹出输入法；应用固定浅色 / 深色主题时
+   * 应用模式与系统模式可能相反，键盘若跟随系统就会与界面配色错配（见
+   * `KeyboardAppearanceUtils` 文件头）。
+   */
+  @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
   @State composeTo: string = ''
   @State composeSubject: string = ''
   @State composeContent: string = ''
@@ -219,7 +228,7 @@ export struct ComposeMessageSheet {
           .caretColor(UIMaterialManager.inputForeground)
           .margin({ top: 12 })
           .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
           .onChange((value: string) => { this.composeTo = value })
 
         TextInput({ text: this.composeSubject, placeholder: '主题' })
@@ -229,7 +238,7 @@ export struct ComposeMessageSheet {
           .caretColor(UIMaterialManager.inputForeground)
           .margin({ top: 8 })
           .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
           .onChange((value: string) => { this.composeSubject = value })
 
         TextArea({ text: this.composeContent, placeholder: '内容' })
@@ -239,7 +248,7 @@ export struct ComposeMessageSheet {
           .caretColor(UIMaterialManager.inputForeground)
           .margin({ top: 8 })
           .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
           .onChange((value: string) => { this.composeContent = value })
 
         Button(this.sending ? '发送中...' : '发送')

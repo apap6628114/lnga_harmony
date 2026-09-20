@@ -22,6 +22,7 @@ import {
 } from '../common/constants/Constants'
 import { NGA_IMG4_BASE } from '../common/constants/NgaDomains'
 import { formatTime } from '../common/utils/Utils'
+import { resolveKeyboardAppearance } from '../common/utils/KeyboardAppearanceUtils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { ThreadDataSource } from '../common/datasource/LazyDataSource'
 import { AnonymousName } from '../common/components/AnonymousName'
@@ -86,6 +87,13 @@ export struct SearchPanel {
   @StorageProp('topicFontSize') topicFontSize: number = 15
   /** 黑名单变更版本号。 */
   @StorageProp('blacklistVersion') blacklistVersion: number = 0
+  /**
+   * 当前生效明暗色模式。
+   *
+   * 搜索框的键盘沉浸样式须跟随**应用主题**（而非系统模式），否则应用固定主题与
+   * 系统模式相反时键盘配色错配（见 `KeyboardAppearanceUtils` 文件头）。
+   */
+  @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
 
   private scroller: Scroller = new Scroller()
   private forumsDataSource: ThreadDataSource = new ThreadDataSource()
@@ -628,7 +636,7 @@ export struct SearchPanel {
               .fontColor(UIMaterialManager.inputForeground)
               .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
               .caretColor(UIMaterialManager.inputForeground)
-              .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+              .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
               .onChange((value: string) => {
                 this.keyword = value
                 this.scheduleAutoSubmit()

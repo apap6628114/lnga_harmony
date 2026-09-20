@@ -38,6 +38,7 @@ import {
 } from '../media/EmotionResources'
 import fileIo from '@ohos.file.fs'
 import { AlertDialog } from '@kit.ArkUI'
+import { resolveKeyboardAppearance } from '../utils/KeyboardAppearanceUtils'
 import {
   pickImage,
   releaseExportedMovingPhoto,
@@ -635,7 +636,7 @@ export struct NewTopicDialog {
           .borderRadius(14)
           .attributeModifier(UIMaterialManager.dialogFieldMaterial)
           .maxLength(60)
-          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
           .onFocus(() => { this.onEditorFocus() })
           .onChange((value: string) => { this.subject = value })
 
@@ -726,7 +727,7 @@ export struct NewTopicDialog {
           .caretColor(UIMaterialManager.inputForeground)
           .borderRadius(16)
           .attributeModifier(UIMaterialManager.dialogFieldMaterial)
-          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
           .onFocus(() => { this.onEditorFocus() })
           .onChange((value: string) => { this.content = value })
           .onTextSelectionChange((start: number, end: number) => {
