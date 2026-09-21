@@ -182,7 +182,10 @@ export struct FloatingLayerComponent {
    */
   private imageCoverOptions(): ContentCoverOptions {
     const options: ContentCoverOptions = {
-      modalTransition: ModalTransition.DEFAULT,
+      /* 打开/收起走透明度渐变（ALPHA），不用系统默认的上下位移：查看器是铺满全屏的固定暗场景，
+         整页内容自下而上推入会被读成"翻页"，淡入淡出才符合"叠一层浮层"的语义。
+         （该字段与自定义 `transition` 互斥，见本地 SDK `ContentCoverOptions.modalTransition` 声明。） */
+      modalTransition: ModalTransition.ALPHA,
       onWillDismiss: (action: DismissContentCoverAction) => {
         action.dismiss()
         this.floating.remove(FloatingPage.IMAGE_VIEWER)

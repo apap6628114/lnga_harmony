@@ -52,7 +52,7 @@
 | 原实现 | 迁移后 | 视觉策略 |
 | --- | --- | --- |
 | 回复编辑器 / 发新主题：全屏 `Stack` 遮罩 + 手搓居中/底部定位 | `bindSheet` 半模态（**三种断点统一 `SheetType.BOTTOM`**，宽屏仅限宽） | sheet 背景置 `Color.Transparent`、`blurStyle` 默认 NONE、蒙层色取 `UIMaterialManager.scrim`（2026-09 起遮罩统一收敛到该令牌）。**注**：这是迁移当时的做法（外观由内容容器的 `surfaceMaterial` 磨砂玻璃承担），后续已被 §7.2 的系统材质接管——sheet 背板改走 `sheetMaterial`，内容容器不再叠自绘玻璃。**另注**：`md+` 曾用 `SheetType.CENTER` 保持居中浮层形态，已作废——编辑器自己用「窗口键盘高度占底部 padding」（`keyboardAvoidMode: NONE`）做避让，该做法只在贴底样式下成立；居中形态会被二次垫高，面板比内容高一截、工具行下方留长空白，且底边越出可视区导致底部圆角不再绘制（真机截图逐像素实测，见 `IMMERSIVE_LIGHT_DESIGN.md` §12.7） |
-| 图片查看器：同层 `Stack` 内渲染 | `bindContentCover` 全屏模态 | 内容自带暗场景底色，`modalTransition` 用系统默认 |
+| 图片查看器：同层 `Stack` 内渲染 | `bindContentCover` 全屏模态 | 内容自带暗场景底色，`modalTransition` 取 `ModalTransition.ALPHA`（透明度渐变；曾用系统默认 `DEFAULT` 的上下位移，见 §3.1 注） |
 | 通用确认框（`floatingLayerStore.showConfirm`） | 官方 `ConfirmDialog`，调用点下移到唯一使用方 `BrowseHistoryPanel` | 官方模板样式，主按钮保留 `AppColors.destructive` 实底 |
 | 「放弃编辑」确认框（`replyConfirmActive`） | 官方 `ConfirmDialog`，下移到 `ReplyDialog` / `NewTopicDialog` 各自的 `CustomDialogController` | 同上 |
 
