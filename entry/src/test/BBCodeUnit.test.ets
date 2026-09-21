@@ -300,7 +300,7 @@ export default function bbcodeUnitTest(): void {
 
     it('continuesInlineStyleAcrossImageBlock', 0, (): void => {
       const nodes: BBNode[] = parseBBCode(
-        '[size=150%]前[img]https://example.com/a.jpg[/img]后[/size]')
+        '[size=150%]前[img]https://img.nga.cn/attachments/mon_202609/11/a.jpg[/img]后[/size]')
 
       expect(nodes.length).assertEqual(3)
       expect(nodes[0].type).assertEqual(BBNodeType.SIZE)
@@ -312,7 +312,7 @@ export default function bbcodeUnitTest(): void {
 
     it('continuesAttributedLinkAcrossImageBlock', 0, (): void => {
       const nodes: BBNode[] = parseBBCode(
-        '[url=https://example.com]前[img]https://example.com/a.jpg[/img]后[/url]')
+        '[url=https://example.com]前[img]https://img.nga.cn/attachments/mon_202609/11/a.jpg[/img]后[/url]')
       const after: InlineRun[] = flattenInlineNodes([nodes[2]])
 
       expect(nodes.length).assertEqual(3)
@@ -326,7 +326,7 @@ export default function bbcodeUnitTest(): void {
 
     it('continuesDerivedLinkAcrossImageBlock', 0, (): void => {
       const nodes: BBNode[] = parseBBCode(
-        '[url]https://example.com[img]https://example.com/a.jpg[/img]继续[/url]')
+        '[url]https://example.com[img]https://img.nga.cn/attachments/mon_202609/11/a.jpg[/img]继续[/url]')
       const after: InlineRun[] = flattenInlineNodes([nodes[2]])
 
       expect(nodes.length).assertEqual(3)
@@ -622,7 +622,7 @@ export default function bbcodeUnitTest(): void {
 
     it('doesNotDuplicateInvalidStyleAcrossBlocks', 0, (): void => {
       const nodes: BBNode[] = parseBBCode(
-        '[size=invalid]前[img]https://example.com/a.jpg[/img]后[/size]')
+        '[size=invalid]前[img]https://img.nga.cn/attachments/mon_202609/11/a.jpg[/img]后[/size]')
       const before: InlineRun[] = flattenInlineNodes([nodes[0]])
       const after: InlineRun[] = flattenInlineNodes([nodes[2]])
 
@@ -740,12 +740,76 @@ export default function bbcodeUnitTest(): void {
     expect(nodes[0].src).assertEqual('https://img.nga.cn/attachments/mon_202112/05/x.png')
   })
 
-  it('keepsNonNgaDomainImgUrlUnchanged', 0, (): void => {
+  it('degradesBareAttachmentImgPathToText', 0, (): void => {
+    /*
+     * 官方 ubbcode.imgGen：`mon_xxx/xx/x.jpg` 这类漏写 `./` 的裸附件路径不算图片，
+     * 整个 [img] 标签退化为补协议后的文本。
+     * 最小复现：线上 tid=47560793 主楼 3 个 [img] 曾被渲染成空白图片块。
+     */
+    const nodes: BBNode[] = parseBBCode(
+      '[img]mon_202609/15/k2Q55-ivsxK2dT3cSil-sg.jpg[/img]')
+
+    expect(nodes.length).assertEqual(1)
+    expect(nodes[0].type).assertEqual(BBNodeType.TEXT)
+    expect(nodes[0].text).assertEqual('https://mon_202609/15/k2Q55-ivsxK2dT3cSil-sg.jpg')
+  })
+
+  it('degradesNonWhitelistImgDomainToText', 0, (): void => {
+    /* 官方 commonui.checkOtherImg 之外的图床域同样退化为文本 */
     const nodes: BBNode[] = parseBBCode('[img]https://example.com/a.png[/img]')
 
     expect(nodes.length).assertEqual(1)
+    expect(nodes[0].type).assertEqual(BBNodeType.TEXT)
+    expect(nodes[0].text).assertEqual('https://example.com/a.png')
+  })
+
+  it('keepsWhitelistImgDomainAsImage', 0, (): void => {
+    /*
+     * 白名单图床（i0.hdslb.com）产出图片。
+     * 有意偏离：官方网页对外链图渲染的是「显示图片」点击加载按钮（srcSelect 对非附件
+     * 无条件置 a.btn=-3，imgGen 的 if(!a.btn) 因此走按钮分支），客户端没有该形态，
+     * 按 App 体验直接显示；「是不是图片」的判定与官方一致。
+     */
+    const nodes: BBNode[] = parseBBCode('[img]https://i0.hdslb.com/bfs/a.jpg[/img]')
+
+    expect(nodes.length).assertEqual(1)
     expect(nodes[0].type).assertEqual(BBNodeType.IMAGE)
-    expect(nodes[0].src).assertEqual('https://example.com/a.png')
+    expect(nodes[0].src).assertEqual('https://i0.hdslb.com/bfs/a.jpg')
+  })
+
+  it('degradesAttachDomainWithoutAttachmentsPathToText', 0, (): void => {
+    /*
+     * 官方 imgGen 只有 ifUrlAttach 返回 2（带 /attachments/）才直接进图片分支，
+     * 返回 1 时落外链白名单；user-file / ngaimg / bnbsky 等域不在白名单 → 退化为文本。
+     */
+    const nodes: BBNode[] = parseBBCode('[img]https://user-file.nga.178.com/x.jpg[/img]')
+
+    expect(nodes.length).assertEqual(1)
+    expect(nodes[0].type).assertEqual(BBNodeType.TEXT)
+    expect(nodes[0].text).assertEqual('https://user-file.nga.178.com/x.jpg')
+  })
+
+  it('decodesHtmlEntityInImgUrl', 0, (): void => {
+    /* 官方把地址写进 HTML 属性由浏览器解码实体，客户端须自行解码后再交给 Image */
+    const nodes: BBNode[] = parseBBCode(
+      '[img]https://img.nga.cn/attachments/a.jpg?x=1&amp;y=2[/img]')
+
+    expect(nodes.length).assertEqual(1)
+    expect(nodes[0].type).assertEqual(BBNodeType.IMAGE)
+    expect(nodes[0].src).assertEqual('https://img.nga.cn/attachments/a.jpg?x=1&y=2')
+  })
+
+  it('keepsDotRelativeAttachmentImgAsImage', 0, (): void => {
+    /* `.` 开头的附件相对路径（含 `.1/` 序号形式）仍拼附件 CDN 根渲染为图片 */
+    const dotSlash: BBNode[] = parseBBCode('[img]./mon_202609/15/a.jpg[/img]')
+    const dotIndex: BBNode[] = parseBBCode('[img].1/mon_202609/15/a.jpg[/img]')
+
+    expect(dotSlash.length).assertEqual(1)
+    expect(dotSlash[0].type).assertEqual(BBNodeType.IMAGE)
+    expect(dotSlash[0].src).assertEqual('https://img.nga.cn/attachments/mon_202609/15/a.jpg')
+    expect(dotIndex.length).assertEqual(1)
+    expect(dotIndex[0].type).assertEqual(BBNodeType.IMAGE)
+    expect(dotIndex[0].src).assertEqual('https://img.nga.cn/attachments/mon_202609/15/a.jpg')
   })
 
   it('normalizesImgInTableCells', 0, (): void => {

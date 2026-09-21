@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { parseBBCode } from '../src/parser/bbcode/parser'
 import { preprocessContent } from '../src/parser/bbcode/lexer'
 import { decodeHtmlEntities } from '../src/parser/_shared/HtmlEntityCodec'
-import { resolveAttachBBCodeUrl, resolveImgUrl } from '../src/parser/_shared/AttachUrl'
+import { resolveAttachBBCodeUrl, resolveImgTag } from '../src/parser/_shared/AttachUrl'
 import { flattenInlineNodes, InlineRun, InlineRunKind } from '../src/common/components/bbcode/bbcode-utils'
 import { BBNode, BBNodeType } from '../src/model/BBCodeNode'
 import { loadSampleContent, isSubsequence, concatTextNodes } from './helpers'
@@ -658,7 +658,7 @@ describe('边角样例', () => {
     { name: '乱序闭合容错', input: '[/b][b]乱序[/i]闭合' },
     { name: '四级标题', input: '[h]四级标题内容[/h]' },
     { name: '居中对齐', input: '[align=center]居中文字[/align]' },
-    { name: '图片', input: '[img]https://img.example.com/a.jpg[/img]' },
+    { name: '图片', input: '[img]https://img.nga.cn/attachments/mon_202609/11/a.jpg[/img]' },
     { name: '折叠块', input: '[collapse=折叠标题]折叠内容[/collapse]' },
     { name: '特殊字符实体', input: '实体 &amp;&lt;&gt;&quot;&#91;字面&#93; 与 裸 [ 方括号' },
     { name: '大小写标签', input: '[B]大写粗体[/B] [COLOR=BLUE]大写颜色[/COLOR]' },
@@ -831,40 +831,42 @@ describe('attach 渲染层', () => {
 describe('img 域名归一化（对齐官方 commonui.correctAttachUrl）', () => {
   it('旧附件域 img.nga.178.com 绝对 URL 归一化到 img.nga.cn', () => {
     assert.equal(
-      resolveImgUrl('https://img.nga.178.com/attachments/mon_202112/05/-40v3zQ2p-ccrhK3S1o-p.png'),
+      resolveImgTag('https://img.nga.178.com/attachments/mon_202112/05/-40v3zQ2p-ccrhK3S1o-p.png').text,
       'https://img.nga.cn/attachments/mon_202112/05/-40v3zQ2p-ccrhK3S1o-p.png'
     )
   })
 
   it('http 旧域 ngacn.cc / nga.donews.com / ngabbs.com 同样归一化', () => {
     assert.equal(
-      resolveImgUrl('http://img.ngacn.cc/attachments/mon_202001/01/x.png'),
+      resolveImgTag('http://img.ngacn.cc/attachments/mon_202001/01/x.png').text,
       'https://img.nga.cn/attachments/mon_202001/01/x.png'
     )
     assert.equal(
-      resolveImgUrl('http://img.nga.donews.com/attachments/mon_202001/01/x.png'),
+      resolveImgTag('http://img.nga.donews.com/attachments/mon_202001/01/x.png').text,
       'https://img.nga.cn/attachments/mon_202001/01/x.png'
     )
     assert.equal(
-      resolveImgUrl('http://img.ngabbs.com/attachments/mon_202001/01/x.png'),
+      resolveImgTag('http://img.ngabbs.com/attachments/mon_202001/01/x.png').text,
       'https://img.nga.cn/attachments/mon_202001/01/x.png'
     )
   })
 
   it('img7 子域匹配、img4 等其余数字子域不匹配（官方 img7? 逐字一致）', () => {
     assert.equal(
-      resolveImgUrl('https://img7.nga.cn/attachments/mon_202001/01/x.png'),
+      resolveImgTag('https://img7.nga.cn/attachments/mon_202001/01/x.png').text,
       'https://img.nga.cn/attachments/mon_202001/01/x.png'
     )
     assert.equal(
-      resolveImgUrl('https://img4.nga.178.com/attachments/mon_202001/01/x.png'),
+      resolveImgTag('https://img4.nga.178.com/attachments/mon_202001/01/x.png').text,
       'https://img4.nga.178.com/attachments/mon_202001/01/x.png'
     )
   })
 
-  it('非 NGA 附件域绝对 URL 原样保留', () => {
+  it('非 NGA 附件域绝对 URL 原样保留且不渲染为图片', () => {
     const raw: string = 'https://example.com/attachments/mon_202001/01/x.png'
-    assert.equal(resolveImgUrl(raw), raw)
+    const resolution = resolveImgTag(raw)
+    assert.equal(resolution.text, raw)
+    assert.equal(resolution.renderable, false)
   })
 
   it('表格内旧域 [img] 解析后 src 为新域', () => {
@@ -872,6 +874,102 @@ describe('img 域名归一化（对齐官方 commonui.correctAttachUrl）', () =
     const img: BBNode | undefined = findType(nodes, BBNodeType.IMAGE)
     if (!img) assert.fail('未找到 IMAGE 节点')
     assert.equal(img.src, 'https://img.nga.cn/attachments/mon_202112/05/x.png')
+  })
+})
+
+describe('[img] 图片内容判定（对齐官方 ubbcode.imgGen）', () => {
+  /*
+   * 官方行为基准（2026-09-21 浏览器实测，https://bbs.nga.cn/read.php?tid=47560793）：
+   * 1. 楼主层 `#postcontent0` 渲染结果里，3 个 `[img]mon_202609/15/xxx.jpg[/img]`
+   *    位置都是纯文本 `https://mon_202609/15/xxx.jpg`（容器内无对应 <img> 元素）；
+   * 2. 判定链用官方真实入口 `ubbcode.bbsCode({c,txt,opt,i,tId,pId,authorId})` 在页面内
+   *    单条渲染复核：`mon_...`（漏写 `./`）→ 纯文本；`./mon_...` / `.1/mon_...` → `<img>`
+   *    （`data-srclazy` 指向 `https://img.nga.cn/attachments/...`）；`https://i.imgur.com/...`
+   *    → 纯文本；`[img]图片文字[/img]` → 官方错误标记文本；
+   *    `https://i0.hdslb.com/...` → **「显示图片」点击加载按钮，不是 `<img>`**：官方
+   *    `srcSelect` 对非附件（`a.self == 0`）无条件置 `a.btn = -3`，`imgGen` 的 `if(!a.btn)`
+   *    因此走按钮分支（与"是否自动加载图片"设置无关）。客户端没有等价的按钮形态，按 App
+   *    体验直接渲染图片，是**有意偏离**（见 `AttachUrl.isRenderableImgUrl` 注释）；
+   *    判定"是不是图片"本身仍与官方一致。
+   */
+
+  it('漏写 ./ 的裸附件路径退化为文本（线上 tid=47560793 主楼）', () => {
+    const nodes: BBNode[] = parseBBCode('[img]mon_202609/15/k2Q55-ivsxK2dT3cSil-sg.jpg[/img]')
+    assert.equal(countType(nodes, BBNodeType.IMAGE), 0, '裸 mon_ 路径不是合法图片源，不得产出 IMAGE 节点')
+    assert.equal(concatTextNodes(nodes), 'https://mon_202609/15/k2Q55-ivsxK2dT3cSil-sg.jpg')
+  })
+
+  it('./ 与 .1/ 附件相对路径仍渲染为图片并拼附件 CDN 根', () => {
+    const dotSlash: BBNode[] = parseBBCode('[img]./mon_202609/15/a.jpg[/img]')
+    const dotIndex: BBNode[] = parseBBCode('[img].1/mon_202609/15/a.jpg[/img]')
+    assert.equal(findType(dotSlash, BBNodeType.IMAGE)?.src, 'https://img.nga.cn/attachments/mon_202609/15/a.jpg')
+    assert.equal(findType(dotIndex, BBNodeType.IMAGE)?.src, 'https://img.nga.cn/attachments/mon_202609/15/a.jpg')
+  })
+
+  it('非白名单外链图床退化为文本（官方 commonui.checkOtherImg）', () => {
+    const imgur: BBNode[] = parseBBCode('[img]https://i.imgur.com/abc.jpg[/img]')
+    const plainHost: BBNode[] = parseBBCode('[img]https://example.com/a.jpg[/img]')
+    assert.equal(countType(imgur, BBNodeType.IMAGE), 0)
+    assert.equal(concatTextNodes(imgur), 'https://i.imgur.com/abc.jpg')
+    assert.equal(countType(plainHost, BBNodeType.IMAGE), 0)
+    assert.equal(concatTextNodes(plainHost), 'https://example.com/a.jpg')
+  })
+
+  it('白名单外链图床仍渲染为图片（客户端有意偏离：官方网页是点击加载按钮）', () => {
+    const bilibili: BBNode[] = parseBBCode('[img]https://i0.hdslb.com/bfs/a.jpg[/img]')
+    assert.equal(findType(bilibili, BBNodeType.IMAGE)?.src, 'https://i0.hdslb.com/bfs/a.jpg')
+  })
+
+  it('图片地址中的 HTML 实体被解码（官方写进 HTML 属性由浏览器解码）', () => {
+    const nodes: BBNode[] = parseBBCode('[img]https://img.nga.cn/attachments/a.jpg?x=1&amp;y=2[/img]')
+    assert.equal(findType(nodes, BBNodeType.IMAGE)?.src, 'https://img.nga.cn/attachments/a.jpg?x=1&y=2')
+  })
+
+  it('非 ASCII 内容按官方错误标记原样显示（文字不丢）', () => {
+    const nodes: BBNode[] = parseBBCode('[img]图片文字[/img]')
+    assert.equal(countType(nodes, BBNodeType.IMAGE), 0)
+    assert.equal(concatTextNodes(nodes), '/* bbscode img error */图片文字/* bbscode img error */')
+  })
+
+  it('空内容 [img][/img] 不被识别（官方内容正则至少 1 字符）', () => {
+    const nodes: BBNode[] = parseBBCode('[img][/img]')
+    assert.equal(countType(nodes, BBNodeType.IMAGE), 0)
+    assert.equal(concatTextNodes(nodes), '[img][/img]')
+  })
+
+  it('样本 tid47560793-lou0-img-invalid.txt 主楼不再产出图片节点', () => {
+    const nodes: BBNode[] = parseBBCode(loadSampleContent('tid47560793-lou0-img-invalid.txt'))
+    assert.equal(countType(nodes, BBNodeType.IMAGE), 0, '主楼 3 个非法 [img] 不得产出空白图片')
+    const text: string = concatTextNodes(nodes)
+    assert.ok(text.includes('https://mon_202609/15/k2Q55-ivsxK2dT3cSil-sg.jpg'), '官方退化文本缺失')
+    assert.ok(text.includes('https://mon_202609/15/k2Q55-3pfjZcT3cSnc-za.jpg'), '官方退化文本缺失')
+    assert.ok(text.includes('https://mon_202609/15/k2Q55-6g92K1lT3cSnc-zc.jpg'), '官方退化文本缺失')
+  })
+
+  it('附件域但无 /attachments/ 的路径按官方退化为文本（self==1 落白名单）', () => {
+    /*
+     * 官方 imgGen 只有 ifUrlAttach 返回 2（带 `/attachments/`）才直接进图片分支；
+     * 返回 1 时落到 checkOtherImg，白名单不含 user-file / ngaimg / bnbsky 等域 → 文本。
+     * img*.nga.cn 与 img*.nga.178.com 由白名单兜住，仍是图片。
+     */
+    const noDir: BBNode[] = parseBBCode('[img]https://user-file.nga.178.com/x.jpg[/img]')
+    const withDir: BBNode[] = parseBBCode('[img]https://user-file.nga.178.com/attachments/x.jpg[/img]')
+    const ngaCn: BBNode[] = parseBBCode('[img]https://img.nga.cn/mon_202609/11/a.jpg[/img]')
+
+    assert.equal(countType(noDir, BBNodeType.IMAGE), 0, 'self==1 且白名单不含该域 → 不得产出 IMAGE')
+    assert.equal(concatTextNodes(noDir), 'https://user-file.nga.178.com/x.jpg')
+    assert.equal(findType(withDir, BBNodeType.IMAGE)?.src, 'https://user-file.nga.178.com/attachments/x.jpg')
+    assert.equal(findType(ngaCn, BBNodeType.IMAGE)?.src, 'https://img.nga.cn/mon_202609/11/a.jpg')
+  })
+
+  it('附件相对路径的媒体节点不使用未归一化地址（不产出空 src）', () => {
+    const indexed: BBNode[] = parseBBCode('[img].1/mon_202609/15/a.mp4[/img]')
+    const dotted: BBNode[] = parseBBCode('[img]./mon_202609/15/a.mp4[/img]')
+    const indexedVideo: BBNode | undefined = findType(indexed, BBNodeType.VIDEO)
+    const dottedVideo: BBNode | undefined = findType(dotted, BBNodeType.VIDEO)
+
+    assert.equal(indexedVideo?.src, 'https://img.nga.cn/attachments/mon_202609/15/a.mp4')
+    assert.equal(dottedVideo?.src, 'https://img.nga.cn/attachments/mon_202609/15/a.mp4')
   })
 })
 

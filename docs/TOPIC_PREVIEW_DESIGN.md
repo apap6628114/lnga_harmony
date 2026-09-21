@@ -540,14 +540,16 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean,
 
 ### 5.2 正文 IMG 链路（成熟体系）能否输出预览图质量：能，且同源
 
-正文图片链路（镜像真源 `tools/bbcode-ts/src/parser/bbcode/block-handlers/handleImg.ts:35,53`
-→ `src/parser/_shared/AttachUrl.ts:82-89`）：
+正文图片链路（镜像真源 `tools/bbcode-ts/src/parser/bbcode/block-handlers/handleImg.ts`
+→ `src/parser/_shared/AttachUrl.ts` 的 `resolveImgTag`）：
 
 ```text
 [img]./mon_xxx/a.jpg[/img]  ─┐
-[img]https://…[/img]        ─┴─► handleImg → resolveImgUrl
+[img]https://…[/img]        ─┴─► handleImg → resolveImgTag
+                                   ├─ 官方判定：附件相对路径 / 本站附件域 / 外链白名单才算图片
+                                   │  （其余内容按官方 ubbcode.imgGen 退化为纯文本，不产出 IMAGE）
                                    ├─ 域归一化（旧域 img*.nga.178.com → img.nga.cn）
-                                   └─ stripImageSuffix()   ← 所有分支都调用
+                                   └─ stripImageSuffix()   ← 图片分支调用
                                         └─► 裸名原图 URL（BBNode.src）
 ```
 
@@ -644,7 +646,7 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean,
 | 含档位段（追加式/插入式） | **0** | —— |
 
 - 正文以**裸名 + 旧域绝对 URL** 为主，因此"strip → 原图"在实践中几乎总是幂等；
-- 旧域 `img.nga.178.com` 现在**已不可达**（`fetch failed`；本项目 `resolveImgUrl` 的域归一化因此是
+- 旧域 `img.nga.178.com` 现在**已不可达**（`fetch failed`；本项目 `resolveImgTag` 的域归一化因此是
   必需的），换到 `img.nga.cn` 后原图与各档位均 200（见 5.1 老 png 行）；
 - 客户端**自己插入**的图片走追加式 `.medium.jpg`（`ReplyDialog.ets:428`），所以"正文可能带档位段"
   这个前提必须保留 —— 这也是档位规则要求"先 strip 再追加"的理由（§5.2）。
@@ -657,7 +659,7 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean,
 | 函数 | 位置 | 面向的输入 | 语义 | 能否用于列表预览 |
 | --- | --- | --- | --- | --- |
 | `resolveAttachUrl` | `parser/_shared/AttachUrl.ets`（**镜像文件**） | `read.php` 帖子附件的 `attachurl`（帖子详情链路） | 裸相对路径 → `NGA_CDN_BASE + path` | 可用（输入形状相同），但列表有服务端 `attachPrefix`，应优先用响应前缀 |
-| `resolveImgUrl` | 同上 | BBCode `[img]` 标签内容 | 域归一化 + `stripImageSuffix` → **原图** | ⚠️ 不能直接当预览 URL（它返回原图、不带档位）；但它内部的 `stripImageSuffix` 正是预览图需要的第一步 |
+| `resolveImgTag` | 同上 | BBCode `[img]` 标签内容（返回 `ImgTagResolution{renderable,text}`） | 官方判定 + 域归一化 + `stripImageSuffix` → **原图**（不可渲染时 `text` 为官方退化文本） | ⚠️ 不能直接当预览 URL（它返回原图、不带档位）；但它内部的 `stripImageSuffix` 正是预览图需要的第一步 |
 | `stripImageSuffix` | `common/utils/Utils.ets:147-150`（**镜像文件**，只读引用） | 正文图片 URL | 去掉 `.thumb_s/.thumb_m/.medium/.thumb` → **裸名原图** | ⚠️ 当前生产未使用（列表用原图）；若切档位则是**第一步**：`stripImageSuffix(url) + '.thumb.jpg'`（对裸名输入幂等） |
 | `applyImageSuffix` | `common/utils/Utils.ets:152-158` | ——（**全仓零调用点**） | `name.ext` → **`name.size.ext`**（尺寸词插在扩展名**前**） | ❌ **实测 404，禁止用于预览图** |
 

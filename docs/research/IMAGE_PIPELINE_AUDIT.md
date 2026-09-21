@@ -13,7 +13,8 @@
 NGA JSON (read.php __output=8)
   └─ BBCode 解析：handleImg.ets            [img]URL[/img] / [img]./mon_xxx[/img]
        ├─ guessMediaTypeFromExt()          按扩展名判 VIDEO/AUDIO/IMAGE（gif 归 IMAGE）
-       └─ resolveImgUrl()  AttachUrl.ets   域归一化 + stripImageSuffix() → **原图 URL**
+       └─ resolveImgTag()  AttachUrl.ets   官方判定 + 域归一化 + stripImageSuffix() → **原图 URL**
+                                           （不可渲染时按官方退化为纯文本，不产出 IMAGE 节点）
   └─ HTML 降级解析：parser/nga/html-thread/*
   ▼
 BBNode[] (type=IMAGE, src=绝对 URL)
@@ -60,7 +61,7 @@ ImageViewer.ets                            全屏查看器（前/中/后三张 I
 | # | 缺口 | 证据 / 位置 |
 |---|---|---|
 | G1 | **缓存不可观测、白块时间长**：`Image(src)` 直连网络 URL，虽由 Image 组件自带缓存（机制上依赖 cacheDownload，落在应用 `cache` 目录）承担二次加载，但官方明示该缓存"无法获取当前缓存占用信息/策略不可定制"，接口"后续不再继续演进"；且官方建议"下载的网络图片大于10MB或一次下载的网络图片数量较多时，用 HTTP 工具提前下载" | `guides/.../显示图片 (Image).md:47-61`（官方原文） |
-| G2 | **无缩略图分级（服务端能力可用，客户端未用）**：解析时 `stripImageSuffix()` 把 `xxx.medium.jpg` 归一成**原图**；正文渲染与查看器用同一 URL。⚠️ **2026-09 复测更正**：服务端**确实**按后缀提供多档缩略图（`名字.原扩展名.thumb.jpg` / `.thumb_s.jpg` / `.thumb_ss.jpg` 均 200），此前"CDN 不提供缩略图"的结论源于当时只测了**不带 `.jpg` 的裸后缀**（见 §5.1）。主题列表预览图已按此实现，正文/查看器的分级仍是后续可选项 | `common/utils/Utils.ets:147`；`AttachUrl.ets:82`；`docs/TOPIC_PREVIEW_DESIGN.md` §5 |
+| G2 | **无缩略图分级（服务端能力可用，客户端未用）**：解析时 `stripImageSuffix()` 把 `xxx.medium.jpg` 归一成**原图**；正文渲染与查看器用同一 URL。⚠️ **2026-09 复测更正**：服务端**确实**按后缀提供多档缩略图（`名字.原扩展名.thumb.jpg` / `.thumb_s.jpg` / `.thumb_ss.jpg` 均 200），此前"CDN 不提供缩略图"的结论源于当时只测了**不带 `.jpg` 的裸后缀**（见 §5.1）。主题列表预览图已按此实现，正文/查看器的分级仍是后续可选项 | `common/utils/Utils.ets:147`；`parser/_shared/AttachUrl.ets` 的 `resolveImgTag`；`docs/TOPIC_PREVIEW_DESIGN.md` §5 |
 | G3 | **动图无任何专门处理**：无角标、无自动播放开关、查看器不能暂停/播放；依赖 Image 组件的默认行为 | `ImageViewer.ets`、`BBCodeContentView.ets:751` |
 | G4 | 查看器保存/分享**重复下载**（http 全量拉取），且临时文件写在 `filesDir`（持久目录，无清理） | `ImageViewer.ets:84-167` |
 | G5 | 查看器无加载进度/失败重试；长图（超高）无专门交互 | `ImageViewer.ets` |

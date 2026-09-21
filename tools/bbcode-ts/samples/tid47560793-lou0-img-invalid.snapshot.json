@@ -1,0 +1,44 @@
+[
+ {
+  "type": "TEXT",
+  "text": "更新：\n·新增“热帖”功能，可以方便地浏览选定版块的近期热门帖子\n·新增“追更”功能，可以更方便地查看特定帖子的更新内容\n·增加底部tab栏，切换查看不同模块更方便\n·新增“阅读”风格主题，以及多种背景色，可以让UI更符合自己偏好\n——————————————\n·支持Chrome/edge(360极速版应该也是可以的，firefox暂时没有)\n·有侧边栏插件和独立小窗两种形式\n·可以设置伪装蒙层，摸鱼更隐蔽：鼠标离开侧边栏后立刻盖上蒙层(可以选择便笺或者纯色样式)\n·UI和交互上贴近app，像在电脑上刷app\n·经过几个版本的迭代，功能基本比较完善了，该有的都有\n\n欢迎大家体验使用和反馈问题或建议～\n\n"
+ },
+ {
+  "type": "TEXT",
+  "text": "https://mon_202609/15/k2Q55-ivsxK2dT3cSil-sg.jpg"
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "TEXT",
+  "text": "https://mon_202609/15/k2Q55-3pfjZcT3cSnc-za.jpg"
+ },
+ {
+  "type": "TEXT",
+  "text": "\n"
+ },
+ {
+  "type": "TEXT",
+  "text": "https://mon_202609/15/k2Q55-6g92K1lT3cSnc-zc.jpg"
+ },
+ {
+  "type": "TEXT",
+  "text": "\n\n\n安装：\n1. 下载压缩包，解压得到nga-moyu文件夹\n"
+ },
+ {
+  "type": "URL",
+  "href": "https://nga-moyu-d8ghhi7acdf05dddc-1310402567.tcloudbaseapp.com/nga-moyu.zip",
+  "children": [
+   {
+    "type": "TEXT",
+    "text": "https://nga-moyu-d8ghhi7acdf05dddc-1310402567.tcloudbaseapp.com/nga-moyu.zip"
+   }
+  ]
+ },
+ {
+  "type": "TEXT",
+  "text": "\n2.浏览器打开 chrome://extensions，打开右上角开发者模式\n3.点击加载已解压/未打包的扩展程序，选中刚才那个文件夹。\n    如果浏览器工具栏上没有出现nga-moyu 的图标，在扩展程序页进这个插件的详情，开启“固定到工具栏”。\n4.点工具栏上的 NGA-moyu 图标\n\n使用侧边栏期间会打开一个NGA 标签页，它相当于插件的信息通道，需要一直保留(放着就行，不用停留在这个标签页)。\n\n来自 nga-moyu 插件"
+ }
+]

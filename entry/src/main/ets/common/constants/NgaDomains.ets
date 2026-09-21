@@ -44,6 +44,91 @@ export const NGA_ATTACH_HOSTS: string[] = [
   'user-file\\.nga\\.178\\.com',
 ]
 
+/**
+ * 外链图片主机白名单（官方 `commonui.checkOtherImg` 正则逐项移植，正则片段）。
+ *
+ * 官方 `ubbcode.imgGen` 渲染 `[img]` 时，非本站附件（既不是 `.` 开头的 NGA
+ * 相对附件路径，也不属于 `NGA_ATTACH_HOSTS`）还要再过这道白名单；**不在名单里的
+ * 外链一律退化为纯文本**（`[img]https://i.example.com/a.jpg[/img]` 在官方网页上
+ * 显示为一行文本而不是图片）。因此本名单必须与官方逐项一致，多一项会渲染出
+ * 官方不显示的图片，少一项会把官方能显示的图片变成文字。
+ *
+ * 顺序与官方正则完全一致（含官方原样的重复项 `pic\.imgdb\.cn`），便于与
+ * `js_default.js` 的 `commonui.checkOtherImg` 逐项核对；
+ * 部分项自带路径段（如 `clan\.akamai\.steamstatic\.com\/images`），拼接后仍与官方同义。
+ */
+export const NGA_IMG_URL_WHITELIST: string[] = [
+  'img[0-9]?\\.nga\\.178\\.com',
+  'img[0-9]?\\.nga\\.cn',
+  'img[0-9]?\\.ngabbs\\.com',
+  'pic[0-9]?\\.178\\.com',
+  'img\\.db\\.178\\.com',
+  'db1?\\.178\\.com',
+  'imgs\\.aixifan\\.com',
+  'pic[0-9]+\\.zhimg\\.com',
+  '[a-z0-9]+\\.sinaimg\\.cn',
+  'image\\.sinajs\\.cn',
+  'pic-bucket\\.ws\\.126\\.net',
+  'nimg\\.ws\\.126\\.net',
+  'steampipe\\.steamcontent\\.tnkjmec\\.com',
+  'st\\.dl\\.eccdnx\\.com',
+  'st\\.dl\\.bscstorage\\.net',
+  'st\\.dl\\.pinyuncloud\\.com',
+  'dl\\.steam\\.ksyna\\.com',
+  'cdn\\.mileweb\\.cs\\.steampowered\\.com\\.8686c\\.com',
+  'cdn-ws\\.content\\.steamchina\\.com',
+  'cdn-qc\\.content\\.steamchina\\.com',
+  'cdn-ali\\.content\\.steamchina\\.com',
+  '[a-z0-9]+\\.csgo\\.wmsj\\.cn',
+  '[a-z0-9]+\\.dota2\\.wmsj\\.cn',
+  'cdn\\.cloudflare\\.steamstatic\\.com',
+  'pic\\.imgdb\\.cn',
+  'liquipedia\\.net',
+  'clan\\.akamai\\.steamstatic\\.com\\/images',
+  'dota2\\.fandom\\.com',
+  'redive\\.estertion\\.win',
+  'bestdori\\.com',
+  'imgbb\\.com',
+  'i\\.ibb\\.co',
+  'shp\\.qpic\\.cn',
+  'docimg[0-9]+\\.docs\\.qq\\.com',
+  'ricochet\\.cn',
+  'dragalialost\\.akamaized\\.net',
+  'sh0wer1ee\\.gitee\\.io',
+  'shadowverse\\.com',
+  'shadowverse\\.jp',
+  'sv\\.163\\.com',
+  'sv\\.res\\.netease\\.com',
+  'shadowverse-portal\\.com',
+  'imgchr\\.com',
+  'img\\.vim-cn\\.com',
+  '[a-z0-9]+\\.hypergryph\\.com',
+  'web\\.hycdn\\.cn',
+  'prts\\.wiki',
+  'news\\.fate-go\\.jp',
+  'game\\.bilibili\\.com',
+  'i0\\.hdslb\\.com',
+  'fgo\\.wiki',
+  'm\\.qpic\\.cn',
+  'upload-bbs\\.mihoyo\\.com',
+  'pic\\.imgdb\\.cn',
+  'images\\.contentstack\\.io',
+  'ossweb-img\\.qq\\.com\\/upload\\/webplat\\/info\\/lol',
+  'img\\.expreview\\.com',
+  'techpowerup\\.com',
+  'hearthstone\\.nosdn\\.127\\.net',
+  'nie\\.res\\.netease\\.com',
+  'smhtv-pic\\.tga\\.qq\\.com',
+  'img\\.crawler\\.qq\\.com\\/cfwebcap',
+  'static\\.gametalk\\.qq\\.com\\/image',
+  'upload-bbs\\.miyoushe\\.com',
+  'sbwsz\\.com',
+  'xyoss\\.g\\.com\\.cn',
+  'shadowverse-wb\\.com',
+  'webview11\\.shadowverse-wb\\.jp',
+  'hs\\.res\\.netease\\.com',
+]
+
 /** 静态资源 CDN 根（img4.nga.cn：版块图标/表情/徽章等） */
 export const NGA_IMG4_BASE: string = 'https://img4.nga.cn'
 
