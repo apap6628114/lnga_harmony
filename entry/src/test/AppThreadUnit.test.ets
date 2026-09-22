@@ -1,7 +1,9 @@
 import { describe, it, expect } from '@ohos/hypium'
 import { parseThreadData } from '../main/ets/parser/ThreadParser'
 import { parseNgaError } from '../main/ets/parser/ErrorParser'
-import { buildThreadHtmlRequest, extractAppArticleHtml, hasRawThreadRows } from '../main/ets/service/api/ThreadApi'
+import {
+  buildThreadHtmlRequest, extractAppArticleHtml, extractHtmlErrorPageMessage, hasRawThreadRows
+} from '../main/ets/service/api/ThreadApi'
 import { parseHtmlToRawJson } from '../main/ets/parser/nga/html-thread/index'
 import type { ThreadRowInfo } from '../main/ets/model/Thread'
 
@@ -99,6 +101,68 @@ function createAppHtmlFixture(): string {
 }
 
 /**
+ * 构造官方 APP read.php `__output=17` 的异常帖响应包装。
+ *
+ * @param html 异常提示页 HTML
+ * @param msg 服务端原因文本
+ * @param template 包装层 template 字段（异常态为 std_error；传空串模拟字段缺失）
+ * @returns APP 响应包装对象
+ */
+function createAppErrorEnvelope(html: string, msg: string, template: string): object {
+  const envelope: Record<string, Object> = {
+    'code': 521 as Object,
+    'htmlBaseUrl': 'https://ngabbs.com/' as Object,
+    'htmlTitle': (msg + ' ') as Object,
+    'msg': msg as Object,
+    'template': template as Object,
+    'html': html as Object,
+  }
+  return envelope as object
+}
+
+/**
+ * 构造官方帖子**异常提示页** HTML（真实样本形态）。
+ *
+ * 取自 ngabbs.com `read.php?__output=17` 实测响应：
+ * - `tid=47591513`：`ERROR:<!--msgcodestart-->11<!--msgcodeend--> 此帖子被锁定`
+ * - `tid=47373567`：`ERROR:<!--msgcodestart-->51<!--msgcodeend--> 帖子正等待审核`
+ *
+ * 两页结构与静态 `read.php` 错误页一致：正文首部给出错误码标记与原因标记，
+ * 整页**不含** `commonui.postArg.proc(` 楼层锚点，因此 HTML 解析器必然得到 0 楼层。
+ *
+ * @param code 服务端错误码
+ * @param message 服务端原因文本
+ * @returns 错误提示页 HTML
+ */
+function createAppErrorPageHtml(code: number, message: string): string {
+  return '<!DOCTYPE HTML PUBLIC \'-//W3C//DTD HTML 4.0 Transitional//EN\'>\n' +
+    '<html>\n<head>\n<meta name=\'viewport\' content=\'width=device-width, initial-scale=1\'/>\n' +
+    '<title>' + message + '</title>\n</head>\n<body>\n' +
+    'ERROR:<!--msgcodestart-->' + code + '<!--msgcodeend--> ' +
+    '<!--msginfostart-->' + message + '<!--msginfoend--><br/>\n' +
+    '<!--msginfostart--><br/><a href=\'/nuke.php?__lib=view_privilege&__act=view&id=436\' ' +
+    'style=\'color:dimgray\' id=\'vp_link\'>[查看所需的权限/条件]</a><!--msginfoend--><br/>\n' +
+    '</body></html>'
+}
+
+/**
+ * 捕获 `extractAppArticleHtml` 的抛错信息。
+ *
+ * @param response APP 响应包装
+ * @returns `{ thrown, message }`；未抛错时 message 为空串
+ */
+function captureExtractError(response: object): Record<string, Object> {
+  const outcome: Record<string, Object> = { 'thrown': false as Object, 'message': '' as Object };
+  try {
+    extractAppArticleHtml(response);
+  } catch (e) {
+    outcome['thrown'] = true as Object;
+    outcome['message'] = ((e as Error).message ?? '') as Object;
+  }
+  return outcome;
+}
+
+/**
  * 注册 Thread HTML 通道单元测试。
  */
 export default function appThreadUnitTest(): void {
@@ -110,6 +174,71 @@ export default function appThreadUnitTest(): void {
           '"msg":"","template":"read"}')
       expect(extractAppArticleHtml(response)).assertEqual(
         '<!--postliststart--><div>帖子内容</div>')
+    })
+
+    it('surfacesLockedThreadServerMessage', 0, (): void => {
+      /**
+       * 实测样本 tid=47591513：帖子被服务端锁定。HTTP 200、code 仍为成功的 521，
+       * 只有 template 变成 std_error。必须上抛服务端报告的原因，而不是把错误页
+       * 交给 HTML 解析器后只剩「HTML 解析结果没有帖子楼层」。
+       */
+      const response: object = createAppErrorEnvelope(
+        createAppErrorPageHtml(11, '此帖子被锁定'), '此帖子被锁定', 'std_error');
+      const outcome: Record<string, Object> = captureExtractError(response);
+      expect(outcome['thrown']).assertTrue();
+      expect(String(outcome['message'])).assertEqual('此帖子被锁定');
+    })
+
+    it('surfacesPendingReviewServerMessage', 0, (): void => {
+      /** 实测样本 tid=47373567：同形态的异常页，错误码 51。 */
+      const response: object = createAppErrorEnvelope(
+        createAppErrorPageHtml(51, '帖子正等待审核'), '帖子正等待审核', 'std_error');
+      const outcome: Record<string, Object> = captureExtractError(response);
+      expect(outcome['thrown']).assertTrue();
+      expect(String(outcome['message'])).assertEqual('帖子正等待审核');
+      /** 原因取错误页第一个 msginfo 片段，不带「[查看所需的权限/条件]」链接尾巴 */
+      expect(String(outcome['message']).includes('查看所需的权限')).assertFalse();
+    })
+
+    it('detectsErrorPageWhenTemplateFieldIsMissing', 0, (): void => {
+      /** 兜底判据：template 缺失/变动时，靠「带错误码标记且无楼层锚点」识别异常页。 */
+      const response: object = createAppErrorEnvelope(
+        createAppErrorPageHtml(11, '此帖子被锁定'), '此帖子被锁定', '');
+      const outcome: Record<string, Object> = captureExtractError(response);
+      expect(outcome['thrown']).assertTrue();
+      expect(String(outcome['message'])).assertEqual('此帖子被锁定');
+    })
+
+    it('keepsNormalPageThatCarriesInfoMarkerAndFloorAnchor', 0, (): void => {
+      /** 反向保护：正文同时出现 msginfo 标记与楼层锚点的正常帖子页不得被误判。 */
+      const normalHtml: string = '<script>' +
+        'commonui.postArg.proc(0,null,null,null,null,null,null,null,null,null,0,33554432,null,' +
+        '\'205511\',1748251672,\'0,0,0\',\'4\',\'\',\'\',\'7 iOS\',\'\',null);' +
+        '</script><!--msginfostart-->版本公告<!--msginfoend-->' +
+        '<!--msgcodestart-->0<!--msgcodeend-->';
+      const response: object = JSON.parse(
+        '{"code":521,"htmlBaseUrl":"https://ngabbs.com/","htmlTitle":"帖子",' +
+          '"msg":"","template":"read","html":' + JSON.stringify(normalHtml) + '}');
+      expect(extractAppArticleHtml(response)).assertEqual(normalHtml);
+    })
+
+    it('reportsEmptyMessageForNonErrorHtml', 0, (): void => {
+      /** 非错误页（无错误码标记）一律返回空串，避免把正常页面里的 msginfo 当作错误。 */
+      expect(extractHtmlErrorPageMessage('<html><body><!--msginfostart-->公告<!--msginfoend--></body></html>'))
+        .assertEqual('');
+      expect(extractHtmlErrorPageMessage(createAppErrorPageHtml(11, '此帖子被锁定')))
+        .assertEqual('此帖子被锁定');
+    })
+
+    it('errorPageHtmlParsesToNoRows', 0, (): void => {
+      /**
+       * 记录「错误页必定解析出 0 楼层」这一事实：正因如此，异常页必须在取数层拦下，
+       * 不能依赖 HTML 解析器给出可读原因。
+       */
+      const raw: Record<string, Object> = parseHtmlToRawJson(createAppErrorPageHtml(11, '此帖子被锁定')) as Record<string, Object>
+      const data: Record<string, Object> = raw['data'] as Record<string, Object>
+      expect(Object.keys(data['__R'] as Record<string, Object>).length).assertEqual(0)
+      expect(hasRawThreadRows(raw)).assertFalse()
     })
 
     it('buildsHtmlOnlyThreadRequest', 0, (): void => {

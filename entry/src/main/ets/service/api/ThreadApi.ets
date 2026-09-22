@@ -6,6 +6,9 @@
  * __output/__inchst），帖子内容使用 __output=17。服务端返回
  * {code,htmlBaseUrl,htmlTitle,html,msg,template} 包装，html 是完整帖子页面；
  * 本客户端提取 html 后交给 HTML 解析器，再复用统一的帖子解析与 BBCode 渲染链。
+ * `template=std_error`（HTTP 200、code 仍为 521）表示 html 是服务端异常提示页
+ * （帖子被锁定 / 待审核 / 权限不足等），由 extractAppArticleHtml 直接上抛服务端
+ * 报告的原因，不得进入 HTML 降级解析。
  * 支持 page=e（末页）、pid 定位（单帖+贴条）、authorid 只看楼主。
  * 发帖、回帖、评论、附件上传等写入操作见 ThreadWriteApi。
  */
@@ -80,24 +83,94 @@ export function buildThreadHtmlRequest(tid: string, pid: string, authorid: strin
 }
 
 /**
+ * 官方 APP 帖子**异常提示页**的包装层标记。
+ *
+ * 实测（ngabbs.com read.php `__output=17`）：帖子被锁定 / 待审核等异常场景下，
+ * 服务端仍返回 HTTP 200 且 `code=521`（与成功态相同），仅把 `template` 从
+ * 成功态的 `read` 换成 `std_error`，并在 `msg`/`htmlTitle` 给出原因，
+ * `html` 则是一张错误提示页而不是帖子页面：
+ *
+ * ```text
+ * {"code":521,"msg":"此帖子被锁定","template":"std_error","html":"<!DOCTYPE ...>
+ *  ERROR:<!--msgcodestart-->11<!--msgcodeend--> <!--msginfostart-->此帖子被锁定<!--msginfoend-->..."}
+ * ```
+ */
+const APP_TEMPLATE_ERROR: string = 'std_error';
+
+/**
+ * 正常帖子页必然包含的楼层锚点（`commonui.postArg.proc(`）。
+ *
+ * 用于在 `template` 缺失或变动时兜底判定"这不是帖子页面"：没有该锚点就一定
+ * 解析不出楼层。
+ */
+const POST_ARG_MARKER: string = 'commonui.postArg.proc(';
+
+/**
+ * 从 NGA 错误提示页 HTML 中提取服务端报告的原因文本。
+ *
+ * 错误页在正文首部给出 `<!--msgcodestart-->N<!--msgcodeend-->` 与
+ * `<!--msginfostart-->原因<!--msginfoend-->`；第一个 `msginfostart` 片段是原因
+ * （如「此帖子被锁定」「帖子正等待审核」），后续片段是「[查看所需的权限/条件]」
+ * 这类链接。未携带错误码标记的页面一律视为非错误页（返回空串），避免把正常
+ * 帖子页面里的 `msginfo` 误判成错误。
+ *
+ * @param html - 服务端返回的 HTML
+ * @returns 剥除标签后的原因文本；非错误页或无法提取时返回空串
+ */
+export function extractHtmlErrorPageMessage(html: string): string {
+  if (html.length === 0 || html.indexOf('<!--msgcodestart-->') < 0) {
+    return '';
+  }
+  const msgMatch: RegExpMatchArray | null = html.match(/<!--msginfostart-->([\s\S]*?)<!--msginfoend-->/);
+  if (msgMatch) {
+    const text: string = msgMatch[1].replace(/<[^>]+>/g, '').trim();
+    if (text.length > 0) {
+      return text;
+    }
+  }
+  const titleMatch: RegExpMatchArray | null = html.match(/<title>([\s\S]*?)<\/title>/);
+  if (titleMatch) {
+    return titleMatch[1].replace(/<[^>]+>/g, '').trim();
+  }
+  return '';
+}
+
+/**
  * 从官方 APP read.php 的 __output=17 响应中提取帖子 HTML。
  *
  * 官方客户端的 Article 模型把 code=521、template=read 视为成功，HTML
  * 位于顶层 html 字段；这里不依赖 code 的成功判断，只接受非空 html，兼容
  * 服务端在不同错误场景下省略 code 或 template 的响应差异。
  *
+ * **异常提示页必须在取数层拦下**：`template=std_error` 时 html 是错误提示页，
+ * 若把它交给 HTML 解析器，会得到 0 个楼层，最终只剩「HTML 解析结果没有帖子楼层」
+ * 这种无信息量的兜底文案，服务端已经明确报告的原因（帖子被锁定 / 待审核 /
+ * 权限不足）反而被丢掉。因此这里直接抛出服务端报告的原因文本。
+ *
  * @param response - ngaClient 解析后的 APP 响应
  * @returns 完整帖子 HTML
- * @throws 响应缺少可解析的 html 字段时抛出错误
+ * @throws 服务端返回异常提示页，或响应缺少可解析的 html 字段时抛出错误
  */
 export function extractAppArticleHtml(response: object): string {
   const responseObj: Record<string, Object> = response as Record<string, Object>;
   const htmlValue: Object | undefined = responseObj['html'];
-  if (typeof htmlValue === 'string' && htmlValue.trim().length > 0) {
-    return htmlValue;
-  }
   const code: string = String(responseObj['code'] ?? '');
   const message: string = String(responseObj['msg'] ?? '');
+  if (typeof htmlValue === 'string' && htmlValue.trim().length > 0) {
+    const template: string = String(responseObj['template'] ?? '');
+    const pageMessage: string = extractHtmlErrorPageMessage(htmlValue);
+    // 主判据是官方明确给出的 template=std_error；兜底判据要求"带错误码标记"
+    // 且"没有楼层锚点"同时成立，正常帖子页因含楼层锚点不会被误判。
+    const isErrorPage: boolean = template === APP_TEMPLATE_ERROR
+      || (pageMessage.length > 0 && htmlValue.indexOf(POST_ARG_MARKER) < 0);
+    if (isErrorPage) {
+      if (pageMessage.length > 0) {
+        throw new Error(pageMessage);
+      }
+      throw new Error(message.length > 0 ? message : '服务器返回了帖子异常页面');
+    }
+    return htmlValue;
+  }
   if (message.length > 0) {
     throw new Error(`APP read.php HTML 接口失败${code ? `（${code}）` : ''}：${message}`);
   }
