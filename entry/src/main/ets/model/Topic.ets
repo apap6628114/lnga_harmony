@@ -1,5 +1,5 @@
 import type { SubBoard } from './Forum';
-import type { ImageSize } from '../common/media/ImageSizeUtil';
+import type { PreviewImage } from '../common/utils/TopicPreviewUtils';
 
 /**
  * 主题列表及其所属版块元数据。
@@ -42,25 +42,17 @@ export interface ThreadPageInfo {
   previewAuthorId?: string;
   previewSnippet?: string;
   /**
-   * 首帖附件中可作为预览图的绝对 URL 列表（已过滤非图片；无附件时为空数组）。
+   * 首帖附件中可作为预览图的图片列表（已过滤非图片；无附件时为空数组）。
    *
-   * 数据来自列表接口条目的 `attachs`（对象数组，元素形如 `{attachurl}`），
-   * 由 `TopicPreviewUtils.parsePreviewImages` 拼接前缀后产出，详见
-   * docs/TOPIC_PREVIEW_DESIGN.md。原 `attachs?: string` 已删除：该字段实测是数组，
-   * 旧代码 `String()` 强转只会得到 "[object Object]"。
+   * 数据来自列表接口条目的 `attachs`（对象数组，元素形如 `{attachurl}`），由
+   * `TopicPreviewUtils.parsePreviewAttachments` 一次遍历产出：**每张图的绝对 URL 与真实像素尺寸
+   * 成对给出**（详见 docs/TOPIC_PREVIEW_DESIGN.md）。
+   *
+   * 原 `attachs?: string` 已删除：该字段实测是数组，旧代码 `String()` 强转只会得到
+   * "[object Object]"。原独立字段 `previewSize?: ImageSize`（只解首图）也已并入本数组的
+   * `PreviewImage.size`——尺寸与 URL 同行产出，不再有"两个数组按索引对齐"的错位风险。
    */
-  previewImages: string[];
-  /**
-   * 首张预览图的**真实像素尺寸**（由 `previewImages[0]` 的文件名尺寸段解出；无法确定时为 null）。
-   *
-   * 用途：主题列表卡片按真实宽高比决定预览区高度（`TopicPreviewUtils.resolvePreviewLayout`），
-   * 使竖图/长图/全景图在同一列宽下都能得到合理的展示比例。**在解析期一次性算定**，
-   * 因此卡片高度是静态值——不依赖图片加载完成后回填，列表不会因图片陆续到位而跳动。
-   *
-   * 与 `ImageSizeUtil`（正文图片的进程级尺寸 LRU）同类型但**不同来源**：这里来自文件名编码，
-   * 零网络成本；`.ets` 侧只在尺寸段解析失败时才可能用到缓存兜底。
-   */
-  previewSize?: ImageSize;
+  previewImages: PreviewImage[];
   /** 官方接口受限/占位条目的受限原因（如「帖子发布或回复时间超过限制」）。 */
   error?: string;
 }

@@ -14,11 +14,12 @@ import { locatePidPage } from '../service/api/ThreadApi'
 import type { TopicListParams } from '../service/api/ForumApi'
 import type { TopicListResult } from '../model/NgaApiResults'
 import {
-  resolvePreviewLayout,
+  resolvePreviewRowLayout,
   FALLBACK_PREVIEW_AREA_WIDTH,
-  PreviewLayout
+  PREVIEW_IMAGE_GAP,
+  PreviewTileLayout
 } from '../common/utils/TopicPreviewUtils'
-import type { ImageSize } from '../common/media/ImageSizeUtil'
+import type { PreviewImage, PreviewRowLayout } from '../common/utils/TopicPreviewUtils'
 import { newTopicManager } from '../common/managers/NewTopicManager'
 import type { PostReplyResult } from '../model/ThreadResult'
 import type { SubBoard } from '../model/Forum'
@@ -82,8 +83,9 @@ const SUB_BOARD_BLOCKED_ICON_OPACITY: number = 0.6
 /**
  * 预览图圆角（与 `PostAttachments` 附件缩略图保持一致）。
  *
- * 预览区**高度不再固定**：由首图真实比例与当前图片区宽度算出（见
- * `TopicPreviewUtils.resolvePreviewLayout` 与 docs/TOPIC_PREVIEW_DESIGN.md §6.2）。
+ * 预览区**尺寸不固定**：区域最大宽高由"当前图片区宽度 × 张数"与 240vp 上限算出，区域内每张图
+ * 再按自身真实比例做最优适配（见 `TopicPreviewUtils.resolvePreviewArea` /
+ * `resolvePreviewRowLayout` 与 docs/TOPIC_PREVIEW_DESIGN.md §6.2）。
  * 原先的 `PREVIEW_IMAGE_HEIGHT = 120` 固定值已移除——实测 582 个真实列表附件下，
  * 固定 120vp 高度平均只能显示 39.7% 的画面（竖图仅 21~27%），是"图片比例多样 ×
  * 设备形态多样"下最大的观感损失点。
@@ -95,7 +97,7 @@ const PREVIEW_IMAGE_RADIUS: number = 8
  *
  * 横向留白**只由这一层承担**：列表自身没有左右 padding（见 `build()` 里的 `List`），
  * 条目边界由贯穿整列的分隔横线表达。预览图区宽度也据此扣（见
- * `TopicCardComponent.previewTileWidth`）。
+ * `TopicCardComponent.previewAreaWidth`）。
  */
 const ITEM_HORIZONTAL_PADDING: number = 16
 
@@ -107,14 +109,6 @@ const ITEM_HORIZONTAL_PADDING: number = 16
  * 实测列表附件里带图条目以 1~3 张为主，3 张覆盖绝大多数场景。
  */
 const PREVIEW_IMAGE_MAX_INLINE: number = 3
-
-/**
- * 多图横排的图间距（vp）。
- *
- * 取 6 而非整行级别的 16：一行内的缩略图是**同一组内容**，间距只需区分边界、不需表达层级，
- * 过大会让每张图显著变窄。图片区总宽 = 内容宽 − 间距 ×（张数 − 1）。
- */
-const PREVIEW_IMAGE_GAP: number = 6
 
 /**
  * 列表单元内各区块之间的**统一纵向间距**（vp）。
@@ -1717,32 +1711,63 @@ struct TopicCardComponent {
    * §5.3 / K22）。组件内状态：LazyForEach 按 tid 复用，条目不变时状态保留；条目被回收重建时重置为 false。
    */
   @State private previewFailed: boolean = false
+  /**
+   * 图片显示布局的零尺寸兜底（仅 {@link tileAt} 下标越界时使用）。
+   *
+   * 单独持有一个实例而不是每次 `new`：`@Builder` 内部不能声明局部变量（ArkUI build 约束），
+   * 越界分支若现场分配会在每帧布局里产生垃圾对象。
+   */
+  private emptyTile: PreviewTileLayout = new PreviewTileLayout()
 
   /**
-   * 首图的**真实像素尺寸**（解析期由 `TopicParser` 从文件名尺寸段解出，见 model/Topic.ets）。
+   * 条目内**图片区总宽**（vp）：列表实测宽度 − 条目左右内边距 × 2。
    *
-   * 缺失（老附件无尺寸段）时为 null，布局走 16:9 兜底比例——不会因此退回固定高度，
-   * 只是该条目的高度按兜底比例算。
+   * 区域宽度的唯一来源。**不能由断点硬编码推出**：`sm` 是整窗、`md` 是"窗口 − 侧边栏 180"、
+   * `lg` 双列时还要再乘 40%，任何写死的宽度都会在其中一种形态下失配（K24）；首帧列表宽度
+   * 尚未测得（`listWidth === 0`）时回落 `FALLBACK_PREVIEW_AREA_WIDTH`。
    *
-   * @returns 尺寸；无/形状不符时返回 null
+   * @returns 图片区总宽（vp）
    */
-  private previewSize(): ImageSize | null {
-    const value: ImageSize | undefined = this.thread['previewSize'] as ImageSize | undefined
-    if (value === undefined || value === null) {
-      return null
-    }
-    return value
+  private previewAreaWidth(): number {
+    return this.listWidth > 0
+      ? this.listWidth - ITEM_HORIZONTAL_PADDING * 2
+      : FALLBACK_PREVIEW_AREA_WIDTH
   }
 
   /**
-   * 预览区布局（高度 + Cover/Contain），由纯函数算出，UI 侧不做算术。
+   * 预览图**整行**布局（行高 + 每张图的显示尺寸），由纯函数算出，UI 侧不做算术。
    *
-   * 宽度取 {@link previewTileWidth}（多图时为单张宽度），使高度与图片**实际显示宽度**匹配。
+   * 区域（最大宽高）与逐张适配都在 `resolvePreviewRowLayout` 内部完成：它先按张数把图片区
+   * 总宽折算成**单张可用区域**（多图扣掉图间距后均分、高度上限 240vp），再让每张图按自己的
+   * 真实比例在区域内做最优适配（完整显示优先）。单图与多图因此走的是同一条算法，
+   * 差别只在"区域是整宽还是单张分区宽"。
    *
-   * @returns 布局结果
+   * @returns 整行布局
    */
-  private previewLayout(): PreviewLayout {
-    return resolvePreviewLayout(this.previewSize(), this.previewTileWidth())
+  private previewRowLayout(): PreviewRowLayout {
+    return resolvePreviewRowLayout(this.inlinePreviewImages(), this.previewAreaWidth())
+  }
+
+  /**
+   * 整行高度（vp）：单图 = 该图显示高度；多图 = 各张显示高度的最大值。
+   *
+   * 被动占位块与实图**共用本值**，被动↔主动切换、WiFi↔蜂窝重判都不产生列表高度跳动（K6）。
+   *
+   * @returns 行高（vp）
+   */
+  private previewRowHeight(): number {
+    return this.previewRowLayout().height
+  }
+
+  /**
+   * 第 `index` 张图的显示布局（宽度 / 高度 / 是否完整显示）。
+   *
+   * @param index - 图片在 {@link inlinePreviewImages} 中的下标
+   * @returns 单张布局；下标越界时返回零尺寸兜底（正常路径不会发生：tiles 与图片同源同长）
+   */
+  private tileAt(index: number): PreviewTileLayout {
+    const tiles: PreviewTileLayout[] = this.previewRowLayout().tiles
+    return index >= 0 && index < tiles.length ? tiles[index] : this.emptyTile
   }
 
   /**
@@ -1768,54 +1793,38 @@ struct TopicCardComponent {
   }
 
   /**
-   * 预览图 URL 列表。
+   * 预览图列表（URL 与解析期算定的真实尺寸成对给出）。
    *
    * `@Prop thread` 为 Record，取数组必须判型（缺失/形状不符时返回空数组）。
+   * 元素形状由解析层保证（`TopicPreviewUtils.parsePreviewAttachments`）——尺寸与 URL 同行产出，
+   * 卡片因此不需要任何"未下载先探测"的请求：每张图的比例在解析期就已确定。
    *
-   * @returns 预览图绝对 URL 列表
+   * @returns 预览图列表（保序）
    */
-  private previewImageUrls(): string[] {
+  private previewImages(): PreviewImage[] {
     const value: Object | undefined = this.thread['previewImages']
     if (value === undefined || value === null || !Array.isArray(value)) {
       return []
     }
-    return value as string[]
+    return value as PreviewImage[]
   }
 
   /**
-   * 条目内**横排渲染**的预览图 URL（最多 `PREVIEW_IMAGE_MAX_INLINE` 张）。
+   * 条目内**横排渲染**的预览图（最多 `PREVIEW_IMAGE_MAX_INLINE` 张）。
    *
    * 多图时只渲染前几张，其余不渲染也不叠数量角标（点开查看器可看全部）。限制数量既是为
    * 单张宽度留余量，也避免列表里同时发起过多图片请求（实测最多的条目带 7 张图）。
    *
-   * @returns 前 N 张 URL（保序）
+   * 布局与渲染共用本方法：区域按**渲染出来的张数**均分，不按 `previewImages` 总数——
+   * 否则 7 张的条目会按 7 份均分宽度、却只画 3 张，每张白白窄掉一半。
+   *
+   * @returns 前 N 张（保序）
    */
-  private inlinePreviewUrls(): string[] {
-    const urls: string[] = this.previewImageUrls()
-    return urls.length > PREVIEW_IMAGE_MAX_INLINE ? urls.slice(0, PREVIEW_IMAGE_MAX_INLINE) : urls
-  }
-
-  /**
-   * 单张缩略图的实际宽度（vp）：图片区总宽按张数均分，扣掉图间距。
-   *
-   * **高度必须按这个宽度算**而不是按图片区总宽：多图时每张只占 1/N 宽，若仍按整行宽度取高，
-   * 3 张 16:9 图会被算成 166vp 高、而实际每张只有约 100vp 宽，画面会被严重裁切。
-   *
-   * 可用宽度 = 列表实测宽度 − 条目左右内边距 × 2（`ITEM_HORIZONTAL_PADDING`；列表自身
-   * 没有左右 padding，横向留白只有这一层）。
-   *
-   * @returns 单张宽度（vp）
-   */
-  private previewTileWidth(): number {
-    const areaWidth: number = this.listWidth > 0
-      ? this.listWidth - ITEM_HORIZONTAL_PADDING * 2
-      : FALLBACK_PREVIEW_AREA_WIDTH
-    const count: number = this.inlinePreviewUrls().length
-    if (count <= 1) {
-      return areaWidth
-    }
-    const gaps: number = PREVIEW_IMAGE_GAP * (count - 1)
-    return (areaWidth - gaps) / count
+  private inlinePreviewImages(): PreviewImage[] {
+    const images: PreviewImage[] = this.previewImages()
+    return images.length > PREVIEW_IMAGE_MAX_INLINE
+      ? images.slice(0, PREVIEW_IMAGE_MAX_INLINE)
+      : images
   }
 
   /**
@@ -1831,7 +1840,7 @@ struct TopicCardComponent {
    * @returns 是否渲染预览图区
    */
   private shouldRenderPreview(): boolean {
-    return this.showTopicPreview && this.previewImageUrls().length > 0 && !this.previewFailed
+    return this.showTopicPreview && this.previewImages().length > 0 && !this.previewFailed
   }
 
   /**
@@ -1873,14 +1882,16 @@ struct TopicCardComponent {
    *  2. 实图 → **直接使用原图 URL**（与 `ImageViewer` / `ThreadPanel` 的图片链路一致，
    *     见设计文档 §5.3 / K22）；加载失败即隐藏整块。
    *
-   * **高度与填充方式由首图真实比例算出**（见设计文档 §6.2）：
-   * - 高度 = `clamp(0.90 × 图片区宽 / 比例, 112, 240)`，横图在 `Cover` 下只裁约 10%；
-   * - 比例 < 0.9 的竖图改用 `Contain`（完整显示，不补底色衬底）；
-   * - 被动占位与实图**同高同宽**（同一个 `previewLayout()`），切换与加载过程中不产生跳动。
+   * **区域与逐张适配都由纯函数给出**（见设计文档 §6.2 / §6.8），本 Builder 只摆放：
+   * - 区域：`resolvePreviewArea(图片区总宽, 张数)` → 单张可用宽（多图扣间距后均分）× 240vp 上限；
+   * - 每张图**各自**按自身真实比例在该区域内做最优适配（完整显示优先、至少一边贴满），
+   *   宽度与高度都**不超过区域**——`Cover` 只在"超宽全景图被最小高度抬起后按比例会超出区域宽"
+   *   时才出现，此时裁掉的是两端而不是主体；
+   * - 整行高度 = 各张显示高度的最大值（多图不逐张撑高行高，行内其余图垂直居中）；
+   * - 被动占位块与实图**同高**（同一个 `previewRowHeight()`），切换与加载过程中不产生跳动。
    *
-   * **多图横排**（见设计文档 §6.8）：最多渲染 `PREVIEW_IMAGE_MAX_INLINE` 张缩略图，**行内同高**
-   * （高度取首图比例算出的值——首图是帖子主图，最能代表这组图），宽度各自按 `displayWidth`
-   * 贴左排列。
+   * **每张图用自己的布局**（`tileAt(index)`）：改造前整行共用首图的布局，首图是横图时第二张
+   * 竖图也会被套上横图容器，完整显示/裁切两种语义被强行统一到首图上。
    *
    * **不渲染任何角标**（用户明确要求移除）：多图「N 图」数量角标（多图横排本身"看得见"张数，
    * 再叠一个数字属于重复表达，且会压住最后一张图的角落）与单图极端比例的「长图」提示角标
@@ -1900,18 +1911,18 @@ struct TopicCardComponent {
             Image($r('app.media.icon_image')).width(22).height(22)
               .fillColor(AppColors.textTertiary).opacity(0.45)
           }
-          .width('100%').height(this.previewLayout().height)
+          .width('100%').height(this.previewRowHeight())
           .justifyContent(FlexAlign.Center)
           .borderRadius(PREVIEW_IMAGE_RADIUS).backgroundColor(AppColors.bgSecondary)
         } else {
           Row({ space: PREVIEW_IMAGE_GAP }) {
-            ForEach(this.inlinePreviewUrls(), (url: string) => {
-              Image(url)
-                /* 宽度按布局给出的**单张显示宽度**：竖图（Contain）收窄到贴合图片，横图取满分区。
-                   恒用 `width('100%')` 会让竖图两侧各留一条空白（观感上"图片居中、两边空"）。 */
-                .width(this.previewLayout().displayWidth)
-                .height(this.previewLayout().height)
-                .objectFit(this.previewLayout().useContain ? ImageFit.Contain : ImageFit.Cover)
+            ForEach(this.inlinePreviewImages(), (image: PreviewImage, index: number) => {
+              Image(image.url)
+                /* 尺寸按**这张图自己**的布局：完整显示时宽度 = 高度 × 比例（贴合图片、两侧不留白），
+                   需要裁切时取满分区宽度。恒用 `width('100%')` 会让窄图两侧各留一条空白。 */
+                .width(this.tileAt(index).width)
+                .height(this.tileAt(index).height)
+                .objectFit(this.tileAt(index).useContain ? ImageFit.Contain : ImageFit.Cover)
                 .borderRadius(PREVIEW_IMAGE_RADIUS)
                 /* 内容到位时的柔和淡入（`@since 21`）。声明只排除"动态图资源"，对网络图 src 是否
                    生效未定义——**待真机复核**：若实测无效（表现为图片硬切出现），删掉本行即可，
@@ -1924,9 +1935,12 @@ struct TopicCardComponent {
                   }
                 })
                 .onError(() => { this.onPreviewFailed() })
-            }, (url: string) => url)
+            }, (image: PreviewImage) => image.url)
           }
           .width('100%')
+          /* 行高 = 各张显示高度的最大值：每张图按自身布局取高，Row 按最高者定高，
+             其余图在其中垂直居中（默认 `VerticalAlign.Center`）——一行整齐，又不牺牲任何一张的完整性 */
+          .height(this.previewRowHeight())
           /* 左对齐：窄图收窄后必须贴左，否则 Row 的默认排布会把它们挤到中间 */
           .justifyContent(FlexAlign.Start)
         }

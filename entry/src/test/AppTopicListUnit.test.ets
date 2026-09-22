@@ -22,14 +22,19 @@ import {
 } from '../main/ets/common/utils/SubjectListQuery'
 import { getHotDays } from '../main/ets/common/utils/TopicListUtils'
 import {
-  parsePreviewImages,
+  parsePreviewAttachments,
   buildPreviewUrl,
   normalizeAttachPrefix,
   isPreviewImage,
   parsePreviewSize,
-  resolvePreviewLayout,
+  resolvePreviewArea,
+  resolvePreviewRowLayout,
   FALLBACK_PREVIEW_AREA_WIDTH,
-  PreviewLayout,
+  PREVIEW_IMAGE_GAP,
+  PreviewImage,
+  PreviewArea,
+  PreviewRowLayout,
+  PreviewTileLayout,
 } from '../main/ets/common/utils/TopicPreviewUtils'
 import { ImageSize } from '../main/ets/common/media/ImageSizeUtil'
 import type { TopicListInfo } from '../main/ets/model/Topic'
@@ -173,6 +178,21 @@ function makeSize(width: number, height: number): ImageSize {
   size.width = width
   size.height = height
   return size
+}
+
+/**
+ * 构造预览图（URL + 解析期算定的真实像素尺寸），供区域/适配用例使用。
+ *
+ * @param url - 绝对 URL
+ * @param width - 像素宽（0 表示尺寸未知）
+ * @param height - 像素高（0 表示尺寸未知）
+ * @returns 预览图对象
+ */
+function makePreviewImage(url: string, width: number, height: number): PreviewImage {
+  const image: PreviewImage = new PreviewImage()
+  image.url = url
+  image.size = makeSize(width, height)
+  return image
 }
 
 /**
@@ -369,8 +389,12 @@ export default function appTopicListUnitTest(): void {
       /* 首条带 attachs → 预览图绝对 URL（前缀取自 result.attachPrefix，拼对即证明读取正确） */
       const first = list.threadPageList[0]
       expect(first.previewImages.length).assertEqual(1)
-      expect(first.previewImages[0]).assertEqual(
+      expect(first.previewImages[0].url).assertEqual(
         'https://img.nga.cn/attachments/mon_202608/19/7Q68-jpq0ZtT3cS1uo-11i.jpeg')
+      /* **URL 与尺寸同行产出**：图片尚未下载，分辨率已在解析期确定（文件名尺寸段）
+         —— 卡片高度因此是静态值，不需要等 onComplete 回填 */
+      expect(first.previewImages[0].size.width).assertEqual(2400)
+      expect(first.previewImages[0].size.height).assertEqual(1350)
       /* 无 attachs 条目：空数组（不残留 undefined） */
       const second = list.threadPageList[1]
       expect(second.previewImages.length).assertEqual(0)
@@ -380,8 +404,8 @@ export default function appTopicListUnitTest(): void {
       const prefix: string = 'https://img.nga.cn/attachments/'
       /* 归一化层对缺失字段写空串 → 非数组一律空结果 */
       const notArray: Record<string, Object> = { 'attachurl': 'mon_1/a.jpg' }
-      expect(parsePreviewImages(notArray, prefix).length).assertEqual(0)
-      expect(parsePreviewImages(undefined, prefix).length).assertEqual(0)
+      expect(parsePreviewAttachments(notArray, prefix).length).assertEqual(0)
+      expect(parsePreviewAttachments(undefined, prefix).length).assertEqual(0)
       /* 非图片扩展名 / 纯数字 / 空串 全部跳过；webp 保留 */
       const item1: Record<string, Object> = { 'attachurl': 'mon_1/a.jpg' }
       const item2: Record<string, Object> = { 'attachurl': 'mon_1/b.mp4' }
@@ -389,10 +413,13 @@ export default function appTopicListUnitTest(): void {
       const item4: Record<string, Object> = { 'attachurl': '' }
       const item5: Record<string, Object> = { 'attachurl': 'mon_1/c.webp' }
       const items: Object[] = [item1, item2, item3, item4, item5]
-      const urls: string[] = parsePreviewImages(items as Object, prefix)
-      expect(urls.length).assertEqual(2)
-      expect(urls[0]).assertEqual('https://img.nga.cn/attachments/mon_1/a.jpg')
-      expect(urls[1]).assertEqual('https://img.nga.cn/attachments/mon_1/c.webp')
+      const images: PreviewImage[] = parsePreviewAttachments(items as Object, prefix)
+      expect(images.length).assertEqual(2)
+      expect(images[0].url).assertEqual('https://img.nga.cn/attachments/mon_1/a.jpg')
+      expect(images[1].url).assertEqual('https://img.nga.cn/attachments/mon_1/c.webp')
+      /* 老附件（无尺寸段）→ 尺寸留 0×0（布局走 16:9 兜底），不抛错、不猜 */
+      expect(images[0].size.width).assertEqual(0)
+      expect(images[0].size.height).assertEqual(0)
       /* 已是绝对地址原样保留 */
       expect(buildPreviewUrl(prefix, 'https://other.example/x.jpg'))
         .assertEqual('https://other.example/x.jpg')
@@ -422,7 +449,7 @@ export default function appTopicListUnitTest(): void {
       const list = info as TopicListInfo
       /* 顶层 attachPrefix 的读取正确性由"拼出的绝对 URL"证明 */
       expect(list.threadPageList[0].previewImages.length).assertEqual(1)
-      expect(list.threadPageList[0].previewImages[0])
+      expect(list.threadPageList[0].previewImages[0].url)
         .assertEqual('https://img.nga.cn/attachments/mon_1/hot.jpg')
     })
 
@@ -449,9 +476,9 @@ export default function appTopicListUnitTest(): void {
       const arrItem: Object[] = ['mon_1/y.jpg']
       const noUrlItem: Record<string, Object> = { 'name': 'x' }
       const items: Object[] = [strItem, numItem, arrItem, noUrlItem]
-      expect(parsePreviewImages(items as Object, prefix).length).assertEqual(0)
+      expect(parsePreviewAttachments(items as Object, prefix).length).assertEqual(0)
       /* JSON null（与 undefined 区分）同样安全 */
-      expect(parsePreviewImages(null, prefix).length).assertEqual(0)
+      expect(parsePreviewAttachments(null, prefix).length).assertEqual(0)
       /* 无 `/` 的合法扩展名走路径守卫（'12345' 会被扩展名守卫先拦，故用 'a.jpg' 覆盖该分支） */
       expect(buildPreviewUrl(prefix, 'a.jpg')).assertEqual('')
     })
@@ -478,12 +505,21 @@ export default function appTopicListUnitTest(): void {
       const b: Record<string, Object> = { 'attachurl': 'mon_1/b.webp' }
       const c: Record<string, Object> = { 'attachurl': 'https://img.nga.cn/attachments/mon_1/c.jpeg' }
       const items: Object[] = [a, b, c]
-      const urls: string[] = parsePreviewImages(items as Object, prefix)
-      expect(urls.length).assertEqual(3)
+      const images: PreviewImage[] = parsePreviewAttachments(items as Object, prefix)
+      expect(images.length).assertEqual(3)
       /* 保序（与输入一致）；绝对地址原样保留、不重复拼前缀 */
-      expect(urls[0]).assertEqual(prefix + 'mon_1/a.jpg')
-      expect(urls[1]).assertEqual(prefix + 'mon_1/b.webp')
-      expect(urls[2]).assertEqual('https://img.nga.cn/attachments/mon_1/c.jpeg')
+      expect(images[0].url).assertEqual(prefix + 'mon_1/a.jpg')
+      expect(images[1].url).assertEqual(prefix + 'mon_1/b.webp')
+      expect(images[2].url).assertEqual('https://img.nga.cn/attachments/mon_1/c.jpeg')
+      /* 每张图的尺寸**各自**解定（不是只有首图）——多图适配依赖这一点 */
+      const sizedFirst: Record<string, Object> = { 'attachurl': 'mon_1/7Q68-aZtT3cSsg-go.jpg' }
+      const sizedSecond: Record<string, Object> = { 'attachurl': 'mon_1/7Q68-aZtT3cS1uo-11i.jpeg' }
+      const sized: Object[] = [sizedFirst, sizedSecond]
+      const multi: PreviewImage[] = parsePreviewAttachments(sized as Object, prefix)
+      expect(multi[0].size.width).assertEqual(1024)
+      expect(multi[0].size.height).assertEqual(600)
+      expect(multi[1].size.width).assertEqual(2400)
+      expect(multi[1].size.height).assertEqual(1350)
     })
 
     it('decodesPreviewSizeSegment', 0, () => {
@@ -548,52 +584,150 @@ export default function appTopicListUnitTest(): void {
       expect(parsePreviewSize('mon_1/aZtT3cSg-go.jpg')).assertNull()
     })
 
-    it('parsesPreviewSizeIntoModel', 0, () => {
-      /* 解析期产出：subject/list 首条的主题模型应带首图真实尺寸（卡片高度据此算定） */
+    it('parsesPreviewSizesIntoModel', 0, () => {
+      /* 解析期产出：模型里的**每张**预览图都带真实像素尺寸（与是否下载无关，卡片高度据此算定） */
       const info: TopicListInfo | null = parseSubjectList(
         createSubjectListResponse(), new Set<string>(), [], 1)
       const first = (info as TopicListInfo).threadPageList[0]
-      const size: ImageSize | undefined = first.previewSize
-      expect(size).not().assertUndefined()
-      expect((size as ImageSize).width).assertEqual(2400)
-      expect((size as ImageSize).height).assertEqual(1350)
-      /* 无 attachs 条目：无尺寸（null/undefined 均可，卡片走兜底比例） */
+      expect(first.previewImages.length).assertEqual(1)
+      expect(first.previewImages[0].size.width).assertEqual(2400)
+      expect(first.previewImages[0].size.height).assertEqual(1350)
+      /* 无 attachs 条目：无预览图（也就没有尺寸可言，卡片整块不渲染） */
       const second = (info as TopicListInfo).threadPageList[1]
-      expect(second.previewSize === undefined || second.previewSize === null).assertTrue()
+      expect(second.previewImages.length).assertEqual(0)
     })
 
-    it('resolvesPreviewLayoutByAspect', 0, () => {
-      /* 用显式宽度做断言（不依赖 FALLBACK 兜底值），避免兜底值调整时用例失稳 */
-      const width: number = 296
-      /* 横图 Cover：高度 = 0.90 × 宽 / 比例，且被 240vp 封顶、112vp 兜底 */
-      const wide: ImageSize = makeSize(2400, 1350)
-      const wideLayout: PreviewLayout = resolvePreviewLayout(wide, width)
-      expect(wideLayout.useContain).assertFalse()
-      expect(wideLayout.height > 145 && wideLayout.height < 155).assertTrue()
-      /* 横图容器取满分区宽度 */
-      expect(wideLayout.displayWidth).assertEqual(width)
-      /* 竖图 Contain：封顶到最大高度 240，且改用完整显示、容器收窄到贴合图片 */
-      const tall: ImageSize = makeSize(567, 1024)
-      const tallLayout: PreviewLayout = resolvePreviewLayout(tall, width)
-      expect(tallLayout.useContain).assertTrue()
-      expect(tallLayout.height).assertEqual(240)
-      /* 收窄：宽 = 高 × 比例（240 × 567/1024 ≈ 132.9），必须小于分区宽度 */
-      expect(tallLayout.displayWidth < width).assertTrue()
-      expect(tallLayout.displayWidth > 130 && tallLayout.displayWidth < 136).assertTrue()
-      /* 超宽全景：压到最小高度 */
-      const pano: ImageSize = makeSize(821, 189)
-      const panoLayout: PreviewLayout = resolvePreviewLayout(pano, width)
-      expect(panoLayout.useContain).assertFalse()
-      expect(panoLayout.height).assertEqual(112)
-      expect(panoLayout.displayWidth).assertEqual(width)
-      /* 尺寸未知（老附件）：16:9 兜底，不退回固定高度、也不因缺失而异常 */
-      const fallback: PreviewLayout = resolvePreviewLayout(null, width)
-      expect(fallback.useContain).assertFalse()
-      expect(fallback.height > 145 && fallback.height < 155).assertTrue()
-      /* 图片区宽度未测得（首帧 0）：回落 FALLBACK_PREVIEW_AREA_WIDTH，与显式传入同值同高 */
-      const fallbackWidth: PreviewLayout = resolvePreviewLayout(wide, 0)
-      expect(fallbackWidth.height)
-        .assertEqual(resolvePreviewLayout(wide, FALLBACK_PREVIEW_AREA_WIDTH).height)
+    it('resolvesPreviewAreaLimits', 0, () => {
+      const width: number = 328
+      /* 单图区域 = 图片区整宽 × 240vp 上限；最小高度取基准标定值 112vp */
+      const single: PreviewArea = resolvePreviewArea(width, 1)
+      expect(single.maxWidth).assertEqual(width)
+      expect(single.maxHeight).assertEqual(240)
+      expect(single.minHeight).assertEqual(112)
+      /* 多图区域 = 扣掉图间距后按张数均分（区域求解与 Row 的 space 共用同一个 gap） */
+      const triple: PreviewArea = resolvePreviewArea(width, 3)
+      expect(triple.maxWidth > 105 && triple.maxWidth < 106).assertTrue()
+      const used: number = triple.maxWidth * 3 + PREVIEW_IMAGE_GAP * 2
+      expect(used > width - 0.01 && used < width + 0.01).assertTrue()
+      /* 最小高度按区域宽度**等比放宽**（比例下限 ≈2.93:1）：窄分区不把小图抬成"裁掉一半的方块" */
+      expect(triple.minHeight > 35 && triple.minHeight < 37).assertTrue()
+      /* 高度上限与单图完全一致：多图整行同样不超过 240vp（最大高宽限制不变） */
+      expect(triple.maxHeight).assertEqual(240)
+      /* 宽度未测得（首帧 0）→ 回落基准宽度；张数非法（0）→ 按 1 张处理（不留除零/负宽） */
+      expect(resolvePreviewArea(0, 1).maxWidth).assertEqual(FALLBACK_PREVIEW_AREA_WIDTH)
+      expect(resolvePreviewArea(width, 0).maxWidth).assertEqual(width)
+    })
+
+    it('fitsSingleImageInsideArea', 0, () => {
+      const width: number = 328
+      const area: PreviewArea = resolvePreviewArea(width, 1)
+      /* 16:9 横图：宽度贴满区域、高度按比例（328 × 9/16 = 184.5），**完整显示、不裁切** */
+      const wide: PreviewImage = makePreviewImage('w.jpg', 2400, 1350)
+      const wideList: PreviewImage[] = [wide]
+      const wideRow: PreviewRowLayout = resolvePreviewRowLayout(wideList, width)
+      const wideTile: PreviewTileLayout = wideRow.tiles[0]
+      expect(wideTile.width).assertEqual(width)
+      expect(wideTile.height > 184 && wideTile.height < 185).assertTrue()
+      expect(wideTile.useContain).assertTrue()
+      /* 单图行高 = 该图显示高度 */
+      expect(wideRow.height).assertEqual(wideTile.height)
+      /* 方图：高度贴满 240、宽度按比例收窄（240vp）——容器贴合图片，两侧不留白（K32） */
+      const square: PreviewImage = makePreviewImage('s.jpg', 500, 500)
+      const squareList: PreviewImage[] = [square]
+      const squareRow: PreviewRowLayout = resolvePreviewRowLayout(squareList, width)
+      expect(squareRow.tiles[0].height).assertEqual(240)
+      expect(squareRow.tiles[0].width).assertEqual(240)
+      expect(squareRow.tiles[0].useContain).assertTrue()
+      /* 3:4 竖图：封顶到 240 高，显示宽度 = 240 × 0.75 = 180vp（完整显示） */
+      const tall: PreviewImage = makePreviewImage('t.jpg', 768, 1024)
+      const tallList: PreviewImage[] = [tall]
+      const tallRow: PreviewRowLayout = resolvePreviewRowLayout(tallList, width)
+      expect(tallRow.tiles[0].height).assertEqual(240)
+      expect(tallRow.tiles[0].width > 179 && tallRow.tiles[0].width < 181).assertTrue()
+      expect(tallRow.tiles[0].useContain).assertTrue()
+      /* 超宽全景（> 2.93:1）：完整显示会低于最小高度 112 → 抬到下限并按区域宽度裁两端（Cover） */
+      const pano: PreviewImage = makePreviewImage('p.jpg', 821, 189)
+      const panoList: PreviewImage[] = [pano]
+      const panoRow: PreviewRowLayout = resolvePreviewRowLayout(panoList, width)
+      expect(panoRow.tiles[0].height).assertEqual(112)
+      expect(panoRow.tiles[0].width).assertEqual(width)
+      expect(panoRow.tiles[0].useContain).assertFalse()
+      /* 尺寸未知（老附件无尺寸段）→ 16:9 兜底，不退回固定高度、也不异常 */
+      const unknown: PreviewImage = makePreviewImage('u.jpg', 0, 0)
+      const unknownList: PreviewImage[] = [unknown]
+      const unknownRow: PreviewRowLayout = resolvePreviewRowLayout(unknownList, width)
+      expect(unknownRow.tiles[0].height).assertEqual(wideTile.height)
+      /* 区域内显示尺寸**恒不超过区域最大宽高**（"不改变最大高宽限制"的可执行断言） */
+      expect(wideTile.width <= area.maxWidth).assertTrue()
+      expect(panoRow.tiles[0].width <= area.maxWidth).assertTrue()
+      expect(tallRow.tiles[0].height <= area.maxHeight).assertTrue()
+      expect(squareRow.tiles[0].width <= area.maxWidth).assertTrue()
+      /* 图片区宽度未测得（首帧 0）：回落 FALLBACK_PREVIEW_AREA_WIDTH，与显式传入同值同布局 */
+      expect(resolvePreviewRowLayout(wideList, 0).tiles[0].height).assertEqual(wideTile.height)
+    })
+
+    it('fitsEachInlineImageIndependently', 0, () => {
+      const width: number = 328
+      const area: PreviewArea = resolvePreviewArea(width, 3)
+      /* 一行内的每张图按**自己**的比例适配（不再共用首图布局）：
+         竖图 0.75 → 140.4 高；16:9 → 59.25 高；方图 → 105.33 高 */
+      const tall: PreviewImage = makePreviewImage('t.jpg', 768, 1024)
+      const wide: PreviewImage = makePreviewImage('w.jpg', 2400, 1350)
+      const square: PreviewImage = makePreviewImage('s.jpg', 500, 500)
+      const trio: PreviewImage[] = [tall, wide, square]
+      const row: PreviewRowLayout = resolvePreviewRowLayout(trio, width)
+      expect(row.tiles.length).assertEqual(3)
+      /* 整行高度 = 各张显示高度的最大值（最高的是竖图），其余图在该高度里垂直居中 */
+      expect(row.height > 140 && row.height < 141).assertTrue()
+      expect(row.tiles[0].height > 140 && row.tiles[0].height < 141).assertTrue()
+      expect(row.tiles[1].height > 59 && row.tiles[1].height < 60).assertTrue()
+      expect(row.tiles[2].height > 105 && row.tiles[2].height < 106).assertTrue()
+      /* 每张都完整显示（无裁切），宽度各自 ≤ 分区宽 */
+      expect(row.tiles[0].useContain).assertTrue()
+      expect(row.tiles[1].useContain).assertTrue()
+      expect(row.tiles[2].useContain).assertTrue()
+      expect(row.tiles[1].width <= area.maxWidth + 0.01).assertTrue()
+      /* 两张 16:9：等宽（都是分区宽）、高度一致且完整显示——旧的"小图被抬到 112 高裁一半"消失 */
+      const wideA: PreviewImage = makePreviewImage('a.jpg', 2400, 1350)
+      const wideB: PreviewImage = makePreviewImage('b.jpg', 2400, 1350)
+      const pair: PreviewImage[] = [wideA, wideB]
+      const uniform: PreviewRowLayout = resolvePreviewRowLayout(pair, width)
+      const pairsArea: PreviewArea = resolvePreviewArea(width, 2)
+      expect(uniform.tiles[0].width > 160.9 && uniform.tiles[0].width < 161.1).assertTrue()
+      expect(uniform.tiles[0].width <= pairsArea.maxWidth + 0.01).assertTrue()
+      expect(uniform.tiles[0].height > 90 && uniform.tiles[0].height < 91).assertTrue()
+      /* 总占用宽度（各张宽 + 间距）恒不超过图片区总宽：区域约束在数学上不可突破 */
+      let used: number = 0
+      for (let i = 0; i < row.tiles.length; i++) {
+        used += row.tiles[i].width
+      }
+      used += PREVIEW_IMAGE_GAP * (row.tiles.length - 1)
+      expect(used <= width + 0.01).assertTrue()
+    })
+
+    it('keepsExtremeRatiosInsideArea', 0, () => {
+      const width: number = 328
+      /* 两张超宽全景：分区宽 161、最小高度 ≈54.98 → 抬到下限并按分区宽裁切，仍不溢出也不超高 */
+      const pano: PreviewImage = makePreviewImage('p.jpg', 821, 189)
+      const panoPair: PreviewImage[] = [pano, pano]
+      const row: PreviewRowLayout = resolvePreviewRowLayout(panoPair, width)
+      expect(row.tiles.length).assertEqual(2)
+      expect(row.height > 54 && row.height < 56).assertTrue()
+      expect(row.tiles[0].width > 160.9 && row.tiles[0].width < 161.1).assertTrue()
+      expect(row.tiles[0].useContain).assertFalse()
+      expect(row.tiles[1].useContain).assertFalse()
+      /* 长截图（966×2142 → 0.45:1）：高度封顶 240，宽度按比例收窄，完整显示 */
+      const longShotImage: PreviewImage = makePreviewImage('l.jpg', 966, 2142)
+      const longShotList: PreviewImage[] = [longShotImage]
+      const longShot: PreviewRowLayout = resolvePreviewRowLayout(longShotList, width)
+      expect(longShot.tiles[0].height).assertEqual(240)
+      expect(longShot.tiles[0].width > 108 && longShot.tiles[0].width < 109).assertTrue()
+      expect(longShot.tiles[0].useContain).assertTrue()
+      /* 空数组（UI 侧不会走到：先判 shouldRenderPreview）→ 行高不为 0，调用方不会拿到塌陷容器 */
+      const none: PreviewImage[] = []
+      const empty: PreviewRowLayout = resolvePreviewRowLayout(none, width)
+      expect(empty.tiles.length).assertEqual(0)
+      expect(empty.height > 0).assertTrue()
     })
 
     it('parsesSubjectSubBoards', 0, () => {

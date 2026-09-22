@@ -9,12 +9,17 @@
  * 的实现要点记录在设计文档 §5，**当前生产路径不启用**——需要时按那里实现即可，
  * 本模块保持最小表面积（不保留无调用方的函数）。
  *
- * 另含**响应式布局纯函数**（§6.2 起）：从 `attachurl` 文件名解出真实像素尺寸、由图片比例
- * 与容器宽度算出预览区高度、判定 Cover / Contain。这些函数是"图片比例多样 × 设备形态多样"
- * 的唯一算法出口，UI 层只消费结果，不得内联同样的算式（测试覆盖见 §6.7）。
+ * 本模块承担两件事，UI 侧只消费结果、不做任何算术：
+ *
+ *  1. **附件 → 预览图**（`parsePreviewAttachments`）：拼前缀、过滤非图片，并**从文件名尺寸段
+ *     解出每一张图的真实像素尺寸**（`PreviewImage.size`）。尺寸与 URL 在解析期一起产出——
+ *     图片尚未下载，分辨率、比例就已经确定，卡片高度因此是静态值（§6.2）。
+ *  2. **区域 → 布局**（`resolvePreviewArea` / `resolvePreviewRowLayout`）：把"条目内可用宽度"
+ *     折算成**预览图区域的最大宽高**（这正是"ListCell 分配给预览图的区域"的显式表达），
+ *     再让区域内每一张图各自做**最优适配**（完整显示优先，见 §6.2 / §6.8）。
  *
  * **尺寸段解码（`parsePreviewSize`）是全工程唯一的出口**，服务三处调用方，不得各自复制正则：
- *  1. 列表预览图（`TopicParser` 解析期 → `TopicInfo.previewSize`）；
+ *  1. 列表预览图（`TopicParser` 解析期 → `PreviewImage.size`）；
  *  2. 正文图片（`BBCodeContentView` 的 `imageSizes` 预填与比例兜底）；
  *  3. 视频附件（`BBCodeContentView` / `PostAttachments` 的 `videoAspectRatio`）。
  *
@@ -117,37 +122,26 @@ export function buildPreviewUrl(prefix: string, attachurl: string): string {
   return normalizeAttachPrefix(prefix) + path
 }
 
-/**
- * 把官方 attachs 字段解析为预览图 URL 列表。
- *
- * @param rawAttachs - 原始 attachs 值（实测为对象数组；归一化层可能写入空串，JSON 可能为 null）
- * @param prefix - 响应 attachPrefix
- * @returns 预览图绝对 URL 列表（保序、已过滤非图片；无有效项时为空数组）
- */
-export function parsePreviewImages(rawAttachs: Object | null | undefined, prefix: string): string[] {
-  if (rawAttachs === undefined || rawAttachs === null || !Array.isArray(rawAttachs)) {
-    return []
-  }
-  const urls: string[] = []
-  const arr: Object[] = rawAttachs as Object[]
-  for (let i = 0; i < arr.length; i++) {
-    const item: Object = arr[i]
-    if (item === undefined || item === null || typeof item !== 'object' || Array.isArray(item)) {
-      continue
-    }
-    const attachurl: string = String((item as Record<string, Object>)['attachurl'] ?? '')
-    if (!isPreviewImage(attachurl)) {
-      continue
-    }
-    const url: string = buildPreviewUrl(prefix, attachurl)
-    if (url.length > 0) {
-      urls.push(url)
-    }
-  }
-  return urls
-}
+// ============== 预览图模型：URL + 解析期算定的真实像素尺寸 ==============
 
-// ============== 预览图响应式布局（§6.2 起） ==============
+/**
+ * 一张可作预览图的附件：**绝对 URL** + **解析期算定的真实像素尺寸**。
+ *
+ * 两者必须同行产出（`parsePreviewAttachments` 一次遍历同时给出），否则极易出现
+ * "卡片渲染的是 A 图的 URL、尺寸却取了 B 图"的错位——旧实现里 `previewImages`（URL 数组）
+ * 与 `previewSize`（首图尺寸）就是从两次独立遍历里分别取出的。
+ */
+export class PreviewImage {
+  /** 可加载的绝对 URL（原图；见设计文档 §5.3）。 */
+  url: string = ''
+  /**
+   * 真实像素尺寸（由文件名尺寸段解出，**与下载无关**）。
+   *
+   * 宽高为 0 表示尺寸段缺失或不可解（老附件、档位 URL）——布局侧据此走 16:9 兜底比例，
+   * 不会因此退回固定高度。
+   */
+  size: ImageSize = new ImageSize()
+}
 
 /**
  * 尺寸段解码的合法边界。
@@ -165,43 +159,6 @@ const MIN_PIXELS: number = 16
 const MAX_PIXELS: number = 20000
 const MIN_ASPECT: number = 1 / 24
 const MAX_ASPECT: number = 24
-
-/**
- * 预览区容器高度参数（vp）——实测标定，改值前先读设计文档 §6.2.2。
- *
- * - `MIN_HEIGHT` 112：超宽全景图的落点。再矮会让 3.5:1 以上的图退化成"一条线"，
- *   而这类图在列表里的信息量（总览、战报长图）本就靠整体轮廓传达。
- * - `MAX_HEIGHT` 240：竖图的封顶。取值约束来自"一屏可读条数"：卡片文字区约 180vp，
- *   图片区 240vp 时整卡 ≈ 420vp，在 640~800vp 的列表可视高度下仍能露出近 2 条。
- *   240 而非 200 的理由：竖图走 `Contain` 完整显示，其**显示宽度**完全由这个上限决定
- *   （宽度 = 高度 × 比例），200 → 240 让 3:4 竖拍的显示宽度从 150vp 提到 180vp（+20%）。
- * - `WIDTH_FACTOR` 0.90：容器高度按"宽度 × 0.90 / 比例"取，即**留 10% 裁切余量**，
- *   使横图在 Cover 下既不顶到卡片上沿、也不至于把主体裁掉。
- *
- * 实测（582 个真实附件、sm 360vp 窗口、图片区 328vp）：固定 120vp 高度平均只能看到
- * 39.7% 的画面，本参数下提升到约 59%，且 16:9 / 3:2 这类常见横图的裁切从 35~45% 降到 10%。
- */
-const MIN_PREVIEW_HEIGHT: number = 112
-const MAX_PREVIEW_HEIGHT: number = 240
-const PREVIEW_HEIGHT_WIDTH_FACTOR: number = 0.9
-
-/**
- * 竖图阈值（图片宽高比低于此值改用 `Contain`：完整显示、两侧留底色）。
- *
- * 取 0.9 而非 1.0：容器比例恒有下限（sm 下约 1.64），任何竖图在 `Cover` 下都只能看到中段
- * 横带（1:1 方图剩 37%、3:4 竖拍剩 27%、9:16 剩 21%）。改 `Contain` 后图片按宽度完整显示，
- * 代价是容器内出现底色——实测列表附件里竖图占 **46%**，这个代价换来的是"看得到整张图"。
- */
-const CONTAIN_ASPECT_THRESHOLD: number = 0.9
-
-/**
- * 图片区宽度未知（首帧尚未测得列表宽度）时的兜底值。
- *
- * 取 328 = sm 360vp 窗口的实测列表宽度 360 − 条目左右内边距 32（见 `TopicListPanel` 的
- * `ITEM_HORIZONTAL_PADDING`；列表自身没有左右 padding）。首帧用它算出的高度与真实值
- * 只差几个 vp，且在列表完成首次布局后立即被真实宽度替换。
- */
-export const FALLBACK_PREVIEW_AREA_WIDTH: number = 328
 
 /**
  * 尺寸段解码：文件名末尾的 `S{base36宽}-{base36高}` + 扩展名。
@@ -263,63 +220,256 @@ export function parsePreviewSize(attachurl: string): ImageSize | null {
 }
 
 /**
- * 解析预览图布局（图片区宽度已知后调用）。
+ * 把官方 attachs 字段解析为预览图列表（URL 与真实尺寸**一次遍历同时产出**）。
  *
- * 纯算术，无副作用：`aspect` 由 `parsePreviewSize` 给出，缺失时用 16:9 兜底（与
- * `BBCodeContentView.getImageAspectRatio` 同一档占位比例，项目内保持一致）。
+ * 每一张图的尺寸都在这里解定：URL 与尺寸成对进模型后，UI 侧不再有"按索引从另一个数组取尺寸"
+ * 的对齐风险，也不需要等图片下载完成才知道分辨率（见设计文档 §6.2.2）。
  *
- * 同时给出 `aspect`、`useContain` 与 `displayWidth`，因为**单图竖图要收窄容器**
- * （见 `PreviewLayout.displayWidth`）：`Contain` 下图片按高度等比放缩，容器若仍撑满图片区
- * 宽度，图片两侧就会各留一条空白。收窄到 `height × aspect` 后图片贴左、且**没有任何多余留白**。
+ * 尺寸在**原始 attachurl** 上解而不是在拼好的绝对 URL 上解：后者虽同为文件名匹配，
+ * 但原始值永远没有 query / fragment 干扰，少一层守卫。
  *
- * 收窄不会溢出：`Contain` 只在 `aspect < CONTAIN_ASPECT_THRESHOLD (0.9)` 时启用，此时
- * `displayWidth = 0.90 × areaWidth < areaWidth`；`aspect ≥ 0.9` 走 `Cover`，方框恒为整宽。
- *
- * @param size - 真实像素尺寸（null 表示尺寸未知，走兜底比例）
- * @param areaWidth - 图片区宽度（vp）
- * @returns 布局结果（高度 / 填充方式 / 比例 / 建议显示宽度）
+ * @param rawAttachs - 原始 attachs 值（实测为对象数组；归一化层可能写入空串，JSON 可能为 null）
+ * @param prefix - 响应 attachPrefix
+ * @returns 预览图列表（保序、已过滤非图片；无有效项时为空数组）
  */
-export function resolvePreviewLayout(size: ImageSize | null, areaWidth: number): PreviewLayout {
-  const width: number = areaWidth > 0 ? areaWidth : FALLBACK_PREVIEW_AREA_WIDTH
-  let aspect: number = 16 / 9
-  if (size !== null && size.width > 0 && size.height > 0) {
-    aspect = size.width / size.height
+export function parsePreviewAttachments(rawAttachs: Object | null | undefined,
+  prefix: string): PreviewImage[] {
+  if (rawAttachs === undefined || rawAttachs === null || !Array.isArray(rawAttachs)) {
+    return []
   }
-  const ideal: number = PREVIEW_HEIGHT_WIDTH_FACTOR * width / aspect
-  const height: number = Math.max(MIN_PREVIEW_HEIGHT, Math.min(MAX_PREVIEW_HEIGHT, ideal))
-  const useContain: boolean = aspect < CONTAIN_ASPECT_THRESHOLD
-  const layout: PreviewLayout = new PreviewLayout()
-  layout.height = height
-  layout.aspect = aspect
-  layout.useContain = useContain
-  layout.displayWidth = useContain ? height * aspect : width
-  return layout
+  const images: PreviewImage[] = []
+  const arr: Object[] = rawAttachs as Object[]
+  for (let i = 0; i < arr.length; i++) {
+    const item: Object = arr[i]
+    if (item === undefined || item === null || typeof item !== 'object' || Array.isArray(item)) {
+      continue
+    }
+    const attachurl: string = String((item as Record<string, Object>)['attachurl'] ?? '')
+    if (!isPreviewImage(attachurl)) {
+      continue
+    }
+    const url: string = buildPreviewUrl(prefix, attachurl)
+    if (url.length === 0) {
+      continue
+    }
+    const image: PreviewImage = new PreviewImage()
+    image.url = url
+    const size: ImageSize | null = parsePreviewSize(attachurl)
+    if (size !== null) {
+      image.size = size
+    }
+    images.push(image)
+  }
+  return images
+}
+
+// ============== 预览图区域与最优适配（§6.2 / §6.8） ==============
+
+/**
+ * 预览区高度参数（vp）——实测标定，改值前先读设计文档 §6.2 的参数依据与 §6.2.1 的实测数据。
+ *
+ * - `MIN_PREVIEW_HEIGHT` 112：**单图**区域的绝对高度下限（超宽全景图的落点）。再矮会让
+ *   3.5:1 以上的图退化成"一条线"，而这类图在列表里的信息量（总览、战报长图）本就靠整体轮廓传达。
+ *   它是**基准宽度（328vp）下的取值**：区域更窄时按比例放宽（见 `MAX_AREA_ASPECT`）。
+ * - `MAX_PREVIEW_HEIGHT` 240：竖图的封顶，也是**整块预览图区域的高度上限**（多图整行同样受它约束）。
+ *   取值约束来自"一屏可读条数"：卡片文字区约 180vp，图片区 240vp 时整卡 ≈ 420vp，
+ *   在 640~800vp 的列表可视高度下仍能露出近 2 条。240 而非 200 的理由：竖图走完整显示，
+ *   其**显示宽度**完全由这个上限决定（宽度 = 高度 × 比例），200 → 240 让 3:4 竖拍的显示宽度
+ *   从 150vp 提到 180vp（+20%）。
+ *
+ * 实测（582 个真实附件、sm 360vp 窗口、图片区 328vp）：固定 120vp 高度平均只能看到
+ * 39.7% 的画面，"区域内完整显示"（本模块当前算法）提升到约 90% 以上（§6.2.1）。
+ */
+const MIN_PREVIEW_HEIGHT: number = 112
+const MAX_PREVIEW_HEIGHT: number = 240
+
+/**
+ * 图片区宽度未知（首帧尚未测得列表宽度）时的兜底值。
+ *
+ * 取 328 = sm 360vp 窗口的实测列表宽度 360 − 条目左右内边距 32（见 `TopicListPanel` 的
+ * `ITEM_HORIZONTAL_PADDING`；列表自身没有左右 padding）。首帧用它算出的高度与真实值
+ * 只差几个 vp，且在列表完成首次布局后立即被真实宽度替换。
+ *
+ * 它同时是**区域最小高度的标定基准**（见 `MAX_AREA_ASPECT`）。
+ */
+export const FALLBACK_PREVIEW_AREA_WIDTH: number = 328
+
+/**
+ * 多图横排的图间距（vp）。
+ *
+ * 取 6 而非整行级别的 16：一行内的缩略图是**同一组内容**，间距只需区分边界、不需表达层级，
+ * 过大会让每张图显著变窄。图片区总宽 = 内容宽 − 间距 ×（张数 − 1）——**区域求解与 Row 的
+ * `space` 必须共用这一个值**，否则单张分区宽与实际排布会错位。
+ */
+export const PREVIEW_IMAGE_GAP: number = 6
+
+/**
+ * 区域允许的**最扁比例**（区域宽 ÷ 区域高），由基准标定值反推：328 / 112 ≈ 2.93。
+ *
+ * 它是"最小高度"的比例化表达：区域高度低于 `区域宽 ÷ 2.93` 时不再压缩图片
+ * （再压就成一条线），改为按区域宽度裁切填满。基准宽度及以上取绝对下限 112vp——
+ * 单图（区域宽 ≥ 328vp）因此与改造前**完全一致**；多图分区窄（约 100vp），下限随之降到
+ * 约 36vp，这是"多图每张都要看得见"的必要前提（否则 105vp 宽的 16:9 小图会被抬到 112vp 高，
+ * 在格子里裁掉近一半，见 §6.8）。
+ */
+const MAX_AREA_ASPECT: number = FALLBACK_PREVIEW_AREA_WIDTH / MIN_PREVIEW_HEIGHT
+
+/** 尺寸未知（老附件）时的兜底比例，与 `BBCodeContentView.getImageAspectRatio` 同档。 */
+const FALLBACK_ASPECT: number = 16 / 9
+
+/**
+ * 浮点余量（vp）：判定"按比例算出的宽度是否等于区域宽度"时用。
+ *
+ * `区域宽 ÷ 比例 × 比例` 在浮点下可能得到 328.00000000000006，直接比较会把本该
+ * 完整显示的图误判成需要裁切。半 vp 的余量在视觉上不可辨，足以吸收这类误差。
+ */
+const LAYOUT_EPSILON: number = 0.5
+
+/**
+ * 预览图区域（vp）：条目内分配给**单张**预览图的最大宽高。
+ *
+ * 这是"ListCell 分配给预览图的区域"的显式表达——此前它只以散落的算式存在
+ * （图片区宽度 − 内边距、按张数均分、240 封顶）。区域一经算出，单图与多图走**同一条**
+ * 适配算法，区别只在 `maxWidth` 是整宽还是单张分区宽。
+ */
+export class PreviewArea {
+  /** 区域最大宽度（vp）：单图 = 图片区整宽；多图 = 均分并扣掉间距后的单张可用宽。 */
+  maxWidth: number = FALLBACK_PREVIEW_AREA_WIDTH
+  /** 区域最大高度（vp）：恒为 `MAX_PREVIEW_HEIGHT`，多图整行也不超过它。 */
+  maxHeight: number = MAX_PREVIEW_HEIGHT
+  /** 区域最小高度（vp）：图片完整显示低于它时不再压缩，改为裁切填满。 */
+  minHeight: number = MIN_PREVIEW_HEIGHT
 }
 
 /**
- * 预览图区布局结果（{@link resolvePreviewLayout} 的返回值）。
+ * 解析预览图区域：把"条目内可用宽度"折算成**单张**预览图的最大宽高。
+ *
+ * 宽度来源是列表自身的实测宽度（`onAreaChange` 采集后下传）而不是断点：`sm` 是整窗、
+ * `md` 是"窗口 − 侧边栏 180"、`lg` 双列时还要再乘 40%，任何按断点写死的宽度都会在
+ * 其中一种形态下失配（K24）。
+ *
+ * @param areaWidth - 条目内图片区总宽（vp；≤0 时回落 `FALLBACK_PREVIEW_AREA_WIDTH`）
+ * @param count - 区域内横排的图片张数（≤1 时按整宽处理）
+ * @returns 单张预览图可用区域
+ */
+export function resolvePreviewArea(areaWidth: number, count: number): PreviewArea {
+  const total: number = areaWidth > 0 ? areaWidth : FALLBACK_PREVIEW_AREA_WIDTH
+  const n: number = count > 0 ? count : 1
+  /* 多图按张数均分并扣掉图间距；除零与负值都在这里收口，UI 侧不再重复这两条守卫 */
+  const maxWidth: number = n <= 1
+    ? total
+    : Math.max((total - PREVIEW_IMAGE_GAP * (n - 1)) / n, 1)
+  const area: PreviewArea = new PreviewArea()
+  area.maxWidth = maxWidth
+  area.maxHeight = MAX_PREVIEW_HEIGHT
+  area.minHeight = Math.min(MIN_PREVIEW_HEIGHT, maxWidth / MAX_AREA_ASPECT)
+  return area
+}
+
+/**
+ * 区域内**单张**图片的显示布局。
  *
  * 用类而非对象字面量：ArkTS 不允许无类型标注的对象字面量（见 entry/src/AGENTS.md）。
  */
-export class PreviewLayout {
-  /** 预览区高度（vp）。 */
-  height: number = MIN_PREVIEW_HEIGHT
+export class PreviewTileLayout {
+  /** 显示宽度（vp；恒 ≤ `PreviewArea.maxWidth`）。 */
+  width: number = 0
+  /** 显示高度（vp；恒 ≤ `PreviewArea.maxHeight`）。 */
+  height: number = 0
   /**
-   * 是否使用 `ImageFit.Contain`（竖图完整显示）。
-   * false 时用 `ImageFit.Cover`（横图填满容器，按 10% 余量裁切）。
+   * 是否完整显示（`ImageFit.Contain`）。
+   *
+   * `true`：容器贴合图片实际显示尺寸——**既不裁切、也不留白**（图片自带比例即容器比例）。
+   * `false`：图片比区域更"扁"（超宽全景），高度被最小高度抬起后按比例算出的宽度超过区域宽度，
+   * 只能按 `ImageFit.Cover` 裁掉两端。
    */
-  useContain: boolean = false
+  useContain: boolean = true
   /** 图片宽高比（尺寸未知时为 16:9 兜底值）。 */
-  aspect: number = 16 / 9
-  /**
-   * 建议的**单张图片显示宽度**（vp）：`Contain` 时为 `height × aspect`（贴合图片实际显示宽度），
-   * 否则等于传入的分区宽度。
-   *
-   * UI 侧必须用它而不是恒 `width('100%')`：`Contain` 下图片按高度等比放缩，容器撑满分区
-   * 会让图片两侧各留一条空白；收窄到该值后图片贴左、且**没有多余留白**。
-   *
-   * 该值**天然不会溢出**：它由传入的分区宽度算出（`0.90 × 分区宽 < 分区宽`），多图横排时
-   * 分区宽度本身就是"单张可用宽度"，因此每张仍能等分排下。
-   */
-  displayWidth: number = 0
+  aspect: number = FALLBACK_ASPECT
+}
+
+/**
+ * 预览图**整行**布局（单图时行内只有一张）。
+ */
+export class PreviewRowLayout {
+  /** 整行高度（vp）：单图 = 该图显示高度；多图 = 各张显示高度的最大值。 */
+  height: number = MIN_PREVIEW_HEIGHT
+  /** 单张可用区域（多图时已扣间距并按张数均分）。 */
+  area: PreviewArea = new PreviewArea()
+  /** 每张图的显示布局（保序，与传入的图片数组等长）。 */
+  tiles: PreviewTileLayout[] = []
+}
+
+/**
+ * 单张图片在区域内的**最优适配**：区域内能放下的最大完整显示尺寸。
+ *
+ * 三步（这就是"单图按最优适配"的全部内容）：
+ *
+ *  1. **完整显示优先**：`containHeight = min(区域宽 ÷ 比例, 区域高)`——等比缩放到刚好放进区域，
+ *     至少有一个方向贴边（宽图贴满宽、竖图贴满高），另一个方向按比例，**不裁切**；
+ *  2. **最小高度兜底**：结果低于区域最小高度时抬到下限（超宽全景图，见 `MAX_AREA_ASPECT`）；
+ *  3. **宽度收口**：显示宽度 = `min(区域宽, 比例 × 高度)`。第 2 步抬起高度后，按比例算出的宽度
+ *     可能超过区域宽度——此时容器只能是"区域宽 × 最小高"，图片改按 `Cover` 裁两端（`useContain=false`）。
+ *
+ * 与改造前的差别（旧算法：`h = clamp(0.90 × 区域宽 ÷ 比例, 112, 240)` + 比例 <0.9 才 Contain）：
+ * 旧算法对**比例 ≥ 0.9 的图一律 Cover**，靠 0.9 系数"少裁一点"，实测 16:9 截掉约 10%、
+ * 方图被 240 封顶后裁掉约 19%；新算法下这些图全部完整显示，且显示尺寸更大
+ * （16:9 由 166vp 高提到 184vp 高）——"不改变最大宽高限制"的前提因此没有被破坏，
+ * 反而在同一区域内用得更满（详见 §6.2.1 的实测对比）。
+ *
+ * @param size - 真实像素尺寸（宽高为 0 表示未知，走 16:9 兜底）
+ * @param area - 单张可用区域
+ * @returns 单张显示布局
+ */
+function resolveTileLayout(size: ImageSize, area: PreviewArea): PreviewTileLayout {
+  let aspect: number = FALLBACK_ASPECT
+  if (size.width > 0 && size.height > 0) {
+    aspect = size.width / size.height
+  }
+  const containHeight: number = Math.min(area.maxWidth / aspect, area.maxHeight)
+  const height: number = Math.max(containHeight, area.minHeight)
+  const width: number = Math.min(area.maxWidth, aspect * height)
+  const tile: PreviewTileLayout = new PreviewTileLayout()
+  tile.aspect = aspect
+  tile.height = height
+  tile.width = width
+  tile.useContain = aspect * height <= area.maxWidth + LAYOUT_EPSILON
+  return tile
+}
+
+/**
+ * 解析预览图整行布局：区域内**每一张图各自**做最优适配，行高取各张显示高度的最大值。
+ *
+ * 多图不再共用首图的布局（旧实现的缺陷）：一行里"首图是横图、第二张是竖图"时，
+ * 第二张也会被套上横图的容器，完整显示与裁切两种语义被强行统一到首图上——
+ * 于是要么所有图都被裁、要么所有图都被塞进一个与自身比例无关的盒子。
+ * 现在每张图按**自己的**比例在**自己的**分区里适配：
+ *
+ * - 宽度各自按比例（≤ 分区宽），**每张都完整显示**，因此横向会有"宽窄不一"——那是真实比例的
+ *   忠实反映；
+ * - 高度各自不同，整行高度取最大值（**不是逐张撑高行高**）：行内其余图在该高度里垂直居中，
+ *   纵向节奏仍然是整齐的一行（见 K29 的取舍记录）；
+ * - 总宽 = Σ 各张宽度（≤ 张数 × 分区宽）+ 间距 ≤ 图片区总宽，总高 ≤ `maxHeight` —— 区域约束
+ *   在数学上不可突破。
+ *
+ * @param images - 区域内横排的预览图（保序；空数组时给出仅含最小高度的空行）
+ * @param areaWidth - 条目内图片区总宽（vp）
+ * @returns 整行布局（行高 + 每张显示尺寸）
+ */
+export function resolvePreviewRowLayout(images: PreviewImage[], areaWidth: number): PreviewRowLayout {
+  const area: PreviewArea = resolvePreviewArea(areaWidth, images.length)
+  const row: PreviewRowLayout = new PreviewRowLayout()
+  row.area = area
+  let rowHeight: number = 0
+  for (let i = 0; i < images.length; i++) {
+    const tile: PreviewTileLayout = resolveTileLayout(images[i].size, area)
+    row.tiles.push(tile)
+    if (tile.height > rowHeight) {
+      rowHeight = tile.height
+    }
+  }
+  /* 无图时不该被调用（UI 侧先判 shouldRenderPreview），兜底给一个不小于区域下限的高度，
+     避免调用方拿到 0 高容器 */
+  row.height = rowHeight > 0 ? rowHeight : area.minHeight
+  return row
 }

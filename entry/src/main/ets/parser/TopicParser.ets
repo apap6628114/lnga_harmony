@@ -1,7 +1,7 @@
 import type { TopicRaw, ThreadPageInfo, TopicListInfo, Pagination } from '../model/Topic';
-import type { ImageSize } from '../common/media/ImageSizeUtil';
 import { decodeAnonymousName } from './AnonymousParser';
-import { parsePreviewImages, parsePreviewSize, isPreviewImage } from '../common/utils/TopicPreviewUtils';
+import { parsePreviewAttachments } from '../common/utils/TopicPreviewUtils';
+import type { PreviewImage } from '../common/utils/TopicPreviewUtils';
 
 /**
  * 判断内容是否命中关键词屏蔽规则。
@@ -43,7 +43,7 @@ export function parseTopicList(raw: object | null, blacklist: Set<string> = new 
   const rowsPerPage = Number(dataObj?.['__T__ROWS_PAGE'] ?? 35);
   /* 附件前缀：官方 subject 系响应由 AppSubjectListParser 透传进 fakeRaw；
      缺失（thread.php 形状 / 置顶/搜索/收藏/用户列表）时为空串，
-     parsePreviewImages 会回退 NGA_CDN_BASE——那些入口本就没有 attachs。 */
+     parsePreviewAttachments 会回退 NGA_CDN_BASE——那些入口本就没有 attachs。 */
   const attachPrefix = String(rawObj?.['attachPrefix'] ?? '');
 
   const keys = Object.keys(tMap);
@@ -107,15 +107,10 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean,
   const parent = raw['parent'] as Record<string, Object> | undefined;
   const board: string = parent?.['2'] ? String(parent['2']) : '';
 
-  // 首帖附件 → 预览图（拼接前缀、过滤非图片；无附件时为空数组）
-  const previewImages: string[] = parsePreviewImages(raw['attachs'], attachPrefix);
-  // 首图真实尺寸：在**解析期**算定，卡片高度因此是静态值（见 model/Topic.ets 的字段说明）。
-  // 这里回到**原始 attachurl** 上解码尺寸段而不是在预览 URL 上解：后者虽同为绝对 URL
-  // （正则匹配文件名，与路径无关），但原始值永远没有 query/fragment 干扰，少一层守卫。
-  // 空值统一取 `undefined`（字段可选类型是 `ImageSize | undefined`，UI 侧对两者都判）。
-  const firstAttach: string = firstAttachUrl(raw['attachs']);
-  const parsedSize: ImageSize | null = parsePreviewSize(firstAttach);
-  const previewSize: ImageSize | undefined = parsedSize === null ? undefined : parsedSize;
+  // 首帖附件 → 预览图（拼接前缀、过滤非图片；无附件时为空数组）。
+  // **每一张图的真实像素尺寸都在这里解定**（文件名尺寸段，零网络请求），UI 侧因此不需要
+  // 等到图片加载完成才知道比例（见 model/Topic.ets 的字段说明与设计文档 §6.2.2）。
+  const previewImages: PreviewImage[] = parsePreviewAttachments(raw['attachs'], attachPrefix);
 
   return {
     tid: Number(raw['tid']),
@@ -154,37 +149,9 @@ function mapTopicRaw(raw: Record<string, Object>, isInBlackList: boolean,
     previewAuthorId: String(__P?.['authorid'] ?? ''),
     previewSnippet: snippet,
     previewImages: previewImages,
-    previewSize: previewSize,
     // 官方接口受限/占位条目的受限原因透传（普通 thread.php 列表无此字段，为空串）
     error: String(raw['error'] ?? ''),
   };
-}
-
-/**
- * 取 `attachs` 数组中**第一张图片附件**的原始 `attachurl`。
- *
- * 与 `parsePreviewImages` 的过滤口径保持一致（同一个 `isPreviewImage` 白名单），否则会出现
- * "卡片显示了 A 图的 URL、却拿 B 图的尺寸"这种错位。这里只回答"首图是谁"，不做前缀拼接。
- *
- * @param rawAttachs - 原始 attachs 值
- * @returns 首图 attachurl；无可用图片时为空串
- */
-function firstAttachUrl(rawAttachs: Object | null | undefined): string {
-  if (rawAttachs === undefined || rawAttachs === null || !Array.isArray(rawAttachs)) {
-    return '';
-  }
-  const arr: Object[] = rawAttachs as Object[];
-  for (let i = 0; i < arr.length; i++) {
-    const item: Object = arr[i];
-    if (item === undefined || item === null || typeof item !== 'object' || Array.isArray(item)) {
-      continue;
-    }
-    const attachurl: string = String((item as Record<string, Object>)['attachurl'] ?? '');
-    if (isPreviewImage(attachurl)) {
-      return attachurl;
-    }
-  }
-  return '';
 }
 
 /**
