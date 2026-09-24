@@ -1206,7 +1206,7 @@ export struct TopicListPanel {
           } else if (this.mgr.threads.length === 0) {
             ListItem() {
               Column() {
-                EmptyStateView({ msg: '暂无主题', icon: $r('app.media.icon_chat_bubble') })
+                EmptyStateView({ msg: this.searchpost ? '暂无回帖' : '暂无帖子', icon: $r('app.media.icon_chat_bubble') })
               }
               .width('100%').height(this.getStateViewHeight())
               .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)

@@ -90,11 +90,11 @@ export const SCENARIO_INJECTED_FIELDS: Record<string, InjectedFieldInfo[]> = {
   [AiScenario.USER_ANALYSIS]: [
     { label: '用户名', example: '用户昵称' },
     { label: 'UID', example: '12345678' },
-    { label: '主题数', example: '12 个主题' },
+    { label: '帖子数', example: '12 个帖子' },
     { label: '回复数', example: '45 条回复' },
     { label: '活跃版面', example: '水区、游戏区、数码区等' },
     { label: '发帖时段分布', example: '凌晨 3 帖 / 上午 8 帖 / 下午 15 帖 / 晚上 19 帖' },
-    { label: '发表的主题', example: '前若干条主题标题列表' },
+    { label: '发表的帖子', example: '前若干条帖子标题列表' },
     { label: '回复内容', example: '前若干条回复片段' }
   ]
 }

@@ -501,9 +501,9 @@ export struct ProfilePanel {
                 })
                 Divider().margin({ left: 60 }).color(AppColors.separator)
                 SettingRow({
-                  iconRes: $r('app.media.profile_topics'), iconColor: ProfileActionIconColors.topics, label: '我的主题',
+                  iconRes: $r('app.media.profile_topics'), iconColor: ProfileActionIconColors.topics, label: '我的帖子',
                   onAction: () => {
-                    routerStore.navigateActivity(Screen.topicList(this.profile!.userName + '的主题', -1, this.profile!.uid))
+                    routerStore.navigateActivity(Screen.topicList(this.profile!.userName + '的帖子', -1, this.profile!.uid))
                   }
                 })
                 Divider().margin({ left: 60 }).color(AppColors.separator)
@@ -522,7 +522,7 @@ export struct ProfilePanel {
                 })
                 Divider().margin({ left: 60 }).color(AppColors.separator)
                 SettingRow({
-                  iconRes: $r('app.media.profile_favorites'), iconColor: ProfileActionIconColors.favorites, label: '收藏主题',
+                  iconRes: $r('app.media.profile_favorites'), iconColor: ProfileActionIconColors.favorites, label: '收藏帖子',
                   onAction: () => {
                     routerStore.navigateActivity(Screen.favoriteSaved())
                   }
@@ -629,7 +629,7 @@ export struct ProfilePanel {
               .margin({ top: 12 })
 
               Row() {
-                Button('主题')
+                Button('帖子')
                   .fontSize(15)
                   .fontColor(AppColors.textPrimary)
                   .backgroundColor(AppColors.bgTertiary)
@@ -637,7 +637,7 @@ export struct ProfilePanel {
                   .layoutWeight(1)
                   .height(44)
                   .onClick(() => {
-                    routerStore.navigateActivity(Screen.topicList(this.profile!.userName + '的主题', -1, this.profile!.uid))
+                    routerStore.navigateActivity(Screen.topicList(this.profile!.userName + '的帖子', -1, this.profile!.uid))
                   })
 
                 Button('回帖')

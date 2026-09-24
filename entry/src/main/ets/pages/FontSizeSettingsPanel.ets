@@ -285,7 +285,7 @@ export struct FontSizeSettingsPanel {
         .width('100%')
         .alignItems(VerticalAlign.Top)
 
-        Text('这是主题内容摘要，可以用来判断较长文本在当前字号下的行数与阅读密度。')
+        Text('这是帖子内容摘要，可以用来判断较长文本在当前字号下的行数与阅读密度。')
           .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.currentTopicFontSize))
           .fontColor(AppColors.textSecondary)
           .maxLines(2)

@@ -79,7 +79,7 @@ export struct ProfileCardPopup {
         const userName: string = this.profile?.userName ?? ''
         let prompt: string = ''
         prompt += userName + '(UID:' + this.targetUid + ') 的账号分析：\n'
-        prompt += '共 ' + result.topicCount.toString() + ' 个主题，' +
+        prompt += '共 ' + result.topicCount.toString() + ' 个帖子，' +
           result.replyCount.toString() + ' 条回复\n\n'
         prompt += '活跃版面：\n'
         for (let i: number = 0; i < result.forumList.length; i++) {
@@ -101,7 +101,7 @@ export struct ProfileCardPopup {
         prompt += '  下午: ' + afternoonSum.toString() + ' 帖\n'
         prompt += '  晚上: ' + nightSum.toString() + ' 帖\n'
         if (result.topicSubjects.length > 0) {
-          prompt += '\n发表的主题：\n'
+          prompt += '\n发表的帖子：\n'
           for (let i: number = 0; i < result.topicSubjects.length; i++) {
             prompt += '  ' + (i + 1).toString() + '. ' + result.topicSubjects[i] + '\n'
           }
@@ -246,7 +246,7 @@ export struct ProfileCardPopup {
   private navigateAuthorPosts(uid: string, name: string, searchpost: boolean): void {
     this.onClose()
     routerStore.navigateActivity(Screen.topicList(
-      name + (searchpost ? '的回帖' : '的主题'), -1, uid, '', searchpost ? '1' : ''
+      name + (searchpost ? '的回帖' : '的帖子'), -1, uid, '', searchpost ? '1' : ''
     ))
   }
 
@@ -405,7 +405,7 @@ export struct ProfileCardPopup {
       .width('100%')
 
       Row() {
-        Text('主题').fontSize(12).fontColor(AppColors.primary).layoutWeight(1).textAlign(TextAlign.Center)
+        Text('帖子').fontSize(12).fontColor(AppColors.primary).layoutWeight(1).textAlign(TextAlign.Center)
           .padding({ top: 10, bottom: 10 })
           .onClick(() => this.navigateAuthorPosts(profile.uid, profile.userName, false))
         Divider().vertical(true).height(16).alignSelf(ItemAlign.Center).color(AppColors.separator)

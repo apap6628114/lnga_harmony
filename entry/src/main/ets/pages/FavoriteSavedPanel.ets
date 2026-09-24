@@ -498,7 +498,7 @@ export struct FavoriteSavedPanel {
             }
           }
           .width('100%')
-          Text(String(folder.topicCount) + ' 个主题 · #' + folder.id)
+          Text(String(folder.topicCount) + ' 个帖子 · #' + folder.id)
             .fontSize(12)
             .fontColor(AppColors.textTertiary)
             .margin({ top: 3 })

@@ -1025,13 +1025,13 @@ export struct NotificationPanel {
   private describeAction(activity: FollowedActivity): string {
     const isReply: boolean = activity.pid.length > 0 && activity.pid !== '0'
     if (activity.type === FollowedActivityType.POST_TOPIC) {
-      return isReply ? '发布了回复' : '发布了主题'
+      return isReply ? '发布了回复' : '发布了帖子'
     }
     if (activity.type === FollowedActivityType.POST_REPLY) {
       return '回复了帖子'
     }
     if (activity.type === FollowedActivityType.FAVOR) {
-      return isReply ? '收藏了回复' : '收藏了主题'
+      return isReply ? '收藏了回复' : '收藏了帖子'
     }
     return '发布了动态'
   }
@@ -1039,7 +1039,7 @@ export struct NotificationPanel {
   /** 动态主题标题（data[4] 缺失时以 tid 兜底）。 */
   private activitySubject(activity: FollowedActivity): string {
     const subject: string = unescapeHtml(activity.subject)
-    return subject.length > 0 ? subject : `主题 ${activity.tid}`
+    return subject.length > 0 ? subject : `帖子 ${activity.tid}`
   }
 
   /** 动态行为者显示名（data[1] 缺失时以 uid 兜底）。 */

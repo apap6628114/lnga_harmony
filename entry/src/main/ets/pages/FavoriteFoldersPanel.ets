@@ -470,7 +470,7 @@ export struct FavoriteFoldersPanel {
             }
           }
           .width('100%')
-          Text(`${folder.topicCount} 个主题 · #${folder.id}`)
+          Text(`${folder.topicCount} 个帖子 · #${folder.id}`)
             .fontSize(12)
             .fontColor(AppColors.textTertiary)
             .margin({ top: 3 })
@@ -637,7 +637,7 @@ export struct FavoriteFoldersPanel {
       .height('100%')
 
       PanelNavBar({
-        title: this.topicId.length > 0 ? '收藏到…' : '收藏主题',
+        title: this.topicId.length > 0 ? '收藏到…' : '收藏夹',
         scrollEffectProgress: this.titleScrollEffectProgress,
         rightIcon: $r('app.media.icon_nav_add'),
         rightIconAccessibilityText: '新建收藏夹',

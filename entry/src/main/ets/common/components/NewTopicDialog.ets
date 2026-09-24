@@ -586,7 +586,7 @@ export struct NewTopicDialog {
 
       Row() {
         Column() {
-          Text('发新主题')
+          Text('发新帖')
             .fontSize(18)
             .fontWeight(FontWeight.Bold)
             .fontColor(UIMaterialManager.adaptiveForeground)
@@ -656,7 +656,7 @@ export struct NewTopicDialog {
           .borderRadius(9)
           .backgroundColor(this.categoryExpanded ? AppColors.selectionTint : Color.Transparent)
           .margin({ right: SUBJECT_ENTRY_MARGIN })
-          .accessibilityText(this.categoryExpanded ? '收起主题分类' : '展开主题分类')
+          .accessibilityText(this.categoryExpanded ? '收起帖子分类' : '展开帖子分类')
           .onClick(() => { this.categoryExpanded = !this.categoryExpanded })
         }
       }
@@ -666,7 +666,7 @@ export struct NewTopicDialog {
       if (this.categoryExpanded && this.categories.length > 0) {
         Column() {
           Row() {
-            Text('主题分类')
+            Text('帖子分类')
               .fontSize(11)
               .fontWeight(FontWeight.Medium)
               .fontColor(UIMaterialManager.adaptiveSecondaryForeground)

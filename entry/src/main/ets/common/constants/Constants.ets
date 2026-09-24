@@ -367,9 +367,9 @@ export interface NotiTypeInfo {
 }
 
 export const NOTI_TYPE_MAP: Record<number, NotiTypeInfo> = {
-  1: { label: '回复了你的主题', category: 'thread' },
+  1: { label: '回复了你的帖子', category: 'thread' },
   2: { label: '回复了你的回复', category: 'thread' },
-  7: { label: '在主题中提到了你', category: 'thread' },
+  7: { label: '在帖子中提到了你', category: 'thread' },
   8: { label: '在回复中提到了你', category: 'thread' },
   10: { label: '发起了新的对话', category: 'message' },
   11: { label: '回复了对话', category: 'message' },

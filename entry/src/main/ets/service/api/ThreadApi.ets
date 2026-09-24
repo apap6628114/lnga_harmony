@@ -638,7 +638,7 @@ export async function getTopicCategories(token: string, fid: number): Promise<To
     }
     const resultValue: Object | undefined = raw['result'];
     if (resultValue === undefined || resultValue === null || !Array.isArray(resultValue)) {
-      result.error = '主题分类数据格式异常';
+      result.error = '帖子分类数据格式异常';
       return result;
     }
     const entries: Object[] = resultValue as Object[];
@@ -657,7 +657,7 @@ export async function getTopicCategories(token: string, fid: number): Promise<To
     result.ok = true;
   } catch (e) {
     logger.warn('获取主题分类失败: %{public}s', formatError(e));
-    result.error = (e as Error).message ?? '获取主题分类失败';
+    result.error = (e as Error).message ?? '获取帖子分类失败';
   }
   return result;
 }

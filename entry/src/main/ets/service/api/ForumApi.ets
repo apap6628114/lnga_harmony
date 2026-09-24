@@ -429,13 +429,13 @@ export async function getTopicList(token: string, params: TopicListParams,
         result.ok = true;
         return result;
       }
-      channelError = '主题列表解析失败';
+      channelError = '帖子列表解析失败';
     }
   } catch (e) {
-    channelError = (e as Error).message ?? '获取主题列表失败';
+    channelError = (e as Error).message ?? '获取帖子列表失败';
     logger.warn('[NGA][REQ] 主题列表官方接口失败: %{public}s', channelError);
   }
-  result.error = channelError || '获取主题列表失败';
+  result.error = channelError || '获取帖子列表失败';
   return result;
 }
 

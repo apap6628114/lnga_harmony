@@ -285,7 +285,7 @@ Result 类：`FollowedUserListResult extends ApiResult { data: FollowedUser[] }`
 - `data[0]` 是「序号字符串 → 活动数组」的映射（`"0": [v0, v1, ...]`），按**数组下标**取值，不要按对象 key。
 - `data[1]` / `data[4]` 是 `uid/tid → 对象`，解析 `data[0]` 时先建 map 再回填 `actorName` / `subject`；缺失时展示兜底（uid/tid 原文或空）。
 - 时间用现有 `formatTime` / `formatTimestampCST`（`common/utils/Utils.ts`）。
-- 类型 3（收藏）的展示文案：`收藏了`；1/2：`发布了主题/回复`。
+- 类型 3（收藏）的展示文案：`收藏了`；1/2：`发布了帖子/回复`。
 
 ### 5.4 UI 建议
 

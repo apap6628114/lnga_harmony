@@ -58,7 +58,7 @@ export struct SearchPanel {
   /** 分类分段按钮选项（胶囊单选，配色与帖子列表排序条一致）。 */
   @State tabOptions: SegmentButtonOptions = SegmentButtonOptions.capsule({
     buttons: [
-      { text: '主题' },
+      { text: '帖子' },
       { text: '板块' },
       { text: '用户' },
     ] as SegmentButtonItemTuple,
@@ -389,7 +389,7 @@ export struct SearchPanel {
       Column() {
         if (this.submitted.length === 0) {
           Column() {
-            EmptyStateView({ msg: '搜索主题、板块或用户', icon: $r('app.media.icon_search') })
+            EmptyStateView({ msg: '搜索帖子、板块或用户', icon: $r('app.media.icon_search') })
           }
           .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
           .padding({ top: this.fixedHeaderHeight })
@@ -631,7 +631,7 @@ export struct SearchPanel {
           Row() {
             Image($r('app.media.icon_search')).width(16).height(16)
               .fillColor(UIMaterialManager.adaptiveSecondaryForeground).margin({ right: 8 })
-            TextInput({ text: this.keyword, placeholder: this.boardFid !== 0 ? `在「${this.boardName}」内搜索` : '搜索板块、主题、内容...' })
+            TextInput({ text: this.keyword, placeholder: this.boardFid !== 0 ? `在「${this.boardName}」内搜索` : '搜索帖子、板块或用户...' })
               .layoutWeight(1).fontSize(15).backgroundColor(Color.Transparent).type(InputType.Normal)
               .fontColor(UIMaterialManager.inputForeground)
               .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)

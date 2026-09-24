@@ -53,7 +53,7 @@ NGA 主题收藏 = 账号级「收藏夹」体系：
 - **收藏关系**：主题（tid）可加入任意收藏夹；主楼 pid=0。
 - **收藏夹内主题列表**：按夹分页拉取主题（官方 `favor/all`，非 thread.php）。
 
-nga_oh 覆盖的 UI：帖子详情「收藏到…」多选弹窗（`FavoriteFoldersPanel`）、个人主页「收藏主题」管理（`FavoriteSavedPanel` 在线收藏 Tab）、收藏夹内主题列表（`TopicListPanel` favor 分支）。
+nga_oh 覆盖的 UI：帖子详情「收藏到…」多选弹窗（`FavoriteFoldersPanel`）、个人主页「收藏帖子」管理（`FavoriteSavedPanel` 在线收藏 Tab）、收藏夹内主题列表（`TopicListPanel` favor 分支）。
 
 ---
 
