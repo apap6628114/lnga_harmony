@@ -53,13 +53,17 @@
 
 **阔折叠 · 横屏 (2584×1828)**
 
-<img src="img/Screenshot_2026-09-15T215829.png" alt="阔折叠横屏：板块导航 / 帖子列表 / 帖子详情 三栏布局" width="520">
+<p align="center">
+  <img src="img/Screenshot_2026-09-24T230822.png" alt="阔折叠横屏：板块导航 / 帖子列表 / 帖子详情 三栏布局" width="100%">
+</p>
 
 **阔折叠 · 竖屏 (1264×1848)**
 
-<img src="img/Screenshot_2026-09-15T215937.png" alt="阔折叠竖屏：帖子详情与写回复面板" width="240">
-<br>&nbsp;<br>
-<img src="img/Screenshot_2026-09-15T220005.png" alt="阔折叠竖屏：板块导航与收藏板块" width="240">
+<p align="center">
+  <img src="img/Screenshot_2026-09-24T231021.png" alt="阔折叠竖屏：帖子列表" width="31%">
+  <img src="img/Screenshot_2026-09-24T230933.png" alt="阔折叠竖屏：帖子详情与写回复面板" width="31%">
+  <img src="img/Screenshot_2026-09-15T220005.png" alt="阔折叠竖屏：板块导航与收藏板块" width="31%">
+</p>
 
 
 ## 致谢
