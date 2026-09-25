@@ -6,6 +6,7 @@ import type { FilterKeyword } from '../../model/FilterKeyword'
 import type { UserNoteEntry } from '../../model/NoteInfo'
 import type { Category, BoardContent } from '../../model/Forum'
 import type { FollowedActivity, FollowedUser } from '../../model/Follow'
+import type { TrackedThread } from '../../model/TrackedThread'
 import { BaseLazyDataSource } from './BaseLazyDataSource'
 
 /** 主题帖子列表数据源，复用基类全部共性逻辑。 */
@@ -105,10 +106,14 @@ class FollowedActivityDataSource extends BaseLazyDataSource<FollowedActivity> {
 class FollowedUserDataSource extends BaseLazyDataSource<FollowedUser> {
 }
 
+/** 跟踪帖子列表数据源。 */
+class TrackedThreadDataSource extends BaseLazyDataSource<TrackedThread> {
+}
+
 export {
   PostInfoDataSource, ThreadDataSource, MessageThreadDataSource,
   MessageArticleDataSource, NotificationDataSource, BlacklistDataSource,
   NotesDataSource, FilterKeywordDataSource, CategoryDataSource,
   HistoryItemDataSource, SidebarDataSource, SidebarSection, SidebarBoardItem,
-  FollowedActivityDataSource, FollowedUserDataSource
+  FollowedActivityDataSource, FollowedUserDataSource, TrackedThreadDataSource
 }

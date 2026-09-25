@@ -317,13 +317,18 @@ function buildSignedHeaders(): Record<string, string> {
  * @param qparams - URL query 参数（带 __lib/__act 的接口由调用方传入；thread.php 无此参数）
  * @param fields - POST body 字段（buildSignedFields 构造）
  * @param cookies - 会话 cookie
+ * @param utf8Response - 响应体解码方式：`true`（默认）按 UTF-8，`false` 按 GB18030。
+ *   App 签名通道的官方接口（__output=12/14/17）恒返回 UTF-8；但 `read.php __output=8`
+ *   的服务端响应标注 `encode:"GBK"`，实测 `__inchst` 与 Content-Type charset 都改不动它，
+ *   必须按 GB18030 解码，否则中文主题标题会整段变成替换字符（见 postSignedPathGb）。
  * @returns NGA JSON 响应
  */
 async function ngaPostSignedCore(path: string, qparams: Record<string, string>,
-  fields: Record<string, string>, cookies: Cookies | undefined): Promise<object> {
+  fields: Record<string, string>, cookies: Cookies | undefined,
+  utf8Response: boolean = true): Promise<object> {
   const extraHeaders: Record<string, string> = buildSignedHeaders();
   return ngaRequest(path, http.RequestMethod.POST, qparams,
-    buildEncodedBody(fields), cookies, 'https://ngabbs.com', extraHeaders, true, true);
+    buildEncodedBody(fields), cookies, 'https://ngabbs.com', extraHeaders, true, utf8Response);
 }
 
 /**
@@ -391,6 +396,29 @@ async function ngaPostSignedPath(path: string, params: Record<string, string>,
   cookies: Cookies | undefined, signParams: string, output: string): Promise<object> {
   const fields: Record<string, string> = buildSignedFields(params, cookies, signParams, output);
   return ngaPostSignedCore(path, emptyStringRecord(), fields, cookies);
+}
+
+/**
+ * App 签名接口（POST form + access_uid/access_token/sign），**响应按 GB18030 解码**。
+ *
+ * 与 {@link ngaPostSignedPath} 完全同形，只有响应解码方式不同：`read.php` 的
+ * `__output=8` 通道服务端固定以 GBK 返回（响应体自带 `"encode":"GBK"`，实测
+ * `__inchst=UTF8`、`Content-Type: …charset=GBK`、空 `__inchst` 三种写法均不改变），
+ * 而签名通道默认按 UTF-8 解码，直接读会把中文标题解成替换字符。
+ *
+ * 用途：跟踪帖子更新的轻量状态查询（`__output=8` 响应约 20KB，且直接带
+ * `__T.replies/lastpost/subject/locked`，无需 HTML 解析）。
+ *
+ * @param path - 请求路径（当前仅 /read.php）
+ * @param params - 业务参数（进 body）
+ * @param cookies - 会话 cookie（提供 access_uid/access_token 与 Cookie 头）
+ * @param signParams - 参与签名的参数值拼接（read.php 无 addSignParams → 传空串）
+ * @param output - __output 值（read.php 状态查询传 '8'）
+ */
+async function ngaPostSignedPathGb(path: string, params: Record<string, string>,
+  cookies: Cookies | undefined, signParams: string, output: string): Promise<object> {
+  const fields: Record<string, string> = buildSignedFields(params, cookies, signParams, output);
+  return ngaPostSignedCore(path, emptyStringRecord(), fields, cookies, false);
 }
 
 async function ngaGetRaw(path: string, params: Record<string, string>,
@@ -499,6 +527,9 @@ interface INgaClient {
   /** App 签名接口（POST form + access_uid/access_token/sign），无 __lib/__act（thread.php 官方通道）。 */
   postSignedPath: (path: string, params: Record<string, string>,
     cookies: Cookies | undefined, signParams: string, output: string) => Promise<object>;
+  /** App 签名接口，响应按 GB18030 解码（read.php __output=8 跟踪状态查询通道）。 */
+  postSignedPathGb: (path: string, params: Record<string, string>,
+    cookies: Cookies | undefined, signParams: string, output: string) => Promise<object>;
   getCaptchaV2: (captchaId: string) => Promise<string>;
   loginPassword: (loginParams: LoginParams) => Promise<LoginResultData>;
   logout: (cookies: Cookies) => Promise<void>;
@@ -518,6 +549,11 @@ const client: INgaClient = {
   async postSignedPath(path: string, params: Record<string, string>,
     cookies: Cookies | undefined, signParams: string, output: string): Promise<object> {
     return ngaPostSignedPath(path, params, cookies, signParams, output);
+  },
+
+  async postSignedPathGb(path: string, params: Record<string, string>,
+    cookies: Cookies | undefined, signParams: string, output: string): Promise<object> {
+    return ngaPostSignedPathGb(path, params, cookies, signParams, output);
   },
 
   async getCaptchaV2(captchaId: string): Promise<string> {

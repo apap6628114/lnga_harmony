@@ -110,3 +110,9 @@ export const KEY_CONTENT_FONT_SIZE: string = 'contentFontSize'
 
 /** 帖子列表字体大小（vp），默认为 15 */
 export const KEY_TOPIC_FONT_SIZE: string = 'topicFontSize'
+
+/** 跟踪帖子列表版本号（新增/移除/检查到更新时 +1 触发 @Watch） */
+export const KEY_TRACKED_THREAD_VERSION: string = 'trackedThreadVersion'
+
+/** 有未读更新的跟踪帖子数（「跟踪」Tab 角标与入口铃铛合并计数） */
+export const KEY_UNREAD_TRACK_COUNT: string = 'unreadTrackCount'

@@ -87,6 +87,7 @@ export type ScreenType =
  * - SEARCH：搜索面板搜索结果
  * - BROWSE_HISTORY：浏览历史
  * - SAVED：保存的帖子离线存档（数据源分流为本地存档读取）
+ * - TRACKED：跟踪帖子更新（消息面板「跟踪」Tab / 收藏保存面板跟踪 Tab）
  */
 export enum ThreadSource {
   /** 未标注来源（无 pid 定位需求的默认入口）。 */
@@ -103,6 +104,8 @@ export enum ThreadSource {
   BROWSE_HISTORY = 'browse-history',
   /** 保存的帖子离线存档进入：ThreadPanel 从本地存档读取数据而非请求服务器。 */
   SAVED = 'saved',
+  /** 跟踪帖子更新进入（打开即推进该帖的跟踪已读基准）。 */
+  TRACKED = 'tracked',
 }
 
 export class Screen {
@@ -249,9 +252,9 @@ export class Screen {
   }
 
   /**
-   * 创建「收藏与保存」融合面板路由（在线收藏 / 离线保存双 Tab）。
+   * 创建「收藏、保存与跟踪」融合面板路由（在线收藏 / 离线保存 / 跟踪 三 Tab）。
    *
-   * @returns 收藏与保存页面路由
+   * @returns 收藏、保存与跟踪页面路由
    */
   static favoriteSaved(): Screen {
     const s = new Screen()
@@ -293,7 +296,7 @@ export class Screen {
       case 'aiSettings': return 'AI 配置'
       case 'fontSizeSettings': return '字体大小'
       case 'favoriteFolders': return this.favoriteTopicId.length > 0 ? '收藏到…' : '收藏夹'
-      case 'favoriteSaved': return '收藏与保存'
+      case 'favoriteSaved': return '收藏、保存与跟踪'
       default: return ''
     }
   }

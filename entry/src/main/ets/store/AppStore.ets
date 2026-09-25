@@ -11,6 +11,7 @@ import { VoteStore } from './VoteStore'
 import { HistoryStore } from './HistoryStore'
 import { FavoriteStore } from './FavoriteStore'
 import { SavedThreadStore } from './SavedThreadStore'
+import { TrackedThreadStore, TrackRequest, TrackResult } from './TrackedThreadStore'
 import { draftStore, DRAFT_RETENTION_DAYS } from '../common/managers/DraftStore'
 import {
   draftMediaStore,
@@ -33,6 +34,8 @@ import type { ProfileData } from '../model/User'
 import type { ThreadResult } from '../model/ThreadResult'
 import type { NgaNotification } from '../model/Notification'
 import type { FollowedActivity } from '../model/Follow'
+import type { TrackedThread, TrackStopNotice } from '../model/TrackedThread'
+import { formatTrackStopNotice } from '../common/utils/ThreadTrackPolicy'
 import type { Category } from '../model/Forum'
 
 import { Logger, DOMAIN_APP, formatError } from '../common/utils/Logger'
@@ -103,8 +106,19 @@ class AppStoreClass {
       new PollingParticipant(
         (): void => { this.followActivityStore.startPolling() },
         (): void => { this.followActivityStore.stopPolling() }
+      ),
+      new PollingParticipant(
+        (): void => { this.trackedThreadStore.startPolling() },
+        (): void => { this.trackedThreadStore.stopPolling() }
       )
     ]
+    // 帖子失效 / 长期无新回复导致的自动停止跟踪统一在这里提示（用户主动移除不提示）
+    this.trackedThreadStore.onStopNotice = (notice: TrackStopNotice): void => {
+      const message: string = formatTrackStopNotice(notice)
+      if (message.length > 0) {
+        this.showToast(message)
+      }
+    }
   }
 
   // ---------- Sub Stores ----------
@@ -121,6 +135,8 @@ class AppStoreClass {
   readonly favoriteStore: FavoriteStore = new FavoriteStore()
   /** 保存的帖子离线存档（文件系统持久化，不按账号区分）。 */
   readonly savedThreadStore: SavedThreadStore = new SavedThreadStore()
+  /** 跟踪帖子更新（按账号隔离的本地跟踪任务 + 前台定时检查）。 */
+  readonly trackedThreadStore: TrackedThreadStore = new TrackedThreadStore()
   /** 帖子阅读进度（按账号隔离，用于下次进入时恢复阅读位置）。 */
   readonly readingProgressStore: ReadingProgressStore = new ReadingProgressStore()
   readonly toastManager: ToastManager = new ToastManager()
@@ -257,6 +273,7 @@ class AppStoreClass {
     await this.notificationStore.init(this.store, this.writeQueue, this.authStore.state)
     await this.followActivityStore.init(this.store, this.writeQueue, this.authStore.state)
     await this.favoriteStore.init(this.store, this.writeQueue, this.authStore.state)
+    await this.trackedThreadStore.init(this.store, this.writeQueue, this.authStore.state)
   }
 
   /** 后台时刷盘 */
@@ -299,6 +316,7 @@ class AppStoreClass {
     this.historyStore.reset()
     this.readingProgressStore.reset()
     this.favoriteStore.reset()
+    this.trackedThreadStore.reset()
     floatingLayerStore.clear()
     routerStore.reset()
     // 与 setAuth 对称：退出后统一协调轮询状态（此时未认证 → 停止轮询，幂等无害）
@@ -471,6 +489,53 @@ class AppStoreClass {
   /** 将所有动态标记为已读。 */
   markAllActivitiesSeen(): void {
     this.followActivityStore.markAllSeen()
+  }
+
+  // ---------- Facade: Tracked Threads ----------
+
+  /** 返回有未读更新的跟踪帖子数（「跟踪」Tab 角标与入口铃铛合并计数）。 */
+  get unreadTrackCount(): number {
+    return this.trackedThreadStore.unreadTrackCount
+  }
+  /** 返回跟踪任务快照（有未读的排前，其次按最后活动时间倒序）。 */
+  getTrackedThreads(): TrackedThread[] {
+    return this.trackedThreadStore.getItems()
+  }
+  /** 指定帖子是否正在跟踪。 */
+  isThreadTracked(tid: string): boolean {
+    return this.trackedThreadStore.isTracked(tid)
+  }
+  /** 取指定帖子的跟踪任务（未跟踪返回 null）。 */
+  getTrackedThread(tid: string): TrackedThread | null {
+    return this.trackedThreadStore.getByTid(tid)
+  }
+  /** 当前跟踪任务数是否已达上限。 */
+  canTrackMoreThreads(): boolean {
+    return this.trackedThreadStore.canTrackMore()
+  }
+  /** 新增或更新跟踪任务（已跟踪时只更新跟踪天数，不动已读基准）。 */
+  trackThread(request: TrackRequest): Promise<TrackResult> {
+    return this.trackedThreadStore.track(request)
+  }
+  /** 移除一个跟踪任务（用户主动移除，不提示）。 */
+  untrackThread(tid: string): void {
+    this.trackedThreadStore.untrack(tid)
+  }
+  /** 移除全部跟踪任务（用户主动移除，不提示）。 */
+  untrackAllThreads(): void {
+    this.trackedThreadStore.untrackAll()
+  }
+  /** 将指定跟踪任务标记为已读（返回是否命中未读）。 */
+  markTrackedSeen(tid: string): boolean {
+    return this.trackedThreadStore.markSeen(tid)
+  }
+  /** 将全部跟踪任务标记为已读（返回是否有变化）。 */
+  markAllTrackedSeen(): boolean {
+    return this.trackedThreadStore.markAllSeen()
+  }
+  /** 帖子页打开被跟踪的帖子时推进已读基准（先检查再置已读）。 */
+  markTrackedSeenOnOpen(tid: string): Promise<void> {
+    return this.trackedThreadStore.seenOnOpen(tid)
   }
 
   // ---------- Facade: Vote ----------

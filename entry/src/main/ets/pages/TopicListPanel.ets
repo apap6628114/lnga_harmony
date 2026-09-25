@@ -215,6 +215,8 @@ export struct TopicListPanel {
   @StorageProp('unreadMessageCount') unreadMessageCount: number = 0
   /** 未读关注动态数量（与通知未读数合并展示在标题栏铃铛角标）。 */
   @StorageProp('unreadActivityCount') unreadActivityCount: number = 0
+  /** 有未读更新的跟踪帖子数（同样并入标题栏铃铛角标）。 */
+  @StorageProp('unreadTrackCount') unreadTrackCount: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
   /** 标题栏渐变模糊与偏色的滚动联动进度。 */
   @State titleScrollEffectProgress: number = 0
@@ -1306,7 +1308,8 @@ export struct TopicListPanel {
         showBack: this.showBack,
         rightIcon: this.canManageCurrentBoard() ? $r('app.media.icon_bell') : '',
         rightIconBadge: this.canManageCurrentBoard()
-          ? this.unreadNotiCount + this.unreadMessageCount + this.unreadActivityCount : 0,
+          ? this.unreadNotiCount + this.unreadMessageCount +
+            this.unreadActivityCount + this.unreadTrackCount : 0,
         onRightClick: (): void => {
           routerStore.navigateActivity(Screen.notifications())
         },

@@ -1,18 +1,22 @@
 /**
- * 通知面板 - 消息 / 私信 / 关注动态 三筛选
+ * 通知面板 - 消息 / 私信 / 关注动态 / 跟踪 四筛选
  *
  * 标题区与帖子 UI（TopicListPanel）保持一致：左侧返回 + 标题「通知」，
- * 筛选项（消息/私信/动态）作为列表首个元素随内容滚动穿越标题区。
+ * 筛选项（消息/私信/动态/跟踪）作为列表首个元素随内容滚动穿越标题区。
  * - 消息：通知中心非私信数据（回复/点赞提醒），点击已读 / 全部已读；
  * - 私信：私信会话列表（getMessageList，滚动分页），会话行已读按可索引 ID
  *   （私信通知 notificationId 内含 mid）精确表达，点击会话标记该会话已读；
  * - 动态：关注动态流，数据来自 FollowActivityStore（轮询/条件抓取/缓存），
- *   已读规则与消息一致：点开帖子才标记已读，右上角「全部已读」作用于当前 Tab 的系统。
+ *   已读规则与消息一致：点开帖子才标记已读，右上角「全部已读」作用于当前 Tab 的系统；
+ * - 跟踪：本地跟踪任务（TrackedThreadStore，前台 10 分钟检查服务端回复数），
+ *   只列被跟踪的帖子，有未读更新的排前并显示「+N 条新回复」，
+ *   点击已读并打开帖子（第 1 页），右上角「全部已读」作用于跟踪系统。
  *
  * 楼层定位：官方 APP 的支持或反对通知（type=17）不返回页码（about_id4 恒 0），
  * 关注动态亦无页码字段——这两类入口点击后先经 locatePidPage 二分定位目标楼层
  * 所在页，再以正确页码打开帖子（openThreadAfterPidLookup，与回帖列表/链接
  * 入口同一模式）；回复/评论类通知携带服务端页码，直接按页码打开。
+ * 跟踪条目按用户口径固定打开第 1 页（不做 pid 换算定位）。
  */
 
 import { appStore } from '../store/AppStore'
@@ -25,6 +29,12 @@ import type {
   UpvoteNotification
 } from '../model/Notification'
 import { FollowedActivity, FollowedActivityType } from '../model/Follow'
+import type { TrackedThread } from '../model/TrackedThread'
+import {
+  describeTrackedThread,
+  trackedSubjectLabel,
+  unreadReplyCount
+} from '../common/utils/ThreadTrackPolicy'
 import type { MessageThreadInfo } from '../model/Message'
 import type { MessageListResult } from '../model/MessageResult'
 import { getMessageList } from '../service/api/MessageApi'
@@ -39,7 +49,8 @@ import { ComposeMessageSheet } from '../common/components/ComposeMessageSheet'
 import {
   NotificationDataSource,
   FollowedActivityDataSource,
-  MessageThreadDataSource
+  MessageThreadDataSource,
+  TrackedThreadDataSource
 } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView, EmptyStateView } from '../common/components/PageStateView'
 import { PageScope } from '../common/concurrency/PageScope'
@@ -56,13 +67,14 @@ import {
 export const TAB_MESSAGES: number = 0
 export const TAB_PRIVATE: number = 1
 export const TAB_ACTIVITIES: number = 2
+export const TAB_TRACKED: number = 3
 
 /** 私信列表快照复用窗口：成功刷新后窗口内切 Tab 不重复请求（详情返回强制刷新不受限）。 */
 const PRIVATE_REFRESH_WINDOW_MS: number = 30 * 1000
 
 @Component
 export struct NotificationPanel {
-  /** 初始筛选 Tab（0=消息，1=私信，2=动态）。 */
+  /** 初始筛选 Tab（0=消息，1=私信，2=动态，3=跟踪）。 */
   @Prop initialTab: number = 0
   /** 直达写私信的初始收件人（非空时强制私信 Tab 并弹出写私信面板）。 */
   @Prop composeToInit: string = ''
@@ -90,6 +102,8 @@ export struct NotificationPanel {
   @State privateNextPage: number = 0
   /** 私信通知快照（可索引 ID 已读表达的数据源：会话行未读点与私信全部已读）。 */
   @State messageNotifications: MessageNotification[] = []
+  /** 跟踪任务快照（有未读更新的排前）。 */
+  @State trackedItems: TrackedThread[] = []
   /** 写私信面板是否可见。 */
   @State showCompose: boolean = false
   /** 当前筛选 Tab。 */
@@ -99,7 +113,8 @@ export struct NotificationPanel {
     buttons: [
       { text: '消息' },
       { text: '私信' },
-      { text: '动态' }
+      { text: '动态' },
+      { text: '跟踪' }
     ] as SegmentButtonItemTuple,
     multiply: false,
     fontColor: AppColors.textSecondary,
@@ -125,15 +140,20 @@ export struct NotificationPanel {
   @StorageProp('activityVersion') @Watch('onActivityVersionChange') activityVersion: number = 0
   /** 私信会话列表刷新信号（详情页关闭时 bump，驱动私信 Tab 静默刷新）。 */
   @StorageProp('messageVersion') @Watch('onMessageVersionChange') messageVersion: number = 0
+  /** 跟踪列表刷新信号（新增/移除/检查到更新时 bump）。 */
+  @StorageProp('trackedThreadVersion') @Watch('onTrackedVersionChange') trackedThreadVersion: number = 0
   /** 消息 Tab 未读数量（以括号文本拼入按钮文案，0 不显示）。 */
   @StorageProp('unreadNotiCount') @Watch('onUnreadCountChange') unreadNotiCount: number = 0
   /** 私信 Tab 未读数量（私信通知未读数，以括号文本拼入按钮文案，0 不显示）。 */
   @StorageProp('unreadMessageCount') @Watch('onUnreadCountChange') unreadMessageCount: number = 0
   /** 动态 Tab 未读数量（以括号文本拼入按钮文案，0 不显示）。 */
   @StorageProp('unreadActivityCount') @Watch('onUnreadCountChange') unreadActivityCount: number = 0
+  /** 跟踪 Tab 未读数量（有未读更新的跟踪任务数，0 不显示）。 */
+  @StorageProp('unreadTrackCount') @Watch('onUnreadCountChange') unreadTrackCount: number = 0
   private notificationsDataSource: NotificationDataSource = new NotificationDataSource()
   private activitiesDataSource: FollowedActivityDataSource = new FollowedActivityDataSource()
   private threadsDataSource: MessageThreadDataSource = new MessageThreadDataSource()
+  private trackedDataSource: TrackedThreadDataSource = new TrackedThreadDataSource()
   /** mid → 是否存在未读私信通知（syncMessageNotificationsFromStore 时重建，行查询 O(1)）。 */
   private unreadByMid: Map<string, boolean> = new Map<string, boolean>()
   /** 私信列表最近一次成功刷新时间戳（快照复用窗口判定）。 */
@@ -170,7 +190,8 @@ export struct NotificationPanel {
       // 直达写私信：强制进入私信 Tab 并弹出写私信面板
       initialTab = TAB_PRIVATE
     }
-    if (initialTab !== TAB_MESSAGES && initialTab !== TAB_PRIVATE && initialTab !== TAB_ACTIVITIES) {
+    if (initialTab !== TAB_MESSAGES && initialTab !== TAB_PRIVATE &&
+      initialTab !== TAB_ACTIVITIES && initialTab !== TAB_TRACKED) {
       initialTab = TAB_MESSAGES
     }
     this.activeTab = initialTab
@@ -179,6 +200,7 @@ export struct NotificationPanel {
     this.syncNotificationsFromStore()
     this.syncActivitiesFromStore()
     this.syncMessageNotificationsFromStore()
+    this.syncTrackedFromStore()
     if (initialTab === TAB_ACTIVITIES) {
       this.loadActivities(currentGeneration)
     } else if (initialTab === TAB_PRIVATE) {
@@ -186,6 +208,8 @@ export struct NotificationPanel {
         this.showCompose = true
       }
       this.loadPrivateMessages(currentGeneration)
+    } else if (initialTab === TAB_TRACKED) {
+      // 跟踪 Tab 纯本地数据（无网络加载），列表由 trackVersion 驱动刷新
     } else {
       this.loadNotifications(currentGeneration)
     }
@@ -264,6 +288,101 @@ export struct NotificationPanel {
     if (this.activeTab === TAB_PRIVATE && this.threadsDataSource.totalCount() > 0) {
       this.refreshThreadUnreadRows()
     }
+  }
+
+  // ==================== 跟踪 Tab ====================
+
+  /** 跟踪列表版本变化：跟踪 Tab 下同步页面快照。 */
+  private onTrackedVersionChange(): void {
+    if (this.activeTab === TAB_TRACKED) {
+      this.syncTrackedFromStore()
+    }
+  }
+
+  /**
+   * 从跟踪 Store 同步页面快照与懒加载数据源。
+   *
+   * 跟踪列表纯本地（Store 已按「未读优先 + 最后活动时间倒序」排好），
+   * 无分页、无网络加载，因此这里直接 replaceAll（不打断滚动的前提是
+   * 数据变化本来就要重排）。
+   */
+  private syncTrackedFromStore(): void {
+    this.trackedItems = appStore.getTrackedThreads()
+    this.trackedDataSource.replaceAll(this.trackedItems)
+    if (this.trackedItems.length === 0) {
+      this.titleScrollEffectProgress = 0
+    }
+  }
+
+  /** 跟踪 Tab 是否存在未读更新（标题栏「全部已读」可用性与颜色）。 */
+  private hasUnreadTracked(): boolean {
+    for (let index: number = 0; index < this.trackedItems.length; index++) {
+      if (unreadReplyCount(this.trackedItems[index]) > 0) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /** 跟踪行时间列：优先服务端最后回复时间，缺失时退回上次检查时间。 */
+  private trackedTimeLabel(item: TrackedThread): string {
+    if (item.lastPostTs > 0) {
+      return formatTime(item.lastPostTs * 1000)
+    }
+    return item.lastCheckAt > 0 ? formatTime(item.lastCheckAt) : ''
+  }
+
+  /** 跟踪行明细：有未读时前置「+N 条新回复」。 */
+  private trackedDetailLabel(item: TrackedThread): string {
+    const unread: number = unreadReplyCount(item)
+    const base: string = describeTrackedThread(item, Date.now())
+    return unread > 0 ? '+' + String(unread) + ' 条新回复 · ' + base : base
+  }
+
+  /**
+   * 强制刷新指定跟踪行。
+   *
+   * 行 key 含已读基准（见行渲染处），已读状态变化后必须 updateAt 才会重建该行
+   * （与动态/私信行的强制刷新同一模式）。
+   *
+   * @param tid - 目标帖子 ID
+   */
+  private refreshTrackedRow(tid: string): void {
+    const total: number = this.trackedDataSource.totalCount()
+    for (let index: number = 0; index < total; index++) {
+      const item: TrackedThread = this.trackedDataSource.getData(index)
+      if (item !== undefined && item !== null && item.tid === tid) {
+        this.trackedDataSource.updateAt(index, item)
+        return
+      }
+    }
+  }
+
+  /** 强制刷新全部跟踪行（「全部已读」后）。 */
+  private refreshAllTrackedRows(): void {
+    const total: number = this.trackedDataSource.totalCount()
+    for (let index: number = 0; index < total; index++) {
+      this.trackedDataSource.updateAt(index, this.trackedDataSource.getData(index))
+    }
+  }
+
+  /**
+   * 点开跟踪条目：标记该帖已读后打开帖子第 1 页。
+   *
+   * 已读用本地当前基准立即生效（不依赖网络）；打开后 ThreadPanel 会对该帖做一次
+   * 状态检查并把基准推进到服务端最新值（`syncTrackedOnOpen`）。
+   *
+   * @param item - 被点击的跟踪任务
+   */
+  private handleTrackedClick(item: TrackedThread): void {
+    if (item.tid.length === 0) {
+      return
+    }
+    appStore.markTrackedSeen(item.tid)
+    this.refreshTrackedRow(item.tid)
+    // 触发 @State 引用变化，让 hasUnreadTracked() 重算（标题栏按钮颜色更新）
+    this.trackedItems = this.trackedItems.slice()
+    routerStore.navigateActivity(Screen.thread(item.tid, 1, '', ThreadSource.TRACKED))
   }
 
   /**
@@ -613,6 +732,7 @@ export struct NotificationPanel {
         this.loadMorePrivateMessages()
       }
     }
+    // 跟踪 Tab 无分页：列表即全部跟踪任务
   }
 
   /** 判断当前动态列表是否包含未读动态。 */
@@ -674,6 +794,9 @@ export struct NotificationPanel {
     if (this.activeTab === TAB_PRIVATE) {
       return this.hasUnreadMessageNotifications()
     }
+    if (this.activeTab === TAB_TRACKED) {
+      return this.hasUnreadTracked()
+    }
     return this.hasUnreadActivities()
   }
 
@@ -681,7 +804,7 @@ export struct NotificationPanel {
    * 将当前选中 Tab 代表的系统全部标记为已读。
    *
    * 消息 tab：非私信通知全部已读；私信 tab：私信通知全部已读；
-   * 动态 tab：关注动态全部已读。
+   * 动态 tab：关注动态全部已读；跟踪 tab：跟踪任务全部已读。
    */
   private handleMarkAllSeen(): void {
     if (this.activeTab === TAB_MESSAGES) {
@@ -698,6 +821,16 @@ export struct NotificationPanel {
       }
       appStore.markMessageNotificationsSeen()
       this.syncMessageNotificationsFromStore()
+      return
+    }
+    if (this.activeTab === TAB_TRACKED) {
+      if (!this.hasUnreadTracked()) {
+        return
+      }
+      appStore.markAllTrackedSeen()
+      // 已读只改基准不 bump 列表版本：这里强制刷新全部行并触发 @State 重算
+      this.refreshAllTrackedRows()
+      this.trackedItems = this.trackedItems.slice()
       return
     }
     if (!this.hasUnreadActivities()) {
@@ -745,6 +878,10 @@ export struct NotificationPanel {
     } else if (index === TAB_PRIVATE) {
       this.syncMessageNotificationsFromStore()
       this.loadPrivateMessages(generation)
+    } else if (index === TAB_TRACKED) {
+      // 跟踪列表纯本地：切到该 Tab 只同步快照（不发起网络检查，
+      // 检查由前台轮询与「点开帖子」触发）
+      this.syncTrackedFromStore()
     } else {
       this.syncActivitiesFromStore()
       this.loadActivities(generation)
@@ -785,7 +922,8 @@ export struct NotificationPanel {
       buttons: [
         { text: this.badgeLabel('消息', this.unreadNotiCount) },
         { text: this.badgeLabel('私信', this.unreadMessageCount) },
-        { text: this.badgeLabel('动态', this.unreadActivityCount) }
+        { text: this.badgeLabel('动态', this.unreadActivityCount) },
+        { text: this.badgeLabel('跟踪', this.unreadTrackCount) }
       ] as SegmentButtonItemTuple,
       multiply: false,
       fontColor: AppColors.textSecondary,
@@ -1302,7 +1440,7 @@ export struct NotificationPanel {
                 .width('100%').justifyContent(FlexAlign.Center).padding(16)
               }
             }
-          } else {
+          } else if (this.activeTab === TAB_ACTIVITIES) {
             if (!appStore.auth.isAuthenticated) {
               ListItem() {
                 Column() {
@@ -1401,6 +1539,82 @@ export struct NotificationPanel {
                 }
                 .width('100%').justifyContent(FlexAlign.Center).padding(16)
               }
+            }
+          } else {
+            if (!appStore.auth.isAuthenticated) {
+              ListItem() {
+                Column() {
+                  EmptyStateView({ msg: '登录后查看跟踪的帖子', icon: $r('app.media.icon_refresh') })
+                }
+                .width('100%').height(this.getStateViewHeight())
+                .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+                .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+              }
+            } else if (this.trackedItems.length === 0) {
+              ListItem() {
+                Column() {
+                  EmptyStateView({
+                    msg: '暂无跟踪的帖子\n在帖子右上角菜单里选择「跟踪帖子更新」',
+                    icon: $r('app.media.icon_refresh')
+                  })
+                }
+                .width('100%').height(this.getStateViewHeight())
+                .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+                .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+              }
+            } else {
+              LazyForEach(this.trackedDataSource, (item: TrackedThread) => {
+                ListItem() {
+                  Row() {
+                    Circle()
+                      .width(7)
+                      .height(7)
+                      .fill(AppColors.primary)
+                      .opacity(unreadReplyCount(item) > 0 ? 1 : 0)
+                      .margin({ right: 9 })
+                    Stack() {
+                      Image($r('app.media.icon_refresh'))
+                        .width(20)
+                        .height(20)
+                        .fillColor(unreadReplyCount(item) > 0 ? AppColors.primary : AppColors.textTertiary)
+                    }
+                    .width(40)
+                    .height(40)
+                    .backgroundColor(AppColors.bgSecondary)
+                    .borderRadius(20)
+                    .margin({ right: 10 })
+                    Column() {
+                      Row() {
+                        Text(trackedSubjectLabel(item))
+                          .fontSize(15)
+                          .fontColor(unreadReplyCount(item) > 0
+                            ? AppColors.textPrimary : AppColors.textSecondary)
+                          .fontWeight(unreadReplyCount(item) > 0
+                            ? FontWeight.Medium : FontWeight.Normal)
+                          .maxLines(1)
+                          .textOverflow({ overflow: TextOverflow.Ellipsis })
+                          .layoutWeight(1)
+                        Text(this.trackedTimeLabel(item))
+                          .fontSize(12)
+                          .fontColor(AppColors.textTertiary)
+                          .margin({ left: 12 })
+                      }.width('100%').alignItems(VerticalAlign.Center)
+                      Text(this.trackedDetailLabel(item))
+                        .fontSize(13)
+                        .fontColor(unreadReplyCount(item) > 0
+                          ? AppColors.textSecondary : AppColors.textTertiary)
+                        .maxLines(1)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
+                        .margin({ top: 5 })
+                        .width('100%')
+                    }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+                  }.width('100%').padding({ left: 16, right: 16, top: 13, bottom: 13 })
+                  .alignItems(VerticalAlign.Center)
+                  // 行背景透明，露出 Stack 的 bg（与帖子列表 TopicCard 的透明策略一致）
+                  .onClick(() => { this.handleTrackedClick(item) })
+                }
+              }, (item: TrackedThread) =>
+                item.tid + '_' + String(item.seenReplies) + '_' + String(item.totalReplies))
             }
           }
         }

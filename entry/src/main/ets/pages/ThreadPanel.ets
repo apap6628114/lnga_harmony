@@ -33,7 +33,10 @@ import { TtsMediaMetadata } from '../common/media/TtsAvSessionController'
 import { TtsPlayer } from '../common/media/TtsPlayer'
 import { shareThread, sharePost } from '../common/utils/ShareUtils'
 import { SaveThreadContent } from '../common/dialogs/SaveThreadDialogs'
+import { ThreadTrackContent } from '../common/dialogs/ThreadTrackDialogs'
 import { savedThreadService, SaveThreadOutcome, getSavedThreadResult } from '../service/SavedThreadService'
+import { TrackRequest, TrackResult } from '../store/TrackedThreadStore'
+import { TrackedThread, TRACK_DEFAULT_KEEP_DAYS, TRACK_MAX_COUNT } from '../model/TrackedThread'
 import { openImageViewer as sharedOpenImageViewer, handleForumLink } from '../common/utils/LinkUtils'
 import { ThreadPaginationManager, MergePageResult } from '../common/managers/ThreadPaginationManager'
 import type { ThreadInfo } from '../model/Thread'
@@ -189,6 +192,17 @@ export struct ThreadPanel {
   @State showPagePicker: boolean = false
   /** 保存帖子对话框控制器（更多菜单「保存帖子」入口）。 */
   private saveDialogController?: CustomDialogController
+  /** 跟踪帖子更新对话框控制器（更多菜单「跟踪帖子更新」入口）。 */
+  private trackDialogController?: CustomDialogController
+  /** 跟踪对话框选中的跟踪时长（天），由 ThreadTrackContent 回写。 */
+  @State private trackKeepDays: number = TRACK_DEFAULT_KEEP_DAYS
+  /**
+   * 跟踪列表版本号（新增/移除/检查到更新时变化）。
+   *
+   * 只用于建立响应式依赖：跟踪状态变化 → 本面板重绘 → `PanelNavBar` 拿到新的
+   * `menuItemsProvider` → 再次展开菜单时「跟踪帖子更新」的激活态必然是最新值。
+   */
+  @StorageProp('trackedThreadVersion') trackedThreadVersion: number = 0
   /** 保存帖子弹窗：页范围是否合法（由 SaveThreadContent 回写）。 */
   @State private saveRangeValid: boolean = false
   /** 保存帖子弹窗：选定起始页（由 SaveThreadContent 回写，非法为 -1）。 */
@@ -428,6 +442,7 @@ export struct ThreadPanel {
     this.prependAnchorScheduled = false
     this.mgr.reset()
     this.saveDialogController = undefined
+    this.trackDialogController = undefined
   }
 
   private onThreadChanged(): void {
@@ -1260,6 +1275,10 @@ export struct ThreadPanel {
           if (appStore.auth.isAuthenticated && !this.isSavedSource()) {
             appStore.addBrowseHistoryFromThread(appStore.auth.uid, result, this.threadTid)
           }
+          // 被跟踪的帖子：打开即推进已读基准（离线存档来源不涉及在线跟踪）
+          if (!this.isSavedSource()) {
+            this.syncTrackedOnOpen()
+          }
           this.prepareListNavigation(generation, resolvedPage, this.pendingTargetPid)
         } else if (mode === ThreadLoadMode.APPEND) {
           const previousEnd: number = this.mgr.loadedPageEnd
@@ -1921,6 +1940,148 @@ export struct ThreadPanel {
     })
   }
 
+  // ==================== 跟踪帖子更新 ====================
+
+  /**
+   * 当前帖子是否正在跟踪（更多菜单「跟踪帖子更新」的激活态）。
+   *
+   * 显式读取 `trackedThreadVersion` 以建立响应式依赖：跟踪状态可能由对话框、
+   * 收藏面板等多处改变，只查 `trackedThreadStore`（非响应式数据）不会触发本面板重绘，
+   * 菜单激活态就可能停在旧值。
+   *
+   * @returns 是否已跟踪
+   */
+  private isTrackingCurrentThread(): boolean {
+    const version: number = this.trackedThreadVersion
+    return version >= 0 && appStore.isThreadTracked(this.threadTid)
+  }
+
+  /**
+   * 当前窗口内主楼（lou=0）的作者昵称。
+   *
+   * 添加跟踪时带上，避免跟踪列表在首次检查回填前显示「未知作者」；主楼不在当前窗口
+   * （只看楼主以外的跨页视图）时返回空串，由检查响应里的 `__T.author` 回填。
+   *
+   * @returns 楼主昵称；未知时返回空串
+   */
+  private resolveThreadAuthorName(): string {
+    const posts: PostInfo[] = this.mgr.posts
+    for (let index: number = 0; index < posts.length; index++) {
+      if (posts[index].lou === 0) {
+        return posts[index].author
+      }
+    }
+    return ''
+  }
+
+  /**
+   * 打开「跟踪帖子更新」对话框（更多菜单入口）。
+   *
+   * 未跟踪：用途说明 + 跟踪时长选择 + 「开始跟踪」；
+   * 已跟踪：额外展示状态卡（剩余天数 / 回复数 / 未读 / 上次检查）与内容区「停止跟踪」。
+   *
+   * 初始跟踪天数取该帖已跟踪设置（未跟踪时用默认 2 天），保证"重新打开改天数"时
+   * 看到的是当前生效值而不是默认值。
+   */
+  private openTrackDialog(): void {
+    if (this.threadTid.length === 0) {
+      return
+    }
+    if (!appStore.auth.isAuthenticated) {
+      appStore.showToast('请先登录')
+      return
+    }
+    const existing: TrackedThread | null = appStore.getTrackedThread(this.threadTid)
+    const isTracked: boolean = existing !== null
+    this.trackKeepDays = isTracked && existing !== null && existing.keepDays > 0
+      ? existing.keepDays
+      : TRACK_DEFAULT_KEEP_DAYS
+    this.trackDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
+      systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
+      builder: CustomContentDialog({
+        primaryTitle: '跟踪帖子更新',
+        contentBuilder: (): void => { this.trackContent() },
+        buttons: [
+          { value: '取消' },
+          {
+            value: isTracked ? '保存' : '开始跟踪',
+            fontColor: AppColors.white,
+            background: AppColors.primary,
+            action: (): void => {
+              this.startTrackThread()
+            }
+          }
+        ]
+      }),
+      autoCancel: true
+    })
+    this.trackDialogController?.open()
+  }
+
+  /** 跟踪对话框的自定义内容（官方 CustomContentDialog 的 contentBuilder）。 */
+  @Builder
+  trackContent() {
+    ThreadTrackContent({
+      tid: this.threadTid,
+      initialSubject: this.threadSubject === '帖子' ? '' : this.threadSubject,
+      onKeepDaysChange: (days: number): void => {
+        this.trackKeepDays = days
+      },
+      onStopTrack: (): void => {
+        this.trackDialogController?.close()
+        appStore.untrackThread(this.threadTid)
+        appStore.showToast('已停止跟踪')
+      }
+    })
+  }
+
+  /**
+   * 提交跟踪设置：未跟踪则新建，已跟踪则只更新跟踪天数（不动已读基准）。
+   */
+  private startTrackThread(): void {
+    if (!appStore.canTrackMoreThreads() && !appStore.isThreadTracked(this.threadTid)) {
+      appStore.showToast('最多同时跟踪 ' + String(TRACK_MAX_COUNT) + ' 个帖子')
+      return
+    }
+    const request: TrackRequest = new TrackRequest()
+    request.tid = this.threadTid
+    // 标题占位值（'帖子'）不作为真实标题入库，交给检查回填
+    request.subject = this.threadSubject === '帖子' ? '' : this.threadSubject
+    request.author = this.resolveThreadAuthorName()
+    request.authorid = Number(this.threadAuthorId) > 0 ? Number(this.threadAuthorId) : 0
+    request.fid = this.threadFid
+    request.forumName = ''
+    request.keepDays = this.trackKeepDays
+    appStore.trackThread(request).then((result: TrackResult): void => {
+      if (result.ok) {
+        appStore.showToast(result.created ? '已开始跟踪' : '跟踪设置已更新')
+      } else {
+        appStore.showToast(result.error || '跟踪失败')
+      }
+    })
+  }
+
+  /**
+   * 帖子页打开被跟踪的帖子后推进已读基准。
+   *
+   * 未跟踪的帖子不发任何请求；已跟踪的帖子先检查一次（受 1 分钟最小间隔节流）、
+   * 再把已读基准推进到服务端最新回复数——用户此刻看到的就是最新内容，避免
+   * 「刚看完又冒红点」。
+   */
+  private syncTrackedOnOpen(): void {
+    if (this.threadTid.length === 0 || !appStore.auth.isAuthenticated) {
+      return
+    }
+    if (!appStore.isThreadTracked(this.threadTid)) {
+      return
+    }
+    appStore.markTrackedSeenOnOpen(this.threadTid).catch((error: Object): void => {
+      logger.warn('跟踪已读推进失败 tid=%{public}s: %{public}s', this.threadTid, formatError(error))
+    })
+  }
+
   private async handleVote(post: PostInfo, value: number): Promise<VoteResult> {
     if (!appStore.auth.isAuthenticated) {
       appStore.showToast('请先登录')
@@ -2245,6 +2406,14 @@ export struct ThreadPanel {
         label: '离线保存帖子',
         action: (): void => {
           this.openSaveThreadDialog()
+        }
+      })
+      // 激活态用文字色表达（`active`），与「只看楼主」同一模式：已跟踪时主色提示
+      items.push({
+        label: '跟踪帖子更新',
+        active: this.isTrackingCurrentThread(),
+        action: (): void => {
+          this.openTrackDialog()
         }
       })
     }

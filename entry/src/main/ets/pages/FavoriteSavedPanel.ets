@@ -1,12 +1,13 @@
 /**
- * 收藏与保存融合面板 - 在线收藏 / 离线保存 双 Tab。
+ * 收藏与保存融合面板 - 在线收藏 / 离线保存 / 跟踪 三 Tab。
  *
- * 由个人主页「收藏主题」入口打开。遵循 docs/TITLE_LIST_DESIGN.md 标题区与
- * 列表沉浸联动契约（以 NotificationPanel 为双 Tab 实例）：
+ * 由个人主页「收藏、保存与跟踪帖子」入口打开。遵循 docs/TITLE_LIST_DESIGN.md 标题区与
+ * 列表沉浸联动契约（以 NotificationPanel 为多 Tab 实例）：
  * - 筛选条（SegmentButton 胶囊）为 List 首个元素，随滚动穿越标题区；
  * - 标题区走 PanelNavBar + contentStartOffset + linearGradientBlur +
  *   TitleScrollEffect 联动体系；
- * - 标题区按钮随 Tab 协调：在线收藏 = 新建收藏夹，离线保存 = 导入 / 导出。
+ * - 标题区按钮随 Tab 协调：在线收藏 = 新建收藏夹，离线保存 = 导入 / 导出，
+ *   跟踪 = 全部移除（破坏性操作走二次确认）。
  * 列表行透明（底色由页面 Stack 提供），避免模糊化过渡带。
  */
 
@@ -25,6 +26,12 @@ import { formatTime } from '../common/utils/Utils'
 import { FavoriteTopicFolder } from '../model/Favorite'
 import { ApiResult } from '../model/NgaApiResults'
 import { SavedThread } from '../model/SavedThread'
+import { TrackedThread } from '../model/TrackedThread'
+import {
+  describeTrackedThread,
+  trackedSubjectLabel,
+  unreadReplyCount
+} from '../common/utils/ThreadTrackPolicy'
 import { ImportResult } from '../store/SavedThreadStore'
 import { Logger, DOMAIN_UI, formatError } from '../common/utils/Logger'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
@@ -40,19 +47,22 @@ const logger = new Logger(DOMAIN_UI, 'FavoriteSavedPanel')
 const TAB_FAVORITES: number = 0
 /** 离线保存 Tab。 */
 const TAB_SAVED: number = 1
+/** 跟踪 Tab。 */
+const TAB_TRACKED: number = 2
 
 /** 导入选择的最大文件数。 */
 const IMPORT_MAX_FILES: number = 50
 
 @Component
 export struct FavoriteSavedPanel {
-  /** 当前筛选 Tab（0=在线收藏，1=离线保存）。 */
+  /** 当前筛选 Tab（0=在线收藏，1=离线保存，2=跟踪）。 */
   @State activeTab: number = 0
   /** 筛选条分段按钮选项（原生 SegmentButton，胶囊单选）。 */
   @State tabOptions: SegmentButtonOptions = SegmentButtonOptions.capsule({
     buttons: [
       { text: '在线收藏' },
-      { text: '离线保存' }
+      { text: '离线保存' },
+      { text: '跟踪' }
     ] as SegmentButtonItemTuple,
     multiply: false,
     fontColor: AppColors.textSecondary,
@@ -107,6 +117,17 @@ export struct FavoriteSavedPanel {
   /** 待删除的存档条目。 */
   private removeTarget: SavedThread | null = null
 
+  // ---- 跟踪（本地跟踪任务）状态 ----
+  /** 跟踪任务快照（有未读更新的排前，其次按最后活动时间倒序）。 */
+  @State trackedItems: TrackedThread[] = []
+  /** 跟踪列表版本号（新增/移除/检查到更新时 +1 触发刷新）。 */
+  @StorageProp('trackedThreadVersion') @Watch('onTrackedThreadVersionChange')
+  trackedThreadVersion: number = 0
+  /** 相对时间刷新信号：副标题含剩余跟踪天数（天粒度，进入面板 / 切到跟踪 Tab 时刷新）。 */
+  @State nowTick: number = Date.now()
+  /** 全部移除确认对话框控制器。 */
+  private untrackAllDialogController?: CustomDialogController
+
   /** 列表滚动控制器。 */
   private scroller: Scroller = new Scroller()
   /** 筛选条在窗口中的底部纵坐标（onAreaChange 实时采集，供状态视图撑满估算）。 */
@@ -129,6 +150,7 @@ export struct FavoriteSavedPanel {
     this.tabSelected = [this.activeTab]
     this.syncFoldersFromStore()
     this.refreshSaved()
+    this.refreshTracked()
     if (this.activeTab === TAB_FAVORITES) {
       this.refreshFolders(true)
     }
@@ -140,6 +162,7 @@ export struct FavoriteSavedPanel {
     this.folderDeleteDialogController = undefined
     this.savedDeleteDialogController = undefined
     this.clearDialogController = undefined
+    this.untrackAllDialogController = undefined
   }
 
   /** 按列表绝对滚动偏移同步标题栏视觉效果。 */
@@ -178,12 +201,22 @@ export struct FavoriteSavedPanel {
       this.tabSecondaryAccessibility = ''
       this.syncFoldersFromStore()
       this.refreshFolders(false)
-    } else {
+    } else if (index === TAB_SAVED) {
       this.tabRightIcon = $r('app.media.icon_import')
       this.tabSecondaryIcon = $r('app.media.icon_export')
       this.tabRightAccessibility = '导入存档'
       this.tabSecondaryAccessibility = '导出存档'
       this.refreshSaved()
+    } else {
+      this.tabRightIcon = $r('app.media.icon_delete')
+      this.tabSecondaryIcon = ''
+      this.tabRightAccessibility = '全部移除跟踪'
+      this.tabSecondaryAccessibility = ''
+      // 剩余天数是天粒度文案：切到本 Tab 时重算一次即可。刻意不做分钟级定时刷新——
+      // 行是按值传参的 @Builder 且 ForEach 键不含 nowTick，定时刷新既打不穿已建行，
+      // 把 nowTick 塞进键又会让 50 行每分钟整体重建，得不偿失。
+      this.nowTick = Date.now()
+      this.refreshTracked()
     }
     // 内容已切换，滚动回到顶部（等待列表重建完成）
     setTimeout((): void => {
@@ -565,6 +598,165 @@ export struct FavoriteSavedPanel {
     .width('100%')
   }
 
+  // ==================== 跟踪：跟踪任务列表 ====================
+
+  private onTrackedThreadVersionChange(): void {
+    this.refreshTracked()
+  }
+
+  /** 从跟踪 Store 重载任务快照（有未读更新的排前，其次按最后活动时间倒序）。 */
+  private refreshTracked(): void {
+    this.trackedItems = appStore.getTrackedThreads()
+    if (this.trackedItems.length === 0) {
+      this.titleScrollEffectProgress = 0
+    }
+  }
+
+  /** 跟踪条目副行文案：有未读时前置「+N 条新回复」。 */
+  private describeTracked(item: TrackedThread): string {
+    const unread: number = unreadReplyCount(item)
+    const base: string = describeTrackedThread(item, this.nowTick)
+    return unread > 0 ? '+' + String(unread) + ' 条新回复 · ' + base : base
+  }
+
+  /**
+   * 跟踪行唯一键 = 行内容的完整指纹。
+   *
+   * 行是按值传参的 @Builder（不建立响应式依赖），只靠 `tid` 或只带未读位时，
+   * 下列三种变化不会重建已建行、界面停在旧文案：改跟踪天数（剩余天数）、
+   * 服务端标题静默回填、最后回复时间推进。因此键把行内可见字段全部纳入
+   * （与同文件 `folderRenderKey` 的范式一致）。
+   *
+   * @param item - 跟踪任务
+   * @returns 渲染键
+   */
+  private trackedRenderKey(item: TrackedThread): string {
+    return item.tid + '|' + trackedSubjectLabel(item) + '|' + String(item.keepDays) + '|' +
+      String(item.lastPostTs) + '|' + String(item.totalReplies) + '|' + String(item.seenReplies)
+  }
+
+  /**
+   * 打开被跟踪的帖子：先标记已读（红点立即消失），再以在线模式打开第 1 页。
+   *
+   * 打开后 ThreadPanel 会对该帖做一次状态检查并把已读基准推进到服务端最新值
+   * （`syncTrackedOnOpen`），因此这里用当前已知基准置已读不会留下假未读。
+   *
+   * @param item - 被点击的跟踪任务
+   */
+  private openTrackedThread(item: TrackedThread): void {
+    if (item.tid.length === 0) {
+      return
+    }
+    appStore.markTrackedSeen(item.tid)
+    this.refreshTracked()
+    routerStore.navigateActivity(Screen.thread(item.tid, 1, '', ThreadSource.TRACKED))
+  }
+
+  /**
+   * 移除单个跟踪任务。
+   *
+   * 不做二次确认：行内删除按钮位置固定、误触代价低（重新跟踪只需在帖子菜单点两下），
+   * 而「全部移除」是破坏性批量操作，走二次确认。
+   *
+   * @param item - 待移除的跟踪任务
+   */
+  private removeTracked(item: TrackedThread): void {
+    appStore.untrackThread(item.tid)
+    appStore.showToast('已移除跟踪')
+  }
+
+  /** 全部移除跟踪任务（破坏性操作，二次确认）。 */
+  private showUntrackAllConfirm(): void {
+    if (this.trackedItems.length === 0) {
+      appStore.showToast('没有跟踪中的帖子')
+      return
+    }
+    const count: number = this.trackedItems.length
+    this.untrackAllDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
+      systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
+      builder: TipsDialog({
+        imageRes: $r('app.media.icon_delete'),
+        title: '全部移除跟踪',
+        content: '确定要移除全部 ' + String(count) + ' 个跟踪任务吗？\n移除后不再提示这些帖子的更新',
+        primaryButton: {
+          value: '全部移除',
+          fontColor: AppColors.white,
+          background: AppColors.destructive,
+          action: () => {
+            appStore.untrackAllThreads()
+            appStore.showToast('已全部移除')
+          }
+        },
+        secondaryButton: {
+          value: '取消'
+        }
+      }),
+      autoCancel: true
+    })
+    this.untrackAllDialogController?.open()
+  }
+
+  /**
+   * 构建单个跟踪任务条目。
+   *
+   * @param item - 跟踪任务模型
+   */
+  @Builder
+  private TrackedRow(item: TrackedThread) {
+    Row() {
+      Stack() {
+        Image($r('app.media.icon_refresh'))
+          .width(20)
+          .height(20)
+          .fillColor(unreadReplyCount(item) > 0 ? AppColors.primary : AppColors.textTertiary)
+      }
+      .width(40)
+      .height(40)
+      .borderRadius(20)
+      .backgroundColor(unreadReplyCount(item) > 0 ? AppColors.primaryLight : AppColors.bgSecondary)
+
+      Column() {
+        Text(trackedSubjectLabel(item))
+          .fontSize(15)
+          .fontColor(AppColors.textPrimary)
+          .fontWeight(unreadReplyCount(item) > 0 ? FontWeight.Medium : FontWeight.Normal)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+        Text(this.describeTracked(item))
+          .fontSize(13)
+          .fontColor(unreadReplyCount(item) > 0 ? AppColors.primary : AppColors.textTertiary)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .margin({ top: 3 })
+          .width('100%')
+      }
+      .layoutWeight(1)
+      .margin({ left: 12 })
+      .alignItems(HorizontalAlign.Start)
+      .onClick((): void => {
+        this.openTrackedThread(item)
+      })
+
+      Stack() {
+        Image($r('app.media.icon_delete'))
+          .width(18)
+          .height(18)
+          .fillColor(AppColors.destructive)
+      }
+      .width(36)
+      .height(36)
+      .onClick((): void => {
+        this.removeTracked(item)
+      })
+    }
+    .width('100%')
+    .padding({ left: 16, right: 12, top: 10, bottom: 10 })
+    .alignItems(VerticalAlign.Center)
+  }
+
   // ==================== 离线保存：存档列表 ====================
 
   private onSavedThreadVersionChange(): void {
@@ -813,7 +1005,7 @@ export struct FavoriteSavedPanel {
                 }
               }, (folder: FavoriteTopicFolder) => this.folderRenderKey(folder))
             }
-          } else {
+          } else if (this.activeTab === TAB_SAVED) {
             if (this.savedItems.length === 0) {
               ListItem() {
                 Column() {
@@ -909,6 +1101,42 @@ export struct FavoriteSavedPanel {
                 }
               }, (item: SavedThread) => item.tid)
             }
+          } else {
+            if (!appStore.auth.isAuthenticated) {
+              ListItem() {
+                Column() {
+                  EmptyStateView({ msg: '登录后查看跟踪的帖子', icon: $r('app.media.icon_refresh') })
+                }
+                .width('100%').height(this.getStateViewHeight())
+                .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+                .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+              }
+            } else if (this.trackedItems.length === 0) {
+              ListItem() {
+                Column() {
+                  EmptyStateView({
+                    msg: '暂无跟踪的帖子\n在帖子右上角菜单里选择「跟踪帖子更新」',
+                    icon: $r('app.media.icon_refresh')
+                  })
+                }
+                .width('100%').height(this.getStateViewHeight())
+                .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+                .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+              }
+            } else {
+              ListItem() {
+                Row() {
+                  Text('共 ' + String(this.trackedItems.length) + ' 个跟踪任务')
+                    .fontSize(13).fontColor(AppColors.textTertiary).layoutWeight(1)
+                }.width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
+              }
+
+              ForEach(this.trackedItems, (item: TrackedThread) => {
+                ListItem() {
+                  this.TrackedRow(item)
+                }
+              }, (item: TrackedThread) => this.trackedRenderKey(item))
+            }
           }
         }
         .width('100%').layoutWeight(1)
@@ -940,7 +1168,7 @@ export struct FavoriteSavedPanel {
       .height('100%')
 
       PanelNavBar({
-        title: '收藏与保存',
+        title: '收藏、保存与跟踪',
         scrollEffectProgress: this.titleScrollEffectProgress,
         rightIcon: this.tabRightIcon,
         rightIconAccessibilityText: this.tabRightAccessibility,
@@ -949,8 +1177,10 @@ export struct FavoriteSavedPanel {
         onRightClick: (): void => {
           if (this.activeTab === TAB_FAVORITES) {
             this.showCreateFolderDialog()
-          } else {
+          } else if (this.activeTab === TAB_SAVED) {
             this.handleImport()
+          } else {
+            this.showUntrackAllConfirm()
           }
         },
         onSecondaryRightClick: (): void => {
