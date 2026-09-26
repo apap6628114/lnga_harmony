@@ -576,6 +576,11 @@ class AppStoreClass {
 
   // ---------- Facade: Toast ----------
 
+  /**
+   * 当前 Toast 状态快照（只读入口）。
+   *
+   * 展示由系统浮层承载（见 `ToastManager`），不再有页面内组件订阅本状态。
+   */
   get toast(): ToastState {
     return this.toastManager.state
   }

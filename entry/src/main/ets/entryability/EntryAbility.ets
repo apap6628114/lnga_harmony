@@ -170,6 +170,12 @@ export default class EntryAbility extends UIAbility {
 
       try {
         const mainWindow = windowStage.getMainWindowSync()
+
+        // Toast 浮层经 PromptAction.openCustomDialog + ComponentContent 承载，内容节点
+        // 必须由 UI 上下文创建。页面加载完成是唯一可靠的注入点：早于此前产生的提示由
+        // ToastManager 暂存，注入时补播。
+        appStore.toastManager.attachUIContext(mainWindow.getUIContext())
+
         this.enableImageDecodeCache(mainWindow)
 
         mainWindow.setWindowLayoutFullScreen(true)

@@ -13,7 +13,7 @@ import { NGA_HOSTS } from './NgaDomains'
 export const NAV_BAR_H: number = 44
 
 /** Toast 提示距底部的高度（vp）。 */
-export const TOAST_BOTTOM_MARGIN: number = 100
+export const TOAST_BOTTOM_MARGIN: number = 70
 
 /** TTS 合成进度指示器距底部的高度（vp），位于 Toast 上方。 */
 export const TTS_PROGRESS_BOTTOM_MARGIN: number = 148

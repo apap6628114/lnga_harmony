@@ -146,7 +146,7 @@ ProfileCardPopup）、`NoteAddContent`（NotesPanel）、`KeywordEditorContent`�
 | `PanelNavBar` 标题栏 | `ComposeTitleBar` / `SelectTitleBar` / `EditableTitleBar` | 三者都没有 `onBack` 回调（返回固定走系统返回）、没有标题区 `@BuilderParam`；`ComposeTitleBar` 无角标字段；`SelectTitleBar` 的标题必须是下拉选择器（`options` 必填）；三者声明都明确要求「避免配置通用属性/事件」（会生成 `__Common__` 节点），而现有用法是 `.width('100%').position(...)`。强行替换会同时丢失自定义返回拦截、未读角标、滚动进入标题区的渐变与图标按钮的材质块底板（`HdsMaterialHost`，见 `IMMERSIVE_LIGHT_DESIGN.md` §12.9） |
 | `SettingRow` 设置行 | `ComposeListItem` / `SubHeader` | `IconType` 是图标尺寸枚举（8/16/24/40/64/96vp 六档），无法表达现有的「29×29 圆角色块 + 17vp 白色填充图标」；`operateItem` 没有未读数徽章字段；行高与字号会变成官方规范。`SubHeader` 是分组标题（新增视觉元素），不是列表行 |
 | 三列 / 侧边栏导航容器 | `SideBarContainer` + `Navigation` | 本轮范围外（用户明确排除） |
-| `ToastComponent` | `promptAction.showToast` | 官方 toast 不支持动作按钮，而工程有「回复成功 → 前往查看」这类带回调的 toast（`appStore.showToastAction`）；官方 toast 也无法承载现有玻璃底色与自定义命中测试策略 |
+| `ToastComponent` | `promptAction.showToast` | **已迁移，但走的是 `openCustomDialog` 而非 `showToast`（详见 §7.9，根因是层级）**。当初保持自研的两条理由仍然成立：官方 toast 不支持动作按钮（`ShowToastOptions` 声明确无 `buttons` 字段，只有 `text` / `duration` / `bottom` / `showMode` 等），而工程有「回复成功 → 前往查看」这类带回调的 toast（`appStore.showToastAction`）；官方 toast 也无法承载自定义底色与「有动作按钮时独占拦截、纯文本时穿透」的命中测试策略。`openCustomDialog` 两者都保住了 |
 
 ---
 
@@ -421,3 +421,135 @@ offset: { x: 0, y: -1 },   // 类型是 Position（x / y），不是 Offset（dx
   `dark` 的 `color.json` 删除；中间产物 `overlay_dialog`（曾用于"弹窗独立档"）随两档合并一并删除。
 - 改动后 `hvigorw assembleHap --mode module -p module=entry@default -p buildMode=debug` →
   `BUILD SUCCESSFUL`。
+
+### 7.9 Toast 承载体迁移到系统浮层树（2026-09）
+
+**问题**：Toast 在 `bindSheet`（回复编辑器）或 `bindContentCover`（图片查看器）打开时被完全遮住，
+`appStore.showToast()` 调用点（`ReplyDialog.ets` 的贴条校验失败、`ImageViewer.ets` 的
+「已保存到相册」「请先双击恢复缩放」等）用户在界面上看不到任何反馈。
+
+**根因：两棵互不相交的渲染树。** ArkUI 的层级契约（官方《弹窗概述》《设置浮层（OverlayManager）》）：
+
+- 「Overlay 浮层、弹窗、模态、带 Order 的 Overlay 浮层都挂载在 **Root 节点**下」，且
+  「弹窗显示在当前应用窗口最上层，**层级高于应用主窗内所有页面**」；
+- 「**OverlayManager 上节点的层级在 Page 页面层级之上，在 Dialog、Popup、Menu、BindSheet、
+  BindContentCover 和 Toast 等组件之下**」。
+
+即：**Page 页面树整体位于 Root 浮层树之下**。`FloatingLayerComponent` 里 `bindSheet` /
+`bindContentCover` 的锚点（`Column().width('100%')...hitTestBehavior(None)`）虽然写在页面树内，
+但那只是**宿主占位**，面板本体被系统搬到了 Root 浮层树。旧 `ToastComponent` 挂在
+`MainPage` 根 `Stack`（页面树），因此**无论怎么调 `zIndex` 或声明顺序都救不了**——两者不在同一棵树里。
+
+为什么此前没暴露：页面内的 `CustomDialogController` 弹窗（各面板的确认框）与 `bindPopup` 资料卡
+虽然也在浮层树，但按规格「多个弹窗组件先后弹出时，**后弹出的层级高于先弹出的**」，
+而它们都晚于 Page 拉起，所以「弹窗里弹 Toast」反而正常。只有**长驻在前面的系统模态**会挡住它。
+
+**方案**：改用 `UIContext.getPromptAction().openCustomDialog` + `ComponentContent` 承载，
+节点落在浮层树的 **Dialog 层**——与 `bindSheet` 的 `SheetMode.OVERLAY` **同层**
+（SDK 对该 mode 的注释原文："displayed at the same level as dialog boxes"），
+不再是「页面树 vs 浮层树」那种整棵树被压住的局面：
+
+| 参数 | 取值 | 理由 |
+| --- | --- | --- |
+| `isModal` | `false` | **官方默认 `true`**，不显式关掉会带可见蒙层（官方原文："非模态窗口且无蒙层，可以与弹窗周围其他控件进行交互"） |
+| **`maskRect`** | **`{ x: 0, y: 0, width: 0, height: 0 }`** | ★ **事件透传的真正开关**。官方定义："**遮蔽层区域内的事件不透传，在遮蔽层区域外的事件透传**"，而默认值是整屏 `{x:0, y:0, width:'100%', height:'100%'}`。**`isModal: false` 只保证"无蒙层"，并不会把默认的全屏遮蔽层变成透传**——不显式收紧 `maskRect`，Toast 显示期间全屏点击都被吞掉 |
+| `alignment` / `offset` | `DialogAlignment.Bottom` + `{ dx: 0, dy: -(TOAST_BOTTOM_MARGIN + navBarHeight) }` | 位置**由系统算**。不要用"全屏 Stack + `margin`"自算：dialog 对内容节点的约束与页面树不同，margin 不生效（实测 Toast 紧贴屏幕底边） |
+| `autoCancel` | `false` | 无蒙层可点，仍显式关闭「点击消失」语义 |
+| `focusable` | `false` | API 19+，默认 `true`。Toast 是纯反馈，不应扰动下层输入焦点与软键盘 |
+| `levelOrder` | `LevelOrder.clamp(100000)` | 官方范围 `[-100000, 100000]`、默认 `clamp(0)`。**仅对参与 levelOrder 排序的弹窗有效**，见下方边界说明 |
+
+**`levelOrder` 的边界（重要，勿过度解读）**：支持 `levelOrder` 的只有
+**openCustomDialog / CustomDialog / AlertDialog / ActionSheet / showDialog** 五类
+（官方《弹出框层级管理》明列）。**`bindSheet` / `bindContentCover` 没有这个字段**——
+`SheetOptions`、`ContentCoverOptions` 及其共同基类 `BindOptions` 均无 `levelOrder`，
+官方指南也未把它们列入支持名单。`bindSheet` 的层级由 **`SheetOptions.mode`** 决定
+（默认 `SheetMode.OVERLAY`），其 SDK 注释原文是
+"displayed at the top of the window... **It is displayed at the same level as dialog boxes**"，
+官方文档同义表述为「和弹窗类组件显示在一个层级」。
+
+因此准确结论是：**Toast 与 OVERLAY 模式的 Sheet 属于同一层**（这已经解决了"被压在页面树之下"
+的根本问题），但**同层内的先后顺序官方未明确**，`clamp(100000)` 只保证在本类弹窗集合内取到最大
+order，**不构成"必然盖过 Sheet"的保证**——该项已列入下方实测清单。
+
+**未采用的路**：`OverlayManager.addComponentContentWithOrder` —— 官方明确写它「在 Dialog、Popup、
+Menu、BindSheet、BindContentCover 和 Toast 等组件之下」，order 再大也无效，是死路。
+
+**附带收益**：删除了旧实现的 150ms 定时轮询（`@Observed` 状态 + `setTimeout` 拉取），
+Toast 现在由系统在展示时回调构建函数，**无显示延迟**。
+
+**改动清单**：
+
+- 新增 `common/feedback/ToastOverlay.ets`：浮层内容组件（`@Prop` 单向数据 + 自持隐藏计时器；
+  **底部边距经 `ToastOverlayParam.bottomMargin` 显式传入，组件内不读 AppStorage**——
+  原因见下方未验证项 3），外加全局 `@Builder toastOverlayBuilder` 与
+  `toastOverlayWrappedBuilder: WrappedBuilder<[ToastOverlayParam]>`；
+  行为（点击回调 / 超时通知）走模块级钩子 `toastOverlayHooks`——ArkTS 的 `@Prop` 不用于承接
+  函数成员，这是本工程既有约定（全工程无 `@Prop` 存函数的先例）。
+- 重写 `common/feedback/ToastManager.ets`：节点创建 / 打开 / 关闭 / 释放集中在此，
+  `isModal: false` + `focusable: false` + `levelOrder` 也在这里。三条实现约束（**改动前必读**）：
+  1. **每次展示新建节点，永不复用**。官方 FAQ 明确弹窗关闭**不**触发内部组件树的
+     `aboutToDisappear`，而浮层的显示与计时挂在 `aboutToAppear` 上——若改用"复用节点 +
+     `update()` 换文案"，`aboutToAppear` 不会重跑，表现为**静默不显示**（不报错）。
+  2. **释放时机取官方写法**：`closeCustomDialog(content).then(() => content.dispose())`
+     （官方指南《不依赖UI组件的自定义弹出框》示例），catch 分支同样释放（系统可能已自行关闭）。
+     **不要用"延迟 N 毫秒后 dispose"猜动画时长**——初审版本这么做，且在"关闭旧节点 + 打开新节点"
+     的重放路径上必然于关闭动画进行中释放。
+  3. **展示序号 `showToken`**：每次 `show` 递增，打开失败后的重试定时器必须校验序号，
+     否则新提示在该窗口内展示完并超时后，旧文案会被复活重播。
+  另外 `openCustomDialog` 的同步抛出也要 try/catch 兜底（否则节点既不显示也不释放，且异常会
+  冒泡打断业务调用方）。`attachUIContext` 由 `EntryAbility` 在 `loadContent` 回调中调用
+  （早于此的提示暂存后补播，与旧实现「后来的覆盖先前的」语义一致）。
+- `EntryAbility.onWindowStageCreate` 注入 UI 上下文；`MainPage` 移除 `ToastComponent()` 挂载点；
+  删除 `common/components/Toast.ets`（旧页面树实现）；`AppStorageKeys` **无需**新增键
+  （Toast 显隐完全由浮层自己的计时器驱动，不经 AppStorage 中转）。
+- `AppStore.toast` / `showToast` / `showToastAction` 对外签名不变，全部调用点零改动。
+
+> 以上三条约束与同步异常兜底来自一次**独立 Agent 代码审查**（审查者未参与实现）的结论，
+> 其中"释放时机"与"重试序号"两条是初审版本的真实缺陷，已按官方依据修正。
+
+**迁移过程中的三次实测回退（教训，别重复踩）**：
+
+| 现象 | 错误做法 | 真正原因 | 正确做法 |
+| --- | --- | --- | --- |
+| Toast 比旧实现更靠近屏幕底边 | 组件内 `@StorageProp('navBarHeight')` 取导航条高度 | `ComponentContent`（BuilderNode 体系）内 `@StorageProp` **不生效**，值恒为 0 | 外界数据一律**显式传参**（manager 取值 → `ToastOverlayParam`） |
+| 修正后**仍**紧贴底边 | 照搬旧实现的"全屏 `Stack` + `alignContent(Bottom)` + `margin(bottom)`" | dialog 对**内容节点**的布局约束与页面树不同，`margin` 不生效 | 定位交给系统：`alignment: Bottom` + `offset` |
+| Toast 显示期间**全屏点击被吞** | 以为 `isModal: false` 就等于"事件透传" | 事件透传由 **`maskRect`** 决定，其默认值是**整屏**；`isModal` 只管蒙层可见性与"可与周围控件交互" | 显式 `maskRect: {x:0, y:0, width:0, height:0}`，命中行为回归气泡自身的 `hitTestBehavior` |
+
+三条的共同点：**把"某个 API 的常见用法"或"看起来等价的写法"当成了契约**。凡涉及
+dialog / BuilderNode 这类"内容节点由系统托管"的场景，先查该参数的**默认值**与
+**语义边界**，再落码。
+
+**未验证项（需真机/模拟器确认；本次只完成编译）**：
+
+1. **Toast 能否盖过已打开的 `bindSheet` / `bindContentCover`**。已知 `levelOrder` 对这两者无效，
+   只能依赖"同层 + 后创建者在上"。官方《弹出框层级管理》的挂载规则是「同一层级大小的弹窗节点按照
+   创建的先后顺序进行挂载」，但**该规则是否同样适用于弹窗与同层 Sheet 之间，文档未明确**。
+   实测方法：打开回复编辑器（`bindSheet`）后再触发一次 Toast，观察是否可见；若不通过，退路是把
+   Toast 内容改到 Sheet 的 builder 内部渲染（层级天然正确）或接受该场景不提示。
+2. ~~非模态（`isModal: false`）下浮层空白区域的点击是否确实穿透到下层~~
+   → **已实测：不穿透，已修**（`maskRect` 收到 0 尺寸，见上表第三行与参数表）。
+3. ~~`@StorageProp('navBarHeight')` 在 `ComponentContent` 内是否生效~~ → **已实测：不生效，已修**。
+   现象：迁到系统浮层后 Toast **明显比旧实现更靠近屏幕底部**。根因是本组件构建在
+   `ComponentContent`（BuilderNode 体系）内，`@StorageProp` 在其中读不到值，
+   `navBarHeight` 恒为 0，底部边距只剩 `TOAST_BOTTOM_MARGIN`（100vp），
+   比旧实现少了一个导航条高度（约 30~48vp）。**修法**：底部边距改由 `ToastManager`
+   在展示时用 `AppStorage.get<number>(KEY_NAV_BAR_HEIGHT)` 读出并算进
+   `ToastOverlayParam.bottomMargin`，浮层只消费参数（`@Prop bottomMargin`），
+   组件内不再有任何 `@StorageProp`。
+   **教训（写进本节供后来者）**：官方对 BuilderNode 的限制清单只列了
+   `@Reusable` / `@Link` / `@Provide` / `@Consume`，**未列举 `@StorageProp`**——
+   "未列举"不等于"支持"。凡浮层组件需要的外界数据，一律**显式传参**，不要在
+   BuilderNode 内部读全局状态。
+4. `ComponentContent` **不支持 DevEco Previewer**（SDK 声明与官方文档均明确注明），
+   但**未说明具体表现**。本实现的降级是可预期的：`EntryAbility` 不参与预览器运行，
+   `attachUIContext` 不会被调用，`uiContext` 保持 null，`showToast` 走暂存分支，
+   因此预览器里应当是"Toast 不出现"而非崩溃——**仍需实跑一次预览器确认**（Toast 是全局组件，
+   若抛异常会影响所有页面的预览）。
+5. **返回键 / 侧滑 / ESC 对 Toast 的影响**。本实现**未注册** `onWillDismiss`；官方只说明了
+   "注册后不会立即关闭"，对**非模态（无蒙层）弹窗**按返回键的默认行为没有说明。若系统据此
+   自行关闭，manager 侧收不到回调（`isOpen` 会滞后），下一次 `show` 走「先关闭再重建」——
+   该路径已能容忍"节点其实已不存在"。实测若发现返回键会吃掉 Toast，可注册 `onWillDismiss`
+   自行决定是否关闭。**参考：** 审查指出官方对层级还有一条更硬的直证——
+   《设置浮层（OverlayManager）》把 `Toast` 与 `BindSheet` / `BindContentCover` 并列在
+   "OverlayManager 之上"的集合里，因此"Toast 高于页面树、Sheet 同属上层"这一方向**大概率成立**，
+   第 1 项通过的可能性较高。

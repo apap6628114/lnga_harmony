@@ -22,7 +22,6 @@ import { SidebarComponent } from '../common/components/SidebarComponent'
 import { CommunityPanel } from './CommunityPanel'
 import { FloatingLayerComponent } from '../common/components/FloatingLayerComponent'
 import { EmptyHint } from '../common/components/EmptyHint'
-import { ToastComponent } from '../common/components/Toast'
 import { TtsProgressIndicator } from '../common/components/TtsProgressIndicator'
 import { SavedThreadProgressIndicator } from '../common/components/SavedThreadProgressIndicator'
 import { PidLocateIndicator } from '../common/components/PidLocateIndicator'
@@ -125,7 +124,9 @@ struct MainPage {
       .height('100%')
 
       FloatingLayerComponent({ currentBreakpoint: this.currentBreakpoint })
-      ToastComponent()
+      // 注：Toast 已迁到系统浮层（PromptAction.openCustomDialog），不再挂在页面根 Stack。
+      // 原因见 common/feedback/ToastOverlay.ets 文件头：页面树整体位于系统浮层树之下，
+      // 只要 bindSheet / bindContentCover 开着，页面内渲染的提示就会被完全遮住。
       TtsProgressIndicator()
       SavedThreadProgressIndicator()
       PidLocateIndicator()
