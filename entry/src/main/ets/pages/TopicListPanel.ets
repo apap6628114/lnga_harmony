@@ -1696,9 +1696,9 @@ struct TopicCardComponent {
   onCardClick: (tid: string, pid: string) => void = (_tid: string, _pid: string) => {}
   /** 「显示帖子预览图」开关（默认开启；设置页改动即时生效，见 docs/TOPIC_PREVIEW_DESIGN.md §8）。 */
   @StorageProp('showTopicPreview') showTopicPreview: boolean = true
-  /** 图片加载模式：决定预览图主动加载还是被动占位。 */
+  /** 图片加载模式：被动态（手动加载 / 「仅 WiFi」下的蜂窝）整块不渲染预览图（见 shouldRenderPreview）。 */
   @StorageProp('imageLoadStrategy') imageLoadStrategy: string = ImageLoadStrategy.ALWAYS
-  /** 网络变更版本号：WiFi↔蜂窝切换 / 模式变更后重判被动态。 */
+  /** 网络变更版本号：WiFi↔蜂窝切换 / 模式变更后重判是否处于被动态（预览块显隐随之变化）。 */
   @StorageProp('networkChangeVersion') networkChangeVersion: number = 0
   /**
    * 列表实测宽度（vp，由 `TopicListPanel` 采集后下传）。
@@ -1754,7 +1754,8 @@ struct TopicCardComponent {
   /**
    * 整行高度（vp）：单图 = 该图显示高度；多图 = 各张显示高度的最大值。
    *
-   * 被动占位块与实图**共用本值**，被动↔主动切换、WiFi↔蜂窝重判都不产生列表高度跳动（K6）。
+   * 行高是**静态值**：尺寸在解析期算定，加载过程中恒定（分辨率来自文件名尺寸段，见设计文档 §6.2）。
+   * 被动态整块不渲染（见 {@link shouldRenderPreview}），所以不再有"占位块与实图同高"这条约束。
    *
    * @returns 行高（vp）
    */
@@ -1833,17 +1834,25 @@ struct TopicCardComponent {
   /**
    * 是否渲染预览图区。
    *
-   * 三级判定（任一不满足即整块不渲染、不占高度）：
+   * 四级判定（任一不满足即整块不渲染、不占高度）：
    *  1. 设置开关开启（showTopicPreview）；
    *  2. 条目有可用预览图（previewImages 非空）；
-   *  3. 尚未加载失败（`previewFailed === false`）。
+   *  3. 尚未加载失败（`previewFailed === false`）；
+   *  4. 图片处于**主动加载**态（`!shouldUsePassive`）。
    *
-   * 「是否真的发起图片请求」由 `shouldUsePassive` 另行决定——本方法只回答"这块 UI 存不存在"。
+   * 第 4 条是「要么显示原图，要么不显示」的唯一落点：被动态（手动加载，或「仅 WiFi」下的蜂窝）
+   * **不再渲染灰底占位块**——列表里凭空空出一大块灰底既没有信息量，又容易被读成"这条在加载中"。
+   * 整块消失后条目自然收紧，列表回到纯文字形态（真实存在的只有实图与"没有图"两种状态）。
+   * 代价是被动↔主动切换会改变条目高度，这是刻意接受的（见设计文档 K40）。
+   *
+   * 判定落在这一层、而不是 `previewArea()` 里的分支：`if` 隔离保证被动态**不创建 `Image` 节点**、
+   * 不发任何图片请求（K8），并与"开关关闭""加载失败"共用同一条"不渲染且不占高度"的路径。
    *
    * @returns 是否渲染预览图区
    */
   private shouldRenderPreview(): boolean {
-    return this.showTopicPreview && this.previewImages().length > 0 && !this.previewFailed
+    return this.showTopicPreview && this.previewImages().length > 0 && !this.previewFailed &&
+      !shouldUsePassive(this.imageLoadStrategy)
   }
 
   /**
@@ -1878,27 +1887,27 @@ struct TopicCardComponent {
   /**
    * 预览图区（摘要下方、底栏上方）。
    *
-   * 两个互斥分支：
-   *  1. **被动加载**（`shouldUsePassive`：手动模式，或"仅 WiFi"模式下的蜂窝网络）→ 占位块。
-   *     用 `if / else` 分支隔离：不创建 `Image` 节点就不会发起请求（不能用 `visibility`
-   *     隐藏，那仍可能触发加载，见设计文档 §6.3 / K8）。
-   *  2. 实图 → **直接使用原图 URL**（与 `ImageViewer` / `ThreadPanel` 的图片链路一致，
-   *     见设计文档 §5.3 / K22）；加载失败即隐藏整块。
+   * **只有实图这一个分支**：被动态（手动加载，或「仅 WiFi」下的蜂窝网络）整块不进入渲染树
+   * （由 {@link shouldRenderPreview} 判定），这里因此既没有 `Image` 节点、也没有占位块——
+   * 即「要么显示原图，要么不显示」（K40）。分支隔离也不只是为了少画一块灰底：不创建 `Image`
+   * 节点就不会发起请求（用 `visibility` 隐藏仍可能触发加载，见设计文档 K8）。
+   *
+   * 图片**直接使用原图 URL**（与 `ImageViewer` / `ThreadPanel` 的图片链路一致，
+   * 见设计文档 §5.3 / K22）；加载失败即隐藏整块。
    *
    * **区域与逐张适配都由纯函数给出**（见设计文档 §6.2 / §6.8），本 Builder 只摆放：
    * - 区域：`resolvePreviewArea(图片区总宽, 张数)` → 单张可用宽（多图扣间距后均分）× 240vp 上限；
    * - 每张图**各自**按自身真实比例在该区域内做最优适配（完整显示优先、至少一边贴满），
    *   宽度与高度都**不超过区域**——`Cover` 只在"超宽全景图被最小高度抬起后按比例会超出区域宽"
    *   时才出现，此时裁掉的是两端而不是主体；
-   * - 整行高度 = 各张显示高度的最大值（多图不逐张撑高行高，行内其余图垂直居中）；
-   * - 被动占位块与实图**同高**（同一个 `previewRowHeight()`），切换与加载过程中不产生跳动。
+   * - 整行高度 = 各张显示高度的最大值（多图不逐张撑高行高，行内其余图垂直居中）。
    *
    * **每张图用自己的布局**（`tileAt(index)`）：改造前整行共用首图的布局，首图是横图时第二张
    * 竖图也会被套上横图容器，完整显示/裁切两种语义被强行统一到首图上。
    *
    * **不渲染任何角标**（用户明确要求移除）：多图「N 图」数量角标（多图横排本身"看得见"张数，
    * 再叠一个数字属于重复表达，且会压住最后一张图的角落）与单图极端比例的「长图」提示角标
-   * **都已删除**。预览区因此只有图片本身（或被动态占位块），右下角不再有任何文字徽标；
+   * **都已删除**。预览区因此只有图片本身，右下角不再有任何文字徽标；
    * 外层容器也不再是"用来叠角标"的 `Stack`，只承担公共宽度与区块间距（`Column`）。
    *
    * 宽度与高度**双向显式**写死（容器与 `Image` 各自 `.width/.height`）：SDK 声明
@@ -1909,44 +1918,34 @@ struct TopicCardComponent {
   previewArea() {
     if (this.shouldRenderPreview()) {
       Column() {
-        if (shouldUsePassive(this.imageLoadStrategy)) {
-          Row() {
-            Image($r('app.media.icon_image')).width(22).height(22)
-              .fillColor(AppColors.textTertiary).opacity(0.45)
-          }
-          .width('100%').height(this.previewRowHeight())
-          .justifyContent(FlexAlign.Center)
-          .borderRadius(PREVIEW_IMAGE_RADIUS).backgroundColor(AppColors.bgSecondary)
-        } else {
-          Row({ space: PREVIEW_IMAGE_GAP }) {
-            ForEach(this.inlinePreviewImages(), (image: PreviewImage, index: number) => {
-              Image(image.url)
-                /* 尺寸按**这张图自己**的布局：完整显示时宽度 = 高度 × 比例（贴合图片、两侧不留白），
-                   需要裁切时取满分区宽度。恒用 `width('100%')` 会让窄图两侧各留一条空白。 */
-                .width(this.tileAt(index).width)
-                .height(this.tileAt(index).height)
-                .objectFit(this.tileAt(index).useContain ? ImageFit.Contain : ImageFit.Cover)
-                .borderRadius(PREVIEW_IMAGE_RADIUS)
-                /* 内容到位时的柔和淡入（`@since 21`）。声明只排除"动态图资源"，对网络图 src 是否
-                   生效未定义——**待真机复核**：若实测无效（表现为图片硬切出现），删掉本行即可，
-                   其余布局不依赖它。 */
-                .contentTransition(ContentTransitionEffect.OPACITY)
-                /* 404 会被 Image 当作加载成功、onError 不触发，故同时用 onComplete 的尺寸补判 */
-                .onComplete((event) => {
-                  if (event && this.isBrokenPreview(event.width, event.height)) {
-                    this.onPreviewFailed()
-                  }
-                })
-                .onError(() => { this.onPreviewFailed() })
-            }, (image: PreviewImage) => image.url)
-          }
-          .width('100%')
-          /* 行高 = 各张显示高度的最大值：每张图按自身布局取高，Row 按最高者定高，
-             其余图在其中垂直居中（默认 `VerticalAlign.Center`）——一行整齐，又不牺牲任何一张的完整性 */
-          .height(this.previewRowHeight())
-          /* 左对齐：窄图收窄后必须贴左，否则 Row 的默认排布会把它们挤到中间 */
-          .justifyContent(FlexAlign.Start)
+        Row({ space: PREVIEW_IMAGE_GAP }) {
+          ForEach(this.inlinePreviewImages(), (image: PreviewImage, index: number) => {
+            Image(image.url)
+              /* 尺寸按**这张图自己**的布局：完整显示时宽度 = 高度 × 比例（贴合图片、两侧不留白），
+                 需要裁切时取满分区宽度。恒用 `width('100%')` 会让窄图两侧各留一条空白。 */
+              .width(this.tileAt(index).width)
+              .height(this.tileAt(index).height)
+              .objectFit(this.tileAt(index).useContain ? ImageFit.Contain : ImageFit.Cover)
+              .borderRadius(PREVIEW_IMAGE_RADIUS)
+              /* 内容到位时的柔和淡入（`@since 21`）。声明只排除"动态图资源"，对网络图 src 是否
+                 生效未定义——**待真机复核**：若实测无效（表现为图片硬切出现），删掉本行即可，
+                 其余布局不依赖它。 */
+              .contentTransition(ContentTransitionEffect.OPACITY)
+              /* 404 会被 Image 当作加载成功、onError 不触发，故同时用 onComplete 的尺寸补判 */
+              .onComplete((event) => {
+                if (event && this.isBrokenPreview(event.width, event.height)) {
+                  this.onPreviewFailed()
+                }
+              })
+              .onError(() => { this.onPreviewFailed() })
+          }, (image: PreviewImage) => image.url)
         }
+        .width('100%')
+        /* 行高 = 各张显示高度的最大值：每张图按自身布局取高，Row 按最高者定高，
+           其余图在其中垂直居中（默认 `VerticalAlign.Center`）——一行整齐，又不牺牲任何一张的完整性 */
+        .height(this.previewRowHeight())
+        /* 左对齐：窄图收窄后必须贴左，否则 Row 的默认排布会把它们挤到中间 */
+        .justifyContent(FlexAlign.Start)
       }
       .width('100%')
       /* 每个区块自带 `margin top`，值统一为 ITEM_BLOCK_GAP：

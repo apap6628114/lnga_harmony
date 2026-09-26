@@ -16,7 +16,7 @@
 | 模型 | `model/Topic.ets`：`TopicListInfo.attachPrefix`、`ThreadPageInfo.previewImages`（**`PreviewImage[]`**：URL 与真实像素尺寸成对；删类型错误的 `attachs?: string` 与只解首图的 `previewSize`，见 §6.2） | ✅ |
 | 工具 | `common/utils/TopicPreviewUtils.ets`（纯函数：前缀归一化 / 图片过滤 / **尺寸段解码 / 区域求解 / 逐张最优适配**） | ✅ |
 | 解析 | `parser/TopicParser.ets`（`attachs` → `previewImages`，**每张图的尺寸同时解定**）、`parser/AppSubjectListParser.ets` 与 `parser/AppUserTopicParser.ets`（`attachPrefix` **解析期内部**透传，见 §4.2；不作为 `TopicListInfo` 字段暴露） | ✅ |
-| UI | `pages/TopicListPanel.ets` → `TopicCardComponent.previewArea()`（开关 + 加载模式双重判定、被动占位、**原图**、失败即隐藏、**区域约束下的逐张最优适配**、**图片左对齐**、多图横排、**无任何角标**） | ✅ |
+| UI | `pages/TopicListPanel.ets` → `TopicCardComponent.previewArea()`（开关 + 加载模式双重判定、被动态**整块不渲染**（无占位块，K40）、**原图**、失败即隐藏、**区域约束下的逐张最优适配**、**图片左对齐**、多图横排、**无任何角标**） | ✅ |
 | 响应式 | 列表实测宽度下传卡片（`onAreaChange` → `@Prop listWidth`）→ **区域最大宽高求解**（单图整宽 / 多图按张数均分扣间距 × 240vp 上限）→ 每张图按自身比例在区域内适配（见 §6.2 / §6.8） | ✅ |
 | 列表边界 | 条目本体**无圆角/描边/底色**，边界由列表自身的 `List.divider`（0.5px `AppColors.separator`）承担，条目之间 0 间距（见 §6.9） | ✅ |
 | 设置 | `AppStorageKeys.KEY_SHOW_TOPIC_PREVIEW` / `SettingsState.showTopicPreview` / `MediaSettings.setShowTopicPreview` / `SettingsStore` 门面与 AppStorage 同步 / `SettingsPanel` 行 / `SettingsIconColors.topicPreview` / `settings_topic_preview.svg` | ✅ |
@@ -681,7 +681,7 @@ ListItem（**一条帖子 = 列表里的一个普通条目**：无圆角、无�
     │       └── Row(左对齐, space 6, 高 = 行高): Image × N
     │             每张的宽度/高度/objectFit 来自**它自己**的 tiles[i]
     │             （完整显示时宽度 = 高度 × 比例；只有超宽全景才 Cover 裁两端）
-    │             （被动模式时换成占位块：bgSecondary 灰底 + icon_image 图标，与实图行高同高）
+    │             （被动态——手动加载 / 仅 WiFi 下的蜂窝——**整个预览区不进入渲染树**，K40）
     └── Row   底栏（作者 · 时间 · 版面 | 回复数，margin top ITEM_BLOCK_GAP）
 ```
 
@@ -695,7 +695,7 @@ ListItem（**一条帖子 = 列表里的一个普通条目**：无圆角、无�
 
 **不渲染任何角标**：多图「N 图」数量角标（多图横排本身"看得见"，再叠一个数字属于重复表达，
 且会压住最后一张图的角落）与单图极端比例的「长图」角标**均已移除**（K34）。预览区内部只有
-图片本身（或被动态占位块），右下角不再有任何文字徽标。
+图片本身（或被动态下"整块不存在"），右下角不再有任何文字徽标。
 
 **列表边界（§6.9）**：条目本体不带圆角 / 描边 / 底色，边界完全由列表自身的 `List.divider`
 （0.5px `AppColors.separator`）承担；横向留白**只有一层**——条目内边距
@@ -939,13 +939,15 @@ UI 只消费结果、不做算术：
 /**
  * 是否渲染预览图区。
  *
- * 三级判定（任一不满足即整块不渲染，不占高度）：
+ * 四级判定（任一不满足即整块不渲染，不占高度）：
  *  1. 设置开关开启（showTopicPreview）
  *  2. 条目有可用预览图（previewImages 非空）
  *  3. 尚未加载失败（previewFailed === false）
+ *  4. 图片处于**主动加载**态（!shouldUsePassive）
  */
 private shouldRenderPreview(): boolean {
-  return this.showTopicPreview && this.previewImages().length > 0 && !this.previewFailed
+  return this.showTopicPreview && this.previewImages().length > 0 && !this.previewFailed &&
+    !shouldUsePassive(this.imageLoadStrategy)
 }
 ```
 
@@ -954,47 +956,40 @@ private shouldRenderPreview(): boolean {
 | 关 | 任意 | 任意 | **不渲染**（无占位、无高度） | ❌ |
 | 开 | `ALWAYS` | 有 | `Image(原图)` | ✅ 1 次（失败即隐藏，无二次请求） |
 | 开 | `ALWAYS` | 无 | 不渲染 | ❌ |
-| 开 | `MANUAL` | 有 | **被动占位块**（灰图图标 + `bgSecondary`） | ❌ |
+| 开 | `MANUAL` | 有 | **不渲染**（被动态整块消失，K40） | ❌ |
 | 开 | `WIFI_ONLY` + WiFi | 有 | `Image(原图)` | ✅ |
-| 开 | `WIFI_ONLY` + 蜂窝 | 有 | **被动占位块** | ❌ |
+| 开 | `WIFI_ONLY` + 蜂窝 | 有 | **不渲染**（被动态整块消失，K40） | ❌ |
 
-### 6.4 被动占位态
+### 6.4 被动态：整块不渲染（无占位块）
 
-与项目既有范式完全一致（`PostAttachments.renderImageAttach`，`PostAttachments.ets:104-125`）：
+被动态（`MANUAL`，或 `WIFI_ONLY` 下的蜂窝）**不再渲染灰底占位块**，整个预览区不进入渲染树
+（由 `shouldRenderPreview` 的第 4 条判定挡掉，与"开关关闭""加载失败"共用同一条路径）。
+这张卡片的可用状态只有两种：**实图** 或 **没有图**——"要么显示原图，要么不显示"（K40）。
 
-```ts
-Row() {
-  Image($r('app.media.icon_image'))
-    .width(22).height(22)
-    .fillColor(AppColors.textTertiary)
-    .opacity(0.45)
-}
-.width('100%').height(this.previewRowHeight())   // ← 与实图态同高（见 6.2）
-.justifyContent(FlexAlign.Center)
-.borderRadius(PREVIEW_IMAGE_RADIUS)
-.backgroundColor(AppColors.bgSecondary)
-// 外层 Column 统一承担 .width('100%') 与 .margin({ top: ITEM_BLOCK_GAP })，占位态与实图态因此同高同位
-```
+判定必须落在 `shouldRenderPreview()` 这一层、而不是 Builder 内部的分支上，理由有两条：
 
-**必须用 `if / else if` 分支而不是 `Image(...).visibility(...)`**：离开渲染树的分支不会创建
-图片节点，也就不会产生网络请求；用 `visibility` 隐藏仍可能触发加载（与「被动模式不主动请求
-图片」的契约相悖）。
+1. **不创建 `Image` 节点就不会发起请求**（用 `visibility` 隐藏仍可能触发加载，K8）；
+2. 被动态与"开关关闭"在语义上完全同类——都是"这块 UI 不存在"，共用一条路径才能保证
+   不占高度、不留空行、不产生区块间距（`margin top: ITEM_BLOCK_GAP` 也随之不生效）。
 
-**占位态高度必须与实图态取自同一个 `previewRowHeight()`**：两者同高，被动↔主动切换、以及
-WiFi↔蜂窝切换重判时都不会产生列表高度跳动（K6）。注意多图的"实图态高度"是**整行高度**
-（各张显示高度的最大值），占位块据此定高——尺寸在解析期就已全部解出，被动模式下无需加载任何
-图片也能算出这个高度。
+**代价（刻意接受）**：被动↔主动切换会改变条目高度，列表内容随之上下移动。改造前靠"占位块与实图
+同高"（旧 K6）换来了高度稳定，但那块灰底在列表里**没有任何信息量**，还容易被读成"这条正在加载"。
+用户明确否决占位形态后，高度稳定不再是目标（K40）。
+
+**若要恢复被动形态**（将来若产品改口），恢复点只有两处：`shouldRenderPreview()` 去掉第 4 条，
+并在 `previewArea()` 里加回占位分支（`Row { Image(icon_image) }` + `bgSecondary` 底 +
+`previewRowHeight()` 定高）；`shouldUsePassive` 分支隔离与"同高"约束照旧适用。
 
 ### 6.5 交互契约
 
 | 手势 | 行为 | 说明 |
 | --- | --- | --- |
 | 点击预览图 | **进帖子**（与点击卡片其他区域一致） | 预览图**不注册 `onClick`**，事件由外层卡片 `onClick` 处理（`TopicCardComponent.build` 末尾） |
-| 点击被动占位块 | 同上（进帖子） | 官方 App 的列表预览图也只是卡片的一部分，没有"点图看大图" |
 
-> 若将来要做「点预览图打开 `openImageViewer`」：需在 `Image` 上注册 `onClick` 并确认 ArkUI
-> 命中测试不会同时触发外层卡片的 `onClick`（默认只触发最内层注册了 `onClick` 的节点，但**必须
-> 真机实测确认**）。本期不做，保持与官方一致且零歧义。
+> 被动态下预览区整块不存在（K40），因此没有"点击占位块"这一条交互；官方 App 的列表预览图
+> 也只是卡片的一部分，没有"点图看大图"。若将来要做「点预览图打开 `openImageViewer`」：需在
+> `Image` 上注册 `onClick` 并确认 ArkUI 命中测试不会同时触发外层卡片的 `onClick`（默认只触发
+> 最内层注册了 `onClick` 的节点，但**必须真机实测确认**）。本期不做，保持与官方一致且零歧义。
 
 ### 6.6 组件代码（`TopicCardComponent`）
 
@@ -1007,9 +1002,9 @@ struct TopicCardComponent {
   @StorageProp('blacklistVersion') blacklistVersion: number = 0
   /** 「显示帖子预览图」开关（默认开启，设置页改动即时生效）。 */
   @StorageProp('showTopicPreview') showTopicPreview: boolean = true
-  /** 图片加载模式（决定主动加载 / 被动占位）。 */
+  /** 图片加载模式（被动态＝手动加载 / 仅 WiFi 下的蜂窝 → 整块不渲染，K40）。 */
   @StorageProp('imageLoadStrategy') imageLoadStrategy: string = ImageLoadStrategy.ALWAYS
-  /** 网络变更版本号：WiFi↔蜂窝切换后重判被动态（NetworkMonitor 已 bump）。 */
+  /** 网络变更版本号：WiFi↔蜂窝切换后重判是否处于被动态（NetworkMonitor 已 bump）。 */
   @StorageProp('networkChangeVersion') networkChangeVersion: number = 0
   /** 列表实测宽度（vp）：预览区宽度 = 本值 − 条目左右内边距 × 2（见 6.2）。 */
   @Prop listWidth: number = 0
@@ -1060,7 +1055,7 @@ struct TopicCardComponent {
     return resolvePreviewRowLayout(this.inlinePreviewImages(), this.previewAreaWidth())
   }
 
-  /** 整行高度（vp）：单图 = 该图显示高度；多图 = 各张显示高度的最大值（占位块共用）。 */
+  /** 整行高度（vp）：单图 = 该图显示高度；多图 = 各张显示高度的最大值（尺寸解析期算定）。 */
   private previewRowHeight(): number {
     return this.previewRowLayout().height
   }
@@ -1071,9 +1066,10 @@ struct TopicCardComponent {
     return index >= 0 && index < tiles.length ? tiles[index] : this.emptyTile
   }
 
-  /** 是否渲染预览图区（见 6.3 判定表）。 */
+  /** 是否渲染预览图区（见 6.3 判定表；第 4 条＝被动态整块不渲染，K40）。 */
   private shouldRenderPreview(): boolean {
-    return this.showTopicPreview && this.previewImages().length > 0 && !this.previewFailed
+    return this.showTopicPreview && this.previewImages().length > 0 && !this.previewFailed &&
+      !shouldUsePassive(this.imageLoadStrategy)
   }
 
   /**
@@ -1099,42 +1095,32 @@ struct TopicCardComponent {
   previewArea() {
     if (this.shouldRenderPreview()) {
       Column() {
-        if (shouldUsePassive(this.imageLoadStrategy)) {
-          // 被动模式：只占位不加载（分支隔离，不创建 Image 节点）；**与实图态同高**
-          // 占位块保留 bgSecondary 灰底（占位语义）；实图分支不得加底色（K30）
-          Row() {
-            Image($r('app.media.icon_image')).width(22).height(22)
-              .fillColor(AppColors.textTertiary).opacity(0.45)
-          }
-          .width('100%').height(this.previewRowHeight())
-          .justifyContent(FlexAlign.Center)
-          .borderRadius(PREVIEW_IMAGE_RADIUS).backgroundColor(AppColors.bgSecondary)
-        } else {
-          Row({ space: PREVIEW_IMAGE_GAP }) {
-            ForEach(this.inlinePreviewImages(), (image: PreviewImage, index: number) => {
-              Image(image.url)
-                // 尺寸按**这张图自己**的布局：完整显示时宽 = 高 × 比例（贴合图片、两侧不留白，
-                // K32）；只有超宽全景在最小高度抬起后需要 Cover 裁两端
-                .width(this.tileAt(index).width)
-                .height(this.tileAt(index).height)
-                .objectFit(this.tileAt(index).useContain ? ImageFit.Contain : ImageFit.Cover)
-                .borderRadius(PREVIEW_IMAGE_RADIUS)
-                // 内容到位时柔和淡入（@since 21；对网络图 src 是否生效声明未定义 → 待真机复核）
-                .contentTransition(ContentTransitionEffect.OPACITY)
-                .onComplete((event) => {
-                  if (event && this.isBrokenPreview(event.width, event.height)) {
-                    this.onPreviewFailed()
-                  }
-                })
-                .onError(() => { this.onPreviewFailed() })
-            }, (image: PreviewImage) => image.url)
-          }
-          .width('100%')
-          // 行高 = 各张显示高度的最大值：Row 按最高者定高，其余图在其中垂直居中（默认 Center）
-          .height(this.previewRowHeight())
-          // 左对齐：窄图收窄后必须贴左，否则 Row 的默认排布会把它们挤到中间
-          .justifyContent(FlexAlign.Start)
+        // 只有实图这一个分支：被动态整块不进入渲染树（shouldRenderPreview 第 4 条，K40），
+        // 这里因此不再有 else 占位分支
+        Row({ space: PREVIEW_IMAGE_GAP }) {
+          ForEach(this.inlinePreviewImages(), (image: PreviewImage, index: number) => {
+            Image(image.url)
+              // 尺寸按**这张图自己**的布局：完整显示时宽 = 高 × 比例（贴合图片、两侧不留白，
+              // K32）；只有超宽全景在最小高度抬起后需要 Cover 裁两端
+              .width(this.tileAt(index).width)
+              .height(this.tileAt(index).height)
+              .objectFit(this.tileAt(index).useContain ? ImageFit.Contain : ImageFit.Cover)
+              .borderRadius(PREVIEW_IMAGE_RADIUS)
+              // 内容到位时柔和淡入（@since 21；对网络图 src 是否生效声明未定义 → 待真机复核）
+              .contentTransition(ContentTransitionEffect.OPACITY)
+              .onComplete((event) => {
+                if (event && this.isBrokenPreview(event.width, event.height)) {
+                  this.onPreviewFailed()
+                }
+              })
+              .onError(() => { this.onPreviewFailed() })
+          }, (image: PreviewImage) => image.url)
         }
+        .width('100%')
+        // 行高 = 各张显示高度的最大值：Row 按最高者定高，其余图在其中垂直居中（默认 Center）
+        .height(this.previewRowHeight())
+        // 左对齐：窄图收窄后必须贴左，否则 Row 的默认排布会把它们挤到中间
+        .justifyContent(FlexAlign.Start)
       }
       .width('100%')
       // 每个区块自带 margin top，值统一 ITEM_BLOCK_GAP（K33）
@@ -1240,12 +1226,12 @@ struct TopicCardComponent {
 | 项 | 要求 |
 | --- | --- |
 | 圆角 | 预览图 8（`PREVIEW_IMAGE_RADIUS`）；**条目本体无圆角**（卡片化已回退，见 §6.9） |
-| 占位底色 | **仅被动占位块**用 `AppColors.bgSecondary`；实图（含竖图 `Contain`）不得加底色（K30） |
+| 占位底色 | **没有占位块**（被动态整块不渲染，K40）；实图（含竖图 `Contain`）也不得加底色（K30） |
 | 条目底色/描边 | **都没有**：与页面同底，边界由 `List.divider`（0.5px `AppColors.separator`）承担（§6.9） |
 | 间距 | 条目内四个区块统一 `ITEM_BLOCK_GAP = 10`（每个区块自带 `margin top`）；条目之间 **0**（横线上下紧贴）；多图横排内 6vp |
 | 横向留白 | 一层：条目内边距 16（`ITEM_HORIZONTAL_PADDING`）；列表自身无左右 padding，排序条走 4% 比例留白 |
 | 图片对齐 | **贴左**（`FlexAlign.Start`）；容器宽度 = 图片实际显示宽度（`a × h`），两侧不留白（K32） |
-| 高度稳定 | 占位态与实图态**同高**（同一个 `previewRowHeight()`），被动↔主动切换不产生跳动；尺寸在**解析期**算定，加载过程中也恒定（见 6.2.2） |
+| 高度稳定 | **同一条目在加载过程中**高度恒定（尺寸在**解析期**算定，见 6.2.2）；跨模式切换（主动↔被动）时条目高度会变——被动态整块不渲染，这是刻意接受的代价（K40） |
 | 尺寸约束 | 区域宽 = 图片区宽（多图按张数均分扣间距）、区域高 = 240vp；每张图 `w ≤ 区域宽`、`h ≤ 240`（§6.2 的三条不变式） |
 | 最小高度 | `min(112, 区域宽 ÷ 2.93)`：单图在基准宽度及以上恒为 112vp（全景图不会退化成"一条线"）；多图分区按比例放宽，小图得以完整显示 |
 | 多图 | 最多 3 张横排；**每张各自适配**（宽窄不一、均完整显示）、行高取各张最大值、行内垂直居中（K38）；区域按渲染张数（≤3）均分 |
@@ -1266,8 +1252,8 @@ struct TopicCardComponent {
 | 值 | 标签（设置页） | 语义 |
 | --- | --- | --- |
 | `ImageLoadStrategy.ALWAYS` = `'0'` | 始终加载（主动式） | 直接请求图片 |
-| `ImageLoadStrategy.MANUAL` = `'1'` | 手动加载（被动式） | 只显示占位，不主动请求 |
-| `ImageLoadStrategy.WIFI_ONLY` = `'2'` | 只在WiFi下加载 | WiFi 下主动，蜂窝下被动 |
+| `ImageLoadStrategy.MANUAL` = `'1'` | 手动加载（被动式） | 不主动请求；列表预览**整块不渲染**（K40） |
+| `ImageLoadStrategy.WIFI_ONLY` = `'2'` | 只在WiFi下加载 | WiFi 下主动；蜂窝下被动（列表预览**整块不渲染**） |
 
 唯一判定入口（**不得自行判断网络**）：
 
@@ -1286,24 +1272,26 @@ export function shouldUsePassive(strategy: string): boolean {
 ### 7.2 两个开关的关系（判定顺序）
 
 ```text
-① showTopicPreview === false        → 整块不渲染（不占位、不请求）
-② previewImages 为空                → 整块不渲染
-③ shouldUsePassive(strategy) === true → 渲染被动占位（不请求，高度与实图态同值）
-④ 否则                              → Image(原图)，失败即隐藏整块（无更低质量回退档）
+① showTopicPreview === false          → 整块不渲染（不占位、不请求）
+② previewImages 为空                  → 整块不渲染
+③ previewFailed === true              → 整块不渲染
+④ shouldUsePassive(strategy) === true → 整块不渲染（被动态，K40）
+⑤ 否则                                → Image(原图)，失败即隐藏整块（无更低质量回退档）
 ```
 
-高度由 `previewRowLayout()`（§6.2）给出，**与这四个分支无关**：占位、实图、加载中、加载失败
-四种状态的容器高度完全一致（多图为**整行高度**，同样只看解析期算定的尺寸，不需要加载）。
+高度由 `previewRowLayout()`（§6.2）给出，与分支无关：实图 / 加载中两种状态的容器高度完全一致
+（多图为**整行高度**，同样只看解析期算定的尺寸，不需要加载）。
 
-**「图片加载模式」是上位约束**：`MANUAL` 时即使开关打开也不会加载图片；`WIFI_ONLY` 在蜂窝下
-与 `MANUAL` 表现一致。开关只决定"这块 UI 存不存在"，加载策略决定"存在时是否真的拉图"。
+**「图片加载模式」是上位约束**：`MANUAL` 时即使开关打开也不显示预览图；`WIFI_ONLY` 在蜂窝下
+与 `MANUAL` 表现一致。开关与加载模式**共同**决定"这块 UI 存不存在"，二者是**与**关系（任一为否
+即整块消失）——不存在"存在但不拉图"的中间态（那正是 K40 取消的占位形态）。
 
 ### 7.3 刷新链路（被动态↔主动态自动切换）
 
 | 触发 | 机制 | 结果 |
 | --- | --- | --- |
 | 用户在设置页改「图片加载模式」 | `MediaSettings.setImageLoadStrategy` → `AppStorage.setOrCreate(KEY_IMAGE_LOAD_STRATEGY)` + `bumpAppStorageVersion(KEY_NETWORK_CHANGE_VERSION)` | 卡片 `@StorageProp('imageLoadStrategy')` / `('networkChangeVersion')` 变化 → 重建 → 重新判定 |
-| WiFi↔蜂窝切换 | `common/managers/NetworkMonitor.ets` → `bumpAppStorageVersion(KEY_NETWORK_CHANGE_VERSION)` | 同上（`WIFI_ONLY` 下进入 WiFi 自动开始加载，离开 WiFi 自动回到占位） |
+| WiFi↔蜂窝切换 | `common/managers/NetworkMonitor.ets` → `bumpAppStorageVersion(KEY_NETWORK_CHANGE_VERSION)` | 同上（`WIFI_ONLY` 下进入 WiFi 预览图自动出现，离开 WiFi 预览区整块消失） |
 | 用户在设置页改「显示帖子预览图」 | `MediaSettings.setShowTopicPreview` → `AppStorage.setOrCreate(KEY_SHOW_TOPIC_PREVIEW)` | 卡片 `@StorageProp('showTopicPreview')` 变化 → 重建 |
 
 **注意**：`setShowTopicPreview` **不需要**再 bump `networkChangeVersion`（那是网络语义的版本号），
@@ -1319,14 +1307,15 @@ export function shouldUsePassive(strategy: string): boolean {
 
 ### 7.5 备选方案 B（本期不做）：被动模式下「点击后加载」
 
-若产品希望被动模式点一下就把图加载出来（而不是进帖子），必须：
+被动态当前**整块不渲染**（K40），列表里没有被动的占位块可点，故本方案只是存档：若将来恢复被动
+形态、并要求"点一下就把图加载出来"（而不是进帖子），必须：
 
-1. 在卡片内加 `@State private previewExpanded: boolean = false`，被动态占位块 `onClick` 置 `true`；
+1. 在卡片内加 `@State private previewExpanded: boolean = false`，占位块 `onClick` 置 `true`；
 2. 该 `onClick` 与卡片整体 `onClick`（进帖子）互斥——**必须先真机验证 ArkUI 的命中测试与冒泡
    行为**，确认不会"既加载又跳转"；
 3. 该状态属于"用户临时意图"，**不要**持久化、不要进入 `LazyForEach` key。
 
-收益有限而交互风险高（与"整卡进帖子"冲突），故本期采用 6.4 的契约。
+收益有限而交互风险高（与"整卡进帖子"冲突），故本期采用 6.4 的契约（整块不渲染）。
 
 ---
 
@@ -1497,7 +1486,7 @@ export const KEY_SHOW_TOPIC_PREVIEW: string = 'showTopicPreview'
 | 单张预览图（**原图**） | 实测 jpg 75 KB / jpeg 292 KB / webp 80 KB / png 108 KB / gif 903 KB / mp4 1.1 MB |
 | 单页新增流量 | ≈29% × 41 条 ≈ 12 张 × 平均 ≈150 KB ≈ **1~2 MB 量级**（首屏；滚动按 `cachedCount(3)` 视口加载） |
 | 与查看器 | 同一 URL：点开查看器不再重新下载（`Image` 缓存内命中） |
-| 被动模式 | 0（只占位、不创建 `Image` 节点） |
+| 被动模式 | 0（整块不渲染、不创建 `Image` 节点，K40） |
 
 其他：
 
@@ -1552,9 +1541,9 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
 - [ ] 设置页出现「显示帖子预览图」行，位于「图片加载模式」正下方，开关可切换并重启后保持
 - [ ] 开关关闭：普通版面列表**无**预览区、无额外网络请求（DevTools/日志确认无 `img.nga.cn` 请求）
 - [ ] 开关开启 + 始终加载：带附件主题显示预览图（**原图 URL**），无附件主题不留空白
-- [ ] 开关开启 + 手动加载：显示被动占位块（灰图标 + 灰底），**该条高度与实图态一致**，无图片请求
-- [ ] 开关开启 + 只在WiFi下加载：WiFi 显示实图；切蜂窝后（或已在蜂窝）自动回到占位
-- [ ] 网络从蜂窝切回 WiFi：占位自动变为实图（不滚动、不重进页面）
+- [ ] 开关开启 + 手动加载：**预览区整块不存在**（无灰底占位块、无空行、无图片请求），条目按纯文字高度收紧
+- [ ] 开关开启 + 只在WiFi下加载：WiFi 显示实图；切蜂窝后（或已在蜂窝）预览区整块消失
+- [ ] 网络从蜂窝切回 WiFi：预览图自动出现（不滚动、不重进页面）；主动↔被动切换带来的高度变化可接受（K40）
 - [ ] 热门榜（`subject/hot`）同样显示预览图（验证顶层 `attachPrefix` 透传）
 - [ ] 置顶模式 / 搜索列表 / 收藏夹 / 用户主页：**无**预览区、无崩溃、无空白（数据本就没有）
 - [ ] 原图不存在的帖子（可临时拼一个不存在的附件路径造 404）：该卡片预览区消失、高度正常回收，
@@ -1591,7 +1580,7 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
 - [ ] `contentTransition(ContentTransitionEffect.OPACITY)` 淡入是否在**网络图 src** 上生效
       （声明未定义，需实测；若不生效只是硬切出现，不影响布局，删该行即可）
 - [ ] 长列表快速滚动时的帧率与内存（原图档，见 K22）—— 真机观察
-- [ ] 暗色主题下占位底色与图片圆角观感正常；切换主题不残留
+- [ ] 暗色主题下图片圆角与观感正常（不再有占位底色）；切换主题不残留
 - [ ] 快速滚动长列表无卡顿、无图片错位（LazyForEach 复用）
 - [ ] 清除缓存后回到列表，预览图重新加载且不报错
 
@@ -1606,12 +1595,12 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
 | K3 | 缩略图拼接是**整串末尾**：`xxx.jpeg.thumb.jpg` | 「去扩展名 + `.thumb.jpg`」实测 404 |
 | K4 | `attachs` 里混有非图片（实测 108 个里有 1 个 mp4） | 扩展名白名单过滤（对齐官方 `parseUrlSubject`） |
 | K5 | 只有 `subject/list` / `subject/hot` 有数据 | 置顶/搜索/收藏/用户列表**不要**指望有图；UI 无图即不渲染 |
-| K6 | 被动↔主动切换高度跳变 | 占位块与实图**同高**——两者都取自同一个 `previewRowHeight()`（§6.2），而不是各写一个常量。多图时该值是**整行高度**（各张显示高度的最大值），尺寸同样来自解析期，被动模式下无需加载任何图片即可算出 |
+| K6 | 被动↔主动切换高度跳变（**旧解法，已作废**） | 占位形态下曾用"占位块与实图同高"（两者同取 `previewRowHeight()`）来抹平跳变。**占位块本身已被取消**（K40），这条约束随之失效：被动态整块不渲染，跨模式切换时条目高度**允许**变化。仍然成立的部分只有"同一条目在加载过程中高度恒定"（尺寸在解析期算定） |
 | K6b | 用固定高度硬扛所有图片比例 | 实测 582 个真实附件里 **p50 = 1.00（近一半是竖图/方图）**：固定 120vp 下平均只能看到 39.7% 的画面，竖图仅 21~27%。必须按真实比例算高度（§6.2），比例来源见 K23 |
 | K7 | 顺手复用 `applyImageSuffix`（`Utils.ets`）做缩略图 | **实测 404**：它输出 `name.size.ext`，而 NGA 是 `name.ext.size.jpg`（见 §5.6）；必须"strip 后整串追加 `.thumb.jpg`" |
 | K7b | 只写裸后缀 `…jpeg.thumb` / `…jpeg.medium` | **实测 404**（`text/html` 146 B）；**必须带 `.jpg`** —— 这正是既有审计文档 §5.1 旧结论的根因（见 §5.4） |
 | K7c | 不 strip 就直接追加 | 输入带档位段时会拼出 `…jpeg.medium.jpg.thumb.jpg`；实测**返回 medium 档而非缩略图**（叠加不会更小）。正确顺序：strip → 追加 |
-| K8 | 用 `visibility` 隐藏图片导致被动模式仍发请求 | 用 `if / else` 分支隔离（对齐 `PostAttachments`） |
+| K8 | 用 `visibility` 隐藏图片导致被动模式仍发请求 | 用 `if` 分支隔离、**不创建 `Image` 节点**（对齐 `PostAttachments`）：被动态在 `shouldRenderPreview()` 就被挡掉，连容器都不进渲染树（K40） |
 | K9 | 在卡片里自己判断网络 | 唯一入口 `shouldUsePassive`（`NetworkUtil`） |
 | K10 | `@Builder` 按值接收 `showTopicPreview`/URL → 不刷新 | Builder 内一律 `this.*` |
 | K11 | 换域（`img.nga.178.com` → `img.nga.cn`）时硬编码域失效 | 优先用响应 `attachPrefix`；兜底用 `NgaDomains.NGA_IMG_BASE`（`NGA_CDN_BASE`） |
@@ -1633,7 +1622,7 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
 | K27 | 用 `.transition()` 做"图片加载完成后淡入" | `transition` 的声明作用域是「组件被插入或删除」（`common.d.ts`），对"同节点 src 变化"是否触发**声明未定义**。正确能力是 `contentTransition(ContentTransitionEffect.OPACITY)`（`image.d.ts`，`@since 21`）。**注意该能力对网络图 src 是否生效同样未定义，需真机实测**；不生效只表现为硬切出现，无布局影响 |
 | K28 | 多图时按"整行宽度"算高度 | 多图是**并排分区**，每张只占 `1/n` 宽（`n=3` 时约 100~125vp）。若高度仍按图片区总宽取，3 张 16:9 会被算成 184.5vp 高、而每张实际只有约 105vp 宽，画面会被严重裁切。正解：**区域宽先按张数均分**（`resolvePreviewArea` 内部的 `(区域宽 − 间隙) ÷ n`），每张的高度按**自己的分区宽**算 |
 | K29 | 让"行内同高"绑架每张图的适配 | 早期做法是**整行统一取首图比例的高度**，换来"三张同高"；代价是首图比例与其余图无关，横竖混排时后几张被塞进不合身的容器（配合 K38 的共用布局，直接错位）。正解：**每张按各自比例取尺寸**，行高取各张显示高度的**最大值**，行内其余图在该高度里**垂直居中**——同样是整齐的一行，却不牺牲任何一张的完整性。取舍记录：会有"宽窄不一"（真实比例的忠实反映），不再有"高矮不齐"的锯齿 |
-| K30 | 竖图 `Contain` 补底色衬底 | 底色衬底在实测观感上属于**多余**（用户明确否决）：`Contain` 下容器宽度已收窄到贴合图片，两侧**本来就没有留白**，再加 `bgSecondary` 反而画出一个比图片更宽的"灰框"。**被动占位块保留灰底**（那是占位语义，不是衬底），实图分支不得加 `backgroundColor` |
+| K30 | 竖图 `Contain` 补底色衬底 | 底色衬底在实测观感上属于**多余**（用户明确否决）：`Contain` 下容器宽度已收窄到贴合图片，两侧**本来就没有留白**，再加 `bgSecondary` 反而画出一个比图片更宽的"灰框"。预览区（含被动态）因此**一律不写 `backgroundColor`**——占位块已整块取消（K40），`bgSecondary` 在这条链路不再有引用点 |
 | K31 | 给 `List` 写链式 `.space(n)` | `space` 是 `List` 的**构造参数**（`ListOptions.space`，`list.d.ts:656`：Spacing between list items along the main axis），`ListAttribute` 上**没有**该属性——链式写法编译直接报 `Property 'space' does not exist on type 'ListAttribute'`。正确写法是构造参数 `List({ scroller, space: n })`；**当前列表不传 `space`**（条目间距恒 0，边界交给 `divider`，见 §6.9）。`lanes` 的 `gutter` 不能替代：声明写明它"仅在列数/行数大于 1 时生效" |
 | K32 | 竖图在满宽容器里靠 `justifyContent` 左对齐 | 只在满宽容器里改对齐方式，竖图左侧贴边、**右侧仍留一整条空白**，观感更差。正解是**收窄容器**到图片实际显示宽度（`PreviewTileLayout.width = a × height`），图片本身即容器宽度，两侧都不留白 |
 | K33 | 区块间距只写在"上方区块"上 | 三个区块若只有前两个带 `margin top`，第三个（预览图）的间距就取决于"上一个区块是否存在"——有摘要时是 10、**无摘要时退化为 0**（图片直接贴住标题，这正是实测反馈的观感问题）。规则：**每个区块自带 `margin top`，值统一用 `ITEM_BLOCK_GAP`**，任何区块增删都不影响其余间距 |
@@ -1643,6 +1632,7 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
 | K37 | 把"预览图能占多大"当成散落的算式，而不是一个**区域** | 改造前"区域"只以三处独立算式存在：`listWidth − 32`（图片区宽）、`(宽 − 间隙) / n`（多图分区）、`clamp(..., 112, 240)`（高度）。于是**填充方式**只能用与区域无关的魔法阈值（`a < 0.9` 才 `Contain`）来猜，横图/方图一律 `Cover` 挨一刀（实测横图只能看到 73%、方图 90%）。正解：把区域**显式求出**（`resolvePreviewArea` → `PreviewArea { maxWidth, maxHeight, minHeight }`），填充方式改由区域**推导**：`a × h ≤ 区域宽` 即完整显示。**先有区域，再有适配**——区域是"ListCell 分配给预览图的最大宽高"这一事实的唯一表达，UI 不得再自行做减法 |
 | K38 | 多图整行共用**首图**的布局（宽度/高度/`fit` 全来自首图） | 首图是横图时，第二张竖图被塞进横图容器：`Contain` 下出现大片留白、`Cover` 下被裁成横带；首图是竖图时反过来。改造前 UI 里 `ForEach` 的每一项都调用同一个 `previewLayout()`，**每张图根本没有自己的布局**。正解：`resolvePreviewRowLayout` 返回 `tiles[]`，UI 用 `tileAt(index)` 取**这一张**的宽高与 `fit`（`Image` 的 `width/height/objectFit` 三者必须同源于同一张的布局，混用会让容器与填充方式错配） |
 | K39 | 把最小高度当成与区域无关的绝对常量 | 绝对下限 112vp 在**多图小分区**里是有害的：分区宽 105vp 的 16:9 图被抬到 112vp 高，`Cover` 下**裁掉近一半宽度**——多图存在的意义（"每张都看得见"）被最小高度反过来破坏。更隐蔽的是旧算法 `Contain` 的宽度 = `112 × 比例` 不随分区宽收缩，窄列 + 近方图时会**一行溢出**（临界扫描 8400 组合里 19 例）。正解：最小高度 = `min(112, 区域宽 ÷ 2.93)`（比例下限，2.93 = 基准 328/112）——单图行为与改造前**完全一致**，多图按比例放宽到约 36vp；宽度再由 `min(区域宽, a × h)` 收口，结构性不可溢出 |
+| K40 | 被动态渲染灰底占位块（`bgSecondary` + `icon_image`） | **已取消**（用户明确要求"要么显示原图，要么不显示"）：列表里那块灰底**没有任何信息量**，却占掉可读条数，还容易被读成"这条正在加载"。改为**被动态整块不渲染**——判定并入 `shouldRenderPreview()` 第 4 条（`!shouldUsePassive(strategy)`），与"开关关闭""加载失败"共用"不渲染且不占高度"的路径，`previewArea()` 因此只剩实图一个分支。**验收口径**：列表里只允许"实图"与"没有图"两种状态，任何加载模式 / 任何网络下都不得出现占位块。**代价**：主动↔被动切换时条目高度会变（旧 K6 的"同高"约束随之作废）；`networkChangeVersion` 仍须保留，用于 WiFi↔蜂窝切换后重判显隐。**恢复点**：`shouldRenderPreview()` 去掉第 4 条 + `previewArea()` 加回占位分支（§6.4 末段） |
 
 ---
 
@@ -1669,6 +1659,12 @@ node tools/bbcode-ts/scripts/sync-to-ets.mjs --dry
 3. **UI 层**：`TopicCardComponent` 改用 `previewRowLayout()` / `previewRowHeight()` / `tileAt(index)`，
    `Image` 的宽高与 `objectFit` 三者同源于同一张的 tile。
 4. **门禁**：Hypium（区域/单图/多图/极端比例 4 个新用例）→ DevEco 编译 → 镜像 dry-run 与 EOL 自检。
+
+**取消被动占位块（本轮）的实施点**（两处代码 + 文档，无解析层改动、无镜像文件改动）：
+
+1. `TopicCardComponent.shouldRenderPreview()` 增加第 4 条判定 `!shouldUsePassive(this.imageLoadStrategy)`；
+2. `TopicCardComponent.previewArea()` 删除被动占位分支，只留实图分支（`if / else` → 单 `if`）；
+3. 文档同步：§6.3 判定表、§6.4、§6.5、§7.2 判定链、§7.5、§10、§11.3 清单、K6/K8/K30 措辞、新增 K40。
 
 ---
 

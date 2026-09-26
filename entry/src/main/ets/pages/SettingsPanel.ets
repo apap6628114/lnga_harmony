@@ -611,7 +611,9 @@ export struct SettingsPanel {
 
               Divider().margin({ left: 60 }).color(AppColors.separator)
 
-              // 显示帖子预览图：本开关决定"这块 UI 存不存在"，上方「图片加载模式」决定"怎么加载"
+              // 显示帖子预览图：本开关决定"这块 UI 存不存在"；上方「图片加载模式」处于被动态
+              // （手动加载 / 仅 WiFi 下的蜂窝）时同样整块不渲染——列表里不放占位块，
+              // 要么显示原图、要么什么都不显示（见 TopicCardComponent.shouldRenderPreview 与 K40）
               SettingToggleRow({
                 iconRes: $r('app.media.settings_topic_preview'), iconColor: SettingsIconColors.topicPreview,
                 label: '显示帖子预览图',
