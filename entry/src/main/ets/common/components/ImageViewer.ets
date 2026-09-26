@@ -6,6 +6,7 @@ import { uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { appStore } from '../../store/AppStore';
 import { AppColors } from '../constants/Constants';
+import { HoldingHandMonitor, HoldingHandStatus } from '../managers/HoldingHandMonitor';
 import { UIMaterialManager } from '../managers/UIMaterialManager';
 import { MovingPhotoPlayer, PHASE_FAILED, PHASE_LOADING, PHASE_PLAYING } from '../media/MovingPhotoPlayer';
 import { ensureMovingPhotoFiles, releaseMovingPhotoFiles, MovingPhotoPair } from '../media/MovingPhotoCache';
@@ -54,8 +55,25 @@ export struct ImageViewer {
    * 尚未落到子组件属性上时命令丢失。
    */
   @State private movingPhotoPlayRequestId: number = 0
+  /**
+   * 当前握姿：左手握持时底部栏镜像（分享/保存移到拇指侧的左边，页数号让到右边）。
+   *
+   * 初值取设置里持久化的上次握姿（与帖子列表 / 帖子页同一真源），挂载后由
+   * {@link holdingMonitor} 实时更新——查看器是全屏模态，独立于下方页面，
+   * 因此自己持有监听而不依赖父组件透传。
+   */
+  @State private holdingStatus: HoldingHandStatus = appStore.settings.holdingHand as HoldingHandStatus
 
   private isPageAnimating: boolean = false
+
+  /** 握姿监测：aboutToAppear 注册、aboutToDisappear 注销。 */
+  private holdingMonitor: HoldingHandMonitor = new HoldingHandMonitor()
+  /**
+   * 是否已经收到过一次握姿上报。
+   *
+   * 只作动画门控（首次直接生效，后续变化才走 300ms 过渡），不参与渲染，故不入 @State。
+   */
+  private holdingDetected: boolean = false
 
   private pinchBaseScale: number = 1
   private pinchBaseOffsetX: number = 0
@@ -89,6 +107,42 @@ export struct ImageViewer {
 
   aboutToAppear(): void {
     this.currentIndex = this.initialIndex
+    this.holdingMonitor.start((data: HoldingHandStatus): void => {
+      this.onHoldingChanged(data)
+    })
+  }
+
+  aboutToDisappear(): void {
+    this.holdingMonitor.stop()
+  }
+
+  /**
+   * 握姿变化回调：首次直接生效，之后的变化带 300ms 动画过渡（与帖子列表 / 帖子页一致），
+   * 状态持久化由 {@link HoldingHandMonitor} 完成。
+   *
+   * @param data - 新的握持状态
+   */
+  private onHoldingChanged(data: HoldingHandStatus): void {
+    if (this.holdingDetected) {
+      this.getUIContext()?.animateTo({ duration: 300, curve: Curve.EaseInOut }, (): void => {
+        this.holdingStatus = data
+      })
+    } else {
+      this.holdingStatus = data
+      this.holdingDetected = true
+    }
+  }
+
+  /**
+   * 是否左手布局。
+   *
+   * 判据与帖子列表悬浮按钮、帖子动作栏一致：只有明确的「左手握持」才镜像，
+   * 右手 / 双手 / 未识别一律走默认（右）布局。
+   *
+   * @returns 左手握持时为 true
+   */
+  private isLeftHandLayout(): boolean {
+    return this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD
   }
 
   /**
@@ -450,6 +504,74 @@ export struct ImageViewer {
     })
   }
 
+  /**
+   * 页数号（当前页 / 总页数）。
+   *
+   * 抽成 @Builder 只为让底栏在两种握姿下互换顺序时**只有一份定义**；
+   * 内部状态一律经 `this` 读取——@Builder 按值传参不建立响应式依赖，翻页不会刷新。
+   */
+  @Builder
+  PageIndicator() {
+    Text(`${this.currentIndex + 1} / ${this.urls.length}`)
+      .fontSize(15).fontColor(AppColors.white)
+  }
+
+  /**
+   * 底栏操作组：分享 / 保存到相册。
+   *
+   * 按钮**内部顺序也吃握姿**，一律按「从左到右」的阅读顺序排：右手模式「分享、保存」
+   * （与历史版本一致），左手模式「保存、分享」。
+   *
+   * 间隙统一由 `Row({ space: 12 })` 提供，按钮自身不带 margin：margin 会钉在**具体某个**
+   * 按钮上，倒序后跑到第一个元素左侧，把整组推离边缘、两按钮间距也不再是 12。
+   */
+  @Builder
+  ViewerActions() {
+    Row({ space: 12 }) {
+      if (this.isLeftHandLayout()) {
+        this.SaveAction()
+        this.ShareAction()
+      } else {
+        this.ShareAction()
+        this.SaveAction()
+      }
+    }
+  }
+
+  /** 分享按钮（下载当前页后拉起系统分享面板）。 */
+  @Builder
+  ShareAction() {
+    Button(this.sharing ? '分享中...' : '分享')
+      .fontSize(14).fontColor(UIMaterialManager.onDarkForeground)
+      .borderRadius(16)
+      .height(32)
+      .type(ButtonType.Capsule)
+      .attributeModifier(UIMaterialManager.darkOverlayMaterial)
+      .enabled(!this.sharing)
+      .onClick(async () => {
+        await this.shareCurrentImage()
+      })
+  }
+
+  /** 保存到相册按钮（系统安全控件，无需申请媒体库权限）。 */
+  @Builder
+  SaveAction() {
+    Stack() {
+      SaveButton({ text: SaveDescription.SAVE, buttonType: ButtonType.Normal })
+        .fontSize(14)
+        .fontColor(AppColors.white)
+        .backgroundColor(AppColors.imageViewerButtonBg)
+        .borderRadius(16)
+        .height(32)
+        .padding({ left: 20, right: 20 })
+        .onClick(async (_event: ClickEvent, result: SaveButtonOnClickResult) => {
+          if (result === SaveButtonOnClickResult.SUCCESS) {
+            await this.saveCurrentImage()
+          }
+        })
+    }
+  }
+
   build() {
     Column() {
       Stack() {
@@ -712,35 +834,20 @@ export struct ImageViewer {
       .layoutWeight(1)
       .width('100%')
 
+      /* 底部栏：**智感握姿**——左手握持时整条镜像：操作组移到左手拇指够得到的左边、页数号
+         让到右边（组内两按钮的左右顺序同样镜像，见 ViewerActions）；其余握姿保持
+         「页数号在左、操作在右」。两分支各写一遍三元素（而非只调换 @Builder 调用序），
+         是为了让 `Blank` 撑开的中间空隙留在同一位置。 */
       Row() {
-        Text(`${this.currentIndex + 1} / ${this.urls.length}`)
-          .fontSize(15).fontColor(AppColors.white)
-        Blank().layoutWeight(1)
-        Button(this.sharing ? '分享中...' : '分享')
-          .fontSize(14).fontColor(UIMaterialManager.onDarkForeground)
-          .borderRadius(16)
-          .height(32)
-          .type(ButtonType.Capsule)
-          .attributeModifier(UIMaterialManager.darkOverlayMaterial)
-          .enabled(!this.sharing)
-          .onClick(async () => {
-            await this.shareCurrentImage()
-          })
-        Stack() {
-          SaveButton({ text: SaveDescription.SAVE, buttonType: ButtonType.Normal })
-            .fontSize(14)
-            .fontColor(AppColors.white)
-            .backgroundColor(AppColors.imageViewerButtonBg)
-            .borderRadius(16)
-            .height(32)
-            .padding({ left: 20, right: 20 })
-            .onClick(async (_event: ClickEvent, result: SaveButtonOnClickResult) => {
-              if (result === SaveButtonOnClickResult.SUCCESS) {
-                await this.saveCurrentImage()
-              }
-            })
+        if (this.isLeftHandLayout()) {
+          this.ViewerActions()
+          Blank().layoutWeight(1)
+          this.PageIndicator()
+        } else {
+          this.PageIndicator()
+          Blank().layoutWeight(1)
+          this.ViewerActions()
         }
-          .margin({ left: 12 })
       }
       .width('100%')
       .padding({ top: 6, bottom: 15 + this.navBarHeight, left: 16, right: 16 })
