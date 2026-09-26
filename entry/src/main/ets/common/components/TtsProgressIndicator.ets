@@ -63,7 +63,7 @@ export struct TtsProgressIndicator {
             .maxLines(1)
           Text(this.percent.toString() + '%')
             .fontSize(13)
-            .fontColor(AppColors.primaryLight)
+            .fontColor(AppColors.toastAccent)
             .maxLines(1)
         }
         .padding({ left: 14, right: 14, top: 8, bottom: 8 })

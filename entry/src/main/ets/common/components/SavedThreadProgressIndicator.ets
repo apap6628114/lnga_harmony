@@ -77,12 +77,12 @@ export struct SavedThreadProgressIndicator {
           if (this.label.length > 0) {
             Text(this.label)
               .fontSize(13)
-              .fontColor(AppColors.primaryLight)
+              .fontColor(AppColors.toastAccent)
               .maxLines(1)
           }
           Text(this.percent.toString() + '%')
             .fontSize(13)
-            .fontColor(AppColors.primaryLight)
+            .fontColor(AppColors.toastAccent)
             .maxLines(1)
           Text('取消')
             .fontSize(13)

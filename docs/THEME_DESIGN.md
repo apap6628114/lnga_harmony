@@ -98,7 +98,30 @@ appStore.init 完成 → applyCurrentTheme()
   **若将来开启**，须先把 `@StorageProp('effectiveColorMode')` 条件样式（`BBCodeContentView.ets`
   表情背景、`ReplyDialog`/`NewTopicDialog`）改造为状态变量驱动，否则切换不生效。
 
-## 6. 相关文件
+## 6. 固定深色浮层的前景色（Toast 一族）
+
+`toast_bg`（`#CC000000`，80% 黑）在 **base 与 dark 两套资源中同值**：Toast 胶囊的底色不随主题
+变化，因此其上的前景色也必须是**固定值**，不能借道随主题切换的应用色资源：
+
+| 位置 | 颜色 | 调用点 |
+| --- | --- | --- |
+| 正文 | `AppColors.white` | `ToastOverlay` 正文、`TtsProgressIndicator` / `PidLocateIndicator` 文案 |
+| 强调（进度百分比 / 进度标签） | `AppColors.toastAccent`（固定暖金 `#E8B96B`） | `TtsProgressIndicator` / `SavedThreadProgressIndicator` 百分比 |
+| 强调（动作文字） | `AppColors.primary` | `ToastOverlay` 的「前往查看」 |
+
+- 两条强调通路都要求**两个主题下都不透明**（`primary` 亮 `#C08A4A` / 暗 `#D4A85A`，对 `#CC000000`
+  分别约 4.5:1 与 9.5:1，可见；`toastAccent` 约 7:1 与 11:1）。动作文字若也需要更亮的落点，
+  可直接切到 `toastAccent`（同一语义位置不要再引入第三个色值）。
+- **禁止**把 `primaryLight`（`primary_light`）当文字色用。它的语义是**浅色填充 / 选中行背景**
+  （`selection_tint` 一族；工程内 13 处调用点全部是 `backgroundColor`）。亮色取值 `#FDF3E7`
+  恰好不透明、看起来"能用"，暗色取值 `#26D4A85A` 只有 15% alpha——压在黑底上等于隐形。
+  历史缺陷：TTS 合成进度百分比（`TtsProgressIndicator`）与保存帖子进度
+  （`SavedThreadProgressIndicator`）在暗色主题下不可见、亮色正常，根因就是这条误用。
+- 新增"深浅色一致"的颜色时**两套资源都写同值**（与 `moving_photo_badge_*`、`glass_dark_*`
+  同一约定），不要只在 `base` 里加。
+- 同一属性**不得**用 `effectiveColorMode` 做函数式取色（§1：热更新不保证重执行）。
+
+## 7. 相关文件
 
 | 文件 | 职责 |
 | --- | --- |

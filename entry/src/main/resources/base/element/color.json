@@ -77,6 +77,10 @@
       "value": "#CC000000"
     },
     {
+      "name": "toast_accent",
+      "value": "#E8B96B"
+    },
+    {
       "name": "image_viewer_bg",
       "value": "#FF000000"
     },

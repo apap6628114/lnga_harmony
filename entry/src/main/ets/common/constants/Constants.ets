@@ -85,6 +85,15 @@ export class AppColors {
   static shadow: Resource = $r('app.color.shadow')
   static shadowLight: Resource = $r('app.color.shadow_light')
   static toastBg: Resource = $r('app.color.toast_bg')
+  /**
+   * 固定深色浮层（`toastBg` 胶囊）上的**强调前景色**。
+   *
+   * `toast_bg` 在亮/暗两套资源里同值（80% 黑），胶囊底色不随主题变化，所以其上的强调前景
+   * 也必须是**固定不透明**值，两套资源写同值（与 `moving_photo_badge_*` 同一约定）。
+   * 不可用 `primaryLight` 代偿：它的语义是"浅色填充/选中行背景"（`selection_tint` 一族），
+   * 暗色下取值带 15% alpha，当文字色压在黑底上等于隐形（TTS 合成进度百分比的历史缺陷）。
+   */
+  static toastAccent: Resource = $r('app.color.toast_accent')
   static imageViewerBg: Resource = $r('app.color.image_viewer_bg')
   static imageViewerButtonBg: Resource = $r('app.color.image_viewer_button_bg')
   /** 正文图片上「动态照片」角标的半透明底（叠在图片上，深浅色一致）。 */
