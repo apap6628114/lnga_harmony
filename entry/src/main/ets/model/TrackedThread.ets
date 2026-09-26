@@ -10,7 +10,7 @@
  */
 
 /** 跟踪时长档位（天）：自最后一次服务端回复起算，满 N 天无新回复即停止跟踪。 */
-export const TRACK_KEEP_DAYS_OPTIONS: number[] = [1, 2, 3, 7, 15, 30]
+export const TRACK_KEEP_DAYS_OPTIONS: number[] = [1, 2, 3, 7, 15]
 
 /** 默认跟踪时长（天）。 */
 export const TRACK_DEFAULT_KEEP_DAYS: number = 2

@@ -2025,7 +2025,6 @@ export struct ThreadPanel {
   trackContent() {
     ThreadTrackContent({
       tid: this.threadTid,
-      initialSubject: this.threadSubject === '帖子' ? '' : this.threadSubject,
       onKeepDaysChange: (days: number): void => {
         this.trackKeepDays = days
       },

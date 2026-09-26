@@ -2,7 +2,7 @@
  * 跟踪帖子更新的对话框内容构件（ThreadPanel 更多菜单「跟踪帖子更新」打开）。
  *
  * 迁移说明与 `SaveThreadDialogs.ets` 同款：标题与按钮由官方 `CustomContentDialog`
- * 模板渲染，本组件只负责「用途说明 + 跟踪时长选择 + 已跟踪状态卡 + 停止跟踪入口」。
+ * 模板渲染，本组件只负责「用途说明 + 已跟踪状态卡 + 跟踪时长选择 + 停止跟踪入口」。
  *
  * 与调用方的契约：
  * - 调用方传 `contentBuilder` 必须写箭头函数（`contentBuilder: (): void => { this.trackContent() }`），
@@ -17,10 +17,13 @@
  * `appStore.getTrackedThread()` 返回的是 Store 里同一个对象引用（该类不是 @Observed），
  * 同引用重新赋值在 ArkUI V1 下不保证触发刷新；标量赋值则必然刷新。
  *
- * 取色遵守 `docs/IMMERSIVE_LIGHT_DESIGN.md` §12.3：背板是系统沉浸材质，**内容层禁止使用
- * 应用自定义色**（`AppColors.bgSecondary` / `text*` 等暖棕阶在无 tint 的半透明材质上
- * 对比不足）。因此状态卡与未选中胶囊改用 `selectionTint`（专为浮层准备的半透明选择底）
- * 与 `$r('sys.color.comp_divider')` 描边，只有选中胶囊保留品牌色实底例外。
+ * 取色遵守 `docs/IMMERSIVE_LIGHT_DESIGN.md` §12.3（背板是系统沉浸材质，内容层不使用
+ * 应用自定义的暖棕阶文字色），并按 `ReplyDialog.ets` 的浮层配方取色：**说明文字同样取
+ * 主前景 `adaptiveForeground`，不用降调的次要前景**——半透明玻璃之上降调文字可读性不足；
+ * 只有选中胶囊用品牌色实底 + 白字。状态卡与未选中胶囊的层级改用 `selectionTint`
+ * 与 `$r('sys.color.comp_divider')` 描边表达。
+ *
+ * 面向用户的文案只表达「需要理解的功能」，不写实现细节（检查频率、失效判定条件等不进 UI）。
  */
 
 import { appStore } from '../../store/AppStore'
@@ -30,8 +33,7 @@ import {
   TrackedThread,
   TRACK_DEFAULT_KEEP_DAYS,
   TRACK_KEEP_DAYS_OPTIONS,
-  TRACK_MAX_COUNT,
-  TRACK_POLL_INTERVAL
+  TRACK_MAX_COUNT
 } from '../../model/TrackedThread'
 import { remainingTrackDays, unreadReplyCount } from '../utils/ThreadTrackPolicy'
 
@@ -39,8 +41,6 @@ import { remainingTrackDays, unreadReplyCount } from '../utils/ThreadTrackPolicy
 export struct ThreadTrackContent {
   /** NGA 主题 ID。 */
   @Prop tid: string = ''
-  /** 主题标题（未跟踪时的兜底展示）。 */
-  @Prop initialSubject: string = ''
   /**
    * 跟踪时长变化回调（回写调用方，供确认按钮提交）。
    *
@@ -155,17 +155,14 @@ export struct ThreadTrackContent {
     return String(Math.floor(diff / (24 * 60 * 60 * 1000))) + ' 天前'
   }
 
-  /** 用途说明文案（未跟踪时）。 */
+  /** 用途说明（未跟踪时）。 */
   private usageText(): string {
-    const minutes: number = Math.round(TRACK_POLL_INTERVAL / (60 * 1000))
-    return '开启后应用会在前台每 ' + String(minutes) + ' 分钟检查一次该帖的回复数，' +
-      '有新回复时在「消息 → 跟踪」里以红点提醒，点开即可阅读。'
+    return '开启后，该帖有新回复时会在「消息 → 跟踪」提醒你。'
   }
 
-  /** 时长选择区的说明文案。 */
+  /** 跟踪时长说明（随所选天数变化）。 */
   private keepDaysHint(): string {
-    return '连续 ' + String(this.keepDays) + ' 天没有新回复将自动停止跟踪；' +
-      '帖子被删除、锁定或审核中也会自动停止。'
+    return '连续 ' + String(this.keepDays) + ' 天没有新回复会自动停止跟踪。'
   }
 
   /** 已跟踪状态卡：状态行文案。 */
@@ -223,12 +220,11 @@ export struct ThreadTrackContent {
           }.width('100%')
           Text(this.statusDetail())
             .fontSize(12)
-            .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+            .fontColor(UIMaterialManager.adaptiveForeground)
             .margin({ top: 4 })
             .width('100%')
           if (this.statusError().length > 0) {
-            /* 警告文字沿用 SaveThreadDialogs 的既有配方（AppColors.warning），
-               材质文档约束的是浮层内的**底色/分隔**，文字语义色不受影响 */
+            /* 警示文字沿用工程既有配方（ReplyDialog / SaveThreadDialogs 的警示色） */
             Text(this.statusError())
               .fontSize(12)
               .fontColor(AppColors.warning)
@@ -242,24 +238,32 @@ export struct ThreadTrackContent {
         .border({ width: 0.5, color: $r('sys.color.comp_divider') })
         .borderRadius(10)
         .alignItems(HorizontalAlign.Start)
-        .margin({ bottom: 14 })
+        .margin({ bottom: 12 })
       } else {
-        Text(this.initialSubject.length > 0 ? this.initialSubject : '该帖子')
-          .fontSize(14)
-          .fontColor(UIMaterialManager.adaptiveForeground)
-          .maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
         Text(this.usageText())
-          .fontSize(12)
-          .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-          .margin({ top: 6, bottom: 14 })
+          .fontSize(13)
+          .fontColor(UIMaterialManager.adaptiveForeground)
           .width('100%')
+          .margin({ bottom: 10 })
+      }
+
+      Text(this.keepDaysHint())
+        .fontSize(13)
+        .fontColor(UIMaterialManager.adaptiveForeground)
+        .width('100%')
+        .margin({ bottom: 10 })
+
+      if (!this.tracked) {
+        Text('最多同时跟踪 ' + String(TRACK_MAX_COUNT) + ' 个帖子。')
+          .fontSize(13)
+          .fontColor(UIMaterialManager.adaptiveForeground)
+          .width('100%')
+          .margin({ bottom: 10 })
       }
 
       Text('跟踪时长')
         .fontSize(13)
-        .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .fontColor(UIMaterialManager.adaptiveForeground)
         .alignSelf(ItemAlign.Start)
       Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start, alignItems: ItemAlign.Start }) {
         ForEach(TRACK_KEEP_DAYS_OPTIONS, (days: number) => {
@@ -269,21 +273,8 @@ export struct ThreadTrackContent {
         }, (days: number) => String(days))
       }
       .width('100%')
-      .margin({ top: 2 })
 
-      Text(this.keepDaysHint())
-        .fontSize(12)
-        .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-        .margin({ top: 10 })
-        .width('100%')
-
-      if (!this.tracked) {
-        Text('最多同时跟踪 ' + String(TRACK_MAX_COUNT) + ' 个帖子')
-          .fontSize(12)
-          .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-          .margin({ top: 4 })
-          .width('100%')
-      } else {
+      if (this.tracked) {
         Row() {
           Text('停止跟踪')
             .fontSize(13)
@@ -297,7 +288,7 @@ export struct ThreadTrackContent {
         }
         .width('100%')
         .justifyContent(FlexAlign.Start)
-        .margin({ top: 8 })
+        .margin({ top: 10 })
       }
     }
     .width('100%')
