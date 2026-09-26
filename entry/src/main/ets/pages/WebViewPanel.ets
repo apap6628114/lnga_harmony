@@ -14,6 +14,7 @@ import { extractHostname } from '../common/utils/UrlUtils'
 import { isNgaQrLoginUrl } from '../common/utils/NgaQrLoginUtils'
 import { AppColors } from '../common/constants/Constants'
 import { PageScope } from '../common/concurrency/PageScope'
+import { HoldingHandMonitor, HoldingHandStatus } from '../common/managers/HoldingHandMonitor'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { resolveWebKeyboardAppearance } from '../common/utils/KeyboardAppearanceUtils'
 
@@ -23,7 +24,7 @@ const NGA_HARMONY_USER_AGENT_SUFFIX: string = ' NGA_Harmony/1.0.0'
 /** 普通网页使用的 WebView User-Agent。 */
 const DEFAULT_WEBVIEW_USER_AGENT: string =
   'Mozilla/5.0 (Linux; Android 10; HarmonyOS) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.144 Mobile Safari/537.36'
-/** 右下角浮动按钮（前进 / 后退）的材质块尺寸（vp），与迁移前的自绘玻璃按钮逐像素一致。 */
+/** 浮动按钮（前进 / 后退）的材质块尺寸（vp），与迁移前的自绘玻璃按钮逐像素一致。 */
 const FAB_SIZE: number = 44
 
 @Component
@@ -43,6 +44,21 @@ export struct WebViewPanel {
   @State progress: number = 0
   @State canGoBackward: boolean = false
   @State canGoForward: boolean = false
+  /**
+   * 当前握姿：左手握持时前进 / 后退浮动按钮整组镜像到左下角（拇指侧），按钮左右顺序不变。
+   *
+   * 初值取设置里持久化的上次握姿（与帖子列表 / 帖子页 / 图片查看器同一真源），
+   * 挂载后由 {@link holdingMonitor} 实时更新。
+   */
+  @State private holdingStatus: HoldingHandStatus = appStore.settings.holdingHand as HoldingHandStatus
+  /** 握姿监测：aboutToAppear 注册、aboutToDisappear 注销。 */
+  private holdingMonitor: HoldingHandMonitor = new HoldingHandMonitor()
+  /**
+   * 是否已经收到过一次握姿上报。
+   *
+   * 只作动画门控（首次直接生效，后续变化才走 300ms 过渡），不参与渲染，故不入 @State。
+   */
+  private holdingDetected: boolean = false
   /** 初始 URL 为 NGA 域名时进入 NGA 会话模式，允许 WebView 内自由浏览 NGA 页面而不被拦截回原生 */
   private ngaSession: boolean = false
   /** 当前 WebView 是否专门用于 NGA 扫码授权。 */
@@ -58,11 +74,44 @@ export struct WebViewPanel {
     this.isQrLoginWebView = isNgaQrLoginUrl(this.url)
     this.injectCookies()
     this.internalFallbackUrl = this.url
+    this.holdingMonitor.start((data: HoldingHandStatus): void => {
+      this.onHoldingChanged(data)
+    })
   }
 
   /** 结束页面出现会话，使未完成的异步回调失效。 */
   aboutToDisappear(): void {
     this.scope.end()
+    this.holdingMonitor.stop()
+  }
+
+  /**
+   * 握姿变化回调：首次直接生效，之后的变化带 300ms 动画过渡（与帖子列表 / 帖子页一致），
+   * 状态持久化由 {@link HoldingHandMonitor} 完成。
+   *
+   * @param data - 新的握持状态
+   */
+  private onHoldingChanged(data: HoldingHandStatus): void {
+    if (this.holdingDetected) {
+      this.getUIContext()?.animateTo({ duration: 300, curve: Curve.EaseInOut }, (): void => {
+        this.holdingStatus = data
+      })
+    } else {
+      this.holdingStatus = data
+      this.holdingDetected = true
+    }
+  }
+
+  /**
+   * 是否左手布局。
+   *
+   * 判据与帖子列表悬浮按钮、帖子动作栏、图片查看器底栏一致：只有明确的「左手握持」才镜像，
+   * 右手 / 双手 / 未识别一律走默认（右）布局。
+   *
+   * @returns 左手握持时为 true
+   */
+  private isLeftHandLayout(): boolean {
+    return this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD
   }
 
   private injectCookies(): void {
@@ -272,7 +321,8 @@ export struct WebViewPanel {
   }
 
   /**
-   * 右下角前进 / 后退浮动按钮：**HDS 材质宿主**背板 + 一颗承载动作的内容节点。
+   * 前进 / 后退浮动按钮（默认右下角，左手握持时整组镜像到左下角）：
+   * **HDS 材质宿主**背板 + 一颗承载动作的内容节点。
    *
    * ## 为什么换成 HDS 材质
    *
@@ -435,14 +485,21 @@ export struct WebViewPanel {
       }
       .width('100%').height('100%')
 
-      // ─── 右下角浮动操作：前进 / 后退（背板为 HDS 材质宿主，见 historyButton） ───
+      // ─── 浮动操作：前进 / 后退（背板为 HDS 材质宿主，见 historyButton） ───
+      // **智感握姿**：左手握持时整组镜像到左下角（拇指侧），**按钮左右顺序保持不变**
+      //（两种握姿都是「◀ 后退、前进 ▶」——只挪位置，不重排）；左右留白随对齐方向切换
+      //（靠左时补 left、靠右时补 right），与 TopicListPanel 的 FAB 同构。
       Row({ space: 12 }) {
         this.historyButton(-1, '网页后退')
         this.historyButton(1, '网页前进')
       }
       .width('100%')
-      .justifyContent(FlexAlign.End)
-      .padding({ right: 16, bottom: 16 + this.navBarHeight })
+      .justifyContent(this.isLeftHandLayout() ? FlexAlign.Start : FlexAlign.End)
+      .padding({
+        left: this.isLeftHandLayout() ? 16 : 0,
+        right: this.isLeftHandLayout() ? 0 : 16,
+        bottom: 16 + this.navBarHeight
+      })
     }
     .width('100%').height('100%')
     .alignContent(Alignment.BottomEnd)
