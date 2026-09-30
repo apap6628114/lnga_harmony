@@ -1237,6 +1237,7 @@ struct TopicCardComponent {
 | 多图 | 最多 3 张横排；**每张各自适配**（宽窄不一、均完整显示）、行高取各张最大值、行内垂直居中（K38）；区域按渲染张数（≤3）均分 |
 | 无图 | 完全不渲染（不留空行、不留背景条），标题行紧贴条目顶部 |
 | 深色模式 | 仅使用 `AppColors` 语义色，无需单独 dark 分支 |
+| 已读 / 有更新 | 看过的帖子标题与摘要 `opacity(0.7)`（**含"看过且有更新"**）；"有更新"只在底栏回复数后追加真实增量 `+x`（主色），回复数与图标保持常规色，不新增任何图元（见 `docs/TOPIC_READ_STATE_DESIGN.md`）。预览图、底栏其余文字、收藏夹的取消收藏按钮均不参与降权 |
 | 玻璃材质 | **不涉及**：预览图在列表内容层，不使用 `systemMaterial` / `GlassModifier`（详见 `docs/IMMERSIVE_LIGHT_DESIGN.md`：材质只用于浮层与系统控件） |
 | 字体 | 预览区不引入新字号角色（角标已全部移除，不再有 11 号角标文字） |
 | 列宽 | 列表恒 `width('100%')` 铺满所属列，**不设宽度上限**（K25） |
@@ -1444,8 +1445,10 @@ export const KEY_SHOW_TOPIC_PREVIEW: string = 'showTopicPreview'
 | `showTopicPreview` | `@StorageProp` | 开关即时生效 |
 | `imageLoadStrategy` | `@StorageProp` | 主动/被动判定 |
 | `networkChangeVersion` | `@StorageProp` | WiFi↔蜂窝/策略变更后重判 |
+| `blacklistVersion` | `@StorageProp` | 黑名单变更后重判作者/摘要占位 |
+| `browseHistoryVersion` | `@StorageProp` | 已读台账（浏览历史）变化后重算「已读 / 有更新」外观（见 `docs/TOPIC_READ_STATE_DESIGN.md`） |
 
-三者都是"值类型 + 会变"，用 `@StorageProp`（单向）即可；**不要**用 `@StorageLink`（卡片不需要写回）。
+各键都是"值类型 + 会变"，用 `@StorageProp`（单向）即可；**不要**用 `@StorageLink`（卡片不需要写回）。
 
 ### 9.2 `LazyForEach` key 不变
 

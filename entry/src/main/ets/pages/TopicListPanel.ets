@@ -53,6 +53,12 @@ import {
   canManageCurrentBoard
 } from '../common/utils/TopicListUtils'
 import { shouldUsePassive } from '../common/utils/NetworkUtil'
+import {
+  TopicReadState,
+  resolveTopicReadState,
+  isTopicRead,
+  topicUpdateDelta
+} from '../common/utils/TopicReadPolicy'
 
 const logger = new Logger(DOMAIN_UI, 'TopicListPanel')
 
@@ -120,6 +126,29 @@ const PREVIEW_IMAGE_MAX_INLINE: number = 3
  * 取 10：与内边距 16 成比例（区块内松、区块间紧），且不改动原有观感基准。
  */
 const ITEM_BLOCK_GAP: number = 10
+
+/**
+ * 看过的帖子其**标题与摘要**的不透明度。
+ *
+ * 「看过 = 变淡」是浏览器"访问过的链接"那一套通用约定，也是本项目对"不想太显眼"的落点：
+ * 它不新增任何图元、不改变任何元素的落点，只把**已经读完**的帖子轻轻压下去，
+ * 于是没看过的帖子在扫视时自然靠前——信号来自"谁更亮"，而不是"谁多了一个记号"。
+ *
+ * **"看过且已更新"同样保持降权，不恢复原亮度**：列表只有一条亮度轴，它只回答"这条我读过没有"；
+ * "读过后又有人回复"由**底栏回复数后的 `+x` 增量**单独表达（见 `TopicCardComponent.updateDelta`）。
+ * 若更新态也恢复原亮度，亮度轴就同时承载两种语义——"没看过"与"看过但有更新"会挤在同一档，
+ * 扫视时"没看过"的优先级被吃掉，等于用一个更抢眼的信号换掉了原本最该突出的那一档。
+ *
+ * 取值 0.7 是"看得出的降权"与"仍可读"的交点：亮色主题下标题由 `#3E2A1D` 落到约 `#78685E`，
+ * 对比度约 5.1:1（仍满足正文对比度要求）；再低（0.6 附近）就降到约 3.8:1，读起来开始吃力，
+ * 且容易被误读成"帖子不可用/已锁定"。
+ *
+ * **只作用于标题与摘要这两块"内容"**（标题行的类型标签/标题、摘要及其屏蔽占位，共四处文字节点）：
+ * 预览图不降权（给图片降低不透明度会像"没加载完"）；底栏（作者 / 时间 / 回复数 / `+x`）
+ * 也不降权——它是条目的状态区，**`+x` 正画在上面**（压暗底栏会让更新信号一起变哑）；
+ * 收藏夹的「取消收藏」是操作不是内容，同理不降权。
+ */
+const TOPIC_READ_CONTENT_OPACITY: number = 0.7
 
 /** 预加载页面临时结果 — startPrefetch 内部收集用 */
 class PrefetchPageResult {
@@ -1692,6 +1721,14 @@ struct TopicCardComponent {
   @StorageProp('topicFontSize') topicFontSize: number = 15
   /** 黑名单变更版本号。 */
   @StorageProp('blacklistVersion') blacklistVersion: number = 0
+  /**
+   * 浏览历史（已读台账）版本号。
+   *
+   * 只作为**重渲染依赖**参与判定（与 `blacklistVersion` 同一模式）：打开帖子 / 清空浏览历史 /
+   * 切换账号后 `HistoryStore` 会 bump 它，已在屏的行据此重算「看过 / 有更新」外观。
+   * 台账本身是 `HistoryStore` 的内存索引，构建期同步可查（见 {@link readState}）。
+   */
+  @StorageProp('browseHistoryVersion') readStateVersion: number = 0
   onRemoveFav: (tid: number) => void = (_tid: number) => {}
   onCardClick: (tid: string, pid: string) => void = (_tid: string, _pid: string) => {}
   /** 「显示帖子预览图」开关（默认开启；设置页改动即时生效，见 docs/TOPIC_PREVIEW_DESIGN.md §8）。 */
@@ -1794,6 +1831,70 @@ struct TopicCardComponent {
     return this.blacklistVersion >= 0 &&
       authorId.length > 0 &&
       appStore.settingsStore.isBlacklisted(authorId)
+  }
+
+  /**
+   * 该帖在列表中的已读状态（没看过 / 看过 / 看过后有更新）。
+   *
+   * 纯逻辑（含两个基线哨兵的处理）已下沉至 `TopicReadPolicy.resolveTopicReadState`，
+   * 本方法只把「已读台账基线」与「条目的当前回复数」两个输入喂进去。数据来源、口径与
+   * 已知边界见 `docs/TOPIC_READ_STATE_DESIGN.md`。
+   *
+   * @returns 已读状态
+   */
+  private readState(): TopicReadState {
+    /* readStateVersion 只用于建立响应式依赖（负版本号不可能出现，分支恒不成立）：
+       台账变化后 bump，已在屏的行才会重算标记——与 isAuthorBlacklisted 用 blacklistVersion 同理 */
+    if (this.readStateVersion < 0) {
+      return TopicReadState.UNREAD
+    }
+    return resolveTopicReadState(this.readBaseline(), this.currentReplies())
+  }
+
+  /**
+   * 已读台账中"读到该帖时"的回复数（基线）。
+   *
+   * @returns 基线；没读过 / 基线未知时为对应的哨兵值
+   */
+  private readBaseline(): number {
+    return appStore.historyStore.getReadReplies(String(this.thread['tid'] ?? ''))
+  }
+
+  /**
+   * 本条目的当前回复数（列表快照里的值）。
+   *
+   * @returns 回复数（缺失或非法按 0）
+   */
+  private currentReplies(): number {
+    const replies: number = Number(this.thread['replies'] ?? 0)
+    return Number.isFinite(replies) && replies > 0 ? replies : 0
+  }
+
+  /**
+   * 标题与摘要的不透明度：看过的帖子降权（**含"看过且有更新"**），没看过的保持原样。
+   *
+   * 更新态不恢复原亮度：亮度只回答"这条我读过没有"，"读过后又有人回复"由底栏回复数
+   * 后面的「+x」单独表达（见 {@link updateDelta} 与 `TOPIC_READ_CONTENT_OPACITY` 的理由）。
+   *
+   * @returns 不透明度
+   */
+  private contentOpacity(): number {
+    return isTopicRead(this.readState()) ? TOPIC_READ_CONTENT_OPACITY : 1
+  }
+
+  /**
+   * 「上一次进帖子时 → 现在」的回复数差（底栏展示为 `+x`）；0 表示不显示。
+   *
+   * 与 {@link readState} 同源同口径（同一个事实的两种视图：有没有新东西 / 多了几条），
+   * 只认回复数增加；从未读过、基线未知、删楼都返回 0。
+   *
+   * @returns 新增回复数
+   */
+  private updateDelta(): number {
+    if (this.readStateVersion < 0) {
+      return 0
+    }
+    return topicUpdateDelta(this.readBaseline(), this.currentReplies())
   }
 
   /**
@@ -1970,19 +2071,24 @@ struct TopicCardComponent {
           Text('该用户已被屏蔽')
             .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.topicFontSize))
             .fontColor(AppColors.textTertiary)
+            .opacity(this.contentOpacity())
             .layoutWeight(1)
         } else {
           Text(getTypeTags(Number(this.thread['type'] ?? 0)))
             .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.topicFontSize))
             .fontColor(AppColors.textTertiary)
+            .opacity(this.contentOpacity())
           Text(unescapeHtml(String(this.thread['subject'] ?? '')))
             .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_TITLE, this.topicFontSize))
             .fontColor(getSubjectFontColor(String(this.thread['titleFont'] ?? '')))
             .fontWeight(isSubjectBold(String(this.thread['titleFont'] ?? '')) ? FontWeight.Bold : FontWeight.Normal)
             .fontStyle(isSubjectItalic(String(this.thread['titleFont'] ?? '')) ? FontStyle.Italic : FontStyle.Normal)
+            .opacity(this.contentOpacity())
             .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
         }
         if (this.isFavorites) {
+          /* 收藏夹的「取消收藏」是**操作**而不是内容：不随"看过"降权——降权只表达
+             "这些字我已经读过了"，压暗一个可点入口会被读成"这行不可操作"。 */
           Image($r('app.media.icon_close')).width(16).height(16).fillColor(AppColors.textTertiary)
             .padding({ left: 8, right: 4 })
             .onClick(() => { this.onRemoveFav(Number(this.thread['tid'] ?? 0)) })
@@ -1995,12 +2101,14 @@ struct TopicCardComponent {
           Text('该用户已被屏蔽')
             .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.topicFontSize))
             .fontColor(AppColors.textTertiary)
+            .opacity(this.contentOpacity())
             .margin({ top: ITEM_BLOCK_GAP })
             .width('100%')
         } else {
           Text(unescapeHtml(String(this.thread['previewSnippet'] ?? '')))
             .fontSize(ReadingTypography.fontSize(ReadingFontRole.TOPIC_SUMMARY, this.topicFontSize))
             .fontColor(AppColors.textSecondary)
+            .opacity(this.contentOpacity())
             .maxLines(2)
             .lineHeight(ReadingTypography.lineHeight(
               ReadingLineHeightRole.TOPIC_SUMMARY,
@@ -2029,7 +2137,21 @@ struct TopicCardComponent {
               .textOverflow({ overflow: TextOverflow.Ellipsis })
           }
         }.layoutWeight(1)
-        Row() { Image($r('app.media.icon_chat_bubble')).width(12).height(12).fillColor(AppColors.textTertiary); Text(` ${this.thread['replies'] ?? 0}`).fontSize(12).fontColor(AppColors.textTertiary) }
+        /* 回复数＝「看过后又有新回复」的唯一信号：在计数后面追加真实增量「+x」
+           （x = 上次进这个帖子时与现在的回复数差）。三态在这里收敛成一句话——
+           没看过（标题全亮，无增量）/ 看过（标题降权，无增量）/ 看过且有更新（标题同样降权，
+           附件 `+x`）。回复数与气泡图标**一律保持常规色**：这里的信号是"多了几条"这个事实，
+           不靠颜色承载，所以行变得更亮/更艳都不会发生。 */
+        Row() {
+          Image($r('app.media.icon_chat_bubble')).width(12).height(12).fillColor(AppColors.textTertiary)
+          Text(` ${this.thread['replies'] ?? 0}`).fontSize(12).fontColor(AppColors.textTertiary)
+          if (this.updateDelta() > 0) {
+            Text(`+${this.updateDelta()}`)
+              .fontSize(12)
+              .fontColor(AppColors.primary)
+              .margin({ left: 4 })
+          }
+        }
       }.width('100%').justifyContent(FlexAlign.SpaceBetween).margin({ top: ITEM_BLOCK_GAP })
     }
     .width('100%')

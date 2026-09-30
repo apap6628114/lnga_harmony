@@ -135,6 +135,20 @@ export struct BrowseHistoryPanel {
       appStore.settingsStore.isBlacklisted(item.authorid)
   }
 
+  /**
+   * 浏览历史行的回复数文案值。
+   *
+   * 条目的 `replies` 兼作主题列表的**已读基线**，基线未知时存哨兵 −2
+   * （见 `TopicReadPolicy.READ_BASELINE_UNKNOWN` 与 `HistoryStore.BrowseHistoryEntry.replies`）。
+   * 本页只做展示，负值一律按 0 呈现，不把内部哨兵泄漏到界面上。
+   *
+   * @param item - 浏览历史条目
+   * @returns 展示用回复数（≥0）
+   */
+  private displayReplies(item: BrowseHistoryEntry): number {
+    return item.replies > 0 ? item.replies : 0
+  }
+
   build() {
     Stack() {
       Column() {
@@ -174,7 +188,7 @@ export struct BrowseHistoryPanel {
                         Text(` · ${formatTime((itemObj as BrowseHistoryEntry).ts / 1000)}`)
                           .fontSize(12).fontColor(AppColors.textTertiary)
                       }
-                      Row() { Image($r('app.media.icon_chat_bubble')).width(12).height(12).fillColor(AppColors.textTertiary); Text(` ${(itemObj as BrowseHistoryEntry).replies}`).fontSize(12).fontColor(AppColors.textTertiary) }.margin({ left: 8 })
+                      Row() { Image($r('app.media.icon_chat_bubble')).width(12).height(12).fillColor(AppColors.textTertiary); Text(` ${this.displayReplies(itemObj as BrowseHistoryEntry)}`).fontSize(12).fontColor(AppColors.textTertiary) }.margin({ left: 8 })
                     }
                     .margin({ top: 6 })
                   }

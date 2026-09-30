@@ -274,6 +274,9 @@ class AppStoreClass {
     await this.followActivityStore.init(this.store, this.writeQueue, this.authStore.state)
     await this.favoriteStore.init(this.store, this.writeQueue, this.authStore.state)
     await this.trackedThreadStore.init(this.store, this.writeQueue, this.authStore.state)
+    /* 浏览历史兼作主题列表的已读台账（看过 / 有更新标记的数据源），随用户数据一并预载：
+       它是懒加载的，不在这里拉起的话列表会先按"全部没看过"渲染一遍再刷新（见 HistoryStore.preload） */
+    await this.historyStore.preload(this.authStore.state.uid)
   }
 
   /** 后台时刷盘 */
