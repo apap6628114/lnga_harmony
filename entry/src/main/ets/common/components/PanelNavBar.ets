@@ -189,11 +189,30 @@ export struct PanelNavBar {
   /**
    * 按钮内容（图标 + 角标）：带菜单与不带菜单两个分支共用，避免重复。
    *
-   * **角标锚在图标自己的右上角，不用 `position` 绝对坐标**：外层容器的高度由 HDS 页签项的
-   * 内容区决定（不由我们控制），任何"假设容器尺寸"的绝对坐标都会失配（`IMMERSIVE_LIGHT_DESIGN.md`
-   * §12.9 的教训）。`offset(8, -9)` 是"角标右上角对齐图标右上角"后的落点换算——旧实现是
-   * `position({ x: 19, y: 0 })`（相对 36×36 材质块；角标宽 16 时右上角落在材质块坐标 `(35, 0)`），
-   * 图标右上角在材质块坐标 `(27, 9)`，两者之差即 `(8, -9)`。
+   * ## 角标锚定盒必须比图标盒宽（否则角标会折行）
+   *
+   * 图标是 18×18，但**容纳角标的盒子不能也是 18×18**：`Stack` 会把自身尺寸当作子组件的
+   * **最大尺寸约束**，角标 `Text` 落在 18vp 宽的盒子里时可用排版宽度只剩 `18 - 5 - 5 = 8vp`，
+   * 三位数角标（`99+`，`formatBadgeCount` 的上限形态）因此被折成两行——真机现象是数字与 `+`
+   * 上下断开、压在 16vp 高的胶囊里。锚定盒取 `TITLE_POD_SIZE`（= 材质块宽度，被外层
+   * `alignContent(Center)` 居中后**盒右边缘就是材质块右边缘**），角标文字在这里才有一次
+   * 足够宽的排版机会。图标自身仍在盒内 `Alignment.Center` 居中，所以"图标与材质块同心"这条
+   * 既有不变式与盒宽无关：HDS 内容区比材质块窄时盒子被夹到内容区宽度，居中关系同样成立。
+   *
+   * ## 角标落点（沿用旧实现实测值，盒宽变化不影响它）
+   *
+   * 角标贴锚定层右上角，再 `offset(-1, -9)`：角标**右边缘**落在材质块坐标 `35`（材质块宽 36，
+   * 即右边缘再左移 1vp），角标**顶边**落在材质块坐标 `0`（高出图标顶边 9vp）——与旧实现
+   * `position({ x: 19, y: 0 })` 的落点逐像素相同（换算见 `IMMERSIVE_LIGHT_DESIGN.md` §12.9）。
+   * 角标宽度随位数变化时**右边缘固定**，向左生长，不会顶出材质块。
+   *
+   * 定位一律用 `offset` 而**不是 `position`**：锚定盒所在的外层容器尺寸由 HDS 页签项决定
+   * （不由我们控制），任何"假设容器尺寸"的绝对坐标都会失配（§12.9 的教训）。
+   *
+   * ## 角标是"绝不允许换行"的小徽标
+   *
+   * 除锚定盒给足宽度外，`Text` 还写 `maxLines(1)` + 自适应字号（`minFontSize`）兜底：排版宽度
+   * 真的不够时（如系统字体放大、HDS 内容区比预期窄）**缩字号**而不是折行，`99+` 三位数是上限。
    *
    * **`draggable(false)` 必须显式写**：`Image` 自 API 10 起 `draggable` 默认为 `true`（官方声明：
    * 值为 `true` 时**绑定的长按手势不生效**，事件被拖拽消费），于是长按标题栏按钮会把图标当成
@@ -201,19 +220,27 @@ export struct PanelNavBar {
    */
   @Builder
   iconPodContent(isBack: boolean, isSecondary: boolean) {
-    Stack({ alignContent: Alignment.TopEnd }) {
+    Stack({ alignContent: Alignment.Center }) {
       Image(this.resolveIcon(isBack, isSecondary)).width(18).height(18).objectFit(ImageFit.Contain)
         .fillColor(this.resolveIconColor(isBack, isSecondary))
         .draggable(false)
       if (!isBack && this.resolveBadgeCount(isSecondary) > 0) {
-        Text(this.formatBadgeCount(this.resolveBadgeCount(isSecondary)))
-          .fontSize(9).fontColor(Color.White).textAlign(TextAlign.Center)
-          .height(16).borderRadius(8).backgroundColor(Color.Red)
-          .padding({ left: 5, right: 5 })
-          .offset({ x: 8, y: -9 })
+        // 角标锚定层：铺满锚定盒（角标因此拿得到盒宽作为排版宽度，不被 18vp 图标挤到换行），
+        // 自身不承载交互——点击 / 菜单 / 无障碍名称都挂在外层内容节点上，事件照常冒泡到那里。
+        Stack({ alignContent: Alignment.TopEnd }) {
+          Text(this.formatBadgeCount(this.resolveBadgeCount(isSecondary)))
+            .fontSize(9).fontColor(Color.White).textAlign(TextAlign.Center)
+            .height(16).borderRadius(8).backgroundColor(Color.Red)
+            .padding({ left: 5, right: 5 })
+            .maxLines(1)
+            .maxFontSize(9).minFontSize(6)
+            .heightAdaptivePolicy(TextHeightAdaptivePolicy.MAX_LINES_FIRST)
+            .offset({ x: -1, y: -9 })
+        }
+        .width('100%').height('100%')
       }
     }
-    .width(18).height(18)
+    .width(TITLE_POD_SIZE).height(18)
   }
 
   /**
