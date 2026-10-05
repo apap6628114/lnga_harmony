@@ -55,7 +55,7 @@ export class AiChatResult {
   text: string = ''
   /** 本响应的输出 items（含 web_search_call 等），回传历史时原样展开 */
   outputItems: Object[] = []
-  /** 是否因达到输出上限被截断 */
+  /** 是否因达到服务端输出长度上限被截断 */
   truncated: boolean = false
 }
 

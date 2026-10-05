@@ -15,19 +15,15 @@ import { PanelNavBar } from '../../common/components/PanelNavBar'
 import { TipsDialog, AlertDialog, SelectDialog } from '@kit.ArkUI'
 import {
   AiProviderProfile,
-  DEFAULT_AI_MAX_TOKENS,
   DEFAULT_AI_TEMPERATURE,
   DEFAULT_DEEPSEEK_ENDPOINT,
-  MAX_AI_MAX_TOKENS,
   MAX_AI_TEMPERATURE,
-  MIN_AI_MAX_TOKENS,
   MIN_AI_TEMPERATURE
 } from '../../model/AiConfig'
 import { PROVIDER_PRESETS } from '../../service/ai/AiModelPresets'
 import { testConnection } from '../../service/ai/ResponsesApiClient'
 import {
   clampTemperature,
-  clampMaxTokens,
   getPreset,
   getModelPlaceholder,
   getApiKeyPlaceholder
@@ -64,8 +60,6 @@ export struct AiSettingsPanel {
   @State editModelInput: string = ''
   /** 温度参数输入值。 */
   @State editTemperatureInput: number = DEFAULT_AI_TEMPERATURE
-  /** 输出上限输入值。 */
-  @State editMaxTokensInput: number = DEFAULT_AI_MAX_TOKENS
   /** 是否展开高级 AI 参数。 */
   @State showAdvancedParams: boolean = false
   /** 当前展开编辑的场景 ID（空字符串表示无展开）。 */
@@ -193,7 +187,6 @@ export struct AiSettingsPanel {
       this.editApiKeyInput = ''
       this.editModelInput = ''
       this.editTemperatureInput = DEFAULT_AI_TEMPERATURE
-      this.editMaxTokensInput = DEFAULT_AI_MAX_TOKENS
       this.showAdvancedParams = false
     } else {
       const profile: AiProviderProfile | null = this.findProfile(profileId)
@@ -203,7 +196,6 @@ export struct AiSettingsPanel {
         this.editApiKeyInput = profile.apiKey
         this.editModelInput = profile.modelName
         this.editTemperatureInput = clampTemperature(profile.temperature)
-        this.editMaxTokensInput = clampMaxTokens(profile.maxTokens)
         this.showAdvancedParams = false
       }
     }
@@ -274,8 +266,7 @@ export struct AiSettingsPanel {
       return this.editNameInput.length > 0 ||
         this.editApiKeyInput.length > 0 ||
         this.editModelInput.length > 0 ||
-        this.editTemperatureInput !== DEFAULT_AI_TEMPERATURE ||
-        this.editMaxTokensInput !== DEFAULT_AI_MAX_TOKENS
+        this.editTemperatureInput !== DEFAULT_AI_TEMPERATURE
     }
     const profile: AiProviderProfile | null = this.findProfile(this.expandedProfileId)
     if (!profile) {
@@ -284,8 +275,7 @@ export struct AiSettingsPanel {
     return this.editNameInput !== profile.name ||
       this.editApiKeyInput !== profile.apiKey ||
       this.editModelInput !== profile.modelName ||
-      this.editTemperatureInput !== clampTemperature(profile.temperature) ||
-      this.editMaxTokensInput !== clampMaxTokens(profile.maxTokens)
+      this.editTemperatureInput !== clampTemperature(profile.temperature)
   }
 
   /** 清空编辑表单缓存和异步结果。 */
@@ -295,7 +285,6 @@ export struct AiSettingsPanel {
     this.editApiKeyInput = ''
     this.editModelInput = ''
     this.editTemperatureInput = DEFAULT_AI_TEMPERATURE
-    this.editMaxTokensInput = DEFAULT_AI_MAX_TOKENS
     this.showAdvancedParams = false
     this.testResultMessage = ''
     this.testSuccess = false
@@ -342,7 +331,6 @@ export struct AiSettingsPanel {
     profile.endpoint = DEFAULT_DEEPSEEK_ENDPOINT
     profile.modelName = this.editModelInput.trim()
     profile.temperature = clampTemperature(this.editTemperatureInput)
-    profile.maxTokens = clampMaxTokens(this.editMaxTokensInput)
 
     if (this.expandedProfileId === NEW_ID) {
       profile.apiKey = this.editApiKeyInput.trim()
@@ -1202,7 +1190,7 @@ export struct AiSettingsPanel {
             .fontSize(13)
             .fontColor(AppColors.textSecondary)
             .width('100%')
-          Text('调整回答随机性和输出长度')
+          Text('调整回答随机性；回复长度不设上限，由模型自行决定')
             .fontSize(11)
             .fontColor(AppColors.textTertiary)
             .width('100%')
@@ -1256,40 +1244,6 @@ export struct AiSettingsPanel {
           .alignItems(VerticalAlign.Center)
 
           Text('越低越稳定，越高越发散')
-            .fontSize(11)
-            .fontColor(AppColors.textTertiary)
-            .width('100%')
-            .margin({ left: 52, bottom: 8 })
-
-          Row() {
-            Text('输出')
-              .fontSize(13)
-              .fontColor(AppColors.textPrimary)
-              .width(52)
-            Slider({
-              value: this.editMaxTokensInput,
-              min: MIN_AI_MAX_TOKENS,
-              max: MAX_AI_MAX_TOKENS,
-              step: 100,
-              style: SliderStyle.InSet
-            })
-              .systemMaterial(UIMaterialManager.controlMaterial)
-              .onChange((value: number, mode: SliderChangeMode): void => {
-                this.editMaxTokensInput = clampMaxTokens(value)
-              })
-              .layoutWeight(1)
-              .height(40)
-            Text(this.editMaxTokensInput.toString())
-              .fontSize(13)
-              .fontColor(AppColors.textSecondary)
-              .width(50)
-              .textAlign(TextAlign.End)
-          }
-          .width('100%')
-          .height(46)
-          .alignItems(VerticalAlign.Center)
-
-          Text('限制单次回复的最大 token 数')
             .fontSize(11)
             .fontColor(AppColors.textTertiary)
             .width('100%')

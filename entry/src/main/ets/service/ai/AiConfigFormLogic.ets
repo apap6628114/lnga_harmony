@@ -3,12 +3,11 @@
  *
  * 收纳 AiSettingsPanel 中不依赖组件状态的计算：参数范围裁剪、服务商预设
  * 查询与占位符解析。全部为静态函数，可安全独立测试。
+ * 输出长度不再由客户端限制，因此这里只处理温度参数。
  */
 
 import {
-  MAX_AI_MAX_TOKENS,
   MAX_AI_TEMPERATURE,
-  MIN_AI_MAX_TOKENS,
   MIN_AI_TEMPERATURE
 } from '../../model/AiConfig'
 import { PROVIDER_PRESETS } from './AiModelPresets'
@@ -23,17 +22,6 @@ import type { AiProviderPreset } from './AiModelPresets'
 export function clampTemperature(value: number): number {
   const clamped: number = Math.max(MIN_AI_TEMPERATURE, Math.min(MAX_AI_TEMPERATURE, value))
   return Math.round(clamped * 10) / 10
-}
-
-/**
- * 将输出上限限制到可编辑范围并规范到整数。
- *
- * @param value - 待规范化的输出上限
- * @returns 规范化后的输出上限
- */
-export function clampMaxTokens(value: number): number {
-  const clamped: number = Math.max(MIN_AI_MAX_TOKENS, Math.min(MAX_AI_MAX_TOKENS, value))
-  return Math.round(clamped)
 }
 
 /**

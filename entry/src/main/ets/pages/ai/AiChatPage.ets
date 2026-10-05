@@ -237,7 +237,7 @@ struct AiChatPage {
 	      let finalText: string = result.text
 	      // 部分内容被截断时追加弱提示，避免用户误以为回答已完整结束
 	      if (result.truncated) {
-	        finalText += '\n\n⚠️ 回答已因长度上限被截断，可增大输出上限后重试'
+	        finalText += '\n\n⚠️ 回答已达模型输出上限被截断，可精简对话上下文或更换支持更长输出的模型后重试'
 	      }
 	      if (this.toolPhase.length > 0) {
 	        const savedInfo: ToolCallInfo = new ToolCallInfo()

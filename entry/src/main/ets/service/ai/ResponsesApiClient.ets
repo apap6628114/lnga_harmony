@@ -62,7 +62,7 @@ export class ResponseResult {
   outputItems: Object[] = []
   /** 响应状态（'completed' | 'incomplete'） */
   status: string = ''
-  /** 是否因达到 max_output_tokens 被截断 */
+  /** 是否因达到服务端输出长度上限被截断 */
   truncated: boolean = false
 }
 
@@ -497,9 +497,10 @@ export async function createResponseStream(
           return
         }
         if (content.length === 0) {
-          // response.incomplete 表示达到 max_output_tokens 截断，与"格式不兼容"区分提示
+          // response.incomplete 表示被服务端输出长度上限截断（模型上下文或服务端配额），
+          // 与"格式不兼容"区分提示
           if (parser.getStatus() === 'incomplete') {
-            rejectOnce(new Error('回答超长被截断，请增大输出上限或更换模型'))
+            rejectOnce(new Error('回答超长被截断，请更换支持更长输出的模型'))
           } else {
             rejectOnce(new Error('AI 响应为空或格式不兼容'))
           }
@@ -639,6 +640,9 @@ function buildHeaders(apiKey: string): Record<string, string> {
 /**
  * 构造请求体 JSON 字符串。
  *
+ * 不携带 max_output_tokens：输出长度完全交给服务端按模型能力决定，
+ * 客户端不设上限，避免把长回答截断。
+ *
  * 始终携带服务端内置 web_search 工具声明（tool_choice=auto），
  * 由模型自行判断是否需要联网搜索。
  *
@@ -652,7 +656,6 @@ function buildRequestBody(profile: AiProviderProfile, messages: ChatMessage[], s
   bodyObj['model'] = profile.modelName
   bodyObj['stream'] = stream
   bodyObj['temperature'] = profile.temperature
-  bodyObj['max_output_tokens'] = profile.maxTokens
 
   const toolObj: Record<string, string> = {}
   toolObj['type'] = WEB_SEARCH_TOOL_TYPE
