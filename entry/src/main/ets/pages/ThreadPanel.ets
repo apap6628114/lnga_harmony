@@ -23,6 +23,7 @@ import { HdsMaterialHost } from '../common/components/HdsMaterialHost'
 import { PostItem } from '../common/components/PostItem'
 import { PostInfoDataSource } from '../common/datasource/LazyDataSource'
 import { LoadingStateView, ErrorStateView } from '../common/components/PageStateView'
+import { dismissAnalyzerSessions } from '../common/media/ImageAnalyzerSession'
 import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
 import { replyManager, ReplyType } from '../common/managers/ReplyManager'
 import { withTimeout } from '../common/utils/TimeoutUtils'
@@ -2297,6 +2298,11 @@ export struct ThreadPanel {
         })
         .onDidScroll((): void => {
           this.syncTitleScrollEffect()
+          /* 正文图的识图选取态不允许跨滚动存活：系统在滚动过程中只是把文本菜单临时收起、
+             松手又放出来，只有主动拆掉分析器才收得干净。选取态可能属于**任意楼层**（滚动
+             起点甚至不在那一层），所以走全局登记表而不是组件内自查；无会话时本调用只是
+             一次空数组判断，逐帧调用没有开销。详见 `common/media/ImageAnalyzerSession.ets`。 */
+          dismissAnalyzerSessions()
         })
         .onAppear((): void => {
           this.listMounted = true

@@ -2028,6 +2028,15 @@ struct TopicCardComponent {
               .height(this.tileAt(index).height)
               .objectFit(this.tileAt(index).useContain ? ImageFit.Contain : ImageFit.Cover)
               .borderRadius(PREVIEW_IMAGE_RADIUS)
+              /* **本工程唯一明确关闭**系统 AI 图像分析（长按识图）的图片位。默认值即 false，
+                 显式写出只为**固化意图、防后续回归**：本节点就在 `ImageViewer` 的上一跳
+                 （卡片 onClick 打开帖子，进帖子后点图才是查看器），后续改动极易顺手复制成
+                 开启。关闭的三条理由见 `docs/research/IMAGE_TEXT_RECOGNITION_GUIDE.md` §3.3：
+                 ① 官方建议该能力只开在"大图预览场景"，缩略图不是该场景；
+                 ② 列表长按与卡片 onClick（打开帖子）是同一条触点，长按选字会与卡片点击竞争；
+                 ③ 列表长按与滚动同属一条手势通道，逐条预分析不值得。
+                 该"能识别 / 不能识别"的差异是**产品决策**，不是平台限制。 */
+              .enableAnalyzer(false)
               /* 内容到位时的柔和淡入（`@since 21`）。声明只排除"动态图资源"，对网络图 src 是否
                  生效未定义——**待真机复核**：若实测无效（表现为图片硬切出现），删掉本行即可，
                  其余布局不依赖它。 */

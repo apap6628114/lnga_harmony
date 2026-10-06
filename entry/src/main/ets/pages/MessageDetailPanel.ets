@@ -23,6 +23,7 @@ import { KEY_MESSAGE_VERSION } from '../common/constants/AppStorageKeys'
 import { bumpAppStorageVersion } from '../common/utils/AppStorageVersion'
 import { resolveKeyboardAppearance } from '../common/utils/KeyboardAppearanceUtils'
 import { BBCodeContentView } from '../common/components/BBCodeContentView'
+import { dismissAnalyzerSessions } from '../common/media/ImageAnalyzerSession'
 import { getCachedBBNodes } from '../parser/bbcode/BBCodeCache'
 
 @Component
@@ -329,6 +330,8 @@ export struct MessageDetailPanel {
           })
           .onDidScroll((): void => {
             this.syncTitleScrollEffect()
+            /* 消息里的正文图同样带长按识图：滚动即取消选取态（理由与实现见 ThreadPanel 同一处注释）。 */
+            dismissAnalyzerSessions()
           })
           .onAppear((): void => {
             this.syncTitleScrollEffect()

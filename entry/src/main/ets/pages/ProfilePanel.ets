@@ -16,6 +16,7 @@ import { LoadingStateView, ErrorStateView } from '../common/components/PageState
 import { SettingRow } from '../common/components/SettingRow'
 import { getCachedBBNodes, preWarmBatch } from '../parser/bbcode/BBCodeCache'
 import { BBCodeContentView } from '../common/components/BBCodeContentView'
+import { dismissAnalyzerSessions } from '../common/media/ImageAnalyzerSession'
 import { openImageViewer, handleForumLink } from '../common/utils/LinkUtils'
 import { PageScope } from '../common/concurrency/PageScope'
 import { Context } from '@kit.AbilityKit'
@@ -710,6 +711,8 @@ export struct ProfilePanel {
         })
         .onDidScroll((): void => {
           this.syncTitleScrollEffect()
+          /* 签名区里的正文图同样带长按识图：滚动即取消选取态（理由与实现见 ThreadPanel 同一处注释）。 */
+          dismissAnalyzerSessions()
         })
         .onAppear((): void => {
           this.syncTitleScrollEffect()

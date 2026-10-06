@@ -8,7 +8,8 @@ import { appStore } from '../../store/AppStore';
 import { AppColors } from '../constants/Constants';
 import { HoldingHandMonitor, HoldingHandStatus } from '../managers/HoldingHandMonitor';
 import { UIMaterialManager } from '../managers/UIMaterialManager';
-import { MovingPhotoPlayer, PHASE_FAILED, PHASE_LOADING, PHASE_PLAYING } from '../media/MovingPhotoPlayer';
+import { MovingPhotoPlayer, PHASE_FAILED, PHASE_LOADING, PHASE_PLAYING } from '../media/MovingPhotoPlayer'
+import { createTextOnlyAnalyzerOptions } from '../media/ImageAnalyzerOptions';
 import { ensureMovingPhotoFiles, releaseMovingPhotoFiles, MovingPhotoPair } from '../media/MovingPhotoCache';
 import { getMovingPhotoVideo } from '../media/MovingPhotoRegistry';
 import { Logger, DOMAIN_UI, formatError } from '../utils/Logger';
@@ -577,10 +578,13 @@ export struct ImageViewer {
       Stack() {
         Stack() {
           if (this.currentIndex > 0) {
-            Image(this.urls[this.currentIndex - 1])
+            Image(this.urls[this.currentIndex - 1], createTextOnlyAnalyzerOptions())
               .objectFit(ImageFit.Contain)
               .width('100%').height('100%')
               .translate({ x: -this.containerW + this.swipeTranslateX })
+              /* AI 图像分析：只做文字识别（长按识图选字）。分析基于**完整原图**，本页的
+                 translate/scale 平移与父层 clip 裁剪都不影响识别（见当前页同项注释）。 */
+              .enableAnalyzer(true)
               .onError(() => {
               })
           }
@@ -612,11 +616,31 @@ export struct ImageViewer {
               .width('100%').height('100%')
               .translate({ x: this.swipeTranslateX })
           } else {
-            Image(this.urls[this.currentIndex])
+            Image(this.urls[this.currentIndex], createTextOnlyAnalyzerOptions())
               .objectFit(ImageFit.Contain)
               .width('100%').height('100%')
-              /* 长按不注册操作：Image 自 API 10 起 draggable 默认 true，长按会被当成拖拽图片。 */
+              /* 长按不注册操作：Image 自 API 10 起 draggable 默认 true，长按会被当成拖拽图片。
+                 对下方的识图而言这一行是**消歧**而非前提：SDK 只声明 `draggable(true)` 会让
+                 "绑定到组件上的长按手势"失效（拖拽消费），而分析器的长按由系统内部处理、
+                 不属于拖拽类事件；官方**未声明**两者的交互。停用拖拽后，唯一与识别争抢
+                 长按的角色（拖拽）已被移除，行为因此完全确定（见 `docs/research/
+                 IMAGE_TEXT_RECOGNITION_GUIDE.md` §3.2）。 */
               .draggable(false)
+              /* AI 图像分析（API 11+，`image.d.ts` 的 `enableAnalyzer`）：长按图片的**文字区**即
+                  识别文字，可框选 / 复制。分析类型在构造处收窄为「只做文字识别」——不传 `types`
+                  时系统默认还会开启主体识别（长按抠图），本工程不要那一套选取态：
+                  见 `common/media/ImageAnalyzerOptions.ets`。这是官方面向"大图预览场景"的推荐用法
+                  （Vision Kit《AI识图》）。
+                  识别基于**完整原图**：本组件的 objectFit(Contain)、外层 clip(true)、以及缩放/
+                  平移用的 scale/translate 都不会让识别区域偏移（SDK 明确声明 clip/margin/
+                  borderRadius/position/objectFit/renderMode 均不改变分析区域）。
+                  与既有手势不冲突：分析触点是**单指长按**，而这里绑的是双指捏合、双击与需要
+                  15vp 位移的滑动——手指形态与激活条件都不重叠。
+                  不做设备降级：非国内设备 / 老设备 / 模拟器上系统会静默失效（长按无反应，不报错），
+                  与本工程对系统材质"不降级"的取向一致。不支持的判据是
+                  `ImageAnalyzerController.getImageAnalyzerSupportTypes()` 返回空数组，需要引入
+                  Vision Kit 可选能力包，收益不抵成本，故不接。 */
+              .enableAnalyzer(true)
               .scale({ x: this.zoomScale, y: this.zoomScale, centerX: 0, centerY: 0 })
               .translate({ x: this.zoomOffsetX + this.swipeTranslateX, y: this.zoomOffsetY })
               .onComplete((event) => {
@@ -630,10 +654,12 @@ export struct ImageViewer {
           }
 
           if (this.currentIndex < this.urls.length - 1) {
-            Image(this.urls[this.currentIndex + 1])
+            Image(this.urls[this.currentIndex + 1], createTextOnlyAnalyzerOptions())
               .objectFit(ImageFit.Contain)
               .width('100%').height('100%')
               .translate({ x: this.containerW + this.swipeTranslateX })
+              /* 同前一张：AI 图像分析（只做文字识别），说明见当前页那一处。 */
+              .enableAnalyzer(true)
               .onError(() => {
               })
           }

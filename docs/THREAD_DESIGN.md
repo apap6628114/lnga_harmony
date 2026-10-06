@@ -259,6 +259,88 @@ TITLE_SCROLL_EFFECT_DISTANCE = 20vp
   回复按钮走 `HdsMaterialHost`（HDS 材质宿主）。
   组件不得保存材质启用状态，也不得按持久化设置切换 `systemMaterial`。
 
+### 6.5 正文图的长按识图（AI 图像分析）
+
+正文图（含引用块内的图）已开启系统 AI 图像分析，**长按图片的文字区**即可识别文字并框选 / 复制。
+同一能力也开在 `ImageViewer` 的三张轮播图上。分析类型**只保留文字识别**：不请求主体分割
+（长按抠图）与对象查找——长按非文字区没有任何识别 UI，也就不会并存出第二套选取态。
+
+- 开关只有一处：`.enableAnalyzer(true)`（API 11+，ArkUI `Image` 自带，**无需额外权限与依赖**——
+  `ohos.permission.INTERNET` 已在 `module.json5` 声明）。默认值为 `false`，不写即关闭。
+  正文图这一处的值绑 `@State analyzerEnabled`（取消选取态要把它关一次，见 §6.5.1）。
+- **分析类型只能经构造下发**：`Image` 没有 `analyzerConfig` 一类的属性（那是 `Video` 的，
+  `video.d.ts:965`），类型只能走构造第二个参数 `ImageAIOptions`（`image.d.ts:559`）。本工程统一用
+  `common/media/ImageAnalyzerOptions.ets` 的 `createTextOnlyAnalyzerOptions()` 构造（只有
+  `ImageAnalyzerType.TEXT`）。**不要退回不传 `types` 的写法**：不传时系统默认同时开启主体识别与
+  文字识别（`image_common.d.ts:20-28` 原文），长按无文字的照片也会弹选区与系统菜单。
+- 节点归属：正文图由 `BBCodeContentView.RenderImageContent` 渲染（`PostItem` 内部），
+  **不在 `ThreadPanel.ets` 里**；改这一处同时覆盖引用块与就地播放的动态照片封面。
+- `.draggable(false)` **必须保留**：它不决定识别是否生效（分析器的长按由系统内部处理，
+  不属于拖拽类事件），但它是"长按只归识别"的消歧手段——`draggable(true)` 会让绑定到组件上的
+  长按手势被拖拽消费（`image.d.ts` 原文）。真机长按无反应时先核对这一行是否还在。
+- **主题列表预览图（`TopicListPanel`）显式保持关闭**（`.enableAnalyzer(false)`）：
+  列表缩略图不是"大图预览场景"，且列表长按与卡片点击、滚动同处一条手势通道。
+  **该差异是产品决策，不是平台限制**，不要"顺手统一"。
+- 不做设备能力探测与降级：非国内设备、老设备与**模拟器**上该能力静默失效（长按无反应、不报错、
+  不影响点击与缩放）。**模拟器不支持本特性，因此本条不能在模拟器验收。**
+- 系统限制（**不是缺陷，不要当 bug 修**）：svg / gif 不参与分析；图需 ≥100×100；
+  **长截图（高 > 宽×7）不做文字识别**；支持语种为简繁中文、英文、维吾尔文、藏文。
+- **只做文字识别的代价（已知、可接受）**：长按**没有文字的照片**不会有任何识别 UI，但选区取消
+  链路仍会把这次长按记成一次会话，于是紧接着的那一次单击会被吞一次（表现为"点了没反应"，再点
+  即正常）。系统没有"这次分析是否真的出了选区"的回执可用，判据只能是长按本身。
+
+#### 6.5.1 选取态的取消（会话登记 + 集中拆除）
+
+系统只在长按之后**接管**识别交互，**没有**"清除选区"接口：`startImageAnalyzer` /
+`stopImageAnalyzer` 只存在于 `XComponentController` 与 `CanvasRenderingContext2D`，Vision Kit 的
+`VisionImageAnalyzerController` 只有 `setImageAnalyzerVisibility`（官方文档写的是"设置 AI 识图
+**控件**的可见性"，示例里用于在 `aboutToAppear` 隐藏 AIButton；**它是否连已显示的选区一并收起
+本地无证据**）与只读的界面状态查询（`getImageAnalyzerUIStatus`）。因此**在不引入 `@kit.VisionKit`
+的前提下**，`Image` 上唯一可用的杠杆是**把 `enableAnalyzer` 关掉一次**：组件不再支持 AI 分析 ⇒
+分析器整体拆除 ⇒ 选取态与系统文本菜单一并消失，稍后再打开即恢复长按识图。
+
+取消契约（三条取消路径 + 一条"不取消"）：
+
+| 交互 | 行为 |
+| --- | --- |
+| 单击**产生选取态的那张**正文图 | **只取消选取态**，这次点击不进查看器；再点一次才进 |
+| 单击正文里的其它图片（含**别的楼层**的图） | 先收掉选区，再照常进查看器（点的是另一张图，拦下来反而莫名其妙） |
+| 单击正文任意位置（含正文文字、链接、折叠块、动态照片角标…） | 取消选取态，各元素原有点击行为不变 |
+| 滑动宿主列表（帖子列表 / 私信详情 / 个人主页）与正文内的横向滚动（代码块 / 宽表） | 取消选取态。系统在滚动过程中只是把文本菜单临时收起、松手又放出来，**必须主动拆** |
+
+实现要点（**改这块之前先读**）：
+
+- 会话登记表在 `common/media/ImageAnalyzerSession.ets`。登记必须**跨组件**：触发取消的交互
+  常常发生在别的楼层（滚动起点甚至不在那一层）。正文组件在 `aboutToDisappear` 必须注销会话，
+  否则列表回收楼层后登记表会持有已销毁组件的回调。
+- 长按判定**不用 `LongPressGesture`**：绑到组件上的长按手势会与分析器内部的长按**竞争**
+  （`draggable(false)` 之后这类手势是生效的），赢了就等于掐掉系统识图。改用 `onTouch` 计时：
+  `ANALYZER_LONG_PRESS_MS = 400` 是对 **ArkUI 长按手势默认阈值 500ms**（分析器内部阈值官方
+  **未公开**，只能按手势默认值推断）留的提前量，判定结果只用于"取消 / 进查看器"分流，不消费任何
+  事件；位移超过 `ANALYZER_LONG_PRESS_SLOP = 10vp` 即撤销判定。若按下被分析器接管而只收到
+  `Cancel`，由 `ANALYZER_CANCEL_FALLBACK_MS = 250` 补判（**只补判 `Cancel` 不补判 `Up`**：
+  `Cancel` 不是点击，补判错了最多吞掉下一次单击；对 `Up` 补判会把三百毫秒的慢点击直接吞掉）。
+- **取消不能只挂在图片的 `onClick` 上**：系统选区浮层盖在图上，点击可能被浮层消费掉，那时
+  `onClick` 不触发、选区就再也收不掉。因此图片自己的 `Up` 也承担取消，并置
+  `suppressImageTap` 把紧随其后的那次 `onClick` 按下去——保住"第一次点击只取消、不进查看器"。
+  该标记在下一次按下即复位，不会外泄。
+- 正文根容器用 `onTouch` 而不是 `onClick` 收"点击正文"：点击本身是手势，父子同类手势只会有一个
+  响应（正文内每个可点元素都自带 onClick），而触摸事件自叶向根冒泡，根容器一处即可覆盖全部
+  可点元素。图片自己的 `onTouch` 先于根容器执行，据此把"落在图上的点击"让位给图片自己处理。
+- 拆除后必须**跨帧**再重新武装（`ANALYZER_REARM_DELAY_MS = 150`）：同一帧里的 `false → true`
+  会被状态批处理合并成空操作，分析器根本不会被拆掉。代价是该正文组件整树重渲染两次——只有
+  真有会话时才会走到这里（登记表空表早退），滚动等无会话路径不付这个成本。
+- 已知副作用（可接受）：**程序化滚动**（跳页定位、锚点补偿、翻页前插引起的偏移变化）同样会落在
+  `onDidScroll` 上，因此也会收掉选区；长按了**无识别内容**的图（gif / svg / <100×100 / 长截图，
+  见 §6.5）同样会成立会话，于是"下一次单击该图"会被吞一次。两者都能重新长按找回。
+- 覆盖范围是**正文组件内部**：楼层其它区域（头像、动作栏）与 `ImageViewer` 内的手势**不在**
+  本契约内，这是产品选择，不要顺手扩大（要扩就先确认交互，再把取消调用接到对应容器上）。
+  另外两点边界：**按图片地址**判定会话归属，同一地址在一层里出现两次视为同一张图；路由入栈时
+  底层页面不销毁，因此"导航离开"不会取消选区（未被要求，真机若发现浮层残留再在路由处补一行）。
+
+完整 API 契约、约束出处与真机验收清单见
+[`docs/research/IMAGE_TEXT_RECOGNITION_GUIDE.md`](research/IMAGE_TEXT_RECOGNITION_GUIDE.md)。
+
 ### 6.4 共享实现的适用条件
 
 `TitleScrollEffect` 和 `PanelNavBar` 是共享实现，不是 Thread 专用视觉副本。页面直接复用时必须同时满足：
@@ -284,6 +366,7 @@ TITLE_SCROLL_EFFECT_DISTANCE = 20vp
 | 引用跳转后只剩一帖且分页器消失 | 普通整页请求携带 pid，或单帖响应覆盖真实总页数 | 整页请求不带 pid；兜底前保存并恢复总页数 | 把单帖响应当作普通页窗口 |
 | 回复成功后旧窗口被静默刷新污染 | 静默刷新响应未校验请求代际 | 提交前比较发起时代际，不一致即丢弃 | 依赖请求返回顺序 |
 | 快速跳页后旧页面覆盖新页面 | 旧响应未做请求代际校验 | `REPLACE` 推进代际，提交前比较代际 | 依赖请求返回顺序 |
+| 长按识图后选区永不消失：点图直接进查看器、滚动后文本菜单又回来、点正文文字只把菜单临时藏起来 | `Image` 的 AI 分析没有"清除选取"接口，选区随组件存活；系统只在滚动中临时收起菜单 | 会话登记 + 关一次 `enableAnalyzer` 把分析器整体拆掉（§6.5.1） | 组件内自查（覆盖不到别的楼层与列表滚动）、用 `LongPressGesture` 抢长按（会把系统识图一起掐掉） |
 | 编辑成功后楼层正文不刷新 | LazyForEach 键值只含 pid，内容变化不改变键值，`onDataChange` 不触发组件更新 | 内容变化时递增 `uiRev`（键值 `pid + uiRev`）重建该楼层；静默刷新返回旧缓存时经 `protectedContent` 跳过覆盖 | 只改 `content` 后 `updateAt`（键值不变不刷新）；整体 `replaceAll` 重建（破坏窗口与滚动） |
 | 点赞/踩成功后数字与颜色不刷新或整层闪烁 | `PostInfo` 非 `@Observed`，分数内部字段变更不能驱动 LazyForEach；父层投票状态更新还可能用旧 `@Prop post.score` 覆盖动作栏 | `PostVoteBar` 在点击事件内先写入局部 `@State`，失败回滚，成功按本次操作语义确认最终状态；移除点赞状态的旧值 `@Watch` 同步；请求期间屏蔽同楼层重复提交 | 点赞路径递增 `uiRev` 或重建包含图片/正文的 `PostItem` |
 
@@ -350,6 +433,9 @@ hdc shell hilog -x -T ThreadPanel -v time
 - 修改标题高度、状态栏处理或 `contentStartOffset`：同步检查前插恢复公式和标题重叠公式，两者必须使用同一个 `H`。
 - 修改 `TitleScrollEffect` 或 `PanelNavBar`：核对所有采用相同覆盖式列表模型的调用方，但不要把 Thread 的坐标假设扩散到不同布局。
 - 新增日志应描述事务标识、代际、请求页、服务端页、窗口和 pid；不要依赖无法关联时序的散点文本。
+- 修改正文图属性（`draggable` / `objectFit` / `borderRadius` / `aspectRatio` / `enableAnalyzer`）：
+  三个面（正文图、`ImageViewer`、主题列表预览图）的"开 / 关"是**产品决策**，不是平台限制；
+  `enableAnalyzer` 与 `draggable` 的并存语义见第 6.5 节，改任一项都要重新走一遍该节的真机清单。
 - 只有实际产品契约或实现发生变化时才更新“不变量”；历史故障应记录在第 7 节，不应反向改写事实。
 
 ## 参考资料
@@ -357,5 +443,7 @@ hdc shell hilog -x -T ThreadPanel -v time
 - 华为开发者文档：[沉浸光感](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/ui-design-hds-component-material)
 - 华为开发者文档：[标题栏动态模糊](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/ui-design-navigation-dynamic-blur)
 - 华为开发者文档：[List](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/ts-container-list)
+- 华为开发者文档：[AI 识图](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/vision-imageanalyzer)（图片长按识图的平台能力、约束与设备支持）
+- 本仓库调研：[图片长按识图完整方案](research/IMAGE_TEXT_RECOGNITION_GUIDE.md)
 
 官方资料用于确定平台能力和设计方向；`20vp`、`32vp`、最大半径 `16`、颜色资源及具体材质参数均是本项目当前选择，应以仓库代码为准。

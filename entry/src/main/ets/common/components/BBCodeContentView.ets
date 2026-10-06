@@ -6,6 +6,12 @@ import { MutedVideo } from '../media/MutedVideo'
 import { ImageSize, getCachedImageSize, setCachedImageSize } from '../media/ImageSizeUtil'
 import { MovingPhotoPlayer } from '../media/MovingPhotoPlayer'
 import { registerMovingPhoto } from '../media/MovingPhotoRegistry'
+import {
+  dismissAnalyzerSessions,
+  registerAnalyzerSession,
+  unregisterAnalyzerSession,
+} from '../media/ImageAnalyzerSession'
+import { createTextOnlyAnalyzerOptions } from '../media/ImageAnalyzerOptions'
 import { fetchVideoSize, getCachedVideoSize } from '../media/VideoSizeUtil'
 import { shouldUsePassive } from '../utils/NetworkUtil'
 import { parsePreviewSize } from '../utils/TopicPreviewUtils'
@@ -52,6 +58,39 @@ import { decodeAnonymousName } from '../../parser/AnonymousParser'
 
 /** 单个 BBCode 视图允许缓存的最大内联节点组数量。 */
 const MAX_INLINE_RUN_CACHE_SIZE: number = 4096
+
+/**
+ * 正文图长按判定阈值（ms）：识图会话的主要入口。
+ *
+ * 取 400ms 是对 **ArkUI 长按手势默认阈值 500ms**（`LongPressGesture.md`：「默认最短长按时间为
+ * 500 毫秒」）留的提前量——分析器内部的阈值官方**未公开**，只能按手势默认值推断。留提前量是为了
+ * 应付"分析器接管这次按下之后本组件收不到 `Up`"：计时器必须先在 400ms 触发，会话才判得出来。
+ * 万一分析器阈值更短、抢先投递 `Cancel`，由 {@link ANALYZER_CANCEL_FALLBACK_MS} 的补判兜住。
+ */
+const ANALYZER_LONG_PRESS_MS: number = 400
+
+/**
+ * `Cancel` 补判阈值（ms）：按下被别的角色接管时，按住超过它且期间没有位移，就按长按处理。
+ *
+ * **只对 `Cancel` 补判、不对 `Up` 补判**：`Cancel` 意味着这次按下不是点击，补判出来的会话最坏
+ * 只是让"下一次单击图片"被吞一次（且滚动一开始就会被收掉）；若对 `Up` 也补判，一次三百毫秒的
+ * 慢点击就会被当成取消，直接吞掉用户真正想看的那次点击。
+ */
+const ANALYZER_CANCEL_FALLBACK_MS: number = 250
+
+/** 长按判定的移动容忍度（vp）：按下后位移超过它即按滚动 / 拖拽处理，不成立长按。 */
+const ANALYZER_LONG_PRESS_SLOP: number = 10
+
+/**
+ * 拆除分析器后重新武装的延时（ms）。
+ *
+ * 必须跨帧：`false` → `true` 若落在同一帧的状态批处理里会被合并成空操作，分析器根本不会
+ * 被拆掉。150ms 远小于"抬手再按下并保持 400ms"所需时间，用户感知不到这段窗口。
+ *
+ * 代价：一次取消会让该正文组件整树重渲染两次；因为无会话时不会走到这里（登记表空表早退），
+ * 只有真正长按过识图的楼层会付这个成本。
+ */
+const ANALYZER_REARM_DELAY_MS: number = 150
 
 /**
  * 单个内联节点组的样式安全缓存项。
@@ -120,6 +159,49 @@ export struct BBCodeContentView {
   /** 链接点击回调。 */
   onLinkClick: (href: string) => void = (_href: string) => {}
 
+  /**
+   * 正文图是否允许系统 AI 图像分析（长按识图）。
+   *
+   * **取消选取态靠把它翻成 false 再翻回来**：`Image` 侧没有"清除选区"接口，关掉开关让
+   * 分析器整体拆除是唯一可用的杠杆（见 `ImageAnalyzerSession` 文件头）。绑定的是同一个
+   * 开关，因此**本组件内所有图**共用一次拆除动作。
+   */
+  @State private analyzerEnabled: boolean = true
+  /** 当前是否处于识图会话中（长按成立置位，被取消后复位）。 */
+  private analyzerSessionActive: boolean = false
+  /** 会话归属的图片地址：单击**同一张**图只取消选取态，单击别的图照常进查看器。 */
+  private analyzerSessionSrc: string = ''
+  /** 会话句柄（登记表的注销凭据，0 表示无会话）。 */
+  private analyzerSessionToken: number = 0
+  /** 长按判定计时器句柄（-1 表示未在计时）。 */
+  private longPressTimer: number = -1
+  /** 长按判定的按下点（窗口坐标，vp）。 */
+  private longPressX: number = 0
+  /** 长按判定的按下点（窗口坐标，vp）。 */
+  private longPressY: number = 0
+  /** 长按判定计时归属的图片地址。 */
+  private longPressSrc: string = ''
+  /** 本次按下的起点时间（ns，取自 `TouchEvent.timestamp`），用于 `Cancel` 的时长补判。 */
+  private longPressDownNs: number = 0
+  /** 本次按下是否已位移超限（超限即滚动 / 拖拽，`Cancel` 不再补判为长按）。 */
+  private longPressMoved: boolean = false
+  /** 本次按下是否已由长按判定成立过会话：用于区分"这次按下就是长按"与"长按之后的又一次单击"。 */
+  private longPressEstablished: boolean = false
+  /**
+   * 已在图片的 `Up` 上取消过会话，抑制紧随其后的 `onClick` 进查看器。
+   *
+   * 分析器浮层盖在图上，单击可能被它消费掉、`onClick` 根本不触发，所以取消不能只挂在 `onClick`
+   * 上；在 `Up` 上取消之后必须再把这次点击按下去，否则"第一次点击只取消选取态"会退化成"取消并
+   * 进查看器"。下一次按下即复位，标记不会外泄到后续触摸。
+   */
+  private suppressImageTap: boolean = false
+  /** 本次触摸是否落在正文图上（由图片的 onTouch 维护，根容器在 Down 时取走）。 */
+  private touchLandedOnImage: boolean = false
+  /** 本次触摸是否**起始于**正文图（根容器在 Down 时快照，Up 时据此让位给图片自己的点击）。 */
+  private touchStartedOnImage: boolean = false
+  /** 重新武装分析器的计时器句柄（-1 表示未在计时）。 */
+  private analyzerRearmTimer: number = -1
+
   /** 当前内容内可供图片查看器浏览的地址。 */
   private allImageUrls: string[] = []
   /** 按节点组与继承样式缓存的内联渲染结果。 */
@@ -186,6 +268,20 @@ export struct BBCodeContentView {
         })
       }
     }
+  }
+
+  /**
+   * 组件销毁：注销可能仍挂着的识图会话，避免登记表持有已销毁组件的拆除回调。
+   *
+   * 列表回收楼层时正文组件会被整体销毁，而选取态会话是**跨组件**登记的（宿主列表滚动时
+   * 仍可能触发它），因此这里必须显式退场。
+   */
+  aboutToDisappear(): void {
+    this.clearAnalyzerTimers()
+    unregisterAnalyzerSession(this.analyzerSessionToken)
+    this.analyzerSessionToken = 0
+    this.analyzerSessionActive = false
+    this.analyzerSessionSrc = ''
   }
 
   /**
@@ -273,6 +369,224 @@ export struct BBCodeContentView {
       }
     }
     return 0
+  }
+
+  /**
+   * 正文根容器触摸：点击正文任意位置（含链接、折叠块、动态照片角标等可点元素）都取消识图选取态。
+   *
+   * 用 `onTouch` 而不是 `onClick`：点击本身是手势，父子组件绑定的同类手势会**竞争**且只有一个能
+   * 响应（正文内每个可点元素都自带 onClick），而触摸事件沿响应链自叶向根**冒泡**，根容器必定收得到，
+   * 一处即可覆盖全部可点元素。
+   *
+   * @param event 触摸事件
+   */
+  private onContentTouch(event: TouchEvent): void {
+    if (event.type === TouchType.Down) {
+      /* 事件先到叶子、再冒泡到父级：图片节点的 onTouch 已先于本回调执行，因此这里取到的就是
+         "本次触摸是否落在正文图上"。取走后立即复位，避免图片的 Up 被分析器吃掉时把标记留给
+         下一次触摸（那会让随后点击正文文字被误判成"点在图上"而不取消）。 */
+      this.touchStartedOnImage = this.touchLandedOnImage
+      this.touchLandedOnImage = false
+      /* 抑制标记只对"紧跟着那一次 Up 的点击"有效：新的一次按下即作废（分析器若把 Up 与 onClick
+         一起吃掉，标记不会外泄到之后的点击上）。 */
+      this.suppressImageTap = false
+      return
+    }
+    if (event.type === TouchType.Up) {
+      /* 落在正文图上的点击让位给图片自己的 onTouch / onClick（要区分"只取消选取态"与"进查看器"）；
+         其余位置（正文文字、链接、折叠块、角标…）一律取消选取态。 */
+      if (!this.touchStartedOnImage) {
+        dismissAnalyzerSessions()
+      }
+      this.touchStartedOnImage = false
+      return
+    }
+    if (event.type === TouchType.Cancel) {
+      this.touchStartedOnImage = false
+    }
+  }
+
+  /**
+   * 正文图触摸：判定长按（识图会话的入口）并在抬手时收掉残留选区。
+   *
+   * 刻意**不注册 `LongPressGesture`**：绑定到组件上的长按手势会与分析器内部的长按**竞争**
+   * （`draggable(false)` 之后这类手势是生效的），本组件赢下长按的同时也就掐掉了系统识图。
+   * 改用 `onTouch` 计时：原始触摸事件不参与手势竞争，判定结果只用于后续"取消 / 进查看器"分流，
+   * 不消费任何事件，识图本身仍完全由系统接管。
+   *
+   * @param event 触摸事件
+   * @param src 本次触摸所在图片的地址
+   */
+  private onImageTouch(event: TouchEvent, src: string): void {
+    if (event.type === TouchType.Down) {
+      this.touchLandedOnImage = true
+      this.longPressEstablished = false
+      this.longPressMoved = false
+      this.longPressDownNs = event.timestamp
+      this.startLongPressTimer(event, src)
+      return
+    }
+    if (event.type === TouchType.Move) {
+      this.abortLongPressOnMove(event)
+      return
+    }
+    /* Up / Cancel：这一次按下已经结束，没成立的长按不再成立。 */
+    this.touchLandedOnImage = false
+    const heldNs: number = event.timestamp - this.longPressDownNs
+    this.clearLongPressTimer()
+    if (event.type === TouchType.Cancel) {
+      /* 按下被别的角色接管（分析器长按 / 容器手势）。分析器阈值未公开，若它短于本组件阈值，
+         计时会被这次 Cancel 抢掉、会话永远判不出来——用"按住够久且没位移"补判一次。 */
+      if (!this.longPressMoved && heldNs >= ANALYZER_CANCEL_FALLBACK_MS * 1000000) {
+        this.establishAnalyzerSession(src)
+      }
+      return
+    }
+    /* Up：长按之后的**又一次**单击在这里就取消选取态。
+       不能只挂在图片的 onClick 上：分析器浮层盖在图上，这次点击可能被它消费掉，那时 onClick
+       不触发，选区就再也收不掉了。取消后抑制这次点击，保住"第一次点击只取消、不进查看器"。 */
+    if (this.analyzerSessionActive && !this.longPressEstablished) {
+      const isSessionOwner: boolean = this.analyzerSessionSrc === src
+      this.endAnalyzerSession()
+      if (isSessionOwner) {
+        this.suppressImageTap = true
+      }
+    }
+  }
+
+  /**
+   * 启动长按判定计时。
+   *
+   * @param event 触摸事件
+   * @param src 本次触摸所在图片的地址
+   */
+  private startLongPressTimer(event: TouchEvent, src: string): void {
+    this.clearLongPressTimer()
+    const points: TouchObject[] = event.touches.length > 0 ? event.touches : event.changedTouches
+    if (points.length === 0) {
+      return
+    }
+    this.longPressX = points[0].windowX
+    this.longPressY = points[0].windowY
+    this.longPressSrc = src
+    this.longPressTimer = setTimeout((): void => {
+      this.longPressTimer = -1
+      this.establishAnalyzerSession(this.longPressSrc)
+    }, ANALYZER_LONG_PRESS_MS)
+  }
+
+  /**
+   * 按下后位移超限即撤销长按判定：这次按下是滚动 / 拖拽，不是识图。
+   *
+   * @param event 触摸事件
+   */
+  private abortLongPressOnMove(event: TouchEvent): void {
+    if (this.longPressTimer === -1) {
+      return
+    }
+    const points: TouchObject[] = event.touches.length > 0 ? event.touches : event.changedTouches
+    if (points.length === 0) {
+      return
+    }
+    if (Math.abs(points[0].windowX - this.longPressX) > ANALYZER_LONG_PRESS_SLOP ||
+      Math.abs(points[0].windowY - this.longPressY) > ANALYZER_LONG_PRESS_SLOP) {
+      this.longPressMoved = true
+      this.clearLongPressTimer()
+    }
+  }
+
+  /** 撤销长按判定计时。 */
+  private clearLongPressTimer(): void {
+    if (this.longPressTimer !== -1) {
+      clearTimeout(this.longPressTimer)
+      this.longPressTimer = -1
+    }
+  }
+
+  /** 撤销长按判定与重新武装计时（会话结束时使用）。 */
+  private clearAnalyzerTimers(): void {
+    this.clearLongPressTimer()
+    if (this.analyzerRearmTimer !== -1) {
+      clearTimeout(this.analyzerRearmTimer)
+      this.analyzerRearmTimer = -1
+    }
+  }
+
+  /**
+   * 成立一次识图会话（长按计时触发，或 `Cancel` 时长补判触发）。
+   *
+   * @param src 会话归属的图片地址
+   */
+  private establishAnalyzerSession(src: string): void {
+    this.longPressEstablished = true
+    this.beginAnalyzerSession(src)
+  }
+
+  /**
+   * 开启识图会话：登记到全局表，使宿主列表滚动、其它楼层的点击也能把它收掉。
+   *
+   * 同一正文里先后长按两张图时只接管登记、**不做拆除**：此刻新图的分析器可能刚刚起来，
+   * 翻一次开关会连它一起拆掉；旧图残留的选区由系统在新的长按成立时自行处理。
+   *
+   * @param src 会话归属的图片地址
+   */
+  private beginAnalyzerSession(src: string): void {
+    unregisterAnalyzerSession(this.analyzerSessionToken)
+    this.analyzerSessionActive = true
+    this.analyzerSessionSrc = src
+    this.analyzerSessionToken = registerAnalyzerSession((): void => {
+      this.endAnalyzerSession()
+    })
+  }
+
+  /**
+   * 结束识图会话并拆掉分析器：关一次开关（选取态与系统文本菜单一并消失），随后重新武装。
+   *
+   * 幂等：登记表里只会有存活会话，重复调用最多多翻一次开关，不改变最终状态。
+   */
+  private endAnalyzerSession(): void {
+    unregisterAnalyzerSession(this.analyzerSessionToken)
+    this.analyzerSessionToken = 0
+    this.analyzerSessionActive = false
+    this.analyzerSessionSrc = ''
+    this.clearLongPressTimer()
+    this.analyzerEnabled = false
+    if (this.analyzerRearmTimer !== -1) {
+      clearTimeout(this.analyzerRearmTimer)
+    }
+    this.analyzerRearmTimer = setTimeout((): void => {
+      this.analyzerRearmTimer = -1
+      this.analyzerEnabled = true
+    }, ANALYZER_REARM_DELAY_MS)
+  }
+
+  /**
+   * 正文图点击：会话归属的那张图优先"取消选取态"（这次点击不再进查看器），再点一次才进。
+   *
+   * 与系统图库 / 聊天软件一致：图上还留着选区时，第一次点击是"退出选取态"。
+   * 点击**别的**图（含别的楼层）则先收掉选区、再照常进查看器（点的是另一张图，拦下来反而莫名其妙）。
+   *
+   * @param src 被点击图片的地址
+   */
+  private handleImageTap(src: string): void {
+    if (this.suppressImageTap) {
+      /* 图片 Up 上已经取消过会话（分析器浮层可能连 onClick 一起吃掉，所以取消不能只挂在这里）。 */
+      this.suppressImageTap = false
+      return
+    }
+    if (this.longPressEstablished) {
+      /* 这一次点击属于**刚成立的那次长按**（长按抬手若仍被判成 click）：既不进查看器，
+         也不能把刚建立的选区收掉——否则"长按选字"会被自己的抬手动作立刻取消。 */
+      return
+    }
+    if (this.analyzerSessionActive && this.analyzerSessionSrc === src) {
+      this.endAnalyzerSession()
+      return
+    }
+    /* 其余情况先收掉**所有**选区——可能是别的楼层留下的：点别的图/别处文字都该把它收干净。 */
+    dismissAnalyzerSessions()
+    const urls: string[] = this.allImageUrls.length > 0 ? this.allImageUrls : [src]
+    this.onImageClick(urls, this.getImageIndex(src))
   }
 
   /**
@@ -404,6 +718,10 @@ export struct BBCodeContentView {
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
+    /* 触摸事件沿响应链自叶向根冒泡，根容器一处即可覆盖正文内全部可点元素（见 `onContentTouch`）。 */
+    .onTouch((event: TouchEvent): void => {
+      this.onContentTouch(event)
+    })
   }
 
   /**
@@ -771,6 +1089,10 @@ export struct BBCodeContentView {
             .width(18).height(18)
             .fillColor(AppColors.textTertiary)
             .opacity(0.45)
+            /* 与实图分支同一项：被动式下**同样**不出现"有的图能识别、有的不能"的差异。
+               占位本身只有 28×28（低于分析所需的最小 100×100），不会触发识别；
+               用户点开后进入的是实图分支。开关与分析器拆除状态同源（见 `analyzerEnabled`）。 */
+            .enableAnalyzer(this.analyzerEnabled)
         }
         .width(28).height(28)
         .borderRadius(6)
@@ -784,9 +1106,7 @@ export struct BBCodeContentView {
       .backgroundColor(AppColors.bgSecondary)
       .margin({ top: 6, bottom: 4 })
       .onClick(() => {
-        let urls: string[] = this.allImageUrls.length > 0 ? this.allImageUrls : [src]
-        let idx: number = this.getImageIndex(src)
-        this.onImageClick(urls, idx)
+        this.handleImageTap(src)
       })
     } else {
       /* 主动式：原有加载行为。 */
@@ -808,14 +1128,33 @@ export struct BBCodeContentView {
            播放时封面被完全盖住；播放器出帧前的空档露出来的正是下面这张已解码好的封面。
            同一契约也用在 `MovingPhotoPlayer` 内部（封面 Image 与 MovingPhotoView）。 */
         if (this.releasedImages.has(src) || this.getImageAspectRatio(src) > 0) {
-          Image(src)
+          /* 第二个参数是**分析选项**（不是 reloadKey）：本工程只做文字识别，见
+             `common/media/ImageAnalyzerOptions.ets`。`Image` 没有设置类型的属性，构造是唯一通路。 */
+          Image(src, createTextOnlyAnalyzerOptions())
             .width('100%').height('100%')
             /* 动态照片恒用 Contain：须与播放用的 MovingPhotoView（固定 Contain）同几何，
                否则引用块里 Cover 的封面与 Contain 的播放画面会大小不一。 */
             .objectFit(inQuote && videoSrc.length === 0 ? ImageFit.Cover : ImageFit.Contain)
             .borderRadius(inQuote ? 6 : 8)
-            /* 长按不注册操作：Image 自 API 10 起 draggable 默认 true，长按会被系统当成拖拽图片。 */
+            /* 长按不注册操作：Image 自 API 10 起 draggable 默认 true，长按会被系统当成拖拽图片。
+               对下方的识图而言这一行是**消歧**而非前提：SDK 只声明 `draggable(true)` 会让绑定到
+               组件上的长按手势失效，分析器的长按由系统内部处理、不属于拖拽类事件，官方**未声明**
+               两者交互；停用拖拽后与识别争抢长按的角色（拖拽）已被移除，行为完全确定。 */
             .draggable(false)
+            /* 正文图开启系统 AI 图像分析（API 11+）：长按**文字区**识别文字、可框选与复制。
+               分析类型在构造处收窄为「只做文字识别」（`createTextOnlyAnalyzerOptions`），
+               **不含**系统默认的主体分割（长按抠图），完整契约与真机验收项见
+               `docs/research/IMAGE_TEXT_RECOGNITION_GUIDE.md`。此处只记四条与本节点相关的：
+               ① 识别基于**完整原图**，本处的 objectFit 与父层 aspectRatio 不影响识别区域；
+               ② 与 onClick（打开查看器）不冲突：长按归分析器、单击归点击回调；
+               ③ **GIF 不支持分析**（SDK：svg/gif 属动图，不参与），故动图长按无反应属系统限制；
+               ④ 开关绑状态而非字面量 true：选取态的取消就是把分析器拆掉一次（见 `analyzerEnabled`）。
+               非国内设备 / 老设备 / 模拟器上系统静默失效，不报错也不影响其余交互（不做降级）。 */
+            .enableAnalyzer(this.analyzerEnabled)
+            /* 长按判定只用原始触摸计时，不注册手势：手势会与系统识图的长按竞争（见 `onImageTouch`）。 */
+            .onTouch((event: TouchEvent): void => {
+              this.onImageTouch(event, src)
+            })
             .onError(() => {
               this.markImageFailed(src)
             })
@@ -827,9 +1166,7 @@ export struct BBCodeContentView {
               }
             })
             .onClick(() => {
-              let urls: string[] = this.allImageUrls.length > 0 ? this.allImageUrls : [src]
-              let idx: number = this.getImageIndex(src)
-              this.onImageClick(urls, idx)
+              this.handleImageTap(src)
             })
         }
 
@@ -855,11 +1192,10 @@ export struct BBCodeContentView {
               }
             },
             onBodyClick: (): void => {
-              /* 播放态点图片与静态封面行为一致：收起就地播放器并打开查看器。 */
+              /* 播放态点图片与静态封面行为一致：先收起就地播放器，再走同一条点击分流
+                 （图上还留着选区时，第一次点击只取消选取态）。 */
               this.playingMovingPhotoSrc = ''
-              let urls: string[] = this.allImageUrls.length > 0 ? this.allImageUrls : [src]
-              let idx: number = this.getImageIndex(src)
-              this.onImageClick(urls, idx)
+              this.handleImageTap(src)
             }
           })
             .width('100%')
@@ -1202,6 +1538,10 @@ export struct BBCodeContentView {
     .borderRadius(8)
     .backgroundColor(AppColors.bgSecondary)
     .align(Alignment.TopStart)
+    /* 正文内的横向滚动同样是"非识图交互"：拖动代码块即收掉选区（无会话时是一次空数组判断）。 */
+    .onDidScroll((): void => {
+      dismissAnalyzerSessions()
+    })
   }
 
   /**
@@ -1389,6 +1729,10 @@ export struct BBCodeContentView {
       .scrollBar(BarState.Auto)
       .width('100%')
       .margin({ top: 6, bottom: 4 })
+      /* 宽表的横向滚动同代码块：拖动即收掉识图选区（无会话时是一次空数组判断）。 */
+      .onDidScroll((): void => {
+        dismissAnalyzerSessions()
+      })
     } else {
       Column() {
         ForEach(layout.rows, (row: TableLayoutRow) => {
