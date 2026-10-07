@@ -15,6 +15,16 @@ description: 在本工程新增或改造 AI 功能（新场景、新入口、新
   → ActiveAiService.chatCompleteWithActiveAiStream（流式 + 服务端联网搜索）
 ```
 
+**另有一类「就地取结果」的场景不跳 AiChatPage**（如智能去水的「按本帖主题生成规则」）：
+结果是一段要被程序解析的 JSON、不展示对话过程，因此由自己的 `service/` 直接调
+`chatCompleteWithActiveAiStream` 并只取最终文本。**唯一 AI 通道不变**，但要自己承担
+下面三件事（见 §6）：
+
+- 门禁：复用 `getActiveAiValidationMessage()`，空串才发起；
+- 取消：自建 `RequestCanceller` 传给通道，并在构件 `aboutToDisappear` 里 `cancel()`
+  —— 不取消会留下无人接收的回调；
+- 输出按**不可信输入**防御性解析，任何一条不合格就丢掉那一条，不抛异常打断主流程。
+
 场景（`scenario`）是这条链路里唯一的扩展键：它决定注入哪个 system prompt。
 取数与拼装必须下沉到 `service/`，页面只留门禁、状态与路由——参照
 `service/ThreadSummaryService.ets` 与 `pages/ThreadPanel.ets` 的
@@ -27,8 +37,8 @@ description: 在本工程新增或改造 AI 功能（新场景、新入口、新
 | 场景定义 | `entry/src/main/ets/model/AiScenarioConfig.ets` | `AiScenario` 加枚举值；`SCENARIO_META`（设置页卡片标题与描述）；`DEFAULT_SYSTEM_PROMPTS`（默认 prompt）；`SCENARIO_INJECTED_FIELDS`（设置页「注入数据」预览，只读展示） |
 | 设置页 | `entry/src/main/ets/pages/ai/AiSettingsPanel.ets` | `ScenarioSection()` 里加一张 `this.ScenarioCard(AiScenario.XXX)`；`scenarioIcon(scenario)` 加图标分支 |
 | 图标资源 | `entry/src/main/resources/base/media/icon_*.svg` | 每个场景一个**语义独立**的 SVG，`fill="#000000"` 交给 `.fillColor()` 着色（只需 base，无需 dark 变体） |
-| 入口 | 页面 + 组件 | **帖子级动作**（全帖总结、收藏、离线保存…）放「更多」菜单 `moreMenuItems()`；标题栏入口走 `PanelNavBar`（见 §2）；楼层级入口走 `PostVoteBar` 的 `onSummarize` 一类的回调 |
-| 组装 | `entry/src/main/ets/service/*.ets` | 取数 + 截断 + 拼提示词；**不调用模型** |
+| 入口 | 页面 + 组件 | **帖子级动作**（全帖总结、收藏、离线保存…）放「更多」菜单 `moreMenuItems()`；标题栏入口走 `PanelNavBar`（见 §2）；楼层级入口走 `PostVoteBar` 的 `onSummarize` 一类的回调。**「就地取结果」类场景（§5）没有独立入口**——它是某个功能的内部一步，这一行留空即可，但场景定义 / 图标 / 设置页卡片**仍然要配**（用户得能编辑它的 prompt） |
+| 组装 | `entry/src/main/ets/service/*.ets` | 取数 + 截断 + 拼提示词；**不调用模型**（就地取结果类才允许在同一层继续调通道取结果 + 解析） |
 
 `SCENARIO_META` / `DEFAULT_SYSTEM_PROMPTS` / `SCENARIO_INJECTED_FIELDS` 是 `Record<string, …>`，
 漏配任一项的表现分别是：设置页 `SCENARIO_META[scenario].name` 读到 `undefined`、
@@ -87,7 +97,29 @@ description: 在本工程新增或改造 AI 功能（新场景、新入口、新
 - 进度反馈优先做**页内浮层**：只有"用户可能离开发起页仍需看到进度"（如 `savedThreadProgress`
   的离线保存）才做全局进度发布器 + `MainPage` 挂载的指示组件。
 
-## 5. 验证门禁
+## 5. 「就地取结果」类场景的红线
+
+适用形态：结果是**要被程序解析的结构化数据**（JSON 规则 / 标签 / 分类），
+而不是给用户读的一段话。代表：智能去水的「按本帖主题生成规则」。
+`service/WaterFilterAiRulesService.ets` 是可直接照抄的样板。
+
+- **复用唯一通道**，不另开 HTTP：`chatCompleteWithActiveAiStream(messages, onDelta, …)`，
+  `onDelta` 传空函数（一次性取 `result.text`）。
+- **提示词契约三处同步**：默认 system prompt（`AiScenarioConfig`）、解析器、
+  设计文档。用户可能已自定义过该场景的 prompt，格式不认识时解析器要按「没拿到结果」
+  降级，**不得抛异常打断主流程**。
+- **解析是纯函数**、逐条防御、不抛异常：截 JSON 子串（定位第一个 `{` 到最后一个 `}`，
+  别匹配 ```json 前缀）→ 校验每个字段 → 归一化 → 去重 → 限条数。把最危险的坏数据
+  写成显式规则丢掉（如「单字关键词的包含规则会命中大量正常文本」），并在 prompt 里
+  也明令禁止——两道防线，因为模型输出不可信。
+- **结果只归调用方本次使用**：若它依赖当前上下文（帖子主题、当前用户），
+  就**不要落盘成全局配置**，否则换个上下文就是误伤。用回调把结果交回发起方。
+- **门禁要区分两类可用性**：AI 不可用只提示、不阻断主功能（本地判定不依赖模型）；
+  但**结果还在生成中时必须拦使用入口**（用户点了"开始"却用不上刚生成的结果，
+  比不用 AI 更糟）。
+- 取消：`RequestCanceller` 交给通道，构件 `aboutToDisappear` 里 `cancel()`。
+
+## 6. 验证门禁
 
 1. `node scripts/check-eol.mjs`（LF 强制；注意仓库里 `oh-package-lock.json5` 是历史遗留违规，
    与本工程改动无关，不要去"顺手修"）。

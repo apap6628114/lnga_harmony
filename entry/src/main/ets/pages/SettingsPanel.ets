@@ -29,12 +29,20 @@ import { movingPhotoCacheDir } from '../common/media/MovingPhotoCache'
 import { draftStore } from '../common/managers/DraftStore'
 import { draftMediaStore } from '../common/media/DraftMediaStore'
 import { removeDirRecursively } from '../common/utils/FileUtils'
+import { waterLevelLabel } from '../model/WaterFilterRule'
 
 @Component
 export struct SettingsPanel {
   @StorageProp('themeName') themeName: string = 'light'
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('aiConfigVersion') @Watch('onAiConfigVersionChange') aiConfigVersion: number = 0
+  /**
+   * 去水配置版本号：等级或自定义规则变更时 +1。
+   *
+   * 必须显式依赖：去水规则页与设置页是路由栈里两个并存的 Screen，
+   * 从规则页返回时设置页不会重建，只靠 `aboutToAppear` 会让角标停在旧值。
+   */
+  @StorageProp('waterFilterVersion') @Watch('onWaterFilterVersionChange') waterFilterVersion: number = 0
   /** 当前帖子内容字号，用于响应字体设置页的实时更新。 */
   @StorageProp('contentFontSize') contentFontSize: number = 15
   @State cacheSizeText: string = ''
@@ -43,6 +51,8 @@ export struct SettingsPanel {
   @State threadNavBadge: string = '无缝加载'
   @State prefetchPageBadge: string = '1 页'
   @State aiProviderBadge: string = '未配置 AI'
+  /** 「去水规则」入口的角标：当前严格等级 + 生效的自定义规则条数。 */
+  @State waterFilterBadge: string = ''
   /** 标题栏渐变模糊与偏色的滚动联动进度。 */
   @State titleScrollEffectProgress: number = 0
   /** 滚动容器当前视口高度。 */
@@ -167,6 +177,7 @@ export struct SettingsPanel {
     this.threadNavBadge = this.threadNavLabel(appStore.settings.threadNavMode)
     this.prefetchPageBadge = this.prefetchPageLabel(appStore.settings.prefetchPageCount)
     this.updateAiBadge()
+    this.updateWaterFilterBadge()
   }
 
   aboutToDisappear() {
@@ -180,6 +191,22 @@ export struct SettingsPanel {
 
   private onAiConfigVersionChange(): void {
     this.updateAiBadge()
+  }
+
+  private onWaterFilterVersionChange(): void {
+    this.updateWaterFilterBadge()
+  }
+
+  /**
+   * 刷新「去水规则」角标。
+   *
+   * 只在有自定义规则时补上条数：等级本身就是一行短标签，再加「0 条规则」
+   * 只会让角标变宽而没有任何信息量。
+   */
+  private updateWaterFilterBadge(): void {
+    const label: string = waterLevelLabel(appStore.settingsStore.getWaterFilterLevel())
+    const rules: number = appStore.settingsStore.countEnabledWaterRules()
+    this.waterFilterBadge = rules > 0 ? label + ' · ' + String(rules) + ' 条' : label
   }
 
   private formatSize(bytes: number): string {
@@ -512,7 +539,7 @@ export struct SettingsPanel {
             .padding(12)
             .margin({ top: 16 })
 
-            // ---- Block 1: 黑名单管理 / 用户备注 / 关键词屏蔽 / 自动签到 ----
+            // ---- Block 1: 黑名单管理 / 用户备注 / 关键词屏蔽 / 去水规则 / 自动签到 ----
             Column() {
               SettingRow({
                 iconRes: $r('app.media.settings_blacklist'), iconColor: SettingsIconColors.blacklist, label: '黑名单管理',
@@ -536,6 +563,16 @@ export struct SettingsPanel {
                 iconRes: $r('app.media.settings_keyword_filter'), iconColor: SettingsIconColors.keywordFilter, label: '关键词屏蔽',
                 onAction: () => {
                   routerStore.navigateActivity(Screen.filterKeywords())
+                }
+              })
+
+              Divider().margin({ left: 60 }).color(AppColors.separator)
+
+              SettingPickerRow({
+                iconRes: $r('app.media.settings_water_filter'), iconColor: SettingsIconColors.waterFilter, label: '去水规则',
+                badgeText: this.waterFilterBadge,
+                onAction: () => {
+                  routerStore.navigateActivity(Screen.waterFilterRules())
                 }
               })
 

@@ -1,8 +1,9 @@
 /**
  * AI 场景与 System Prompt 配置数据模型。
  *
- * 定义三个内置 AI 场景（帖子内容总结、全帖总结、用户成分分析）的枚举、
- * 元数据、默认 system prompt 以及注入数据字段说明。
+ * 定义内置 AI 场景（帖子内容总结、全帖总结、用户成分分析、智能去水规则生成）的枚举、
+ * 元数据、默认 system prompt 以及注入数据字段说明。其中「智能去水规则生成」是非对话
+ * 场景：单次调用后由调用方解析 JSON，不进入 AiChatPage。
  */
 
 /**
@@ -17,7 +18,15 @@ export enum AiScenario {
   /** 全帖总结（跨楼层汇总，标题栏右上角 AI 图标入口） */
   THREAD_SUMMARY = 'thread_summary',
   /** 用户成分分析 */
-  USER_ANALYSIS = 'user_analysis'
+  USER_ANALYSIS = 'user_analysis',
+  /**
+   * 智能去水的规则生成（非对话场景）。
+   *
+   * 与其它场景不同：本场景**不进入 AiChatPage 对话界面**，由
+   * `service/WaterFilterAiRulesService` 单次调用后解析成规则列表。因此不需要
+   * 注入数据预览以外的任何 UI 接线，但 system prompt 仍可被用户自定义。
+   */
+  WATER_RULE_GEN = 'water_rule_gen'
 }
 
 /** 场景元数据项。 */
@@ -45,6 +54,10 @@ export const SCENARIO_META: Record<string, ScenarioMeta> = {
   [AiScenario.USER_ANALYSIS]: {
     name: '用户成分分析',
     desc: '控制 AI 如何分析论坛用户的行为和倾向'
+  },
+  [AiScenario.WATER_RULE_GEN]: {
+    name: '智能去水规则生成',
+    desc: '控制 AI 如何按帖子主题推断灌水表达并输出过滤规则（输出必须是约定格式的 JSON）'
   }
 }
 
@@ -83,6 +96,23 @@ export const DEFAULT_SYSTEM_PROMPTS: Record<string, string> = {
     '1. 用户画像：推断该用户的身份、兴趣领域、在论坛中的角色',
     '2. 政治光谱：根据其讨论话题和立场倾向，判断其政治倾向',
     '3. 整体点评：以辛辣尖锐的语言风格对其用户画像进行一句话锐评'
+  ].join('\n'),
+  [AiScenario.WATER_RULE_GEN]: [
+    '你是一个中文论坛灌水回复过滤器。用户会给你一个论坛帖子的标题和主楼正文，请据此推断这个帖子下哪些回复属于「不提供任何信息的灌水」，并输出一组过滤规则。',
+    '',
+    '输出要求（必须严格遵守）：',
+    '1. 只输出一个 JSON 对象，不要输出任何解释文字，不要用 markdown 代码块包裹。',
+    '2. 格式固定为：{"rules":[{"type":"contain","value":"示例词"},{"type":"max-length","value":"3"}]}',
+    '3. type 只能是三种之一：',
+    '   - contain：回复正文包含 value 就判为灌水，适合这个帖子里反复出现的口头禅、无意义应和；',
+    '   - equals：回复正文完全等于 value 才判为灌水，适合明确的灌水标记词；',
+    '   - max-length：value 是 1~500 的整数，表示回复正文不超过这么多字就判为灌水。',
+    '4. value 必须是最短的关键词，一般 2~6 个字；不要带标点，不要写整句话。',
+    '5. 最多 12 条。宁缺勿滥：只为这个帖子确实会出现的灌水表达写规则。',
+    '6. 不要写通用灌水词：「mark」「插眼」「马克」「谢谢分享」「哈哈」这类常见灌水已由应用内置词表覆盖，你只需补充与本帖主题相关的。',
+    '7. 严禁写会误伤正常讨论的词，尤其禁止 contain 规则使用单字（如「图」「求」「问」「顶」「好」）——它们会命中大量正经回复。宁可少给，不可误伤。',
+    '8. 判定时引用的内容不计入正文长度，所以针对「引用 + 一句短评」的楼层，请用 contain 而不是 max-length。',
+    '9. 如果从这个帖子看不出特有的灌水表达，就输出 {"rules":[]}。'
   ].join('\n')
 }
 
@@ -121,5 +151,10 @@ export const SCENARIO_INJECTED_FIELDS: Record<string, InjectedFieldInfo[]> = {
     { label: '发帖时段分布', example: '凌晨 3 帖 / 上午 8 帖 / 下午 15 帖 / 晚上 19 帖' },
     { label: '发表的帖子', example: '前若干条帖子标题列表' },
     { label: '回复内容', example: '前若干条回复片段' }
+  ],
+  [AiScenario.WATER_RULE_GEN]: [
+    { label: '帖子标题', example: '原标题文本' },
+    { label: '主楼正文', example: '楼主开帖内容的纯文本（超长时截断）' },
+    { label: '预期输出', example: '{"rules":[{"type":"contain","value":"示例词"}]}' }
   ]
 }

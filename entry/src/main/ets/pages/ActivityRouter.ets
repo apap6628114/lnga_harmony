@@ -8,6 +8,7 @@ import { MessageDetailPanel } from './MessageDetailPanel'
 import { BlacklistPanel } from './BlacklistPanel'
 import { NotesPanel } from './NotesPanel'
 import { FilterKeywordsPanel } from './FilterKeywordsPanel'
+import { WaterFilterRulesPanel } from './WaterFilterRulesPanel'
 import { SettingsPanel } from './SettingsPanel'
 import { TtsSettingsPanel } from './TtsSettingsPanel'
 import { BrowseHistoryPanel } from './BrowseHistoryPanel'
@@ -68,6 +69,7 @@ export struct ActivityRouter {
               threadPage: entry.screen.threadPage,
               threadPid: entry.screen.pid,
               threadSource: entry.screen.threadSource,
+              archiveId: entry.screen.archiveId,
               navEntryId: entry.id
             })
           } else if (entry.screen.type === 'browseHistory') {
@@ -90,6 +92,8 @@ export struct ActivityRouter {
             NotesPanel()
           } else if (entry.screen.type === 'filterKeywords') {
             FilterKeywordsPanel()
+          } else if (entry.screen.type === 'waterFilterRules') {
+            WaterFilterRulesPanel()
           } else if (entry.screen.type === 'topicList') {
             TopicListPanel({
               boardFid: entry.screen.topicListFid,

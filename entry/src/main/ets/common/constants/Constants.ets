@@ -18,6 +18,15 @@ export const TOAST_BOTTOM_MARGIN: number = 70
 /** TTS 合成进度指示器距底部的高度（vp），位于 Toast 上方。 */
 export const TTS_PROGRESS_BOTTOM_MARGIN: number = 148
 
+/**
+ * 「智能去水」进度指示器距底部的高度（vp）。
+ *
+ * 比 {@link TTS_PROGRESS_BOTTOM_MARGIN} 再高出一档：去水任务与离线保存任务是
+ * 两条独立的跨页任务，理论上可以同时进行；两条进度胶囊用不同高度各自成行，
+ * 同时出现时不会叠在一起看不清。
+ */
+export const WATER_FILTER_PROGRESS_BOTTOM_MARGIN: number = 192
+
 /** 标题栏滚动模糊从透明过渡到完全生效的距离（vp）。 */
 export const TITLE_SCROLL_EFFECT_DISTANCE: number = 20
 
@@ -172,6 +181,8 @@ export class SettingsIconColors {
   static readonly imageLoading: string = '#3B82F6'
   /** 显示帖子预览图的玫瑰红。 */
   static readonly topicPreview: string = '#E11D48'
+  /** 智能去水的青蓝色（水滴语义，与语音朗读的天蓝拉开区分）。 */
+  static readonly waterFilter: string = '#0891B2'
   /** 字体大小的排版紫红色。 */
   static readonly fontSize: string = '#A21CAF'
   /** 帖子楼层导航的路径橙色。 */

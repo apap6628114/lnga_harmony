@@ -57,6 +57,9 @@ import {
 import { ReadingProgressEntry } from '../store/ReadingProgressStore'
 import { threadSummaryService, ThreadSummaryOutcome } from '../service/ThreadSummaryService'
 import { AiScenario } from '../model/AiScenarioConfig'
+import { WaterFilterContent } from '../common/dialogs/WaterFilterDialogs'
+import { threadWaterFilterService, WaterFilterOutcome } from '../service/ThreadWaterFilterService'
+import type { WaterFilterRule } from '../model/WaterFilterRule'
 
 const logger = new Logger(DOMAIN_UI, 'ThreadPanel')
 
@@ -162,6 +165,13 @@ export struct ThreadPanel {
   @Prop threadPid: string = ''
   /** 打开帖子的路由来源（ThreadSource 枚举值），用于运行态诊断。 */
   @Prop threadSource: string = ''
+  /**
+   * 离线存档标识（SavedThread.archiveId），仅离线存档来源使用。
+   *
+   * 与 threadTid 分离：同一主题可并存原帖存档与去水版存档，只有 archiveId 能
+   * 区分读取哪一份。为空时回退为 threadTid（原帖存档的 archiveId 即 tid）。
+   */
+  @Prop archiveId: string = ''
   @Prop @Watch('onScrollToPid') navEntryId: number = 0
   @State isLoading: boolean = true
   @State hasError: boolean = false
@@ -197,6 +207,14 @@ export struct ThreadPanel {
   private saveDialogController?: CustomDialogController
   /** 跟踪帖子更新对话框控制器（更多菜单「跟踪帖子更新」入口）。 */
   private trackDialogController?: CustomDialogController
+  /** 智能去水确认对话框控制器（更多菜单「智能去水」入口）。 */
+  private waterFilterDialogController?: CustomDialogController
+  /** 本次去水使用的 AI 规则（按本帖主题生成，只对本次任务生效，不落盘）。 */
+  private waterFilterAiRules: WaterFilterRule[] = []
+  /** AI 规则是否正在生成（生成中点「开始」必须拦住）。 */
+  private waterFilterAiGenerating: boolean = false
+  /** 主楼正文纯文本缓存（开框时解析一次，供 AI 推断帖子类型）。 */
+  private waterFilterOpText: string = ''
   /** 跟踪对话框选中的跟踪时长（天），由 ThreadTrackContent 回写。 */
   @State private trackKeepDays: number = TRACK_DEFAULT_KEEP_DAYS
   /**
@@ -459,6 +477,7 @@ export struct ThreadPanel {
     this.mgr.reset()
     this.saveDialogController = undefined
     this.trackDialogController = undefined
+    this.waterFilterDialogController = undefined
   }
 
   private onThreadChanged(): void {
@@ -1158,7 +1177,7 @@ export struct ThreadPanel {
     // 其余来源保持服务器请求模式。
     const result: ThreadResult = this.threadSource === ThreadSource.SAVED
       ? await withTimeout<ThreadResult>(getSavedThreadResult(
-        this.threadTid, targetPage,
+        this.getArchiveId(), targetPage,
         appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords(),
         noteMap, this.authorOnly ? this.threadAuthorId : ''
       ), timeoutMs)
@@ -1891,6 +1910,18 @@ export struct ThreadPanel {
   }
 
   /**
+   * 当前读取的离线存档标识。
+   *
+   * 路由未携带 archiveId 时回退为 tid：原帖存档的 archiveId 就等于 tid，
+   * 这样存量调用点与旧书签无需改动。
+   *
+   * @returns 存档标识
+   */
+  private getArchiveId(): string {
+    return this.archiveId.length > 0 ? this.archiveId : this.threadTid
+  }
+
+  /**
    * 打开「保存帖子」对话框（选择保存的页范围）。
    */
   private openSaveThreadDialog(): void {
@@ -1955,6 +1986,152 @@ export struct ThreadPanel {
       } else {
         appStore.showToast('保存失败：' + outcome.message)
       }
+    })
+  }
+
+  // ==================== 智能去水 ====================
+
+  /**
+   * 打开「智能去水」确认对话框（更多菜单入口）。
+   *
+   * 与「离线保存帖子」同构：抓取规模、预计耗时、当前严格等级与生效规则条数、以及
+   * **产出物存档在哪儿**都必须在点「开始」之前让用户看到——去水是**全帖不限页数**的抓取，
+   * 长帖可能跑很久，跑完用户已经离开对话框了。
+   *
+   * 对话框里改等级会即时写回设置（见 `WaterFilterContent`），所以这里不需要接收回写值；
+   * 但 **AI 规则要接**：它只对本次任务生效，不落盘，必须由本页持有并在发起时并入规则集。
+   */
+  private openWaterFilterDialog(): void {
+    if (this.threadTid.length === 0) {
+      return
+    }
+    // 每次开框都清掉上一轮的 AI 规则：对话框是新建实例，本页字段不重置就会把
+    // 上一个帖子的规则静默带进这一次去水
+    this.waterFilterAiRules = []
+    this.waterFilterAiGenerating = false
+    // 主楼正文在开框时同步解析一次并缓存：放进 contentBuilder 会在每次重绘时重解析
+    this.waterFilterOpText = this.resolveOpPlainText()
+    this.waterFilterDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
+      systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
+      builder: CustomContentDialog({
+        primaryTitle: '智能去水',
+        contentBuilder: (): void => { this.waterFilterContent() },
+        buttons: [
+          { value: '取消' },
+          {
+            value: '开始',
+            fontColor: AppColors.white,
+            background: AppColors.primary,
+            action: (): void => {
+              this.startWaterFilter()
+            }
+          }
+        ]
+      }),
+      autoCancel: true
+    })
+    this.waterFilterDialogController?.open()
+  }
+
+  /** 智能去水确认对话框的自定义内容（官方 CustomContentDialog 的 contentBuilder）。 */
+  @Builder
+  waterFilterContent() {
+    WaterFilterContent({
+      subject: this.threadSubject,
+      totalPages: this.mgr.totalPages,
+      opText: this.waterFilterOpText,
+      onAiStateChange: (rules: WaterFilterRule[], generating: boolean): void => {
+        this.waterFilterAiRules = rules
+        this.waterFilterAiGenerating = generating
+      },
+      onOpenRules: (): void => {
+        // 先把对话框收掉再跳转：设置页是独立 Screen，留着对话框会盖在它上面
+        this.waterFilterDialogController?.close()
+        routerStore.navigateActivity(Screen.waterFilterRules())
+      }
+    })
+  }
+
+  /**
+   * 当前窗口内主楼（lou=0）的正文纯文本。
+   *
+   * 供 AI 推断帖子类型（攻略 / 资源 / 追更 / 闲聊）。主楼不在当前窗口时返回空串，
+   * 此时 AI 只看标题——比不生成规则更保守，不会因此失败。
+   *
+   * @returns 主楼纯文本；未加载或无内容时返回空串
+   */
+  private resolveOpPlainText(): string {
+    const posts: PostInfo[] = this.mgr.posts
+    for (let index: number = 0; index < posts.length; index++) {
+      if (posts[index].lou === 0) {
+        const text: string = bbNodesToPlainText(getCachedBBNodes(posts[index].content))
+        return text.trim().length > 0 ? text : ''
+      }
+    }
+    return ''
+  }
+
+  /**
+   * 发起全帖去水任务；结果以 Toast 提示（进度与取消由全局指示组件承担）。
+   *
+   * 门禁与「全帖 AI 总结」对齐，但**不校验 AI 可用性**：去水判定是纯本地规则，
+   * 未配置 AI 也应照常可用（AI 规则是可选加分项，不是前置条件）。离线存档来源不展示
+   * 本菜单项（见 {@link isSavedSource} 分支），因此这里不必再判一次。
+   */
+  private startWaterFilter(): void {
+    if (!appStore.auth.isAuthenticated) {
+      appStore.showToast('请先登录')
+      return
+    }
+    if (this.waterFilterAiGenerating) {
+      // 规则还没拿到就开始抓，用户以为用了 AI 规则、实际一条没用上——必须拦住
+      appStore.showToast('AI 正在生成规则，请稍候再开始')
+      return
+    }
+    if (threadWaterFilterService.isRunning) {
+      appStore.showToast('已有去水任务进行中，请在进度条里等待或取消')
+      return
+    }
+    if (this.mgr.totalPages < 1) {
+      appStore.showToast('帖子尚未加载完成，请稍后再试')
+      return
+    }
+    const level: number = appStore.settingsStore.getWaterFilterLevel()
+    // 本次生效的规则 = 全局自定义规则 + 本次 AI 规则（AI 规则不落盘）
+    const merged: WaterFilterRule[] = []
+    const customRules: WaterFilterRule[] = appStore.settingsStore.getWaterFilterRules()
+    for (let i: number = 0; i < customRules.length; i++) {
+      merged.push(customRules[i])
+    }
+    for (let i: number = 0; i < this.waterFilterAiRules.length; i++) {
+      merged.push(this.waterFilterAiRules[i])
+    }
+    logger.info('water-filter start tid=%{public}s hintPages=%{public}d level=%{public}d rules=%{public}d ai=%{public}d',
+      this.threadTid, this.mgr.totalPages, level, customRules.length, this.waterFilterAiRules.length)
+    threadWaterFilterService.run(
+      this.threadTid,
+      this.threadSubject,
+      this.mgr.totalPages,
+      level,
+      merged
+    ).then((outcome: WaterFilterOutcome): void => {
+      if (!outcome.ok) {
+        if (!outcome.cancelled) {
+          appStore.showToast(outcome.message)
+        }
+        return
+      }
+      logger.info(
+        'water-filter done tid=%{public}s archive=%{public}s kept=%{public}d removed=%{public}d pages=%{public}d',
+        this.threadTid, outcome.archiveId, outcome.keptFloors, outcome.removedFloors, outcome.outputPages
+      )
+      appStore.showToast('已生成去水版：' + outcome.message)
+    }).catch((error: Error): void => {
+      logger.warn('water-filter rejected tid=%{public}s error=%{public}s',
+        this.threadTid, formatError(error))
+      appStore.showToast('去水失败：' + error.message)
     })
   }
 
@@ -2593,6 +2770,15 @@ export struct ThreadPanel {
         label: '离线保存帖子',
         action: (): void => {
           this.openSaveThreadDialog()
+        }
+      })
+      // 智能去水：与「收藏夹/离线保存帖子」并列的帖子级动作。产出的「去水版」是一份独立的
+      // 本地存档（archiveId = tid + '-w'），在「保存的帖子」列表里与原帖离线存档并排展示，
+      // 不影响原帖。抓取与判定全部在本地完成（不调模型、不耗额度），进度与取消由页内浮层承担。
+      items.push({
+        label: '智能去水',
+        action: (): void => {
+          this.openWaterFilterDialog()
         }
       })
       // AI 全帖总结：与「收藏夹/离线保存帖子」并列的帖子级动作。放在这里而不是标题栏图标，

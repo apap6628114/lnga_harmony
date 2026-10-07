@@ -12,11 +12,13 @@ import { MediaSettings } from './settings/domain/MediaSettings'
 import { ReadingSettings } from './settings/domain/ReadingSettings'
 import { SocialListSettings } from './settings/domain/SocialListSettings'
 import { FilterKeywordSettings } from './settings/domain/FilterKeywordSettings'
+import { WaterFilterSettings } from './settings/domain/WaterFilterSettings'
 import { NoteSettings } from './settings/domain/NoteSettings'
 import { CheckinSettings } from './settings/domain/CheckinSettings'
 import { AiSettings } from './settings/domain/AiSettings'
 import type { AuthState } from './AuthStore'
 import type { AiProviderProfile } from '../model/AiConfig'
+import type { WaterFilterRule } from '../model/WaterFilterRule'
 import {
   KEY_SHOW_SIGNATURE,
   KEY_IMAGE_LOAD_STRATEGY,
@@ -46,6 +48,7 @@ export class SettingsStore extends BaseStore<SettingsState> {
   readonly readingSettings: ReadingSettings
   readonly socialListSettings: SocialListSettings
   readonly filterKeywordSettings: FilterKeywordSettings
+  readonly waterFilterSettings: WaterFilterSettings
   readonly noteSettings: NoteSettings
   readonly checkinSettings: CheckinSettings
   readonly aiSettings: AiSettings
@@ -59,6 +62,7 @@ export class SettingsStore extends BaseStore<SettingsState> {
     this.readingSettings = new ReadingSettings(this.ctx)
     this.socialListSettings = new SocialListSettings(this.ctx)
     this.filterKeywordSettings = new FilterKeywordSettings(this.ctx)
+    this.waterFilterSettings = new WaterFilterSettings(this.ctx)
     this.noteSettings = new NoteSettings(this.ctx)
     this.checkinSettings = new CheckinSettings(this.ctx)
     this.aiSettings = new AiSettings(this.ctx)
@@ -99,6 +103,7 @@ export class SettingsStore extends BaseStore<SettingsState> {
     this.themeSettings.repersist()
     this.socialListSettings.reset()
     this.filterKeywordSettings.reset()
+    this.waterFilterSettings.reset()
     this.noteSettings.reset()
     this.aiSettings.reset()
     super.reset()
@@ -128,6 +133,7 @@ export class SettingsStore extends BaseStore<SettingsState> {
       this.readingSettings.load(saved)
       this.socialListSettings.load(saved)
       this.filterKeywordSettings.load(saved)
+      this.waterFilterSettings.load(saved)
       this.noteSettings.load(saved)
       this.checkinSettings.load(saved)
       this.aiSettings.load(saved)
@@ -228,6 +234,19 @@ export class SettingsStore extends BaseStore<SettingsState> {
   toggleKeyword(keyword: string): void { this.filterKeywordSettings.toggleKeyword(keyword) }
   removeAllKeywords(): void { this.filterKeywordSettings.removeAllKeywords() }
   getEnabledKeywords(): string[] { return this.filterKeywordSettings.getEnabledKeywords() }
+
+  // --- Water Filter（智能去水）---
+  getWaterFilterLevel(): number { return this.waterFilterSettings.getLevel() }
+  setWaterFilterLevel(level: number): void { this.waterFilterSettings.setLevel(level) }
+  getWaterFilterRules(): WaterFilterRule[] { return this.waterFilterSettings.getRules() }
+  countEnabledWaterRules(): number { return this.waterFilterSettings.countEnabledRules() }
+  addWaterRule(type: string, value: string): string { return this.waterFilterSettings.addRule(type, value) }
+  updateWaterRule(id: string, type: string, value: string): string {
+    return this.waterFilterSettings.updateRule(id, type, value)
+  }
+  removeWaterRule(id: string): void { this.waterFilterSettings.removeRule(id) }
+  toggleWaterRule(id: string): void { this.waterFilterSettings.toggleRule(id) }
+  removeAllWaterRules(): void { this.waterFilterSettings.removeAllRules() }
 
   // --- Checkin ---
   setAutoCheckin(enabled: boolean): void { this.checkinSettings.setAutoCheckin(enabled) }

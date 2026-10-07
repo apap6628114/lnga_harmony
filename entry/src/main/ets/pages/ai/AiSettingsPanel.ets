@@ -669,6 +669,7 @@ export struct AiSettingsPanel {
       this.ScenarioCard(AiScenario.POST_SUMMARY)
       this.ScenarioCard(AiScenario.THREAD_SUMMARY)
       this.ScenarioCard(AiScenario.USER_ANALYSIS)
+      this.ScenarioCard(AiScenario.WATER_RULE_GEN)
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center)
@@ -812,6 +813,10 @@ export struct AiSettingsPanel {
     // 与 ThreadPanel 标题栏那颗按钮用的是同一份资源
     if (scenario === AiScenario.THREAD_SUMMARY) {
       return $r('app.media.icon_ai_thread')
+    }
+    // 去水规则生成是「漏斗 + 星芒」：与设置页那颗去水图标同族（漏斗），星芒区别于纯手动规则
+    if (scenario === AiScenario.WATER_RULE_GEN) {
+      return $r('app.media.icon_ai_water_rules')
     }
     return $r('app.media.icon_ai_profile')
   }
