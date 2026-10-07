@@ -216,7 +216,8 @@ export const savedThreadService: SavedThreadService = new SavedThreadService()
  * 数据来源即可渲染；「只看楼主」在离线模式下由服务端过滤改为客户端过滤；
  * 总页数限定为实际保存页数（超出即视为无更多页）。
  *
- * @param tid - NGA 主题 ID
+ * @param archiveId - 存档标识（见 SavedThread.archiveId）。**不是 tid**：同一主题
+ *   的原帖存档与去水版存档共用 tid，只有 archiveId 能区分要读哪一份。
  * @param page - 页码（从 1 开始）
  * @param blacklist - 黑名单 UID
  * @param keywords - 标题屏蔽关键词
@@ -225,12 +226,12 @@ export const savedThreadService: SavedThreadService = new SavedThreadService()
  *   `#anony_` 编码名；匿名存档的 uid 是页内局部号，拿它筛只会得到空结果
  * @returns 解释后的帖子详情结果
  */
-export async function getSavedThreadResult(tid: string, page: number,
+export async function getSavedThreadResult(archiveId: string, page: number,
   blacklist: Set<string>, keywords: string[] = [],
   noteMap: Record<string, string> = {},
   authorKey: string = ''): Promise<ThreadResult> {
   const result: ThreadResult = new ThreadResult()
-  const archive: SavedThread | null = appStore.savedThreadStore.getByTid(tid)
+  const archive: SavedThread | null = appStore.savedThreadStore.getByArchiveId(archiveId)
   if (archive === null) {
     result.error = '存档不存在或已被删除'
     return result
@@ -241,7 +242,7 @@ export async function getSavedThreadResult(tid: string, page: number,
   if (authorKey.length > 0) {
     const allPosts: PostInfo[] = []
     for (let p: number = 1; p <= archive.rawPages.length; p++) {
-      const rawPage: Record<string, Object> | null = appStore.savedThreadStore.getRawPage(tid, p)
+      const rawPage: Record<string, Object> | null = appStore.savedThreadStore.getRawPage(archiveId, p)
       if (rawPage === null) {
         continue
       }
@@ -259,8 +260,8 @@ export async function getSavedThreadResult(tid: string, page: number,
           result.forumName = pageResult.forumName
         }
       } catch (e) {
-        logger.warn('saved author-only page parse failed tid=%{public}s page=%{public}d: %{public}s',
-          tid, p, formatError(e))
+        logger.warn('saved author-only page parse failed archiveId=%{public}s page=%{public}d: %{public}s',
+          archiveId, p, formatError(e))
       }
     }
     result.posts = allPosts
@@ -276,7 +277,7 @@ export async function getSavedThreadResult(tid: string, page: number,
     result.error = '超出存档页数'
     return result
   }
-  const raw: Record<string, Object> | null = appStore.savedThreadStore.getRawPage(tid, page)
+  const raw: Record<string, Object> | null = appStore.savedThreadStore.getRawPage(archiveId, page)
   if (raw === null) {
     result.error = '存档数据缺失'
     return result
@@ -289,8 +290,8 @@ export async function getSavedThreadResult(tid: string, page: number,
     result.pagination.totalPages = archive.savedPages
     result.pagination.page = page
   } catch (e) {
-    logger.warn('getSavedThreadResult failed tid=%{public}s page=%{public}d: %{public}s',
-      tid, page, formatError(e))
+    logger.warn('getSavedThreadResult failed archiveId=%{public}s page=%{public}d: %{public}s',
+      archiveId, page, formatError(e))
     result.error = '存档数据无法解析'
   }
   return result

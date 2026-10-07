@@ -1,13 +1,19 @@
 /**
  * 保存帖子存储 - 文件系统持久化（不按账号区分）。
  *
- * 存档目录为应用沙箱 `filesDir/saved_threads`，每个帖子一个 `<tid>.json` 文件，
+ * 存档目录为应用沙箱 `filesDir/saved_threads`，每份存档一个 `<archiveId>.json` 文件，
  * 内容为 SavedThread 的 JSON 序列化（含每页同形状原始 JSON）。内存缓存按保存
  * 时间（savedAt）降序维护，与查看页的排序口径一致。导入冲突按覆盖处理
- * （同 tid 直接覆盖）。
+ * （同 archiveId 直接覆盖）。
+ *
+ * **唯一键是 archiveId 而非 tid**：同一主题允许并存多份存档——原帖全量存档
+ * （archiveId === tid）与「智能去水」派生的去水版（archiveId === tid + '-w'）。
+ * 两者共用 tid，因此「在线模式打开」仍指向真实主题；用 tid 当键会让后写的
+ * 一份直接覆盖另一份。存量存档没有 archiveId 字段，加载时回填为 tid。
  *
  * 写入采用「临时文件 + 重命名」原子替换：写失败不会截断/破坏已存在的旧存档；
- * tid 强制校验为纯数字（NGA 主题 ID 形状），杜绝导入文件路径穿越越出存档目录。
+ * archiveId 强制校验形状（纯数字，或纯数字 + `-w` 派生后缀），杜绝导入文件
+ * 路径穿越越出存档目录。
  */
 
 import { fileIo } from '@kit.CoreFileKit'
@@ -26,21 +32,48 @@ const logger = new Logger(DOMAIN_STORE, 'SavedThreadStore')
 /** 存档子目录名（相对 filesDir）。 */
 const SAVED_THREAD_DIR_NAME: string = 'saved_threads'
 
+/** 派生存档（去水版）的 archiveId 后缀。 */
+export const DERIVED_ARCHIVE_SUFFIX: string = '-w'
+
 /**
- * 校验 tid 是否可安全用于存档文件名。
+ * 把 tid 归一为原帖存档的 archiveId（存量数据与新建存档共用同一口径）。
  *
- * NGA 主题 ID 恒为纯数字（1~16 位）；导入文件为外部可控输入，必须拒绝
- * 含路径分隔符/`..` 等字符的 tid，防止路径穿越越出存档目录。
+ * @param tid - NGA 主题 ID
+ * @returns 原帖存档的 archiveId
+ */
+export function baseArchiveIdOf(tid: string): string {
+  return tid
+}
+
+/**
+ * 生成去水版存档的 archiveId（同一主题只保留一份，重跑覆盖）。
  *
- * @param tid - 待校验的主题 ID
+ * @param tid - NGA 主题 ID
+ * @returns 去水版存档的 archiveId
+ */
+export function derivedArchiveIdOf(tid: string): string {
+  return tid + DERIVED_ARCHIVE_SUFFIX
+}
+
+/**
+ * 校验 archiveId 是否可安全用于存档文件名。
+ *
+ * 形状固定为「1~16 位纯数字」+ 可选派生后缀（`-w`）。导入文件为外部可控输入，
+ * 必须拒绝含路径分隔符/`..` 等字符的 id，防止路径穿越越出存档目录；**不接受**
+ * 任意后缀，避免派生键空间被外部文件随意扩张而绕开归档语义。
+ *
+ * @param id - 待校验的存档标识
  * @returns 是否合法
  */
-function isValidTid(tid: string): boolean {
-  if (tid.length === 0 || tid.length > 16) {
+function isValidArchiveId(id: string): boolean {
+  const digits: string = id.endsWith(DERIVED_ARCHIVE_SUFFIX)
+    ? id.substring(0, id.length - DERIVED_ARCHIVE_SUFFIX.length)
+    : id
+  if (digits.length === 0 || digits.length > 16) {
     return false
   }
-  for (let i = 0; i < tid.length; i++) {
-    const c: string = tid.charAt(i)
+  for (let i = 0; i < digits.length; i++) {
+    const c: string = digits.charAt(i)
     if (c < '0' || c > '9') {
       return false
     }
@@ -77,8 +110,8 @@ export class SavedThreadStore {
     this.reload()
   }
 
-  private filePathOf(tid: string): string {
-    return this.dirPath + '/' + tid + '.json'
+  private filePathOf(archiveId: string): string {
+    return this.dirPath + '/' + archiveId + '.json'
   }
 
   /**
@@ -99,10 +132,14 @@ export class SavedThreadStore {
         try {
           const raw: string = fileIo.readTextSync(this.dirPath + '/' + name)
           const parsed: SavedThread = JSON.parse(raw) as SavedThread
-          // v2 存档要求具备可解释的同形状原始 JSON；损坏/旧格式/tid 非法文件跳过
-          if (parsed && isValidTid(parsed.tid) &&
-            parsed.rawPages && parsed.rawPages.length > 0) {
-            this.normalizeArchive(parsed)
+          // v2 存档要求具备可解释的同形状原始 JSON；损坏/旧格式文件跳过
+          if (!parsed || !parsed.rawPages || parsed.rawPages.length === 0) {
+            logger.warn('reload skip file: %{public}s', name)
+            continue
+          }
+          this.normalizeArchive(parsed)
+          // 标识非法（含路径穿越形态）的存档整体丢弃，不进入内存列表
+          if (isValidArchiveId(parsed.archiveId) && isValidArchiveId(parsed.tid)) {
             list.push(parsed)
           }
         } catch (e) {
@@ -119,11 +156,20 @@ export class SavedThreadStore {
   /**
    * 规整存档的可解释性字段：savedPages 缺失或与实际页数不一致时以实际页数为准，
    * 避免「列表显示 N 页但打开越界报缺失」的死档；lastLou 缺失（改动前存量存档）
-   * 兜底为 0，避免列表显示 "undefined 楼" 技术字符串。
+   * 兜底为 0，避免列表显示 "undefined 楼" 技术字符串；archiveId 缺失（本字段引入
+   * 前的存量存档）回填为 tid，derivedFrom 兜底为空串。
    *
    * @param thread - 待规整的存档（原地修改）
    */
   private normalizeArchive(thread: SavedThread): void {
+    const archiveId: string = thread.archiveId
+    if (archiveId === undefined || archiveId === null || archiveId.length === 0) {
+      thread.archiveId = baseArchiveIdOf(thread.tid ?? '')
+    }
+    const derived: string = thread.derivedFrom
+    if (derived === undefined || derived === null) {
+      thread.derivedFrom = ''
+    }
     if (thread.savedPages <= 0 || thread.savedPages !== thread.rawPages.length) {
       thread.savedPages = thread.rawPages.length
     }
@@ -145,18 +191,41 @@ export class SavedThreadStore {
   }
 
   /**
-   * 按 tid 查找存档。
+   * 按 archiveId 查找存档。
    *
-   * @param tid - NGA 主题 ID
+   * @param archiveId - 存档标识（见 SavedThread.archiveId）
    * @returns 存档；不存在时返回 null
    */
-  getByTid(tid: string): SavedThread | null {
+  getByArchiveId(archiveId: string): SavedThread | null {
+    if (archiveId.length === 0) {
+      return null
+    }
     for (let i = 0; i < this.items.length; i++) {
-      if (this.items[i].tid === tid) {
+      if (this.items[i].archiveId === archiveId) {
         return this.items[i]
       }
     }
     return null
+  }
+
+  /**
+   * 按「原帖 tid」查找原帖存档（不含去水版等派生存档）。
+   *
+   * @param tid - NGA 主题 ID
+   * @returns 原帖存档；不存在时返回 null
+   */
+  getByTid(tid: string): SavedThread | null {
+    return this.getByArchiveId(baseArchiveIdOf(tid))
+  }
+
+  /**
+   * 是否已存在该主题的去水版存档。
+   *
+   * @param tid - NGA 主题 ID
+   * @returns 是否已存在
+   */
+  hasDerivedArchive(tid: string): boolean {
+    return this.getByArchiveId(derivedArchiveIdOf(tid)) !== null
   }
 
   /**
@@ -169,17 +238,17 @@ export class SavedThreadStore {
   /**
    * 取存档指定页的同形状原始 JSON。
    *
-   * @param tid - NGA 主题 ID
+   * @param archiveId - 存档标识（见 SavedThread.archiveId）
    * @param page - 页码（从 1 开始）
    * @returns 该页原始数据；存档不存在、页号越界或数据缺失时返回 null
    */
-  getRawPage(tid: string, page: number): Record<string, Object> | null {
+  getRawPage(archiveId: string, page: number): Record<string, Object> | null {
     if (page < 1) {
       return null
     }
     for (let i = 0; i < this.items.length; i++) {
       const item: SavedThread = this.items[i]
-      if (item.tid === tid) {
+      if (item.archiveId === archiveId) {
         if (page > item.rawPages.length) {
           return null
         }
@@ -194,23 +263,25 @@ export class SavedThreadStore {
   }
 
   /**
-   * 写入（覆盖）一个帖子存档。
+   * 写入（覆盖）一份存档。
    *
-   * 原子写：先写 `<tid>.json.tmp`，成功后再重命名替换目标文件；写失败时
-   * 旧存档保持完整，临时文件被清理。
+   * 原子写：先写 `<archiveId>.json.tmp`，成功后再重命名替换目标文件；写失败时
+   * 旧存档保持完整，临时文件被清理。覆盖粒度是 **archiveId**：写去水版
+   * （`<tid>-w`）不会动到同主题的原帖存档。
    *
-   * @param thread - 待保存的帖子快照
+   * @param thread - 待保存的存档快照
    * @param notify - 是否 bump savedThreadVersion（批量导入时由调用方统一触发）
    */
   async save(thread: SavedThread, notify: boolean = true): Promise<void> {
     if (this.context === null) {
       throw new Error('存档未就绪')
     }
-    if (!isValidTid(thread.tid)) {
+    // 先规整（archiveId 缺失时按 tid 回填），再做形状校验
+    this.normalizeArchive(thread)
+    if (!isValidArchiveId(thread.archiveId)) {
       throw new Error('存档标识无效')
     }
-    this.normalizeArchive(thread)
-    const path: string = this.filePathOf(thread.tid)
+    const path: string = this.filePathOf(thread.archiveId)
     const tmpPath: string = path + '.tmp'
     const content: string = JSON.stringify(thread)
     let file: fileIo.File | null = null
@@ -222,7 +293,7 @@ export class SavedThreadStore {
       file = null
       fileIo.renameSync(tmpPath, path)
     } catch (e) {
-      logger.error('save failed tid=%{public}s: %{public}s', thread.tid, formatError(e))
+      logger.error('save failed archiveId=%{public}s: %{public}s', thread.archiveId, formatError(e))
       if (file) {
         try {
           fileIo.closeSync(file)
@@ -242,10 +313,10 @@ export class SavedThreadStore {
         } catch (e) {}
       }
     }
-    // 更新内存缓存并保持降序
+    // 更新内存缓存并保持降序（按 archiveId 去重）
     const filtered: SavedThread[] = []
     for (let i = 0; i < this.items.length; i++) {
-      if (this.items[i].tid !== thread.tid) {
+      if (this.items[i].archiveId !== thread.archiveId) {
         filtered.push(this.items[i])
       }
     }
@@ -258,29 +329,29 @@ export class SavedThreadStore {
   }
 
   /**
-   * 删除一个帖子存档。
+   * 删除一份存档。
    *
-   * @param tid - NGA 主题 ID
+   * @param archiveId - 存档标识（见 SavedThread.archiveId）
    */
-  async remove(tid: string): Promise<void> {
+  async remove(archiveId: string): Promise<void> {
     if (this.context === null) {
       throw new Error('存档未就绪')
     }
-    if (!isValidTid(tid)) {
+    if (!isValidArchiveId(archiveId)) {
       throw new Error('存档标识无效')
     }
     try {
-      const path: string = this.filePathOf(tid)
+      const path: string = this.filePathOf(archiveId)
       if (fileIo.accessSync(path)) {
         fileIo.unlinkSync(path)
       }
     } catch (e) {
-      logger.error('remove failed tid=%{public}s: %{public}s', tid, formatError(e))
+      logger.error('remove failed archiveId=%{public}s: %{public}s', archiveId, formatError(e))
       throw new Error('删除存档失败')
     }
     const filtered: SavedThread[] = []
     for (let i = 0; i < this.items.length; i++) {
-      if (this.items[i].tid !== tid) {
+      if (this.items[i].archiveId !== archiveId) {
         filtered.push(this.items[i])
       }
     }
@@ -359,8 +430,7 @@ export class SavedThreadStore {
     let hasAnyInvalid: boolean = false
     for (let i = 0; i < parsed.threads.length; i++) {
       const item: SavedThread = parsed.threads[i]
-      if (!item || !isValidTid(item.tid || '') ||
-        !item.rawPages || item.rawPages.length === 0) {
+      if (!item || !item.rawPages || item.rawPages.length === 0) {
         result.skipped++
         hasAnyInvalid = true
         continue
@@ -368,7 +438,13 @@ export class SavedThreadStore {
       if (item.savedAt <= 0) {
         item.savedAt = Date.now()
       }
+      // 先规整（导出文件可能来自未含 archiveId 的旧版本），再校验键与 tid 形状
       this.normalizeArchive(item)
+      if (!isValidArchiveId(item.archiveId) || !isValidArchiveId(item.tid || '')) {
+        result.skipped++
+        hasAnyInvalid = true
+        continue
+      }
       try {
         // 批量导入统一在循环结束后 bump 一次版本，避免逐帖触发列表全量刷新
         await this.save(item, false)
@@ -384,7 +460,7 @@ export class SavedThreadStore {
       bumpAppStorageVersion(KEY_SAVED_THREAD_VERSION)
     }
     if (result.error.length === 0 && hasAnyInvalid) {
-      result.error = '部分条目无效已跳过（tid 非法或缺少内容）'
+      result.error = '部分条目无效已跳过（存档标识非法或缺少内容）'
     }
     return result
   }

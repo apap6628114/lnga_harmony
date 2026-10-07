@@ -783,11 +783,21 @@ export struct FavoriteSavedPanel {
   }
 
   /**
-   * 以「保存的帖子」来源打开该帖：ThreadPanel 从本地存档读取数据渲染，
+   * 条目是否为派生（去水版）存档。
+   */
+  private isDerived(item: SavedThread): boolean {
+    return item.derivedFrom.length > 0
+  }
+
+  /**
+   * 以「保存的帖子」来源打开该存档：ThreadPanel 从本地存档读取数据渲染，
    * 不依赖网络，帖子删除后仍可完整阅读；表现与在线打开一致。
+   *
+   * 必须传 archiveId 而不是 tid：同一主题可能并存原帖存档与去水版存档，
+   * 只传 tid 会永远打开原帖存档。
    */
   private openThread(item: SavedThread): void {
-    routerStore.navigateActivity(Screen.thread(item.tid, 1, '', ThreadSource.SAVED))
+    routerStore.navigateActivity(Screen.savedThread(item.archiveId, item.tid, 1))
   }
 
   /**
@@ -1035,9 +1045,23 @@ export struct FavoriteSavedPanel {
                     .width(40).height(40).borderRadius(20).backgroundColor(AppColors.bgSecondary)
 
                     Column() {
-                      Text(item.subject.length > 0 ? item.subject : '（无标题）')
-                        .fontSize(15).fontColor(AppColors.textPrimary)
-                        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                      Row() {
+                        if (this.isDerived(item)) {
+                          // 去水版：与同主题的原帖存档同名，必须给出可见区分标记
+                          Text('去水')
+                            .fontSize(11).fontColor(AppColors.primary)
+                            .padding({ left: 5, right: 5, top: 1, bottom: 1 })
+                            .borderRadius(4)
+                            .border({ width: 1, color: AppColors.primary })
+                            .margin({ right: 6 })
+                        }
+                        Text(item.subject.length > 0 ? item.subject : '（无标题）')
+                          .fontSize(15).fontColor(AppColors.textPrimary)
+                          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                          .layoutWeight(1)
+                      }
+                      .width('100%').alignItems(VerticalAlign.Center)
+
                       Text(this.describe(item))
                         .fontSize(13).fontColor(AppColors.textTertiary).margin({ top: 2 })
                     }
@@ -1073,11 +1097,13 @@ export struct FavoriteSavedPanel {
                             fontColor: AppColors.white,
                             background: AppColors.destructive,
                             action: () => {
-                              const tid: string = this.removeTarget ? this.removeTarget.tid : ''
+                              // 按 archiveId 删除：同主题的原帖存档与去水版是两份独立存档，
+                              // 用 tid 删会把两份都误删（tid 相同）
+                              const archiveId: string = this.removeTarget ? this.removeTarget.archiveId : ''
                               this.removeTarget = null
-                              if (tid.length > 0) {
+                              if (archiveId.length > 0) {
                                 // 存储层已 bump savedThreadVersion，刷新由 onSavedThreadVersionChange 驱动
-                                appStore.savedThreadStore.remove(tid).then((): void => {
+                                appStore.savedThreadStore.remove(archiveId).then((): void => {
                                   appStore.showToast('已删除存档')
                                 }).catch((e: Error) => {
                                   appStore.showToast(e.message || '删除失败')
@@ -1099,7 +1125,7 @@ export struct FavoriteSavedPanel {
                   }
                   .width('100%').padding({ left: 16, right: 16, top: 10, bottom: 10 }).alignItems(VerticalAlign.Center)
                 }
-              }, (item: SavedThread) => item.tid)
+              }, (item: SavedThread) => item.archiveId)
             }
           } else {
             if (!appStore.auth.isAuthenticated) {

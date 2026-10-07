@@ -55,6 +55,11 @@ import {
   parsePageInput
 } from '../common/utils/PagePicker'
 import { ReadingProgressEntry } from '../store/ReadingProgressStore'
+import { threadSummaryService, ThreadSummaryOutcome } from '../service/ThreadSummaryService'
+import { AiScenario } from '../model/AiScenarioConfig'
+import { WaterFilterContent } from '../common/dialogs/WaterFilterDialogs'
+import { threadWaterFilterService, WaterFilterOutcome } from '../service/ThreadWaterFilterService'
+import type { WaterFilterRule } from '../model/WaterFilterRule'
 
 const logger = new Logger(DOMAIN_UI, 'ThreadPanel')
 
@@ -160,6 +165,13 @@ export struct ThreadPanel {
   @Prop threadPid: string = ''
   /** 打开帖子的路由来源（ThreadSource 枚举值），用于运行态诊断。 */
   @Prop threadSource: string = ''
+  /**
+   * 离线存档标识（SavedThread.archiveId），仅离线存档来源使用。
+   *
+   * 与 threadTid 分离：同一主题可并存原帖存档与去水版存档，只有 archiveId 能
+   * 区分读取哪一份。为空时回退为 threadTid（原帖存档的 archiveId 即 tid）。
+   */
+  @Prop archiveId: string = ''
   @Prop @Watch('onScrollToPid') navEntryId: number = 0
   @State isLoading: boolean = true
   @State hasError: boolean = false
@@ -206,6 +218,14 @@ export struct ThreadPanel {
   private saveDialogController?: CustomDialogController
   /** 跟踪帖子更新对话框控制器（更多菜单「跟踪帖子更新」入口）。 */
   private trackDialogController?: CustomDialogController
+  /** 智能去水确认对话框控制器（更多菜单「智能去水」入口）。 */
+  private waterFilterDialogController?: CustomDialogController
+  /** 本次去水使用的 AI 规则（按本帖主题生成，只对本次任务生效，不落盘）。 */
+  private waterFilterAiRules: WaterFilterRule[] = []
+  /** AI 规则是否正在生成（生成中点「开始」必须拦住）。 */
+  private waterFilterAiGenerating: boolean = false
+  /** 主楼正文纯文本缓存（开框时解析一次，供 AI 推断帖子类型）。 */
+  private waterFilterOpText: string = ''
   /** 跟踪对话框选中的跟踪时长（天），由 ThreadTrackContent 回写。 */
   @State private trackKeepDays: number = TRACK_DEFAULT_KEEP_DAYS
   /**
@@ -226,6 +246,17 @@ export struct ThreadPanel {
   private pagePickerOnSelect: ((page: number) => void) | null = null
   /** 页码选择器输入框当前文本（仅页数多时显示，用于直达任意中间页）。 */
   private pagePickerInput: string = ''
+  /** 是否正在抓取全帖楼层（标题栏 AI 全帖总结入口的进行态）。 */
+  @State private summaryBuilding: boolean = false
+  /** 全帖抓取进度文案，由 {@link summarizeThread} 的进度回调逐页更新。 */
+  @State private summaryProgressText: string = ''
+  /**
+   * 全帖总结任务代际。
+   *
+   * 每次发起、切帖与页面销毁都自增，使在途任务的进度回调与结束分支全部失效——
+   * 与分页代际不同源：抓取任务不参与帖子窗口的事务，不能借用 `mgr` 的代际语义。
+   */
+  private summaryGeneration: number = 0
   private scroller: Scroller = new Scroller()
   /** List 当前视口高度，用于将固定 vp 标题区换算为渐变模糊比例。 */
   @State listViewportHeight: number = 1
@@ -436,6 +467,8 @@ export struct ThreadPanel {
   }
 
   aboutToDisappear(): void {
+    // 在途的全帖总结必须显式取消：抓取任务挂在模块级单例上，不会随组件销毁自动结束
+    this.cancelThreadSummary('disappear')
     // 先补记最终阅读位置（此时列表与滚动状态仍有效），再清理资源
     this.recordReadingProgress()
     clearTimeout(this.progressRecordTimer)
@@ -461,6 +494,7 @@ export struct ThreadPanel {
     this.mgr.reset()
     this.saveDialogController = undefined
     this.trackDialogController = undefined
+    this.waterFilterDialogController = undefined
   }
 
   private onThreadChanged(): void {
@@ -468,6 +502,8 @@ export struct ThreadPanel {
       this.hasInitiallyLoaded = true
       return
     }
+    // 旧帖在途的全帖总结随帖子切换作废，防止旧帖的楼层内容被写进新帖的总结
+    this.cancelThreadSummary('thread-changed')
     // 切换帖子前补记旧帖的最终阅读位置（此时 mgr.posts 仍是旧帖数据）
     this.recordReadingProgress()
     clearTimeout(this.progressRecordTimer)
@@ -1170,7 +1206,7 @@ export struct ThreadPanel {
     // 其余来源保持服务器请求模式。
     const result: ThreadResult = this.threadSource === ThreadSource.SAVED
       ? await withTimeout<ThreadResult>(getSavedThreadResult(
-        this.threadTid, targetPage,
+        this.getArchiveId(), targetPage,
         appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords(),
         noteMap,
         // 离线存档用 `authorKey` 而不是 uid 过滤：匿名存档里 uid 也是页内局部号，
@@ -1915,6 +1951,18 @@ export struct ThreadPanel {
   }
 
   /**
+   * 当前读取的离线存档标识。
+   *
+   * 路由未携带 archiveId 时回退为 tid：原帖存档的 archiveId 就等于 tid，
+   * 这样存量调用点与旧书签无需改动。
+   *
+   * @returns 存档标识
+   */
+  private getArchiveId(): string {
+    return this.archiveId.length > 0 ? this.archiveId : this.threadTid
+  }
+
+  /**
    * 打开「保存帖子」对话框（选择保存的页范围）。
    */
   private openSaveThreadDialog(): void {
@@ -1979,6 +2027,152 @@ export struct ThreadPanel {
       } else {
         appStore.showToast('保存失败：' + outcome.message)
       }
+    })
+  }
+
+  // ==================== 智能去水 ====================
+
+  /**
+   * 打开「智能去水」确认对话框（更多菜单入口）。
+   *
+   * 与「离线保存帖子」同构：抓取规模、预计耗时、当前严格等级与生效规则条数、以及
+   * **产出物存档在哪儿**都必须在点「开始」之前让用户看到——去水是**全帖不限页数**的抓取，
+   * 长帖可能跑很久，跑完用户已经离开对话框了。
+   *
+   * 对话框里改等级会即时写回设置（见 `WaterFilterContent`），所以这里不需要接收回写值；
+   * 但 **AI 规则要接**：它只对本次任务生效，不落盘，必须由本页持有并在发起时并入规则集。
+   */
+  private openWaterFilterDialog(): void {
+    if (this.threadTid.length === 0) {
+      return
+    }
+    // 每次开框都清掉上一轮的 AI 规则：对话框是新建实例，本页字段不重置就会把
+    // 上一个帖子的规则静默带进这一次去水
+    this.waterFilterAiRules = []
+    this.waterFilterAiGenerating = false
+    // 主楼正文在开框时同步解析一次并缓存：放进 contentBuilder 会在每次重绘时重解析
+    this.waterFilterOpText = this.resolveOpPlainText()
+    this.waterFilterDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
+      systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
+      builder: CustomContentDialog({
+        primaryTitle: '智能去水',
+        contentBuilder: (): void => { this.waterFilterContent() },
+        buttons: [
+          { value: '取消' },
+          {
+            value: '开始',
+            fontColor: AppColors.white,
+            background: AppColors.primary,
+            action: (): void => {
+              this.startWaterFilter()
+            }
+          }
+        ]
+      }),
+      autoCancel: true
+    })
+    this.waterFilterDialogController?.open()
+  }
+
+  /** 智能去水确认对话框的自定义内容（官方 CustomContentDialog 的 contentBuilder）。 */
+  @Builder
+  waterFilterContent() {
+    WaterFilterContent({
+      subject: this.threadSubject,
+      totalPages: this.mgr.totalPages,
+      opText: this.waterFilterOpText,
+      onAiStateChange: (rules: WaterFilterRule[], generating: boolean): void => {
+        this.waterFilterAiRules = rules
+        this.waterFilterAiGenerating = generating
+      },
+      onOpenRules: (): void => {
+        // 先把对话框收掉再跳转：设置页是独立 Screen，留着对话框会盖在它上面
+        this.waterFilterDialogController?.close()
+        routerStore.navigateActivity(Screen.waterFilterRules())
+      }
+    })
+  }
+
+  /**
+   * 当前窗口内主楼（lou=0）的正文纯文本。
+   *
+   * 供 AI 推断帖子类型（攻略 / 资源 / 追更 / 闲聊）。主楼不在当前窗口时返回空串，
+   * 此时 AI 只看标题——比不生成规则更保守，不会因此失败。
+   *
+   * @returns 主楼纯文本；未加载或无内容时返回空串
+   */
+  private resolveOpPlainText(): string {
+    const posts: PostInfo[] = this.mgr.posts
+    for (let index: number = 0; index < posts.length; index++) {
+      if (posts[index].lou === 0) {
+        const text: string = bbNodesToPlainText(getCachedBBNodes(posts[index].content))
+        return text.trim().length > 0 ? text : ''
+      }
+    }
+    return ''
+  }
+
+  /**
+   * 发起全帖去水任务；结果以 Toast 提示（进度与取消由全局指示组件承担）。
+   *
+   * 门禁与「全帖 AI 总结」对齐，但**不校验 AI 可用性**：去水判定是纯本地规则，
+   * 未配置 AI 也应照常可用（AI 规则是可选加分项，不是前置条件）。离线存档来源不展示
+   * 本菜单项（见 {@link isSavedSource} 分支），因此这里不必再判一次。
+   */
+  private startWaterFilter(): void {
+    if (!appStore.auth.isAuthenticated) {
+      appStore.showToast('请先登录')
+      return
+    }
+    if (this.waterFilterAiGenerating) {
+      // 规则还没拿到就开始抓，用户以为用了 AI 规则、实际一条没用上——必须拦住
+      appStore.showToast('AI 正在生成规则，请稍候再开始')
+      return
+    }
+    if (threadWaterFilterService.isRunning) {
+      appStore.showToast('已有去水任务进行中，请在进度条里等待或取消')
+      return
+    }
+    if (this.mgr.totalPages < 1) {
+      appStore.showToast('帖子尚未加载完成，请稍后再试')
+      return
+    }
+    const level: number = appStore.settingsStore.getWaterFilterLevel()
+    // 本次生效的规则 = 全局自定义规则 + 本次 AI 规则（AI 规则不落盘）
+    const merged: WaterFilterRule[] = []
+    const customRules: WaterFilterRule[] = appStore.settingsStore.getWaterFilterRules()
+    for (let i: number = 0; i < customRules.length; i++) {
+      merged.push(customRules[i])
+    }
+    for (let i: number = 0; i < this.waterFilterAiRules.length; i++) {
+      merged.push(this.waterFilterAiRules[i])
+    }
+    logger.info('water-filter start tid=%{public}s hintPages=%{public}d level=%{public}d rules=%{public}d ai=%{public}d',
+      this.threadTid, this.mgr.totalPages, level, customRules.length, this.waterFilterAiRules.length)
+    threadWaterFilterService.run(
+      this.threadTid,
+      this.threadSubject,
+      this.mgr.totalPages,
+      level,
+      merged
+    ).then((outcome: WaterFilterOutcome): void => {
+      if (!outcome.ok) {
+        if (!outcome.cancelled) {
+          appStore.showToast(outcome.message)
+        }
+        return
+      }
+      logger.info(
+        'water-filter done tid=%{public}s archive=%{public}s kept=%{public}d removed=%{public}d pages=%{public}d',
+        this.threadTid, outcome.archiveId, outcome.keptFloors, outcome.removedFloors, outcome.outputPages
+      )
+      appStore.showToast('已生成去水版：' + outcome.message)
+    }).catch((error: Error): void => {
+      logger.warn('water-filter rejected tid=%{public}s error=%{public}s',
+        this.threadTid, formatError(error))
+      appStore.showToast('去水失败：' + error.message)
     })
   }
 
@@ -2240,6 +2434,164 @@ export struct ThreadPanel {
     })
   }
 
+  // ============== 全帖 AI 总结 ==============
+
+  /**
+   * 汇总全帖所有楼层并发起 AI 总结。
+   *
+   * 入口是「更多」菜单里的「AI 总结帖子」（见 {@link moreMenuItems}）。与动作栏的单楼层
+   * 总结（只带本层正文）分工明确：这里按服务端总页数跨页取数，覆盖整帖楼层后复用同一条
+   * `AiChatPage` 流式通道（场景 `AiScenario.THREAD_SUMMARY`）。
+   *
+   * 取数与截断策略全部下沉在 {@link threadSummaryService}：页数超上限时取头部若干页 + 末页，
+   * 长度超预算时按楼号顺序截断，两种情况都会写进提示词让模型知道覆盖范围。
+   *
+   * 「只看楼主」模式下窗口内只有楼主楼层，因此**不复用窗口**、按整帖重新取数——
+   * 全帖总结的语义是整帖，不是当前筛选视图。
+   */
+  private summarizeThread(): void {
+    const aiValidationMessage: string = getActiveAiValidationMessage()
+    if (aiValidationMessage.length > 0) {
+      appStore.showToast(aiValidationMessage)
+      return
+    }
+    if (this.summaryBuilding) {
+      appStore.showToast('正在汇总全帖楼层，请稍候')
+      return
+    }
+    if (this.isSavedSource()) {
+      appStore.showToast('离线存档只包含已保存的页，不支持全帖总结')
+      return
+    }
+    if (this.mgr.totalPages < 1) {
+      appStore.showToast('帖子尚未加载完成，请稍后再试')
+      return
+    }
+    TtsPlayer.stop()
+    this.summaryGeneration++
+    const generation: number = this.summaryGeneration
+    this.summaryBuilding = true
+    this.summaryProgressText = '正在汇总全帖楼层…'
+    // 只看楼主只筛选了窗口内容：整帖取数不复用窗口，避免"部分页只有楼主、部分页全体"的混口径
+    const reuseWindow: boolean = !this.authorOnly
+    logger.info(
+      'thread-summary start tid=%{public}s pages=%{public}d window=%{public}d-%{public}d reuse=%{public}s',
+      this.threadTid, this.mgr.totalPages, this.mgr.loadedPageStart, this.mgr.loadedPageEnd,
+      String(reuseWindow)
+    )
+    threadSummaryService.buildSummaryPrompt(
+      this.threadTid,
+      this.threadSubject,
+      this.mgr.totalPages,
+      reuseWindow ? this.mgr.posts : [],
+      reuseWindow ? this.mgr.pageOfIndex : [],
+      (done: number, total: number, label: string): void => {
+        if (generation !== this.summaryGeneration) {
+          return
+        }
+        this.summaryProgressText = label
+      }
+    ).then((outcome: ThreadSummaryOutcome): void => {
+      if (generation !== this.summaryGeneration) {
+        return
+      }
+      this.summaryGeneration++
+      this.summaryBuilding = false
+      if (!outcome.ok) {
+        if (!outcome.cancelled) {
+          appStore.showToast(outcome.message)
+        }
+        return
+      }
+      logger.info(
+        'thread-summary ready tid=%{public}s floors=%{public}d pages=%{public}d truncated=%{public}s',
+        this.threadTid, outcome.includedFloors, outcome.coveredPages, String(outcome.truncated)
+      )
+      this.getUIContext().getRouter().pushUrl({
+        url: 'pages/ai/AiChatPage',
+        params: {
+          initialPrompt: outcome.prompt,
+          title: 'AI 全帖总结',
+          scenario: AiScenario.THREAD_SUMMARY
+        }
+      })
+    }).catch((error: Error): void => {
+      if (generation !== this.summaryGeneration) {
+        return
+      }
+      this.summaryGeneration++
+      this.summaryBuilding = false
+      logger.warn('thread-summary rejected tid=%{public}s error=%{public}s',
+        this.threadTid, formatError(error))
+      appStore.showToast('全帖总结失败：' + error.message)
+    })
+  }
+
+  /**
+   * 取消在途的全帖总结，并让所有已捕获的进度回调与结束分支失效。
+   *
+   * 切帖与页面销毁都必须调用：抓取任务挂在模块级单例上，不会随组件销毁自动结束。
+   *
+   * @param reason - 取消原因（仅用于日志关联）
+   */
+  private cancelThreadSummary(reason: string): void {
+    if (!this.summaryBuilding) {
+      return
+    }
+    logger.info('thread-summary cancel tid=%{public}s reason=%{public}s', this.threadTid, reason)
+    this.summaryGeneration++
+    this.summaryBuilding = false
+    this.summaryProgressText = ''
+    threadSummaryService.cancel()
+  }
+
+  /**
+   * 全帖总结的抓取进度浮层。
+   *
+   * 最多 20 页的顺序请求会持续数秒到数十秒，必须给出进度与取消入口。刻意不做全局进度发布
+   * （对比 `savedThreadProgress`）：本流程只由 Thread 页内的按钮发起，用户离开页面时任务
+   * 一并作废，不存在"换个页面还该看到进度"的场景。
+   *
+   * 全屏层默认的命中行为即可完成拦截：抓取期间列表不响应滚动与楼层交互，
+   * 避免用户在数据未就绪时反复操作。
+   */
+  @Builder
+  SummaryProgressOverlay() {
+    // 全屏层必须是 Stack：`alignContent` 只存在于 Stack / RelativeContainer，
+    // Column 上写它直接是编译错误（本项目已在 `toastBg` 胶囊的同类浮层上踩过）
+    Stack() {
+      Column({ space: 12 }) {
+        Row({ space: 8 }) {
+          LoadingProgress().width(16).height(16).color(AppColors.white)
+          Text(this.summaryProgressText)
+            .fontSize(14)
+            .fontColor(AppColors.white)
+            .maxLines(2)
+            .textAlign(TextAlign.Center)
+        }
+        .alignItems(VerticalAlign.Center)
+
+        Text('取消')
+          .fontSize(13)
+          .fontColor(AppColors.white)
+          .opacity(0.85)
+          .padding({ left: 14, right: 14, top: 3, bottom: 3 })
+          .borderRadius(12)
+          .border({ width: 1, color: AppColors.white })
+          .onClick((): void => {
+            threadSummaryService.cancel()
+            this.summaryProgressText = '正在取消…'
+          })
+      }
+      .padding({ left: 20, right: 20, top: 16, bottom: 14 })
+      .borderRadius(16)
+      .backgroundColor(AppColors.toastBg)
+      .constraintSize({ maxWidth: '80%' })
+    }
+    .width('100%').height('100%')
+    .alignContent(Alignment.Center)
+  }
+
   build() {
     Stack() {
       Column() {
@@ -2433,6 +2785,9 @@ export struct ThreadPanel {
       PanelNavBar({
         title: this.getVisibleThreadSubject(),
         rightIcon: $r('app.media.icon_more'),
+        // 全帖 AI 总结是「更多」菜单里的一项（见 `moreMenuItems`），标题栏保持单颗 more 按钮：
+        // 与「收藏夹/离线保存帖子/跟踪帖子更新」同为帖子级动作，集中在菜单里比在标题栏多挂一颗
+        // 语义不明显的图标更容易被发现，也不与右侧的滚动收起动画争位置。
         scrollEffectProgress: this.titleScrollEffectProgress,
         // 菜单在 PanelNavBar **内部**渲染、锚定这颗 more 按钮（36×36 系统组件）：挂在标题栏整体上时，
         // 折叠屏多列路由下菜单会被算到窗口左侧。两参 bindMenu 下开合由系统持有，本组件不再持有显隐
@@ -2443,6 +2798,10 @@ export struct ThreadPanel {
         .width('100%').position({ x: 0, y: 0 })
 
       this.BottomBar()
+
+      if (this.summaryBuilding) {
+        this.SummaryProgressOverlay()
+      }
 
     }
     .width('100%').height('100%').backgroundColor(AppColors.bg).alignContent(Alignment.BottomEnd)
@@ -2482,6 +2841,24 @@ export struct ThreadPanel {
         label: '离线保存帖子',
         action: (): void => {
           this.openSaveThreadDialog()
+        }
+      })
+      // 智能去水：与「收藏夹/离线保存帖子」并列的帖子级动作。产出的「去水版」是一份独立的
+      // 本地存档（archiveId = tid + '-w'），在「保存的帖子」列表里与原帖离线存档并排展示，
+      // 不影响原帖。抓取与判定全部在本地完成（不调模型、不耗额度），进度与取消由页内浮层承担。
+      items.push({
+        label: '智能去水',
+        action: (): void => {
+          this.openWaterFilterDialog()
+        }
+      })
+      // AI 全帖总结：与「收藏夹/离线保存帖子」并列的帖子级动作。放在这里而不是标题栏图标，
+      // 是为了让它和其它帖子级动作集中在一处。抓取中的进度与取消由页内浮层承担，
+      // 因此菜单点完即收起，无需在这里做任何状态回写。
+      items.push({
+        label: 'AI 总结帖子',
+        action: (): void => {
+          this.summarizeThread()
         }
       })
       // 激活态用文字色表达（`active`），与「只看楼主」同一模式：已跟踪时主色提示

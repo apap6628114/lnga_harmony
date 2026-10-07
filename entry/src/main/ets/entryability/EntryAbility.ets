@@ -24,6 +24,7 @@ import {
   KEY_WINDOW_WIDTH_VP,
 } from '../common/constants/AppStorageKeys';
 import { TtsPlayer } from '../common/media/TtsPlayer';
+import { threadWaterFilterService } from '../service/ThreadWaterFilterService';
 import { markPageLoaded } from '../common/infra/PageLifecycle';
 
 /** EntryAbility 日志记录器。 */
@@ -90,6 +91,9 @@ export default class EntryAbility extends UIAbility {
   /** 创建 Ability 并初始化全局服务。 */
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     TtsPlayer.initialize(this.context)
+    // 「智能去水」的数据传输长时任务需要 UIAbility 上下文（上千页的帖子会跑很久，
+    // 退到后台仍要能继续抓取）
+    threadWaterFilterService.initialize(this.context)
 
     // 冷启动（进程重建）时应用颜色模式为默认跟随系统，此时
     // resourceManager.getConfigurationSync() 返回的即系统真实颜色模式：
@@ -146,6 +150,7 @@ export default class EntryAbility extends UIAbility {
   onDestroy(): void {
     appStore.setForegroundActive(false)
     TtsPlayer.shutdown()
+    threadWaterFilterService.shutdown()
     try {
       this.context.getApplicationContext().offSystemConfigurationUpdated(this.sysConfigUpdatedCallback)
     } catch (err) {

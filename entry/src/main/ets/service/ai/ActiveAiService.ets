@@ -1,21 +1,23 @@
 /**
- * 自定义 AI 激活配置与调用门面（DeepSeek Responses API）。
+ * 自定义 AI 激活配置与调用门面。
  *
- * 统一封装当前激活的 DeepSeek AI 配置校验、调用与错误文案，
- * 页面层不再直接处理配置索引或额外调用分支。
- * 联网搜索由 DeepSeek 服务端内置 web_search 工具执行，
- * 客户端仅透传搜索状态用于 UI 展示，无需任何第三方搜索服务。
+ * 统一封装当前激活的 AI 配置校验、调用与错误文案，页面层不再处理
+ * 配置索引或协议分支。
+ *
+ * 调用统一经 AiProviderRouter 分流：DeepSeek 走 Responses API（可带服务端
+ * 内置联网搜索），其余服务商走 OpenAI 兼容 chat/completions。联网能力缺失时
+ * 由 getActiveAiCapabilityNotice 给出提示文案，调用本身照常降级为普通对话。
  */
 
 import { appStore } from '../../store/AppStore'
 import type { AiProviderProfile } from '../../model/AiConfig'
 import {
-  createResponseStream,
+  AiCompletionResult,
   ChatMessage,
   ChatStreamChunkCallback,
-  ResponseResult,
   RequestCanceller
-} from './ResponsesApiClient'
+} from './AiChatTypes'
+import { getCapabilityNotice, streamChatCompletion } from './AiProviderRouter'
 import { translateError } from './AiErrorTranslator'
 import { Logger, DOMAIN_SERVICE } from '../../common/utils/Logger'
 
@@ -91,16 +93,34 @@ export function getActiveAiValidationMessage(): string {
 }
 
 /**
+ * 获取当前激活配置的能力缺失提示。
+ *
+ * 用于在对话页/设置页明确告知用户「该服务商提供了哪些能力」，
+ * 而不是让用户误以为已经联网检索过。
+ *
+ * @returns 提示文案，能力完整或未配置时返回空字符串
+ */
+export function getActiveAiCapabilityNotice(): string {
+  const profile: AiProviderProfile | null = getActiveAiProfile()
+  if (!profile) {
+    return ''
+  }
+  return getCapabilityNotice(profile.providerId)
+}
+
+/**
  * 使用当前激活的自定义 AI 配置发起可流式展示的对话补全。
  *
- * 请求自动携带服务端内置 web_search 工具声明，
- * 模型判断需要联网搜索时由 DeepSeek 服务端执行并自动注入结果。
+ * 是否联网搜索由「调用方是否允许」与「服务商是否支持」共同决定：
+ * DeepSeek 支持服务端内置 web_search，模型自行判断是否需要检索；
+ * 其余服务商无该能力，直接走普通对话，能力缺失由 UI 另行提示。
  *
  * @param messages - 对话消息列表
  * @param onDelta - 文本增量回调
  * @param onStatus - 可选的状态更新回调
  * @param onToolCall - 可选的服务端搜索阶段回调
  * @param canceller - 可选的请求取消令牌（页面销毁时调用 cancel() 中断请求）
+ * @param allowWebSearch - 是否允许联网搜索（纯 JSON 生成类场景应传 false）
  * @returns 对话结果（完整文本与输出 items）
  */
 export async function chatCompleteWithActiveAiStream(
@@ -108,7 +128,8 @@ export async function chatCompleteWithActiveAiStream(
   onDelta: ChatStreamChunkCallback,
   onStatus?: ChatStatusCallback,
   onToolCall?: ToolCallCallback,
-  canceller?: RequestCanceller
+  canceller?: RequestCanceller,
+  allowWebSearch: boolean = true
 ): Promise<AiChatResult> {
   const profile: AiProviderProfile | null = getActiveAiProfile()
   const validationMessage: string = getActiveAiValidationMessage()
@@ -124,7 +145,7 @@ export async function chatCompleteWithActiveAiStream(
   let searched: boolean = false
   let searchFailed: boolean = false
   let lastQuery: string = ''
-  const result: ResponseResult = await createResponseStream(
+  const result: AiCompletionResult = await streamChatCompletion(
     profile,
     messages,
     onDelta,
@@ -154,7 +175,8 @@ export async function chatCompleteWithActiveAiStream(
         onStatus?.('搜索失败，继续回答...')
       }
     },
-    canceller
+    canceller,
+    allowWebSearch
   )
 
   // 最终状态：发生过联网搜索时标记完成，供气泡展示搜索摘要（失败时如实提示）

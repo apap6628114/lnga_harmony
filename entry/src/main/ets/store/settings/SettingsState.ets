@@ -2,6 +2,7 @@ import { ImageLoadStrategy, ThreadNavMode } from '../../common/constants/Constan
 import { FavBoard } from '../../model/SocialEntries'
 import type { BlacklistEntry } from '../../model/SocialEntries'
 import { FilterKeyword } from '../../model/FilterKeyword'
+import { WaterFilterRule } from '../../model/WaterFilterRule'
 import type { UserNoteEntry } from '../../model/NoteInfo'
 import type { AiProviderProfile } from '../../model/AiConfig'
 
@@ -55,4 +56,8 @@ export class SettingsState {
   activeAiProfileId: string = ''
   /** 各场景自定义 system prompt（key=场景ID, value=用户自定义文本） */
   scenarioSystemPrompts: Record<string, string> = {}
+  /** 「智能去水」严格等级（WaterFilterLevel，1=只清纯灌水，2=连简短闲聊也清）。 */
+  waterFilterLevel: number = 1
+  /** 「智能去水」自定义规则（在任意等级下都生效）。 */
+  waterFilterRules: WaterFilterRule[] = []
 }

@@ -116,3 +116,6 @@ export const KEY_TRACKED_THREAD_VERSION: string = 'trackedThreadVersion'
 
 /** 有未读更新的跟踪帖子数（「跟踪」Tab 角标与入口铃铛合并计数） */
 export const KEY_UNREAD_TRACK_COUNT: string = 'unreadTrackCount'
+
+/** 智能去水配置版本号（等级或自定义规则变更时 +1，驱动设置页角标刷新） */
+export const KEY_WATER_FILTER_VERSION: string = 'waterFilterVersion'

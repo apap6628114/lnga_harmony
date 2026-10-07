@@ -24,6 +24,7 @@ import { FloatingLayerComponent } from '../common/components/FloatingLayerCompon
 import { EmptyHint } from '../common/components/EmptyHint'
 import { TtsProgressIndicator } from '../common/components/TtsProgressIndicator'
 import { SavedThreadProgressIndicator } from '../common/components/SavedThreadProgressIndicator'
+import { WaterFilterProgressIndicator } from '../common/components/WaterFilterProgressIndicator'
 import { PidLocateIndicator } from '../common/components/PidLocateIndicator'
 import { Logger, DOMAIN_UI } from '../common/utils/Logger'
 import { enableKeepScreenOn, disableKeepScreenOn } from '../common/managers/ScreenOnManager'
@@ -129,6 +130,7 @@ struct MainPage {
       // 只要 bindSheet / bindContentCover 开着，页面内渲染的提示就会被完全遮住。
       TtsProgressIndicator()
       SavedThreadProgressIndicator()
+      WaterFilterProgressIndicator()
       PidLocateIndicator()
     }
     .width('100%').height('100%')

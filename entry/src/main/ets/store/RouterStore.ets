@@ -70,6 +70,7 @@ export type ScreenType =
   | 'fontSizeSettings'
   | 'favoriteFolders'
   | 'favoriteSaved'
+  | 'waterFilterRules'
 
 /**
  * 帖子路由来源。
@@ -113,6 +114,13 @@ export class Screen {
   tid: string = ''
   threadPage: number = 1
   pid: string = ''
+  /**
+   * 离线存档标识（SavedThread.archiveId），仅 ThreadSource.SAVED 使用。
+   *
+   * 与 tid 分离：同一主题可以并存原帖存档与去水版存档，只有 archiveId 能区分
+   * 打开哪一份。原帖存档的 archiveId 等于 tid。
+   */
+  archiveId: string = ''
   /** 打开帖子的路由来源（ThreadSource）。 */
   threadSource: string = ''
   uid: string = ''
@@ -150,6 +158,20 @@ export class Screen {
     // 表示无楼层定位意图——ThreadPanel 无需再区分哨兵与真实 pid
     s.pid = pid === '0' ? '' : pid
     s.threadSource = source
+    return s
+  }
+
+  /**
+   * 打开一份离线存档（原帖存档或去水版等派生存档）。
+   *
+   * @param archiveId - 存档标识（SavedThread.archiveId）
+   * @param tid - NGA 主题 ID（用于「在线模式打开」与引用跳转）
+   * @param page - 初始页码
+   * @returns 帖子页路由
+   */
+  static savedThread(archiveId: string, tid: string, page: number = 1): Screen {
+    const s: Screen = Screen.thread(tid, page, '', ThreadSource.SAVED)
+    s.archiveId = archiveId
     return s
   }
 
@@ -198,6 +220,20 @@ export class Screen {
   static filterKeywords(): Screen {
     const s = new Screen()
     s.type = 'filterKeywords'
+    return s
+  }
+
+  /**
+   * 「智能去水」的规则设置页。
+   *
+   * 与「关键词屏蔽」同层级的设置面板：值域是**全局**的（严格等级 + 自定义规则），
+   * 不随帖子变化，因此路由不带任何参数。
+   *
+   * @returns 去水规则设置页路由
+   */
+  static waterFilterRules(): Screen {
+    const s = new Screen()
+    s.type = 'waterFilterRules'
     return s
   }
 
@@ -297,6 +333,7 @@ export class Screen {
       case 'fontSizeSettings': return '字体大小'
       case 'favoriteFolders': return this.favoriteTopicId.length > 0 ? '收藏到…' : '收藏夹'
       case 'favoriteSaved': return '收藏、保存与跟踪'
+      case 'waterFilterRules': return '去水规则'
       default: return ''
     }
   }

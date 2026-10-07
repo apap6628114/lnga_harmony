@@ -7,6 +7,7 @@ import type { UserNoteEntry } from '../../model/NoteInfo'
 import type { Category, BoardContent } from '../../model/Forum'
 import type { FollowedActivity, FollowedUser } from '../../model/Follow'
 import type { TrackedThread } from '../../model/TrackedThread'
+import type { WaterFilterRule } from '../../model/WaterFilterRule'
 import { BaseLazyDataSource } from './BaseLazyDataSource'
 
 /** 主题帖子列表数据源，复用基类全部共性逻辑。 */
@@ -98,6 +99,10 @@ class NotesDataSource extends BaseLazyDataSource<UserNoteEntry> {
 class FilterKeywordDataSource extends BaseLazyDataSource<FilterKeyword> {
 }
 
+/** 去水自定义规则列表数据源。 */
+class WaterRuleDataSource extends BaseLazyDataSource<WaterFilterRule> {
+}
+
 /** 关注动态列表数据源。 */
 class FollowedActivityDataSource extends BaseLazyDataSource<FollowedActivity> {
 }
@@ -115,5 +120,6 @@ export {
   MessageArticleDataSource, NotificationDataSource, BlacklistDataSource,
   NotesDataSource, FilterKeywordDataSource, CategoryDataSource,
   HistoryItemDataSource, SidebarDataSource, SidebarSection, SidebarBoardItem,
-  FollowedActivityDataSource, FollowedUserDataSource, TrackedThreadDataSource
+  FollowedActivityDataSource, FollowedUserDataSource, TrackedThreadDataSource,
+  WaterRuleDataSource
 }
