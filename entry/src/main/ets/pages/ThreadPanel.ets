@@ -55,6 +55,8 @@ import {
   parsePageInput
 } from '../common/utils/PagePicker'
 import { ReadingProgressEntry } from '../store/ReadingProgressStore'
+import { threadSummaryService, ThreadSummaryOutcome } from '../service/ThreadSummaryService'
+import { AiScenario } from '../model/AiScenarioConfig'
 
 const logger = new Logger(DOMAIN_UI, 'ThreadPanel')
 
@@ -215,6 +217,17 @@ export struct ThreadPanel {
   private pagePickerOnSelect: ((page: number) => void) | null = null
   /** 页码选择器输入框当前文本（仅页数多时显示，用于直达任意中间页）。 */
   private pagePickerInput: string = ''
+  /** 是否正在抓取全帖楼层（标题栏 AI 全帖总结入口的进行态）。 */
+  @State private summaryBuilding: boolean = false
+  /** 全帖抓取进度文案，由 {@link summarizeThread} 的进度回调逐页更新。 */
+  @State private summaryProgressText: string = ''
+  /**
+   * 全帖总结任务代际。
+   *
+   * 每次发起、切帖与页面销毁都自增，使在途任务的进度回调与结束分支全部失效——
+   * 与分页代际不同源：抓取任务不参与帖子窗口的事务，不能借用 `mgr` 的代际语义。
+   */
+  private summaryGeneration: number = 0
   private scroller: Scroller = new Scroller()
   /** List 当前视口高度，用于将固定 vp 标题区换算为渐变模糊比例。 */
   @State listViewportHeight: number = 1
@@ -419,6 +432,8 @@ export struct ThreadPanel {
   }
 
   aboutToDisappear(): void {
+    // 在途的全帖总结必须显式取消：抓取任务挂在模块级单例上，不会随组件销毁自动结束
+    this.cancelThreadSummary('disappear')
     // 先补记最终阅读位置（此时列表与滚动状态仍有效），再清理资源
     this.recordReadingProgress()
     clearTimeout(this.progressRecordTimer)
@@ -451,6 +466,8 @@ export struct ThreadPanel {
       this.hasInitiallyLoaded = true
       return
     }
+    // 旧帖在途的全帖总结随帖子切换作废，防止旧帖的楼层内容被写进新帖的总结
+    this.cancelThreadSummary('thread-changed')
     // 切换帖子前补记旧帖的最终阅读位置（此时 mgr.posts 仍是旧帖数据）
     this.recordReadingProgress()
     clearTimeout(this.progressRecordTimer)
@@ -2169,6 +2186,164 @@ export struct ThreadPanel {
     })
   }
 
+  // ============== 全帖 AI 总结 ==============
+
+  /**
+   * 汇总全帖所有楼层并发起 AI 总结。
+   *
+   * 入口是「更多」菜单里的「AI 总结帖子」（见 {@link moreMenuItems}）。与动作栏的单楼层
+   * 总结（只带本层正文）分工明确：这里按服务端总页数跨页取数，覆盖整帖楼层后复用同一条
+   * `AiChatPage` 流式通道（场景 `AiScenario.THREAD_SUMMARY`）。
+   *
+   * 取数与截断策略全部下沉在 {@link threadSummaryService}：页数超上限时取头部若干页 + 末页，
+   * 长度超预算时按楼号顺序截断，两种情况都会写进提示词让模型知道覆盖范围。
+   *
+   * 「只看楼主」模式下窗口内只有楼主楼层，因此**不复用窗口**、按整帖重新取数——
+   * 全帖总结的语义是整帖，不是当前筛选视图。
+   */
+  private summarizeThread(): void {
+    const aiValidationMessage: string = getActiveAiValidationMessage()
+    if (aiValidationMessage.length > 0) {
+      appStore.showToast(aiValidationMessage)
+      return
+    }
+    if (this.summaryBuilding) {
+      appStore.showToast('正在汇总全帖楼层，请稍候')
+      return
+    }
+    if (this.isSavedSource()) {
+      appStore.showToast('离线存档只包含已保存的页，不支持全帖总结')
+      return
+    }
+    if (this.mgr.totalPages < 1) {
+      appStore.showToast('帖子尚未加载完成，请稍后再试')
+      return
+    }
+    TtsPlayer.stop()
+    this.summaryGeneration++
+    const generation: number = this.summaryGeneration
+    this.summaryBuilding = true
+    this.summaryProgressText = '正在汇总全帖楼层…'
+    // 只看楼主只筛选了窗口内容：整帖取数不复用窗口，避免"部分页只有楼主、部分页全体"的混口径
+    const reuseWindow: boolean = !this.authorOnly
+    logger.info(
+      'thread-summary start tid=%{public}s pages=%{public}d window=%{public}d-%{public}d reuse=%{public}s',
+      this.threadTid, this.mgr.totalPages, this.mgr.loadedPageStart, this.mgr.loadedPageEnd,
+      String(reuseWindow)
+    )
+    threadSummaryService.buildSummaryPrompt(
+      this.threadTid,
+      this.threadSubject,
+      this.mgr.totalPages,
+      reuseWindow ? this.mgr.posts : [],
+      reuseWindow ? this.mgr.pageOfIndex : [],
+      (done: number, total: number, label: string): void => {
+        if (generation !== this.summaryGeneration) {
+          return
+        }
+        this.summaryProgressText = label
+      }
+    ).then((outcome: ThreadSummaryOutcome): void => {
+      if (generation !== this.summaryGeneration) {
+        return
+      }
+      this.summaryGeneration++
+      this.summaryBuilding = false
+      if (!outcome.ok) {
+        if (!outcome.cancelled) {
+          appStore.showToast(outcome.message)
+        }
+        return
+      }
+      logger.info(
+        'thread-summary ready tid=%{public}s floors=%{public}d pages=%{public}d truncated=%{public}s',
+        this.threadTid, outcome.includedFloors, outcome.coveredPages, String(outcome.truncated)
+      )
+      this.getUIContext().getRouter().pushUrl({
+        url: 'pages/ai/AiChatPage',
+        params: {
+          initialPrompt: outcome.prompt,
+          title: 'AI 全帖总结',
+          scenario: AiScenario.THREAD_SUMMARY
+        }
+      })
+    }).catch((error: Error): void => {
+      if (generation !== this.summaryGeneration) {
+        return
+      }
+      this.summaryGeneration++
+      this.summaryBuilding = false
+      logger.warn('thread-summary rejected tid=%{public}s error=%{public}s',
+        this.threadTid, formatError(error))
+      appStore.showToast('全帖总结失败：' + error.message)
+    })
+  }
+
+  /**
+   * 取消在途的全帖总结，并让所有已捕获的进度回调与结束分支失效。
+   *
+   * 切帖与页面销毁都必须调用：抓取任务挂在模块级单例上，不会随组件销毁自动结束。
+   *
+   * @param reason - 取消原因（仅用于日志关联）
+   */
+  private cancelThreadSummary(reason: string): void {
+    if (!this.summaryBuilding) {
+      return
+    }
+    logger.info('thread-summary cancel tid=%{public}s reason=%{public}s', this.threadTid, reason)
+    this.summaryGeneration++
+    this.summaryBuilding = false
+    this.summaryProgressText = ''
+    threadSummaryService.cancel()
+  }
+
+  /**
+   * 全帖总结的抓取进度浮层。
+   *
+   * 最多 20 页的顺序请求会持续数秒到数十秒，必须给出进度与取消入口。刻意不做全局进度发布
+   * （对比 `savedThreadProgress`）：本流程只由 Thread 页内的按钮发起，用户离开页面时任务
+   * 一并作废，不存在"换个页面还该看到进度"的场景。
+   *
+   * 全屏层默认的命中行为即可完成拦截：抓取期间列表不响应滚动与楼层交互，
+   * 避免用户在数据未就绪时反复操作。
+   */
+  @Builder
+  SummaryProgressOverlay() {
+    // 全屏层必须是 Stack：`alignContent` 只存在于 Stack / RelativeContainer，
+    // Column 上写它直接是编译错误（本项目已在 `toastBg` 胶囊的同类浮层上踩过）
+    Stack() {
+      Column({ space: 12 }) {
+        Row({ space: 8 }) {
+          LoadingProgress().width(16).height(16).color(AppColors.white)
+          Text(this.summaryProgressText)
+            .fontSize(14)
+            .fontColor(AppColors.white)
+            .maxLines(2)
+            .textAlign(TextAlign.Center)
+        }
+        .alignItems(VerticalAlign.Center)
+
+        Text('取消')
+          .fontSize(13)
+          .fontColor(AppColors.white)
+          .opacity(0.85)
+          .padding({ left: 14, right: 14, top: 3, bottom: 3 })
+          .borderRadius(12)
+          .border({ width: 1, color: AppColors.white })
+          .onClick((): void => {
+            threadSummaryService.cancel()
+            this.summaryProgressText = '正在取消…'
+          })
+      }
+      .padding({ left: 20, right: 20, top: 16, bottom: 14 })
+      .borderRadius(16)
+      .backgroundColor(AppColors.toastBg)
+      .constraintSize({ maxWidth: '80%' })
+    }
+    .width('100%').height('100%')
+    .alignContent(Alignment.Center)
+  }
+
   build() {
     Stack() {
       Column() {
@@ -2362,6 +2537,9 @@ export struct ThreadPanel {
       PanelNavBar({
         title: this.getVisibleThreadSubject(),
         rightIcon: $r('app.media.icon_more'),
+        // 全帖 AI 总结是「更多」菜单里的一项（见 `moreMenuItems`），标题栏保持单颗 more 按钮：
+        // 与「收藏夹/离线保存帖子/跟踪帖子更新」同为帖子级动作，集中在菜单里比在标题栏多挂一颗
+        // 语义不明显的图标更容易被发现，也不与右侧的滚动收起动画争位置。
         scrollEffectProgress: this.titleScrollEffectProgress,
         // 菜单在 PanelNavBar **内部**渲染、锚定这颗 more 按钮（36×36 系统组件）：挂在标题栏整体上时，
         // 折叠屏多列路由下菜单会被算到窗口左侧。两参 bindMenu 下开合由系统持有，本组件不再持有显隐
@@ -2372,6 +2550,10 @@ export struct ThreadPanel {
         .width('100%').position({ x: 0, y: 0 })
 
       this.BottomBar()
+
+      if (this.summaryBuilding) {
+        this.SummaryProgressOverlay()
+      }
 
     }
     .width('100%').height('100%').backgroundColor(AppColors.bg).alignContent(Alignment.BottomEnd)
@@ -2411,6 +2593,15 @@ export struct ThreadPanel {
         label: '离线保存帖子',
         action: (): void => {
           this.openSaveThreadDialog()
+        }
+      })
+      // AI 全帖总结：与「收藏夹/离线保存帖子」并列的帖子级动作。放在这里而不是标题栏图标，
+      // 是为了让它和其它帖子级动作集中在一处。抓取中的进度与取消由页内浮层承担，
+      // 因此菜单点完即收起，无需在这里做任何状态回写。
+      items.push({
+        label: 'AI 总结帖子',
+        action: (): void => {
+          this.summarizeThread()
         }
       })
       // 激活态用文字色表达（`active`），与「只看楼主」同一模式：已跟踪时主色提示

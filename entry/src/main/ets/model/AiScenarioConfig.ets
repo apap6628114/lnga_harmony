@@ -1,7 +1,7 @@
 /**
  * AI 场景与 System Prompt 配置数据模型。
  *
- * 定义两个内置 AI 场景（帖子内容总结、用户成分分析）的枚举、
+ * 定义三个内置 AI 场景（帖子内容总结、全帖总结、用户成分分析）的枚举、
  * 元数据、默认 system prompt 以及注入数据字段说明。
  */
 
@@ -12,8 +12,10 @@
  * 每个场景拥有独立的 system prompt 和注入数据。
  */
 export enum AiScenario {
-  /** 帖子内容总结 */
+  /** 帖子内容总结（只覆盖单个楼层，动作栏 AI 图标入口） */
   POST_SUMMARY = 'post_summary',
+  /** 全帖总结（跨楼层汇总，标题栏右上角 AI 图标入口） */
+  THREAD_SUMMARY = 'thread_summary',
   /** 用户成分分析 */
   USER_ANALYSIS = 'user_analysis'
 }
@@ -34,7 +36,11 @@ interface ScenarioMeta {
 export const SCENARIO_META: Record<string, ScenarioMeta> = {
   [AiScenario.POST_SUMMARY]: {
     name: '帖子内容总结',
-    desc: '控制 AI 如何分析和总结帖子正文内容'
+    desc: '控制 AI 如何分析和总结单个楼层的正文内容'
+  },
+  [AiScenario.THREAD_SUMMARY]: {
+    name: '全帖总结',
+    desc: '控制 AI 如何汇总整个帖子的全部楼层内容'
   },
   [AiScenario.USER_ANALYSIS]: {
     name: '用户成分分析',
@@ -56,6 +62,20 @@ export const DEFAULT_SYSTEM_PROMPTS: Record<string, string> = {
     '2. 关键信息：列出重要的事实、数据或论据',
     '3. 逻辑脉络：梳理帖子的行文结构和论证逻辑',
     '4. 一句话总结：用精炼的语言概括帖子的核心内容'
+  ].join('\n'),
+  [AiScenario.THREAD_SUMMARY]: [
+    '你是一个论坛长帖分析助手。用户会提供同一个主题帖内多个楼层的内容，楼层按楼号顺序排列，请跨楼层对整帖做总结。',
+    '',
+    '注意：注入数据可能因页数或长度上限只覆盖了帖子的部分楼层（数据开头会说明覆盖范围）。',
+    '覆盖不完整时，请如实说明本次结论只基于已提供的楼层，不要推断未提供楼层的内容。',
+    '',
+    '分析要点：',
+    '1. 主题概述：这个帖子在讨论什么，楼主提出了什么',
+    '2. 讨论脉络：讨论如何演进，出现了哪些分支话题',
+    '3. 主要观点与分歧：各楼层的主要立场、共识与争议点',
+    '4. 关键信息：值得记下的事实、数据、结论或资源',
+    '5. 整体氛围：讨论氛围与倾向（如有明显特征）',
+    '6. 一句话总结：用一句话概括整帖'
   ].join('\n'),
   [AiScenario.USER_ANALYSIS]: [
     '你是一个论坛用户行为分析专家。请根据用户提供的论坛活跃数据，分析并总结以下内容：',
@@ -86,6 +106,11 @@ export const SCENARIO_INJECTED_FIELDS: Record<string, InjectedFieldInfo[]> = {
     { label: '楼层', example: '#1' },
     { label: '作者', example: '用户名' },
     { label: '正文内容', example: '帖子的纯文本内容' }
+  ],
+  [AiScenario.THREAD_SUMMARY]: [
+    { label: '帖子标题', example: '原标题文本' },
+    { label: '覆盖范围', example: '总页数、实际纳入的楼层数与截断说明' },
+    { label: '楼层内容', example: '#1 作者名：该楼层的纯文本内容（按楼号顺序拼接）' }
   ],
   [AiScenario.USER_ANALYSIS]: [
     { label: '用户名', example: '用户昵称' },

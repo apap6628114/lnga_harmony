@@ -667,6 +667,7 @@ export struct AiSettingsPanel {
         .margin({ bottom: 8, top: 2 })
 
       this.ScenarioCard(AiScenario.POST_SUMMARY)
+      this.ScenarioCard(AiScenario.THREAD_SUMMARY)
       this.ScenarioCard(AiScenario.USER_ANALYSIS)
     }
     .width('100%')
@@ -806,6 +807,11 @@ export struct AiSettingsPanel {
   private scenarioIcon(scenario: string): Resource {
     if (scenario === AiScenario.POST_SUMMARY) {
       return $r('app.media.icon_ai_summary')
+    }
+    // 全帖总结与单楼层总结是两件事（跨页取数 vs 单层正文），图标必须分开，
+    // 与 ThreadPanel 标题栏那颗按钮用的是同一份资源
+    if (scenario === AiScenario.THREAD_SUMMARY) {
+      return $r('app.media.icon_ai_thread')
     }
     return $r('app.media.icon_ai_profile')
   }

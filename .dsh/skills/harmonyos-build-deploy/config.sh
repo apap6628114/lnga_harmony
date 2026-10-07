@@ -12,6 +12,15 @@ NODE="${DEVECO_STUDIO_HOME}/tools/node/node.exe"
 # SDK 环境变量（hvigorw 构建必需）
 export DEVECO_SDK_HOME="${DEVECO_STUDIO_HOME}/sdk"
 
+# DevEco 自带 JBR（构建必需）
+# 打包阶段（:entry:default@PackageHap）会 spawn 一个 java 进程做签名与打包；
+# 仅编译 ArkTS 用不到 java，所以缺少它时表现为「编译全过、最后一步打包失败」：
+#   ERROR: Error Code: 00308018 Unknown Error
+#   spawn java ENOENT
+# DevEco Studio 自身终端里 java 已在 PATH 上，Agent/脚本环境通常没有，必须显式导出。
+export JAVA_HOME="${DEVECO_STUDIO_HOME}/jbr"
+export PATH="${JAVA_HOME}/bin:${PATH}"
+
 # 内存限制（解决 Java/Node 爆内存，常见于 Windows 页面文件偏小的环境）
 JAVA_OPTIONS="-Xmx1024m -Xms256m -XX:+UseSerialGC"
 NODE_OPTIONS="--max-old-space-size=8192"

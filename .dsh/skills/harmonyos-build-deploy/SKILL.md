@@ -34,6 +34,7 @@ source .dsh/skills/harmonyos-build-deploy/config.sh
 | `JAVA_OPTIONS` | `-Xmx1024m -Xms256m -XX:+UseSerialGC` | Java JVM 参数（爆内存时使用） |
 | `NODE_OPTIONS` | `--max-old-space-size=8192` | Node.js V8 内存上限 |
 | `DEVECO_STUDIO_HOME` | `C:/Program Files/Huawei/DevEco Studio` | DevEco 安装目录 |
+| `JAVA_HOME` | `$DEVECO_STUDIO_HOME/jbr` | 打包阶段（`@PackageHap`）spawn 的 java；缺失时表现为「编译全过、打包失败 00308018 / spawn java ENOENT」 |
 
 ## 步骤 0：状态检查（每次必做）
 
@@ -123,6 +124,8 @@ PowerShell 等价命令（Windows 环境）：
 
 ```powershell
 $env:DEVECO_SDK_HOME = 'C:/Program Files/Huawei/DevEco Studio/sdk'
+$env:JAVA_HOME = 'C:\Program Files\Huawei\DevEco Studio\jbr'
+$env:PATH = 'C:\Program Files\Huawei\DevEco Studio\jbr\bin;' + $env:PATH
 $env:_JAVA_OPTIONS = '-Xmx1024m -Xms256m -XX:+UseSerialGC'
 $env:NODE_OPTIONS = '--max-old-space-size=8192'
 & 'C:/Program Files/Huawei/DevEco Studio/tools/hvigor/bin/hvigorw.bat' assembleHap --mode module -p module=entry@default -p buildMode=debug --no-daemon
@@ -289,7 +292,31 @@ Error Message: ENOENT: no such file C:\Users\ll\.hvigor\project_caches\<hash>\wo
 - 判断：`Get-Acl` 看目标文件 ACL 是否只有 `CodexSandboxUsers: ReadAndExecute`；或 `whoami /groups` 检查当前身份。
 - 处理：构建命令本身需要完整权限（`sandbox_permissions: danger-full-access`），不能只靠复制文件绕过——hvigor 运行期仍要写缓存。
 
-### 5. 内存不足
+### 5. `PackageHap` 失败：`00308018 Unknown Error` / `spawn java ENOENT`
+
+现象：`CompileArkTS` 全部通过（无 ArkTS 报错），最后一步 `:entry:default@PackageHap` 失败：
+
+```text
+> hvigor ERROR: Failed :entry:default@PackageHap...
+> hvigor ERROR: Error Code: 00308018 Unknown Error
+spawn java ENOENT
+```
+
+原因：打包/签名阶段要 spawn 一个 java 进程，而 Agent 或脚本环境的 `PATH` 上没有 `java`
+（DevEco Studio 自己的终端里有，所以只有从 IDE 里构建时看不出来）。**只有编译 ArkTS 用不到 java**，
+因此故障表现固定为"编译全过、打包失败"——不要误判成 ArkTS 源码或签名配置的问题。
+
+处理：导出 DevEco 自带 JBR 后重跑（`config.sh` 已包含）：
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Huawei\DevEco Studio\jbr'
+$env:PATH = 'C:\Program Files\Huawei\DevEco Studio\jbr\bin;' + $env:PATH
+```
+
+判定：`Test-Path 'C:\Program Files\Huawei\DevEco Studio\jbr\bin\java.exe'` 为真即可用。
+不要把系统 JDK 装进 PATH 了事——签名工具与 SDK 有版本绑定，用 DevEco 自带的 JBR 最稳。
+
+### 6. 内存不足
 
 | 症状 | 处理 |
 |------|------|

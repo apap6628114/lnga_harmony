@@ -35,6 +35,7 @@
 | [`LazyDataSource.ets`](../entry/src/main/ets/common/datasource/LazyDataSource.ets) | `PostInfoDataSource` 的 ArkUI 列表变更通知 |
 | [`TitleScrollEffect.ets`](../entry/src/main/ets/common/utils/TitleScrollEffect.ets) | 标题总高、重叠进度、模糊半径和空间渐变停靠点 |
 | [`PanelNavBar.ets`](../entry/src/main/ets/common/components/PanelNavBar.ets) | 固定标题内容、按钮材质和偏色覆盖层 |
+| [`ThreadSummaryService.ets`](../entry/src/main/ets/service/ThreadSummaryService.ets) | 全帖 AI 总结的跨页取数、截断策略与提示词组装 |
 | [`ThreadPaginationUnit.test.ets`](../entry/src/test/ThreadPaginationUnit.test.ets) | 分页管理器不变量的单元回归 |
 
 ## 2. 用户可观察行为
@@ -250,6 +251,9 @@ TITLE_SCROLL_EFFECT_DISTANCE = 20vp
   （`docs/IMMERSIVE_LIGHT_DESIGN.md` §12.9）。材质块的形状由 HDS 规范决定，**不再是自绘的正圆**；
   真机待核对项见该节"标题栏按钮"。
 - 右侧存在两个操作按钮时，按钮之间固定保留 `8vp` 间距（`TITLE_ACTION_BUTTON_GAP`）。
+  主按钮承载菜单（`hasMenu`），次按钮一律是**纯动作**、**不得绑定菜单**（`menuOnSecondary`
+  保持 `false`）。帖子详情页只挂一颗更多按钮（全帖 AI 总结已移入该按钮的菜单，见 §6.6），
+  两按钮布局由其它面板（如 `TopicListPanel`、`FavoriteSavedPanel`）使用。
 - 材质不做设备降级：设备不支持材质时按钮背板就是透明的，这是接受的结果。
 - 标题操作必须使用语义明确的独立 SVG 资源，不在标题栏中混用文字操作；视觉图标与无障碍名称分别由 `rightIcon` 和 `rightIconAccessibilityText` 提供。
 - 标题栏本体不使用整块材质；正文模糊由 `List` 承担，标题可读性由颜色渐变层承担。
@@ -354,6 +358,48 @@ TITLE_SCROLL_EFFECT_DISTANCE = 20vp
 
 `WebViewPanel` 不满足第 1、3 项：`Web` 可报告网页滚动位置，但没有与 ArkUI `contentStartOffset` 等价且不修改网页文档的能力。因此该页面保留非重叠的静态标题布局，并由页面根节点绘制不透明 `AppColors.bg`，避免网页加载或透明区域暴露活动栈下层内容。不得为了表面一致向任意网页注入顶部 DOM/CSS，也不得未经约束切换为 `FIT_CONTENT` 后放入外层 `Scroll`；这两种做法分别会改变网页布局语义，或引入页面高度与无限加载限制。
 
+### 6.6 全帖 AI 总结（更多菜单入口）
+
+「更多」菜单里的「AI 总结帖子」是**全帖** AI 总结；动作栏那颗 AI 图标是**单楼层**总结。
+两者是不同功能，共用同一条 `AiChatPage` 流式通道，仅场景标识不同
+（`thread_summary` / `post_summary`）：
+
+| 维度 | 单楼层总结（动作栏） | 全帖总结（更多菜单） |
+| --- | --- | --- |
+| 数据来源 | 该楼层正文（`getCachedBBNodes` 已缓存） | 按总页数跨页取数，仅复用已加载窗口 |
+| 场景 | `AiScenario.POST_SUMMARY` | `AiScenario.THREAD_SUMMARY` |
+| 入口 | `PostVoteBar.onSummarize` | `moreMenuItems()` 的「AI 总结帖子」项 |
+
+入口与「收藏夹」「离线保存帖子」「跟踪帖子更新」并列，同属**帖子级动作**，因此只出现在
+非离线存档分支（`isSavedSource()` 为假时）。**不得**改回标题栏图标：标题栏为单颗更多按钮，
+贴子级动作集中在菜单里更容易发现，也不与右侧滚动收起动画争位置。
+
+取数与组装全部在 [`ThreadSummaryService`](../entry/src/main/ets/service/ThreadSummaryService.ets)，
+`ThreadPanel` 只负责门禁、进度展示与路由。契约：
+
+- **上限是硬约束，不得为了"完整"取消**：页数超过 20 页时只取第 1~10 页与末页，正文超过
+  40000 字符预算时按楼号顺序截断（末页预留 8000 字符，头部未用完的额度顺延给末页）。
+  末页必须保留——长帖的结论、资源与后续进展通常落在末页。
+- **截断必须如实写进提示词**：覆盖范围（页区间、层数）与未纳入原因（页数上限 / 长度上限 /
+  黑名单）由服务写入「本次覆盖」「说明」两行，并显式要求模型不要推断未纳入部分。
+  **不得**在截断后仍声称"已总结全部楼层"。
+- **只做取数与组装，不调用模型**：模型调用仍由 `AiChatPage` → `ActiveAiService` 承担，
+  与单楼层总结共用同一条通道；本服务不得引入第二条调用路径。
+- **单页失败只跳过该页**：任一页请求失败记 warn 并继续，不得让整帖总结失败。
+- **「只看楼主」下不复用窗口**：该模式窗口内只有楼主楼层，复用会造成"部分页只有楼主、
+  部分页全体"的混口径；此时按空窗口走整帖重新取数。因此 `buildSummaryPrompt` 的
+  `windowPosts` / `windowPages` 在只看楼主模式下**必须传空数组**。
+- **离线存档不支持**（`ThreadSource.SAVED`）：存档只含已保存页，覆盖范围与"全帖"语义不符。
+  菜单项本身就不在存档分支渲染（§6.6 入口说明），`summarizeThread` 内的入参校验是第二道
+  防线——两条入口分支都不发起取数。
+- **进度浮层是页内浮层，不做全局进度发布**：对比 `savedThreadProgress`（保存帖子由弹窗发起、
+  用户可能离开页面），全帖总结只由本页菜单项发起，用户离开页面即整体作废，不存在需要跨页展示
+  进度的场景。抓取期间浮层拦截交互，并提供取消入口。
+- **任务是模块级单例，必须显式取消**：抓取不随组件销毁结束，`aboutToDisappear` 与切帖
+  （`onThreadChanged`）都必须调用 `cancelThreadSummary`，并推进 `summaryGeneration` 使
+  在途的进度回调与结束分支全部失效。该代际与分页代际不同源：抓取不参与帖子窗口事务，
+  **不得**借用 `mgr.getGeneration()`。
+
 ## 7. 已知故障模式
 
 | 现象 | 根因 | 正确处理 | 禁止的补丁 |
@@ -368,6 +414,8 @@ TITLE_SCROLL_EFFECT_DISTANCE = 20vp
 | 快速跳页后旧页面覆盖新页面 | 旧响应未做请求代际校验 | `REPLACE` 推进代际，提交前比较代际 | 依赖请求返回顺序 |
 | 长按识图后选区永不消失：点图直接进查看器、滚动后文本菜单又回来、点正文文字只把菜单临时藏起来 | `Image` 的 AI 分析没有"清除选取"接口，选区随组件存活；系统只在滚动中临时收起菜单 | 会话登记 + 关一次 `enableAnalyzer` 把分析器整体拆掉（§6.5.1） | 组件内自查（覆盖不到别的楼层与列表滚动）、用 `LongPressGesture` 抢长按（会把系统识图一起掐掉） |
 | 编辑成功后楼层正文不刷新 | LazyForEach 键值只含 pid，内容变化不改变键值，`onDataChange` 不触发组件更新 | 内容变化时递增 `uiRev`（键值 `pid + uiRev`）重建该楼层；静默刷新返回旧缓存时经 `protectedContent` 跳过覆盖 | 只改 `content` 后 `updateAt`（键值不变不刷新）；整体 `replaceAll` 重建（破坏窗口与滚动） |
+| 全帖总结在切帖/返回后仍弹出 AI 页，或把旧帖楼层写进新帖总结 | 抓取任务挂在模块级单例上，不随组件销毁结束；旧帖的在途回调未被失效 | 切帖（`onThreadChanged`）与销毁（`aboutToDisappear`）都调 `cancelThreadSummary`，推进独立的任务代际使在途回调与结束分支全部失效 | 只靠 `summaryBuilding` 布尔值判断（旧任务仍会写状态）；借用 `mgr.getGeneration()` 当代际（抓取不参与窗口事务） |
+| 全帖总结内容与帖子实际楼层不符（缺页/夹带未加载页） | 把「只看楼主」的窗口当作整帖复用，混了口径 | 只看楼主模式下传空窗口，按整帖重新取数 | 直接用 `mgr.posts` 组装（该模式只有楼主楼层） |
 | 点赞/踩成功后数字与颜色不刷新或整层闪烁 | `PostInfo` 非 `@Observed`，分数内部字段变更不能驱动 LazyForEach；父层投票状态更新还可能用旧 `@Prop post.score` 覆盖动作栏 | `PostVoteBar` 在点击事件内先写入局部 `@State`，失败回滚，成功按本次操作语义确认最终状态；移除点赞状态的旧值 `@Watch` 同步；请求期间屏蔽同楼层重复提交 | 点赞路径递增 `uiRev` 或重建包含图片/正文的 `PostItem` |
 
 ## 8. 诊断与日志
@@ -424,6 +472,16 @@ hdc shell hilog -x -T ThreadPanel -v time
 - 空页、全重复页和不足一整页的末页不会导致无限请求。
 - `ThreadNavMode.PAGE` 不触发连续滚动预取和边缘加载。
 
+AI 总结：
+
+- 「更多」菜单里的「AI 总结帖子」可见，且与「收藏夹/离线保存帖子/跟踪帖子更新」同属一组；
+  离线存档模式下不出现该项。
+- 未配置 AI 或未登录时，「AI 总结帖子」菜单项与动作栏 AI 图标给出同一类提示，不进入抓取。
+- 短帖（页数未超上限）全帖总结的覆盖范围写明「全帖 N 页」，层数与帖子实际楼层数一致。
+- 长帖（页数超上限）覆盖范围写明取到的页区间与未纳入的页区间，且末页楼层出现在提示词中。
+- 抓取期间浮层给出页数进度，取消后立即结束且不跳转 AI 页；返回键退出页面时任务同时终止。
+- 「只看楼主」开启时全帖总结仍覆盖整帖楼层（不是只有楼主）。
+
 编译成功不能证明挂载时序、滚动坐标或设备材质效果正确；涉及这些内容的修改必须执行运行时验证。
 
 ## 10. 维护规则
@@ -436,6 +494,10 @@ hdc shell hilog -x -T ThreadPanel -v time
 - 修改正文图属性（`draggable` / `objectFit` / `borderRadius` / `aspectRatio` / `enableAnalyzer`）：
   三个面（正文图、`ImageViewer`、主题列表预览图）的"开 / 关"是**产品决策**，不是平台限制；
   `enableAnalyzer` 与 `draggable` 的并存语义见第 6.5 节，改任一项都要重新走一遍该节的真机清单。
+- 修改全帖总结的页数/长度上限、截断说明或窗口复用条件：同步更新第 6.6 节与
+  `ThreadSummaryService` 的常量，并核对"覆盖范围"文案与实际纳入的楼层一致。
+- 移动全帖总结的入口（标题栏按钮 ↔ 菜单项）：同步更新第 6.3 / 6.6 节与第 9.2 节验收项，
+  并核对 `summarizeThread` 的门禁仍在入口分支之外独立成立（入口只是触发，不作为唯一校验）。
 - 只有实际产品契约或实现发生变化时才更新“不变量”；历史故障应记录在第 7 节，不应反向改写事实。
 
 ## 参考资料
