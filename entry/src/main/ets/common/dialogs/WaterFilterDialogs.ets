@@ -31,7 +31,7 @@ import {
   WaterFilterAiRulesResult
 } from '../../service/WaterFilterAiRulesService'
 import { getActiveAiValidationMessage } from '../../service/ai/ActiveAiService'
-import { RequestCanceller } from '../../service/ai/ResponsesApiClient'
+import { RequestCanceller } from '../../service/ai/AiChatTypes'
 import {
   WaterFilterLevel,
   WaterFilterRule,

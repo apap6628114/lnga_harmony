@@ -10,7 +10,7 @@ import {
   MAX_AI_TEMPERATURE,
   MIN_AI_TEMPERATURE
 } from '../../model/AiConfig'
-import { PROVIDER_PRESETS } from './AiModelPresets'
+import { findPresetById } from './AiModelPresets'
 import type { AiProviderPreset } from './AiModelPresets'
 
 /**
@@ -25,15 +25,13 @@ export function clampTemperature(value: number): number {
 }
 
 /**
- * 获取当前唯一预设（DeepSeek）。
+ * 按服务商标识获取预设。
  *
- * @returns DeepSeek 预设，列表为空时返回 null
+ * @param providerId - 服务商标识
+ * @returns 匹配的预设，未匹配时返回 null
  */
-export function getPreset(): AiProviderPreset | null {
-  if (PROVIDER_PRESETS.length > 0) {
-    return PROVIDER_PRESETS[0]
-  }
-  return null
+export function getPreset(providerId: string | undefined): AiProviderPreset | null {
+  return findPresetById(providerId)
 }
 
 /**
@@ -53,7 +51,7 @@ export function getModelPlaceholder(preset: AiProviderPreset | null): string {
  * 获取 API Key 输入框占位提示。
  *
  * @param preset - 当前平台预设（可空）
- * @returns DeepSeek 的 API Key 格式提示
+ * @returns 该服务商的 API Key 格式提示
  */
 export function getApiKeyPlaceholder(preset: AiProviderPreset | null): string {
   if (preset && preset.apiKeyPlaceholder.length > 0) {

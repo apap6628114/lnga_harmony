@@ -37,7 +37,7 @@ import {
   getActiveAiValidationMessage,
   AiChatResult
 } from './ai/ActiveAiService'
-import { ChatMessage, RequestCanceller } from './ai/ResponsesApiClient'
+import { ChatMessage, RequestCanceller } from './ai/AiChatTypes'
 import { Logger, DOMAIN_SERVICE, formatError } from '../common/utils/Logger'
 
 const logger = new Logger(DOMAIN_SERVICE, 'WaterFilterAiRules')
@@ -235,12 +235,14 @@ export async function generateWaterRules(subject: string, opText: string,
   ]
   try {
     // 不展示流式增量：这是一次性取结果，交给解析器即可
+    // 输出是纯 JSON 规则，联网搜索只会拖慢速度并引入无关内容，显式关闭
     const chatResult: AiChatResult = await chatCompleteWithActiveAiStream(
       messages,
       (_chunk: string): void => {},
       undefined,
       undefined,
-      canceller
+      canceller,
+      false
     )
     if (canceller.isCancelled()) {
       result.cancelled = true

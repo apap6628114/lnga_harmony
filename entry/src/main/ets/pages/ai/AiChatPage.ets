@@ -1,7 +1,8 @@
-import { ChatMessage, RequestCanceller } from '../../service/ai/ResponsesApiClient'
+import { ChatMessage, RequestCanceller } from '../../service/ai/AiChatTypes'
 import {
   chatCompleteWithActiveAiStream,
   formatAiCompletionError,
+  getActiveAiCapabilityNotice,
   ToolCallInfo,
   AiChatResult
 } from '../../service/ai/ActiveAiService'
@@ -91,6 +92,12 @@ struct AiChatPage {
   @State private toolCount: number = 0
   /** 导航栏标题 */
   @State private title: string = 'AI 对话'
+  /**
+   * 当前服务商能力缺失提示（如"不提供内置联网搜索"）。
+   *
+   * 空字符串表示能力完整，不展示任何提示行。
+   */
+  @State private capabilityNotice: string = ''
   /** 状态栏高度。 */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   /** 标题栏渐变模糊与偏色的滚动联动进度。 */
@@ -134,6 +141,8 @@ struct AiChatPage {
 
   aboutToAppear(): void {
     this.scope.begin()
+    // 能力提示在进入页面时取一次即可：服务商切换需回到设置页，不会在对话中途变化
+    this.capabilityNotice = getActiveAiCapabilityNotice()
     const params: Record<string, Object> = this.getUIContext().getRouter().getParams() as Record<string, Object>
     if (params) {
       const prompt: string = (params['initialPrompt'] as string) ?? ''
@@ -649,6 +658,19 @@ struct AiChatPage {
   @Builder
   RenderInputBar() {
     Column() {
+      if (this.capabilityNotice.length > 0) {
+        Row() {
+          Text(this.capabilityNotice)
+            .fontSize(11)
+            .fontColor(AppColors.textTertiary)
+            .lineHeight(16)
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .constraintSize({ maxWidth: 720 })
+        .padding({ left: 4, right: 4, bottom: 6 })
+      }
+
       Row() {
         TextInput({ text: this.inputText, placeholder: '输入追问…' })
           .layoutWeight(1)

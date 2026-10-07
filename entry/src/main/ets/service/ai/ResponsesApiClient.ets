@@ -1,10 +1,11 @@
 /**
  * DeepSeek Responses API 客户端。
  *
- * 全面对接 DeepSeek 的 /responses 端点：
- * - 内置服务端联网搜索工具 web_search，无需任何第三方搜索服务
+ * 对接 DeepSeek 的 /responses 端点：
  * - 语义化 SSE 事件流（response.* 事件序列，以 response.completed / incomplete / failed 结束）
  * - 无状态 API：多轮上下文由客户端回传历史 items（含 web_search_call 原样回传）
+ * - 可选的服务端内置联网搜索工具 web_search（由调用方按场景显式开关，
+ *   纯 JSON 生成类场景应关闭，避免无谓的联网往返与 token 消耗）
  */
 
 import { http } from '@kit.NetworkKit'
@@ -12,6 +13,13 @@ import { util } from '@kit.ArkTS'
 import { Logger, DOMAIN_SERVICE } from '../../common/utils/Logger'
 import type { AiProviderProfile } from '../../model/AiConfig'
 import { AiTestResult, DEFAULT_DEEPSEEK_ENDPOINT } from '../../model/AiConfig'
+import {
+  AiCompletionResult,
+  ChatMessage,
+  ChatStreamChunkCallback,
+  RequestCanceller,
+  WebSearchStateCallback
+} from './AiChatTypes'
 
 const logger = new Logger(DOMAIN_SERVICE, 'ResponsesApiClient')
 
@@ -21,93 +29,6 @@ const REQUEST_TIMEOUT: number = 90000
 const CONNECT_TIMEOUT: number = 15000
 /** 服务端内置联网搜索工具类型名 */
 const WEB_SEARCH_TOOL_TYPE: string = 'web_search'
-
-/** 流式响应文本增量回调。 */
-export type ChatStreamChunkCallback = (chunk: string) => void
-
-/** 服务端联网搜索状态回调。phase: searching | completed | failed */
-export type WebSearchStateCallback = (phase: string, query: string) => void
-
-/**
- * 对话消息。
- *
- * 用于构建 Responses API 输入 items。
- * assistant 消息可携带该轮原始输出 items（含 web_search_call），回传历史时原样展开。
- */
-export class ChatMessage {
-  /** 消息角色（user / assistant / system） */
-  role: string
-  /** 消息内容 */
-  content: string
-  /** 该条 assistant 消息对应的原始响应输出 items（可选） */
-  outputItems?: Object[]
-
-  /**
-   * 创建对话消息。
-   *
-   * @param role - 消息角色
-   * @param content - 消息内容
-   */
-  constructor(role: string, content: string) {
-    this.role = role
-    this.content = content
-  }
-}
-
-/** Responses API 调用结果。 */
-export class ResponseResult {
-  /** 助手回复完整文本 */
-  content: string = ''
-  /** 本响应的输出 items 数组（用于多轮对话回传） */
-  outputItems: Object[] = []
-  /** 响应状态（'completed' | 'incomplete'） */
-  status: string = ''
-  /** 是否因达到服务端输出长度上限被截断 */
-  truncated: boolean = false
-}
-
-/**
- * 请求取消令牌。
- *
- * 页面销毁等场景可调用 cancel() 中断进行中的流式请求。
- */
-export class RequestCanceller {
-  /** 是否已取消。 */
-  private cancelled: boolean = false
-  /** 取消处理器（由客户端内部注册）。 */
-  private handler: (() => void) | null = null
-
-  /**
-   * 发起取消，触发客户端中断请求。
-   */
-  cancel(): void {
-    if (this.cancelled) {
-      return
-    }
-    this.cancelled = true
-    if (this.handler) {
-      this.handler()
-    }
-  }
-
-  /**
-   * 判断是否已取消。
-   *
-   * @returns true 表示已取消
-   */
-  isCancelled(): boolean {
-    return this.cancelled
-  }
-
-  /**
-   * 注册取消处理器（仅供客户端内部使用）。
-   *
-   * @param handler - 取消时执行的回调
-   */
-  setHandler(handler: () => void): void {
-    this.handler = handler
-  }
-}
 
 /**
  * Responses API 语义化 SSE 事件解析器。
@@ -380,7 +301,6 @@ class ResponsesEventParser {
 /**
  * 向 DeepSeek /responses 端点发送流式请求。
  *
- * 自动携带服务端内置 web_search 工具声明，
  * 实时解析语义化 SSE 事件并输出文本增量与搜索状态。
  * 支持外部取消（canceller）与整体超时看门狗，避免请求永久挂起。
  *
@@ -389,6 +309,7 @@ class ResponsesEventParser {
  * @param onDelta - 文本增量回调
  * @param onSearch - 可选的服务端搜索状态回调
  * @param canceller - 可选的取消令牌（页面销毁时调用 cancel() 中断请求）
+ * @param enableWebSearch - 是否下发服务端内置 web_search 工具声明
  * @returns 响应结果（含完整文本与输出 items）
  */
 export async function createResponseStream(
@@ -396,17 +317,18 @@ export async function createResponseStream(
   messages: ChatMessage[],
   onDelta: ChatStreamChunkCallback,
   onSearch?: WebSearchStateCallback,
-  canceller?: RequestCanceller
-): Promise<ResponseResult> {
-  const url: string = buildResponsesUrl()
-  const body: string = buildRequestBody(profile, messages, true)
+  canceller?: RequestCanceller,
+  enableWebSearch: boolean = true
+): Promise<AiCompletionResult> {
+  const url: string = buildResponsesUrl(profile.endpoint)
+  const body: string = buildRequestBody(profile, messages, true, enableWebSearch)
   const decoder: util.TextDecoder = util.TextDecoder.create('utf-8')
   const parser: ResponsesEventParser = new ResponsesEventParser()
   const httpRequest: http.HttpRequest = http.createHttp()
   const searchCallback: WebSearchStateCallback = onSearch ?? ((phase: string, query: string): void => {
   })
 
-  return new Promise<ResponseResult>((resolve: (value: ResponseResult) => void, reject: (reason: Error) => void): void => {
+  return new Promise<AiCompletionResult>((resolve: (value: AiCompletionResult) => void, reject: (reason: Error) => void): void => {
     let settled: boolean = false
     let streamError: Error | null = null
     let watchdog: number = -1
@@ -434,7 +356,7 @@ export async function createResponseStream(
       reject(error)
     }
 
-    const resolveOnce = (result: ResponseResult): void => {
+    const resolveOnce = (result: AiCompletionResult): void => {
       if (settled) {
         return
       }
@@ -506,7 +428,7 @@ export async function createResponseStream(
           }
           return
         }
-        const result: ResponseResult = new ResponseResult()
+        const result: AiCompletionResult = new AiCompletionResult()
         result.content = content
         result.outputItems = parser.getOutputItems()
         result.status = parser.getStatus()
@@ -550,13 +472,16 @@ export async function createResponseStream(
 /**
  * 向 DeepSeek /responses 端点发送非流式请求。
  *
+ * 不下发 web_search：该函数仅用于「测试连接」这类一次性的连通性探测，
+ * 联网搜索只会拖长探测耗时。
+ *
  * @param profile - AI 提供方配置
  * @param messages - 对话消息列表
  * @returns 响应结果
  */
-export async function createResponse(profile: AiProviderProfile, messages: ChatMessage[]): Promise<ResponseResult> {
-  const url: string = buildResponsesUrl()
-  const body: string = buildRequestBody(profile, messages, false)
+export async function createResponse(profile: AiProviderProfile, messages: ChatMessage[]): Promise<AiCompletionResult> {
+  const url: string = buildResponsesUrl(profile.endpoint)
+  const body: string = buildRequestBody(profile, messages, false, false)
 
   const httpRequest: http.HttpRequest = http.createHttp()
   try {
@@ -584,21 +509,21 @@ export async function createResponse(profile: AiProviderProfile, messages: ChatM
 }
 
 /**
- * 测试与 DeepSeek 端点的连接。
+ * 测试与 DeepSeek Responses 端点的连接。
  *
  * 发送简短测试消息验证 API Key 有效性和模型可用性。
  *
  * @param profile - AI 提供方配置
  * @returns 测试结果
  */
-export async function testConnection(profile: AiProviderProfile): Promise<AiTestResult> {
+export async function testResponsesConnection(profile: AiProviderProfile): Promise<AiTestResult> {
   const messages: ChatMessage[] = [
     new ChatMessage('user', '请用一句简短的中文确认连接成功。')
   ]
   const result: AiTestResult = new AiTestResult()
   const startTime: number = Date.now()
   try {
-    const response: ResponseResult = await createResponse(profile, messages)
+    const response: AiCompletionResult = await createResponse(profile, messages)
     result.durationMs = Date.now() - startTime
     result.success = true
     result.message = response.content
@@ -614,13 +539,22 @@ export async function testConnection(profile: AiProviderProfile): Promise<AiTest
 /**
  * 构造 Responses API 请求 URL。
  *
- * 全面转向 DeepSeek 后端点恒定，忽略配置中的旧端点字段
- * （旧 OpenAI 兼容端点不支持 Responses API，不提供任何兼容）。
+ * 以配置中的服务地址为基准（历史配置可能为空，回退到 DeepSeek 官方端点），
+ * 末尾统一补齐 /responses。
  *
+ * @param endpoint - 配置中的服务地址
  * @returns 完整的 /responses URL
  */
-function buildResponsesUrl(): string {
-  return DEFAULT_DEEPSEEK_ENDPOINT + '/responses'
+function buildResponsesUrl(endpoint: string): string {
+  let base: string = (endpoint ?? '').trim()
+  if (base.length === 0) {
+    base = DEFAULT_DEEPSEEK_ENDPOINT
+  }
+  base = base.replace(/\/+$/, '')
+  if (base.endsWith('/responses')) {
+    return base
+  }
+  return base + '/responses'
 }
 
 /**
@@ -643,24 +577,32 @@ function buildHeaders(apiKey: string): Record<string, string> {
  * 不携带 max_output_tokens：输出长度完全交给服务端按模型能力决定，
  * 客户端不设上限，避免把长回答截断。
  *
- * 始终携带服务端内置 web_search 工具声明（tool_choice=auto），
- * 由模型自行判断是否需要联网搜索。
+ * enableWebSearch 为 true 时才携带服务端内置 web_search 工具声明
+ * （tool_choice=auto），由模型自行判断是否需要联网搜索。
  *
  * @param profile - AI 提供方配置
  * @param messages - 消息列表
  * @param stream - 是否流式
+ * @param enableWebSearch - 是否下发内置联网搜索工具
  * @returns JSON 字符串
  */
-function buildRequestBody(profile: AiProviderProfile, messages: ChatMessage[], stream: boolean): string {
+function buildRequestBody(
+  profile: AiProviderProfile,
+  messages: ChatMessage[],
+  stream: boolean,
+  enableWebSearch: boolean
+): string {
   const bodyObj: Record<string, Object> = {}
   bodyObj['model'] = profile.modelName
   bodyObj['stream'] = stream
   bodyObj['temperature'] = profile.temperature
 
-  const toolObj: Record<string, string> = {}
-  toolObj['type'] = WEB_SEARCH_TOOL_TYPE
-  bodyObj['tools'] = [toolObj]
-  bodyObj['tool_choice'] = 'auto'
+  if (enableWebSearch) {
+    const toolObj: Record<string, string> = {}
+    toolObj['type'] = WEB_SEARCH_TOOL_TYPE
+    bodyObj['tools'] = [toolObj]
+    bodyObj['tool_choice'] = 'auto'
+  }
 
   bodyObj['input'] = buildInputItems(messages)
   const instructions: string = collectInstructions(messages)
@@ -732,8 +674,8 @@ function buildInputItems(messages: ChatMessage[]): Object[] {
  * @param responseText - 响应 JSON 字符串
  * @returns 响应结果
  */
-function parseResponseJson(responseText: string): ResponseResult {
-  const result: ResponseResult = new ResponseResult()
+function parseResponseJson(responseText: string): AiCompletionResult {
+  const result: AiCompletionResult = new AiCompletionResult()
   let json: Record<string, Object> = {}
   try {
     json = JSON.parse(responseText) as Record<string, Object>

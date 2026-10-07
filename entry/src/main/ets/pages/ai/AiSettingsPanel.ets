@@ -1,10 +1,10 @@
 /**
  * AI 配置管理面板。
  *
- * 管理 DeepSeek Responses API 配置：创建、编辑、删除、测试连接。
- * 采用内联可展开卡片模式，新建/编辑在同一页面内完成，
- * 无需切换模式。端点固定为 https://api.deepseek.com，
- * 联网搜索由服务端内置 web_search 工具完成，无需额外配置。
+ * 管理 AI 服务商配置：选择平台预设、创建、编辑、删除、测试连接。
+ * 采用内联可展开卡片模式，新建/编辑在同一页面内完成，无需切换模式。
+ * 服务地址默认取预设端点且允许修改；服务商不支持的能力（如内置联网搜索）
+ * 在表单内直接提示，避免用户在对话中被静默降级。
  */
 
 import { appStore } from '../../store/AppStore'
@@ -15,13 +15,22 @@ import { PanelNavBar } from '../../common/components/PanelNavBar'
 import { TipsDialog, AlertDialog, SelectDialog } from '@kit.ArkUI'
 import {
   AiProviderProfile,
+  DEFAULT_AI_PROVIDER_ID,
   DEFAULT_AI_TEMPERATURE,
-  DEFAULT_DEEPSEEK_ENDPOINT,
   MAX_AI_TEMPERATURE,
   MIN_AI_TEMPERATURE
 } from '../../model/AiConfig'
-import { PROVIDER_PRESETS } from '../../service/ai/AiModelPresets'
-import { testConnection } from '../../service/ai/ResponsesApiClient'
+import {
+  PROVIDER_PRESETS,
+  getProviderDisplayName,
+  resolveProviderId
+} from '../../service/ai/AiModelPresets'
+import {
+  getCapabilityNotice,
+  getProfileSubtitle,
+  resolveProfileEndpoint,
+  testProviderConnection
+} from '../../service/ai/AiProviderRouter'
 import {
   clampTemperature,
   getPreset,
@@ -54,6 +63,8 @@ export struct AiSettingsPanel {
   @State editNameInput: string = ''
   /** 服务地址输入值。 */
   @State editEndpointInput: string = ''
+  /** 当前编辑配置的服务商标识（决定协议链路与能力提示）。 */
+  @State editProviderId: string = DEFAULT_AI_PROVIDER_ID
   /** API 密钥输入值。 */
   @State editApiKeyInput: string = ''
   /** 模型名称输入值。 */
@@ -87,6 +98,14 @@ export struct AiSettingsPanel {
   @State scrollViewportHeight: number = 1
   /** 测试连接请求序号。 */
   private testConnectionRequestId: number = 0
+  /**
+   * 服务商选择弹窗中当前被选中的预设下标。
+   *
+   * SelectDialog 的 SheetInfo.action 只在「选中项变化」时触发，
+   * selectedIndex 预选的单项不会触发任何回调，因此这里只记录选择，
+   * 由确认按钮的 action 统一应用。
+   */
+  private pickedPresetIndex: number = 0
   /** AI 设置页滚动控制器。 */
   private scroller: Scroller = new Scroller()
 
@@ -182,8 +201,9 @@ export struct AiSettingsPanel {
     this.testSuccess = false
 
     if (profileId === NEW_ID) {
+      this.editProviderId = DEFAULT_AI_PROVIDER_ID
       this.editNameInput = ''
-      this.editEndpointInput = DEFAULT_DEEPSEEK_ENDPOINT
+      this.editEndpointInput = ''
       this.editApiKeyInput = ''
       this.editModelInput = ''
       this.editTemperatureInput = DEFAULT_AI_TEMPERATURE
@@ -191,8 +211,9 @@ export struct AiSettingsPanel {
     } else {
       const profile: AiProviderProfile | null = this.findProfile(profileId)
       if (profile) {
+        this.editProviderId = resolveProviderId(profile.providerId)
         this.editNameInput = profile.name
-        this.editEndpointInput = DEFAULT_DEEPSEEK_ENDPOINT
+        this.editEndpointInput = resolveProfileEndpoint(profile)
         this.editApiKeyInput = profile.apiKey
         this.editModelInput = profile.modelName
         this.editTemperatureInput = clampTemperature(profile.temperature)
@@ -264,6 +285,7 @@ export struct AiSettingsPanel {
     }
     if (this.expandedProfileId === NEW_ID) {
       return this.editNameInput.length > 0 ||
+        this.editEndpointInput.length > 0 ||
         this.editApiKeyInput.length > 0 ||
         this.editModelInput.length > 0 ||
         this.editTemperatureInput !== DEFAULT_AI_TEMPERATURE
@@ -273,6 +295,8 @@ export struct AiSettingsPanel {
       return false
     }
     return this.editNameInput !== profile.name ||
+      this.editProviderId !== resolveProviderId(profile.providerId) ||
+      this.editEndpointInput.trim() !== resolveProfileEndpoint(profile) ||
       this.editApiKeyInput !== profile.apiKey ||
       this.editModelInput !== profile.modelName ||
       this.editTemperatureInput !== clampTemperature(profile.temperature)
@@ -280,8 +304,9 @@ export struct AiSettingsPanel {
 
   /** 清空编辑表单缓存和异步结果。 */
   private clearEditBuffers(): void {
+    this.editProviderId = DEFAULT_AI_PROVIDER_ID
     this.editNameInput = ''
-    this.editEndpointInput = DEFAULT_DEEPSEEK_ENDPOINT
+    this.editEndpointInput = ''
     this.editApiKeyInput = ''
     this.editModelInput = ''
     this.editTemperatureInput = DEFAULT_AI_TEMPERATURE
@@ -321,6 +346,10 @@ export struct AiSettingsPanel {
       appStore.showToast('请输入方案名称')
       return
     }
+    if (!this.editEndpointInput || this.editEndpointInput.trim().length === 0) {
+      appStore.showToast('请输入服务地址')
+      return
+    }
     if (!this.editModelInput || this.editModelInput.trim().length === 0) {
       appStore.showToast('请输入模型名称')
       return
@@ -328,7 +357,8 @@ export struct AiSettingsPanel {
 
     const profile: AiProviderProfile = new AiProviderProfile()
     profile.name = this.editNameInput.trim()
-    profile.endpoint = DEFAULT_DEEPSEEK_ENDPOINT
+    profile.providerId = this.editProviderId
+    profile.endpoint = this.editEndpointInput.trim()
     profile.modelName = this.editModelInput.trim()
     profile.temperature = clampTemperature(this.editTemperatureInput)
 
@@ -397,28 +427,86 @@ export struct AiSettingsPanel {
   /**
    * 应用服务商预设到编辑表单。
    *
+   * 只改「由平台决定」的字段（服务商 / 名称 / 端点 / 模型 / 温度），
+   * **不改卡片归属**——是新建还是编辑现有配置由调用方决定。
+   *
+   * 密钥只在真正换平台时清空：用户点开平台弹窗又选了原来那一家，
+   * 不该把已填好的密钥抹掉。
+   *
    * @param index - 预设下标（PROVIDER_PRESETS 索引）
    */
   private applyProviderPreset(index: number): void {
+    if (index < 0 || index >= PROVIDER_PRESETS.length) {
+      return
+    }
     this.invalidatePendingRequests()
     const preset: AiProviderPreset = PROVIDER_PRESETS[index]
+    const sameProvider: boolean = this.editProviderId === preset.id
+    this.editProviderId = preset.id
     this.editNameInput = preset.name
-    this.editEndpointInput = DEFAULT_DEEPSEEK_ENDPOINT
-    this.editApiKeyInput = ''
+    this.editEndpointInput = preset.endpoint
+    if (!sameProvider) {
+      this.editApiKeyInput = ''
+    }
     this.editModelInput = preset.defaultModelName
+    this.editTemperatureInput = DEFAULT_AI_TEMPERATURE
+    this.showAdvancedParams = false
     this.testResultMessage = ''
     this.testSuccess = false
+  }
+
+  /**
+   * 点「+ 添加 AI 服务」：直接展开新建卡片并套用首选服务商。
+   *
+   * **刻意不经过任何弹窗回调**：「点一下就必须出现配置表单」这条不能依赖对话框
+   * 语义——`SheetInfo.action` 的触发时机（选中变化才触发，与预选中项冲突）曾经
+   * 让整个入口点不动。平台选择退化为表单里的一行，用户随时可换。
+   */
+  private startNewProfile(): void {
+    if (this.hasUnsavedEdit()) {
+      this.showDiscardConfirm((): void => {
+        this.beginNewProfile()
+      })
+      return
+    }
+    this.beginNewProfile()
+  }
+
+  /** 执行新建卡片的初始化：先清空缓存，再套用首选服务商。 */
+  private beginNewProfile(): void {
+    this.clearEditBuffers()
+    this.applyProviderPreset(0)
     this.expandedProfileId = NEW_ID
   }
 
-  /** 显示服务商预设选择弹窗。 */
+  /**
+   * 显示服务商预设选择弹窗。
+   *
+   * 三个必须遵守的点（前两点都由这里踩过）：
+   * 1. **落地动作挂在 `SheetInfo.action` 上**。SDK 原文是 "Callback when the sheet
+   *    is selected"，即选项被选中时触发；工程内 `SettingsPanel` 的「帖子楼层导航 /
+   *    预加载页数 / 图片加载模式」三个单选框都是这么生效的，是已验证可靠的路径。
+   * 2. **不传 `selectedIndex`**（`selectedIndex?: number` 本就可选）。一旦预选中某项，
+   *    点中「已是选中态」的那一项不产生选中变化，回调就不会触发——表现为
+   *    「选了没反应」；这曾让单服务商（列表只有一项且被预选中）的入口彻底点不动。
+   * 3. 应用后**立即关闭弹窗**，否则用户点完看不到任何即时反馈，会以为没生效。
+   *
+   * `confirm.action` 作为兜底：用户不点选项直接按「确定」时，按 `pickedPresetIndex`
+   * 应用（初值 0，即首选服务商）。`applyProviderPreset` 对同一下标幂等，两条路径
+   * 都触发也不会重复建卡。
+   */
   showProviderPresetPicker(): void {
+    this.pickedPresetIndex = 0
     const items: SheetInfo[] = []
     for (let i = 0; i < PROVIDER_PRESETS.length; i++) {
       const presetIndex: number = i
       items.push({
         title: PROVIDER_PRESETS[i].name + ' - ' + PROVIDER_PRESETS[i].description,
-        action: (): void => { this.applyProviderPreset(presetIndex) }
+        action: (): void => {
+          this.pickedPresetIndex = presetIndex
+          this.applyProviderPreset(presetIndex)
+          this.providerPickerController?.close()
+        }
       })
     }
 
@@ -428,13 +516,24 @@ export struct AiSettingsPanel {
       maskColor: UIMaterialManager.scrim,
       builder: SelectDialog({
         title: '选择 AI 平台',
-        selectedIndex: 0,
         radioContent: items,
-        confirm: { value: '确定' }
+        confirm: {
+          value: '确定',
+          action: (): void => {
+            this.confirmProviderPreset()
+          }
+        }
       }),
       autoCancel: true
     })
     this.providerPickerController.open()
+  }
+
+  /**
+   * 兜底应用「确定」按钮路径选定的服务商预设。
+   */
+  private confirmProviderPreset(): void {
+    this.applyProviderPreset(this.pickedPresetIndex)
   }
 
   /**
@@ -456,12 +555,12 @@ export struct AiSettingsPanel {
   }
 
   /**
-   * 获取当前唯一预设（DeepSeek）。
+   * 获取当前编辑配置对应的服务商预设。
    *
-   * @returns DeepSeek 预设，列表为空时返回 null
+   * @returns 匹配的预设，未匹配时返回 null
    */
   private getPreset(): AiProviderPreset | null {
-    return getPreset()
+    return getPreset(this.editProviderId)
   }
 
   /**
@@ -502,12 +601,13 @@ export struct AiSettingsPanel {
     this.testResultMessage = ''
 
     const tempProfile: AiProviderProfile = new AiProviderProfile()
+    tempProfile.providerId = this.editProviderId
     tempProfile.endpoint = endpoint
     tempProfile.apiKey = apiKey
     tempProfile.modelName = modelName
 
     try {
-      const result: AiTestResult = await testConnection(tempProfile)
+      const result: AiTestResult = await testProviderConnection(tempProfile)
       if (!this.isCurrentTestConnectionRequest(requestId, profileId, endpoint, apiKey, modelName)) {
         return
       }
@@ -568,7 +668,7 @@ export struct AiSettingsPanel {
               .width('92%')
               .margin({ top: 8, bottom: 2 })
 
-            Text('配置 DeepSeek Responses API 连接信息和模型参数，联网搜索由服务端内置完成')
+            Text('选择服务商并填写连接信息；DeepSeek 支持内置联网搜索，其他平台按普通对话使用')
               .fontSize(11)
               .fontColor(AppColors.textTertiary)
               .lineHeight(16)
@@ -998,7 +1098,7 @@ export struct AiSettingsPanel {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-        Text('DeepSeek Responses API')
+        Text(getProfileSubtitle(profile))
           .fontSize(11)
           .fontColor(AppColors.textTertiary)
           .margin({ top: 2 })
@@ -1028,7 +1128,76 @@ export struct AiSettingsPanel {
   }
 
   /**
-   * 公共表单字段 — 按操作顺序排列：方案名称、服务地址（只读）、API 密钥、
+   * 服务商选择行。
+   *
+   * 平台选择的唯一入口。刻意做成表单内的一行而不是"新建前置弹窗"：
+   * 表单的出现时机不受任何对话框回调影响，也顺带让已建配置能直接换平台。
+   */
+  @Builder
+  ProviderPickerRow() {
+    Column() {
+      Text('服务商')
+        .fontSize(13)
+        .fontColor(AppColors.textSecondary)
+        .width('100%')
+        .margin({ bottom: 4 })
+
+      Row() {
+        Text(getProviderDisplayName(this.editProviderId))
+          .fontSize(14)
+          .fontColor(UIMaterialManager.inputForeground)
+          .layoutWeight(1)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+        Text('更换 ▾')
+          .fontSize(13)
+          .fontColor(AppColors.primary)
+          .flexShrink(0)
+      }
+      .width('100%')
+      .height(40)
+      .padding({ left: 12, right: 12 })
+      .alignItems(VerticalAlign.Center)
+      .backgroundColor(AppColors.bgSecondary)
+      .borderRadius(8)
+      .onClick(() => {
+        this.showProviderPresetPicker()
+      })
+    }
+    .width('100%')
+    .margin({ bottom: 10 })
+  }
+
+  /**
+   * 能力提示行。
+   *
+   * 当前所选服务商缺少某项能力（如内置联网搜索）时明确告知用户，
+   * 避免在对话中被静默降级后误以为 AI 已经联网检索过。
+   */
+  @Builder
+  ProviderCapabilityNotice() {
+    Column() {
+      if (getCapabilityNotice(this.editProviderId).length > 0) {
+        Row() {
+          Text('ℹ️ ' + getCapabilityNotice(this.editProviderId))
+            .fontSize(11)
+            .fontColor(AppColors.textTertiary)
+            .lineHeight(16)
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+        .backgroundColor(AppColors.bgSecondary)
+        .borderRadius(8)
+        .margin({ bottom: 10 })
+      }
+    }
+    .width('100%')
+  }
+
+  /**
+   * 公共表单字段 — 按操作顺序排列：方案名称、服务地址（可编辑）、API 密钥、
    * 模型名称（手动输入）、联通测试及保存/取消按钮。
    *
    * 由 ProfileCardBody 和 NewProfileCard 共享，
@@ -1037,6 +1206,9 @@ export struct AiSettingsPanel {
   @Builder
   ProfileFormFields() {
     Column() {
+      this.ProviderPickerRow()
+      this.ProviderCapabilityNotice()
+
       Text('方案名称')
         .fontSize(13)
         .fontColor(AppColors.textSecondary)
@@ -1067,19 +1239,25 @@ export struct AiSettingsPanel {
         .width('100%')
         .margin({ bottom: 4 })
 
-      Row() {
-        Text('🔒 ' + this.editEndpointInput)
-          .fontSize(13)
-          .fontColor(AppColors.textTertiary)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-      }
-      .width('100%')
-      .height(40)
-      .alignItems(VerticalAlign.Center)
-      .backgroundColor(AppColors.bgSecondary)
-      .borderRadius(8)
-      .padding({ left: 12, right: 12 })
+      TextInput({ placeholder: 'https://api.example.com/v1', text: this.editEndpointInput })
+        .onChange((v: string) => {
+          this.editEndpointInput = v
+        })
+        .width('100%')
+        .height(40)
+        .attributeModifier(UIMaterialManager.inputMaterial)
+        .borderRadius(8)
+        .fontSize(14)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
+        .padding({ left: 12, right: 12 })
+
+      Text('已按所选平台自动填充，可按需修改')
+        .fontSize(11)
+        .fontColor(AppColors.textTertiary)
+        .width('100%')
+        .margin({ top: 4 })
     }
     .width('100%')
     .margin({ bottom: 10 })
@@ -1349,13 +1527,7 @@ export struct AiSettingsPanel {
     .borderRadius(12)
     .margin({ top: 8 })
     .onClick(() => {
-      if (this.hasUnsavedEdit()) {
-        this.showDiscardConfirm((): void => {
-          this.showProviderPresetPicker()
-        })
-        return
-      }
-      this.showProviderPresetPicker()
+      this.startNewProfile()
     })
   }
 
@@ -1372,7 +1544,7 @@ export struct AiSettingsPanel {
         .fontWeight(FontWeight.Medium)
         .margin({ top: 10 })
 
-      Text('添加 DeepSeek AI 服务后，\n帖子总结、用户分析即可使用，联网搜索由服务端内置完成')
+      Text('添加 AI 服务后，\n帖子总结、用户分析、智能去水即可使用')
         .fontSize(12)
         .fontColor(AppColors.textTertiary)
         .textAlign(TextAlign.Center)
