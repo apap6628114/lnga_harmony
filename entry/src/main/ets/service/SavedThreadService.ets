@@ -221,13 +221,14 @@ export const savedThreadService: SavedThreadService = new SavedThreadService()
  * @param blacklist - 黑名单 UID
  * @param keywords - 标题屏蔽关键词
  * @param noteMap - 用户备注表
- * @param authorid - 只看楼主用户 ID（可空）
+ * @param authorKey - 只看楼主的**稳定作者标识**（可空）：普通帖为 uid 数字串，匿名帖为
+ *   `#anony_` 编码名；匿名存档的 uid 是页内局部号，拿它筛只会得到空结果
  * @returns 解释后的帖子详情结果
  */
 export async function getSavedThreadResult(tid: string, page: number,
   blacklist: Set<string>, keywords: string[] = [],
   noteMap: Record<string, string> = {},
-  authorid: string = ''): Promise<ThreadResult> {
+  authorKey: string = ''): Promise<ThreadResult> {
   const result: ThreadResult = new ThreadResult()
   const archive: SavedThread | null = appStore.savedThreadStore.getByTid(tid)
   if (archive === null) {
@@ -237,7 +238,7 @@ export async function getSavedThreadResult(tid: string, page: number,
   // 只看楼主：离线模式做短路处理——一次性从整个存档筛选楼主楼层并合并为
   // 单页返回（totalPages=1）。与在线服务端过滤相比：不出现"某存档页无楼主
   // 楼层"的空页，楼层跨原存档页连续；嵌套 comments/hotReplies 不过滤。
-  if (authorid.length > 0) {
+  if (authorKey.length > 0) {
     const allPosts: PostInfo[] = []
     for (let p: number = 1; p <= archive.rawPages.length; p++) {
       const rawPage: Record<string, Object> | null = appStore.savedThreadStore.getRawPage(tid, p)
@@ -247,8 +248,8 @@ export async function getSavedThreadResult(tid: string, page: number,
       try {
         const pageResult: ThreadResult = new ThreadResult()
         fillThreadResult(rawPage, pageResult, blacklist, keywords, noteMap)
-        for (let i = 0; i < pageResult.posts.length; i++) {
-          if (String(pageResult.posts[i].authorid) === authorid) {
+        for (let i: number = 0; i < pageResult.posts.length; i++) {
+          if (pageResult.posts[i].authorKey === authorKey) {
             allPosts.push(pageResult.posts[i])
           }
         }

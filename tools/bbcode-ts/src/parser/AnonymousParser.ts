@@ -1,3 +1,13 @@
+/**
+ * 匿名用户名前缀。
+ *
+ * 服务端把匿名作者的 `username` 换成 `#anony_<32 位十六进制>`；该串是**同一帖子内**
+ * 稳定可比的匿名身份（同一匿名用户在同一帖的所有楼层相同，不同匿名用户不同），
+ * 而楼层元数据里的 uid 是**页内局部**合成号（`-1`、`-2`…，逐页重排），不可跨页比较。
+ * 判定匿名身份一律认这个前缀，不要用 uid 正负号。
+ */
+export const ANONYMOUS_NAME_PREFIX: string = '#anony_'
+
 /** 匿名用户名第一、第四位使用的天干地支字符表。 */
 const ANONYMOUS_NAME_PRIMARY_CHARS: string = '甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥'
 
@@ -11,7 +21,7 @@ const ANONYMOUS_NAME_SECONDARY_CHARS: string = '王李张刘陈杨黄吴赵周�
  * @returns 匿名显示名；非匿名用户名保持原值
  */
 export function decodeAnonymousName(encoded: string): string {
-  if (!encoded || !encoded.startsWith('#anony_')) return encoded
+  if (!encoded || !encoded.startsWith(ANONYMOUS_NAME_PREFIX)) return encoded
   let offset: number = 6
   let result: string = ''
   for (let index: number = 0; index < 6; index++) {

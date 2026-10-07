@@ -175,6 +175,17 @@ export struct ThreadPanel {
   @State threadSubject: string = '帖子'
   @State threadFid: number = 0
   @State threadAuthorId: string = ''
+  /**
+   * 楼主（主题作者）的**稳定作者标识**：普通帖是 uid 数字串，匿名帖是
+   * `#anony_<32 位十六进制>` 编码名（见 `PostInfo.authorKey`）。
+   *
+   * 楼主标记与「只看楼主」的客户端过滤必须用它：匿名帖的 uid 是页面局部合成号
+   * （`-1`、`-2`…，逐页重排），拿它跨页比较认不出楼主的匿名回复，还会把撞号的
+   * 其他匿名用户误标成楼主。
+   */
+  @State threadAuthorKey: string = ''
+  /** 是否已取得可用于比较的楼主标识（`threadAuthorKey` 本身可能合法地等于 uid 串）。 */
+  private hasThreadAuthorKey: boolean = false
   @State votedUpPids: Set<string> = new Set()
   @State votedDownPids: Set<string> = new Set()
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
@@ -404,6 +415,12 @@ export struct ThreadPanel {
     this.pendingTargetPid = this.threadPid
     this.singlePostFallback = false
     this.displayPage = initialPage
+    // 楼主身份与 UI 状态同寿命：组件实例被复用打开另一个 tid 时（ArkUI 复用同一实例），
+    // 残留的旧帖楼主标识会把新帖楼层误标成楼主，故打开时必须清空、由首页响应重建。
+    this.threadAuthorId = ''
+    this.threadAuthorKey = ''
+    this.hasThreadAuthorKey = false
+    this.authorOnly = false
     logger.info(
       'thread open tid=%{public}s page=%{public}d pid=%{public}s source=%{public}s',
       this.threadTid, initialPage, this.threadPid, this.threadSource
@@ -472,6 +489,11 @@ export struct ThreadPanel {
     this.isLoadingPrevious = false
     this.hasError = false
     this.authorOnly = false
+    // 楼主身份随帖子切换重置：旧帖的稳定标识（尤其匿名帖的 `#anony_` 键）继续参与
+    // 比较会把新帖楼层误标成楼主，必须清空后由新帖首页响应重建
+    this.threadAuthorId = ''
+    this.threadAuthorKey = ''
+    this.hasThreadAuthorKey = false
     this.syncFavoriteState()
     this.votedUpPids = new Set()
     this.votedDownPids = new Set()
@@ -687,6 +709,8 @@ export struct ThreadPanel {
    * @returns 屏蔽作者时返回占位文案，否则返回原主题标题
    */
   private getVisibleThreadSubject(): string {
+    // 说明：黑名单只存真实 uid，匿名帖的主题作者没有真实 uid（`threadAuthorId` 是页内
+    // 局部号），故匿名楼主无法被拉黑——这是"不知道是谁"的必然结果，不是本处漏判。
     if (this.blacklistVersion >= 0 &&
       appStore.settingsStore.isBlacklisted(this.threadAuthorId)) {
       return '该用户已被屏蔽'
@@ -1136,14 +1160,23 @@ export struct ThreadPanel {
     previousPosts?: PostInfo[]
   ): Promise<ThreadResult> {
     const noteMap: Record<string, string> = appStore.settingsStore.getNoteMap()
+    // 楼主 uid 是页内局部负数时（匿名帖），服务端 authorid 过滤不可用，改为拉取后本地过滤。
+    // 过滤必须与本面板的楼主判据同源（`hasThreadAuthorKey` + `authorKey`）：只按 uid 是否为
+    // 负数决定"要不要过滤"会把两套身份空间混用——首屏落在非首页时还没有可用的稳定键，
+    // 那时若照旧过滤就会把整页筛空。缺键时不过滤（宁可多显示，也不给空列表）。
     const isNegativeAuthor: boolean = this.authorOnly && this.threadAuthorId !== '' && Number(this.threadAuthorId) <= 0
+    const canFilterLocally: boolean = isNegativeAuthor && this.hasThreadAuthorKey
     // 来源分流：保存的帖子离线存档从本地同形状 JSON 读取并解释，与在线走同一条渲染管线；
     // 其余来源保持服务器请求模式。
     const result: ThreadResult = this.threadSource === ThreadSource.SAVED
       ? await withTimeout<ThreadResult>(getSavedThreadResult(
         this.threadTid, targetPage,
         appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords(),
-        noteMap, this.authorOnly ? this.threadAuthorId : ''
+        noteMap,
+        // 离线存档用 `authorKey` 而不是 uid 过滤：匿名存档里 uid 也是页内局部号，
+        // 拿它筛只会得到空结果。没有可用稳定键时传空串 → 不筛（返回全部），
+        // 避免"只看楼主"在键未知时给出一张空列表。
+        this.authorOnly && this.hasThreadAuthorKey ? this.threadAuthorKey : ''
       ), timeoutMs)
       : await withTimeout<ThreadResult>(getThread(
         appStore.auth.token, this.threadTid, requestPid,
@@ -1155,8 +1188,8 @@ export struct ThreadPanel {
       return result
     }
     applyBlacklistStateToPosts(result.posts, appStore.settingsStore.getBlacklistIds())
-    if (isNegativeAuthor) {
-      result.posts = result.posts.filter((post: PostInfo): boolean => String(post.authorid) === this.threadAuthorId)
+    if (canFilterLocally) {
+      result.posts = result.posts.filter((post: PostInfo): boolean => this.isTopicAuthorPost(post))
     }
     try {
       await preWarmPosts(result.posts, false, priority)
@@ -1254,6 +1287,14 @@ export struct ThreadPanel {
           this.threadFid = info.fid
           if (info.authorid > 0 || this.threadAuthorId === '') {
             this.threadAuthorId = String(info.authorid)
+          }
+          // 楼主稳定标识只在"拿到主楼的那一页"采信并锁定：解析器仅在含主楼的页保证
+          // 该键可靠（匿名帖非首页判不出时给空串）。这样即使首屏落在第 N 页，标记也只是
+          // 暂时缺失，读到含主楼的页后立即补齐，不会锁死一个错误的楼主。
+          const hasMainFloor: boolean = result.posts.some((item: PostInfo): boolean => item.lou === 0)
+          if (!this.hasThreadAuthorKey && hasMainFloor && this.isAuthorKeyUsable(info.authorKey)) {
+            this.threadAuthorKey = info.authorKey
+            this.hasThreadAuthorKey = true
           }
         }
 
@@ -1958,6 +1999,36 @@ export struct ThreadPanel {
   }
 
   /**
+   * 该稳定作者标识是否可用于身份比较。
+   *
+   * 空串（解析不出）与非正数字（匿名楼的页内局部合成号）都不可比：前者没有信息，
+   * 后者逐页重排，拿它判定会既漏判楼主、又误判撞号的匿名用户。
+   *
+   * @param authorKey - 待判定的稳定作者标识
+   * @returns 可用于比较时为 true
+   */
+  private isAuthorKeyUsable(authorKey: string): boolean {
+    if (authorKey.length === 0) {
+      return false
+    }
+    const numeric: number = Number(authorKey)
+    return isNaN(numeric) || numeric > 0
+  }
+
+  /**
+   * 当前楼层是否为主题作者（楼主）所发。
+   *
+   * 判据是稳定作者标识而不是 uid：匿名帖里 uid 是页内局部号（见 `PostInfo.authorKey`），
+   * 只有 `#anony_` 编码名能跨页认出楼主的匿名回复。
+   *
+   * @param post - 待判定楼层
+   * @returns 是楼主所发时为 true
+   */
+  private isTopicAuthorPost(post: PostInfo): boolean {
+    return this.hasThreadAuthorKey && post.authorKey === this.threadAuthorKey
+  }
+
+  /**
    * 当前窗口内主楼（lou=0）的作者昵称。
    *
    * 添加跟踪时带上，避免跟踪列表在首次检查回填前显示「未知作者」；主楼不在当前窗口
@@ -2269,7 +2340,7 @@ export struct ThreadPanel {
                   }
                   TtsPlayer.speak(plainText, p.pid, true, metadata)
                 },
-                isTopicAuthor: String(post.authorid) === this.threadAuthorId,
+                isTopicAuthor: this.isTopicAuthorPost(post),
                 isOwnPost: appStore.auth.isAuthenticated && String(post.authorid) === appStore.auth.uid,
               })
             }

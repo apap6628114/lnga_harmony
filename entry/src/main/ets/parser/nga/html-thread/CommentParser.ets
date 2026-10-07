@@ -4,7 +4,7 @@
  */
 
 import { scanBalanced } from './ScanState';
-import { splitTopLevelArgs } from './PostArgScanner';
+import { splitTopLevelArgs, extractPostAuthorKey } from './PostArgScanner';
 import { unescapeHtml } from '../../_shared/HtmlEntityCodec';
 
 /** 贴条容器起点。 */
@@ -61,11 +61,12 @@ class CommentMeta {
  * @param parentPid 所属普通楼层 pid
  * @param fid 版块 id
  * @param tid 主题 id
- * @param rows 已装配的普通楼层表，用于补齐贴条对应原楼层的字段
+ * @param rows 已装配的普通楼层表，用于补齐对应原楼层的字段
+ * @param userInfo 用户信息表（uid → 用户对象），用于解析匿名贴条的稳定作者标识
  * @returns 与网页 JSON `comment` 字段同形状的映射；无贴条时返回 null
  */
 function extractComments(html: string, lou: number, parentPid: number, fid: number, tid: number,
-  rows: Record<string, Object>): Record<string, Object> | null {
+  rows: Record<string, Object>, userInfo: Record<string, Object>): Record<string, Object> | null {
   const startIdx: number = html.indexOf(COMMENT_CONTAINER_PREFIX + parentPid + "'");
   if (startIdx < 0) {
     return null;
@@ -106,6 +107,7 @@ function extractComments(html: string, lou: number, parentPid: number, fid: numb
       'fid': fid as Object,
       'tid': tid as Object,
       'authorid': (source?.['authorid'] ?? meta.authorid) as Object,
+      'authorKey': (source?.['authorKey'] ?? extractPostAuthorKey(userInfo, meta.authorid)) as Object,
       'type': (source?.['type'] ?? meta.type) as Object,
       'score': (source?.['score'] ?? meta.score) as Object,
       'score_2': (source?.['score_2'] ?? meta.score2) as Object,

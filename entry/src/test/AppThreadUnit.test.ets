@@ -2,10 +2,17 @@ import { describe, it, expect } from '@ohos/hypium'
 import { parseThreadData } from '../main/ets/parser/ThreadParser'
 import { parseNgaError } from '../main/ets/parser/ErrorParser'
 import {
-  buildThreadHtmlRequest, extractAppArticleHtml, extractHtmlErrorPageMessage, hasRawThreadRows
+  buildThreadHtmlRequest, extractAppArticleHtml, extractHtmlErrorPageMessage, hasRawThreadRows, fillThreadResult
 } from '../main/ets/service/api/ThreadApi'
 import { parseHtmlToRawJson } from '../main/ets/parser/nga/html-thread/index'
 import type { ThreadRowInfo } from '../main/ets/model/Thread'
+import { ThreadResult } from '../main/ets/model/ThreadResult'
+
+/** 匿名帖样本里楼主（主楼 + 其匿名回复）的 `#anony_` 编码名。 */
+const ANONYMOUS_HASH: string = '#anony_181a8ac0faf810510ae311cd2b044594'
+
+/** 匿名帖样本里另一个匿名用户的 `#anony_` 编码名。 */
+const OTHER_ANONYMOUS_HASH: string = '#anony_7c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f'
 
 /**
  * 构造官方 APP HTML 解析器输出的帖子数据。
@@ -97,6 +104,70 @@ function createAppHtmlFixture(): string {
     'commonui.postArg.proc(\'_824921555\',null,null,null,null,null,null,null,null,null,' +
     '824921555,1,null,\'205511\',1748252378,\'0,0,0\',null,\'\',\'\',null,\'\',null,0,0);' +
     'commonui.loadAlertInfo(\'[E1748252294 0 0]\t\',\'alertc0\');' +
+    '</script>'
+}
+
+/**
+ * 构造匿名帖（`__output=17`）的最小 HTML 样本。
+ *
+ * 真实形态（实测 tid=46151001）：匿名楼层的 `proc` 第 13 参是**页内局部**负数
+ * （`-1`/`-2`…，每页按楼层出现顺序重排），tAid 又是另一个局部号（`-4`）且首页
+ * `__U` 里没有它；同一匿名用户稳定的身份是 `__U` 里的 `#anony_<32 位十六进制>`。
+ * lou=0/1 为楼主匿名楼，lou=2 为另一匿名用户，lou=3 为普通用户。
+ *
+ * @returns 最小匿名帖 APP HTML
+ */
+function createAppHtmlAnonymousFixture(): string {
+  return '<script>' +
+    '__CURRENT_TID=46151001;__CURRENT_FID=-7;__CURRENT_PAGE=1;__CURRENT_PAGE_POSTS=20;' +
+    'commonui.userInfo.setAll({' +
+    '"-1":{"uid":0,"username":"' + ANONYMOUS_HASH + '"},' +
+    '"-2":{"uid":0,"username":"' + ANONYMOUS_HASH + '"},' +
+    '"-3":{"uid":0,"username":"' + OTHER_ANONYMOUS_HASH + '"},' +
+    '"63017029":{"uid":63017029,"username":"伏夏雪子"}});' +
+    'commonui.postArg.setDefault(-7,0,46151001,-4,0,"","","","",null,262144,4,1770376766);' +
+    '</script>' +
+    '<h2 id=\'currentForumName\'>网事杂谈</h2><h1 id=\'currentTopicName\'>试试匿名</h1>' +
+    '<span id=\'postdate0\'>2026-02-06 17:17</span><span id=\'postcontent0\'>试一试</span>' +
+    '<span id=\'postdate1\'>2026-02-06 17:17</span><span id=\'postcontent1\'>要不要呢</span>' +
+    '<span id=\'postdate2\'>2026-02-06 19:14</span><span id=\'postcontent2\'>已经匿了</span>' +
+    '<span id=\'postdate3\'>2026-02-06 19:15</span><span id=\'postcontent3\'>只是楼主匿名了？</span>' +
+    '<script>' +
+    'commonui.postArg.proc( 0,null,null,null,null,null,null,null,null,null,33816576,262144,null,' +
+    '\'-1\',1770369426,\'0,0,0\',\'6\',\'\',\'\',\'8 Android\',\'\',null,0 );' +
+    'commonui.postArg.proc( 1,null,null,null,null,null,null,null,null,null,857247116,262144,null,' +
+    '\'-2\',1770369450,\'0,0,0\',\'8\',\'\',\'\',\'8 Android\',\'\',null,0 );' +
+    'commonui.postArg.proc( 2,null,null,null,null,null,null,null,null,null,857260603,0,null,' +
+    '\'-3\',1770376448,\'0,0,0\',\'8\',\'\',\'\',\'8 Android\',\'\',null,0 );' +
+    'commonui.postArg.proc( 3,null,null,null,null,null,null,null,null,null,857260747,0,null,' +
+    '\'63017029\',1770376518,\'0,0,0\',\'16\',\'\',\'\',\'8 Android\',\'\',null,0 );' +
+    '</script>'
+}
+
+/**
+ * 构造匿名帖**非首页**（主楼不在页内）的最小 HTML 样本。
+ *
+ * 形态取自真实抓包（tid=47680877 page=2）：该页 `__U` 无负键、无 `#anony_`，tAid 与
+ * 页内楼层 uid 是两套页内局部号，`__T.author`/首楼 authorid 是当页首楼的**普通用户**，
+ * 与匿名楼主无关。因此主题作者稳定键在本页无法判定，必须为空串——否则该陌生人会被标成楼主。
+ *
+ * @returns 最小匿名帖非首页 APP HTML
+ */
+function createAppHtmlAnonymousLaterPageFixture(): string {
+  return '<script>' +
+    '__CURRENT_TID=47680877;__CURRENT_FID=-7;__CURRENT_PAGE=2;__CURRENT_PAGE_POSTS=20;' +
+    'commonui.userInfo.setAll({"41976057":{"uid":41976057,"username":"幸运D的yby"},' +
+    '"450870":{"uid":450870,"username":"fortheall"}});' +
+    'commonui.postArg.setDefault(-7,0,47680877,-1,0,"","","","",null,262144,4,1770376766);' +
+    '</script>' +
+    '<h1 id=\'currentTopicName\'>匿名主题</h1>' +
+    '<span id=\'postdate20\'>2026-02-07 09:00</span><span id=\'postcontent20\'>第 2 页首楼</span>' +
+    '<span id=\'postdate21\'>2026-02-07 09:10</span><span id=\'postcontent21\'>第 2 页第二楼</span>' +
+    '<script>' +
+    'commonui.postArg.proc( 20,null,null,null,null,null,null,null,null,null,900000001,0,null,' +
+    '\'41976057\',1770426000,\'0,0,0\',\'8\',\'\',\'\',\'8 Android\',\'\',null,0 );' +
+    'commonui.postArg.proc( 21,null,null,null,null,null,null,null,null,null,900000002,0,null,' +
+    '\'450870\',1770426600,\'0,0,0\',\'8\',\'\',\'\',\'8 Android\',\'\',null,0 );' +
     '</script>'
 }
 
@@ -353,6 +424,66 @@ export default function appThreadUnitTest(): void {
       expect(parseNgaError(notLoggedIn)).assertEqual('1:未登录')
       // 成功形状无 error 键 → null
       expect(parseNgaError(createParsedHtmlThreadResponse())).assertNull()
+    })
+
+    it('keepsAnonymousAuthorKeyStableAcrossFloors', 0, (): void => {
+      // 匿名楼层：uid 是页内局部合成号（同一人逐楼不同、逐页重排），
+      // 稳定身份是 __U 里同一枚 #anony_ 编码名 —— 楼主标记只能靠它跨楼层比较。
+      const raw: Record<string, Object> = parseHtmlToRawJson(createAppHtmlAnonymousFixture()) as Record<string, Object>
+      const data: Record<string, Object> = raw['data'] as Record<string, Object>
+      const rows: Record<string, Object> = data['__R'] as Record<string, Object>
+      // 楼层数字语义不变（引用协议 / 资料卡仍用 uid）
+      expect((rows['0'] as Record<string, Object>)['authorid']).assertEqual('-1')
+      expect((rows['1'] as Record<string, Object>)['authorid']).assertEqual('-2')
+      // 楼主两楼同键，别的匿名用户不同键
+      expect((rows['0'] as Record<string, Object>)['authorKey']).assertEqual(ANONYMOUS_HASH)
+      expect((rows['1'] as Record<string, Object>)['authorKey']).assertEqual(ANONYMOUS_HASH)
+      expect((rows['2'] as Record<string, Object>)['authorKey']).assertEqual(OTHER_ANONYMOUS_HASH)
+      // 主题作者（tAid 为另一局部号、解析不出正数）也必须拿到同一枚键
+      expect((data['__T'] as Record<string, Object>)['authorKey']).assertEqual(ANONYMOUS_HASH)
+
+      const result = parseThreadData(raw)
+      const main: ThreadRowInfo = result.rowList[0]
+      const sameAuthorReply: ThreadRowInfo = result.rowList[1]
+      const otherAnonymous: ThreadRowInfo = result.rowList[2]
+      expect(main.authorid).assertEqual(-1)
+      expect(main.authorKey).assertEqual(ANONYMOUS_HASH)
+      expect(sameAuthorReply.authorKey).assertEqual(main.authorKey)
+      expect(otherAnonymous.authorKey === main.authorKey).assertFalse()
+    })
+
+    it('flagsAnonymousFloorsAndResolvesTopicAuthorKey', 0, (): void => {
+      const raw: Record<string, Object> = parseHtmlToRawJson(createAppHtmlAnonymousFixture()) as Record<string, Object>
+      const result = new ThreadResult()
+      fillThreadResult(raw, result, new Set<string>(), [], {})
+      // 匿名标记必须恢复，否则渲染层不会走匿名名解码与「该用户已匿名」
+      expect(result.posts[0].isanonymous).assertTrue()
+      expect(result.posts[2].isanonymous).assertTrue()
+      // 楼层稳定键与主题作者稳定键同源，楼主标记（isTopicAuthor）才判得出来
+      expect(result.posts[0].authorKey).assertEqual(ANONYMOUS_HASH)
+      const info = result.threadInfo
+      expect(info === null || String(info.authorKey) !== ANONYMOUS_HASH).assertFalse()
+      // 普通用户楼层回落 uid 数字串（与改前的数字判据等价）
+      expect(result.posts[3].authorKey).assertEqual('63017029')
+    })
+
+    it('keepsTopicAuthorUnknownOnAnonymousLaterPage', 0, (): void => {
+      // 匿名帖非首页（真实形态）：页面无任何匿名条目，主题作者键必须为空（未知），
+      // 不得回落成当页首楼作者——回落就会把陌生人标成楼主，正是本缺陷的另一种表现。
+      const raw: Record<string, Object> = parseHtmlToRawJson(createAppHtmlAnonymousLaterPageFixture()) as Record<string, Object>
+      const data: Record<string, Object> = raw['data'] as Record<string, Object>
+      expect((data['__T'] as Record<string, Object>)['authorKey']).assertEqual('')
+
+      const result = new ThreadResult()
+      fillThreadResult(raw, result, new Set<string>(), [], {})
+      const info = result.threadInfo
+      expect(info === null).assertFalse()
+      // 主题作者键未知（空串）→ ThreadPanel 的 isAuthorKeyUsable 会拒绝，不产生任何楼主标记
+      expect(info === null ? 'x' : info.authorKey).assertEqual('')
+      // 楼层数字语义保持既有行为（引用/资料卡用 uid），且不等于主题作者键
+      expect(result.posts[0].authorid).assertEqual(41976057)
+      expect(result.posts[0].authorKey).assertEqual('41976057')
+      expect(result.posts[1].authorKey).assertEqual('450870')
     })
   })
 }

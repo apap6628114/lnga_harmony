@@ -72,7 +72,8 @@ function buildThreadResult(replies: number | null): ThreadResult {
       recommend: 0,
       digest: 0,
       type: 0,
-      topic_misc: ''
+      topic_misc: '',
+      authorKey: '12345'
     }
     result.threadInfo = info
   }

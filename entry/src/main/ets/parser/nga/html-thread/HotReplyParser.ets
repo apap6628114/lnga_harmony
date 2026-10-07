@@ -17,7 +17,7 @@
  */
 
 import { scanBalanced } from './ScanState';
-import { splitTopLevelArgs } from './PostArgScanner';
+import { splitTopLevelArgs, extractPostAuthorKey } from './PostArgScanner';
 import { unescapeHtml } from '../../_shared/HtmlEntityCodec';
 
 /** 热点回复容器起点标记（`<lou>` 为所属页面行号）。 */
@@ -52,9 +52,11 @@ const EMPTY_ATTACHS: Record<string, Object> = {};
  * @param lou 所属页面行号（hightlight_for_<lou> 容器）
  * @param fid 版块 id（页面级变量，填入条目）
  * @param tid 帖子 id（页面级变量，填入条目）
+ * @param userInfo 用户信息表（uid → 用户对象），用于解析匿名楼层的稳定作者标识
  * @returns 热点回复映射（key 为索引字符串）；容器不存在或为空时返回 null
  */
-function extractHotReplies(html: string, lou: number, fid: number, tid: number): Record<string, Object> | null {
+function extractHotReplies(html: string, lou: number, fid: number, tid: number,
+  userInfo: Record<string, Object>): Record<string, Object> | null {
   const startIdx: number = html.indexOf(HIGHLIGHT_MARKER_PREFIX + lou + "'");
   if (startIdx < 0) {
     return null;
@@ -91,6 +93,7 @@ function extractHotReplies(html: string, lou: number, fid: number, tid: number):
       'fid': fid as Object,
       'tid': tid as Object,
       'authorid': meta.authorid as Object,
+      'authorKey': extractPostAuthorKey(userInfo, meta.authorid) as Object,
       'type': meta.type as Object,
       'score': meta.score as Object,
       'score_2': meta.score2 as Object,

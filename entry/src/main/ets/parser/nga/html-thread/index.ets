@@ -10,7 +10,7 @@
  * 组装为 __R/__U/__T/__F/__ROWS/__R__ROWS_PAGE/__PAGE 结构。
  */
 
-import { PostArgData, parseAllPostArgs, extractUserInfo, extractTotalReplies, extractTopicAuthorId, extractLastPostTs, extractSetDefaultVote, extractAlertInfo } from './PostArgScanner';
+import { PostArgData, parseAllPostArgs, extractUserInfo, extractTotalReplies, extractTopicAuthorId, extractTopicAuthorIdRaw, extractLastPostTs, extractSetDefaultVote, extractAlertInfo, extractPostAuthorKey, extractTopicAuthorKey } from './PostArgScanner';
 import {
   extractPostContent, extractPostSubject, extractPostDate,
   extractForumName, extractThreadSubject, extractPostAuthorName,
@@ -85,7 +85,7 @@ export function parseHtmlToRawJson(html: string): object {
     }
 
     let attachs: Record<string, Object>[] = tryParseAttachLoad(html, lou) ?? [];
-    const hotReplies: Record<string, Object> | null = extractHotReplies(html, lou, fid, tid);
+    const hotReplies: Record<string, Object> | null = extractHotReplies(html, lou, fid, tid, __U);
     const noHotReplies: Record<string, Object> = {};
 
     const row: Record<string, Object> = {
@@ -95,6 +95,7 @@ export function parseHtmlToRawJson(html: string): object {
       'lou': lou as Object,
       'authorid': arg.authorid as Object,
       'author': extractPostAuthorName(__U, parseInt(arg.authorid, 10) || 0) as Object,
+      'authorKey': extractPostAuthorKey(__U, arg.authorid) as Object,
       'subject': subject as Object,
       'content': content as Object,
       'postdate': postDate as Object,
@@ -122,7 +123,7 @@ export function parseHtmlToRawJson(html: string): object {
     const hostRow: Record<string, Object> = __R[hostKey] as Record<string, Object>;
     const parentPid: number = Number(hostRow['pid'] ?? 0);
     const comments: Record<string, Object> | null = extractComments(
-      html, Number(hostRow['lou'] ?? hostKey), parentPid, fid, tid, __R);
+      html, Number(hostRow['lou'] ?? hostKey), parentPid, fid, tid, __R, __U);
     if (comments) {
       hostRow['comment'] = comments as Object;
     }
@@ -178,7 +179,15 @@ export function parseHtmlToRawJson(html: string): object {
   // 跨页时页面未提供该字段，置 0 而非取当前页首楼时间（错误值）。
   const topicAuthorId: number = extractTopicAuthorId(html);
   const authorId: number = topicAuthorId > 0 ? topicAuthorId : firstAuthorId;
-  const postdate: number = procKeys.length > 0 && procKeys.includes(0) ? firstPostTs : 0;
+  // 主题作者稳定标识（跨页可比）：匿名帖里 tAid 与楼层局部 uid 都是页内局部号且互不相等，
+  // 拿任一数字比较都认不出楼主，必须走 __U 的 `#anony_` 编码名；判不出（如匿名帖非首页，
+  // 页面完全不含匿名条目）时置空串表示未知，绝不拿当页首楼作者冒充楼主。
+  const hasMainFloor: boolean = procKeys.includes(0);
+  const mainFloorKey: string = hasMainFloor
+    ? extractPostAuthorKey(__U, (postArgs.get(0) as PostArgData).authorid)
+    : '';
+  const topicAuthorKey: string = extractTopicAuthorKey(__U, extractTopicAuthorIdRaw(html),
+    hasMainFloor, mainFloorKey);  const postdate: number = procKeys.length > 0 && procKeys.includes(0) ? firstPostTs : 0;
 
   const postMiscVar: Record<string, Object> = { 'vote': topicVote as Object };
 
@@ -190,6 +199,9 @@ export function parseHtmlToRawJson(html: string): object {
     'this_visit_rows': currentPageRows as Object,
     'authorid': authorId as Object,
     'author': extractPostAuthorName(__U, authorId) as Object,
+    // 稳定作者标识（匿名帖为 `#anony_` 编码名，普通帖为 uid 数字串），
+    // 供「楼主」判定等跨页身份比较使用；JSON API 同名字段（若有）同义。
+    'authorKey': topicAuthorKey as Object,
     'postdate': postdate as Object,
     'lastpost': (extractLastPostTs(html) || lastPostTs || 0) as Object,
     'lastposter': extractPostAuthorName(__U, lastAuthorId) as Object,

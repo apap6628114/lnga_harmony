@@ -104,6 +104,9 @@ function mapRow(raw: Record<string, Object>, blacklist: Set<string>,
     lou: Number(raw['lou'] ?? 0),
     authorid: Number(raw['authorid']) || 0,
     author: String(raw['author'] ?? ''),
+    // 稳定作者标识：解析器（HTML 通道）给出；匿名帖非首页这类"判不出"的情况会是空串
+    // （未知，客户端据此跳过楼主标记）；缺失时回落 uid 数字串，普通帖行为与改前一致。
+    authorKey: String(raw['authorKey'] || raw['authorid'] || ''),
     subject: String(raw['subject'] ?? ''),
     content: String(raw['content'] ?? ''),
     vote: String(raw['vote'] ?? ''),

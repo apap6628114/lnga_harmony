@@ -18,6 +18,7 @@ import { appStore } from '../../store/AppStore';
 import { parseThreadData } from '../../parser/ThreadParser';
 import { parseFromClient } from '../../parser/ClientParser';
 import { isUserMuted } from '../../parser/MuteParser';
+import { ANONYMOUS_NAME_PREFIX } from '../../parser/AnonymousParser';
 import { resolveAttachUrl } from '../../parser/_shared/AttachUrl';
 import { parseHtmlTask } from '../../parser/task/HtmlParseTask';
 import { withTimeout } from '../../common/utils/TimeoutUtils';
@@ -28,6 +29,24 @@ import { ThreadResult, ThreadPaging, TopicCategoriesResult } from '../../model/T
 import { Logger, DOMAIN_SERVICE, formatError } from '../../common/utils/Logger'
 
 const logger = new Logger(DOMAIN_SERVICE, 'ThreadApi')
+
+/**
+ * 匿名编码用户名的定长长度（`#anony_` 8 字符 + 32 位十六进制哈希）。
+ *
+ * 不只看前缀：服务端异常名或用户自己起的、以 `#anony_` 开头的昵称都不该被判成匿名，
+ * 否则会被送进六字匿名名解码（失败后退化成乱码名）。
+ */
+const ANONYMOUS_NAME_LENGTH: number = 39
+
+/**
+ * 是否为服务端生成的匿名编码名（`#anony_<32 位十六进制>`）。
+ *
+ * @param name - 服务端返回的用户名
+ * @returns 是匿名编码名时为 true
+ */
+function isAnonymousName(name: string): boolean {
+  return name.startsWith(ANONYMOUS_NAME_PREFIX) && name.length === ANONYMOUS_NAME_LENGTH
+}
 
 // ============== 帖子详情 ==============
 
@@ -496,7 +515,9 @@ export function fillThreadResult(raw: Record<string, Object>, result: ThreadResu
     post.authorid = row.authorid;
     const rawAuthor: string = String(userInfo?.['username'] ?? row.author ?? '');
     post.author = rawAuthor;
-    post.isanonymous = row.isanonymous || (rawAuthor.startsWith('#anony_') && rawAuthor.length === 39);
+    post.authorKey = row.authorKey.length > 0 ? row.authorKey
+      : (isAnonymousName(rawAuthor) ? rawAuthor : String(row.authorid));
+    post.isanonymous = row.isanonymous || isAnonymousName(rawAuthor);
     post.subject = row.subject;
     post.content = row.content;
     post.vote = row.vote;
@@ -563,6 +584,21 @@ export function fillThreadResult(raw: Record<string, Object>, result: ThreadResu
       const rawAuthorId: number = Number(rawT['authorid'] ?? 0);
       const firstPostAuthorId: number | undefined = data.rowList.find(r => r.lou === 0)?.authorid;
       const finalAuthorId: number = rawAuthorId > 0 ? rawAuthorId : (firstPostAuthorId ?? rawAuthorId);
+      const rawTopicAuthor: string = String(rawT['author'] ?? '');
+      // 楼主稳定标识优先取解析器算好的 `__T.authorKey`（按"主楼 → tAid 正数 uid"推导，
+      // 判不出时明确置空串表示未知）。`__T.authorKey` 缺失（旧存档）时才由本层推导，
+      // 而推导**只允许锚定在主楼这一行**：
+      // - 匿名帖非首页（真实形态）页面没有任何匿名条目，`__T.author`/`__T.authorid` 是当页
+      //   首楼那位**普通用户**，回落它就是把这个陌生人标成楼主——正是本功能要修的缺陷；
+      // - 主楼在页内时 `mainFloorKey` 恒为楼主的稳定键（匿名即编码名），最可靠；
+      // - 主楼不在、也没有主楼行可锚定时置空串（未知）：宁可少标，不可标错。
+      const parserAuthorKey: string = String(rawT['authorKey'] ?? '');
+      const mainFloorKey: string | undefined = data.rowList.find(r => r.lou === 0)?.authorKey;
+      let finalAuthorKey: string = parserAuthorKey;
+      if (finalAuthorKey.length === 0
+        && mainFloorKey !== undefined && mainFloorKey.length > 0 && firstPostAuthorId !== undefined) {
+        finalAuthorKey = mainFloorKey;
+      }
 
       const info: ThreadInfo = {
         tid: Number(rawT['tid'] ?? 0),
@@ -570,7 +606,8 @@ export function fillThreadResult(raw: Record<string, Object>, result: ThreadResu
         subject: String(rawT['subject'] ?? ''),
         replies: Number(rawT['replies'] ?? 0),
         authorid: finalAuthorId,
-        author: String(rawT['author'] ?? ''),
+        author: rawTopicAuthor,
+        authorKey: finalAuthorKey,
         postdate: Number(rawT['postdate'] ?? 0),
         lastpost: Number(rawT['lastpost'] ?? 0),
         lastposter: String(rawT['lastposter'] ?? ''),
