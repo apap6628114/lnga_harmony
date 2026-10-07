@@ -38,6 +38,7 @@ import {
   type InjectedFieldInfo
 } from '../../model/AiScenarioConfig'
 import { TitleScrollEffect } from '../../common/utils/TitleScrollEffect'
+import { resolveKeyboardAppearance } from '../../common/utils/KeyboardAppearanceUtils'
 
 /** 新建方案的哨兵 ID */
 const NEW_ID: string = '__new__'
@@ -48,6 +49,14 @@ export struct AiSettingsPanel {
   @State profiles: AiProviderProfile[] = []
   /** 状态栏高度。 */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
+  /**
+   * 当前生效明暗色模式。
+   *
+   * 本页输入框（方案名称 / API 密钥 / 模型名称 / 场景系统提示词）的键盘沉浸样式
+   * 必须按**应用主题**（而非系统模式）取色，否则固定主题与系统模式相反时键盘
+   * 配色错配（见 `KeyboardAppearanceUtils` 文件头）。
+   */
+  @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
   /** 当前展开编辑的配置 ID。 */
   @State expandedProfileId: string = ''
   /** 方案名称输入值。 */
@@ -835,6 +844,7 @@ export struct AiSettingsPanel {
         .width('100%')
         .height(150)
         .attributeModifier(UIMaterialManager.inputMaterial)
+        .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
         .borderRadius(8)
         .fontSize(14)
         .fontColor(UIMaterialManager.inputForeground)
@@ -1039,6 +1049,7 @@ export struct AiSettingsPanel {
         .width('100%')
         .height(40)
         .attributeModifier(UIMaterialManager.inputMaterial)
+        .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
         .borderRadius(8)
         .fontSize(14)
         .fontColor(UIMaterialManager.inputForeground)
@@ -1088,6 +1099,7 @@ export struct AiSettingsPanel {
         .width('100%')
         .height(40)
         .attributeModifier(UIMaterialManager.inputMaterial)
+        .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
         .borderRadius(8)
         .fontSize(14)
         .fontColor(UIMaterialManager.inputForeground)
@@ -1112,6 +1124,7 @@ export struct AiSettingsPanel {
         .width('100%')
         .height(40)
         .attributeModifier(UIMaterialManager.inputMaterial)
+        .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
         .borderRadius(8)
         .fontSize(14)
         .fontColor(UIMaterialManager.inputForeground)

@@ -31,6 +31,7 @@
 import { AppColors } from '../constants/Constants'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 import { normalizeBlacklistUserId } from '../utils/BlacklistUtils'
+import { resolveKeyboardAppearance } from '../utils/KeyboardAppearanceUtils'
 
 /**
  * 单选条目。
@@ -72,6 +73,13 @@ export struct NoteEditorContent {
   @Prop userName: string = ''
   /** 文本变化回调（回写父组件状态）。 */
   onNoteChange?: (value: string) => void
+  /**
+   * 当前生效明暗色模式。
+   *
+   * 输入框的键盘沉浸样式必须按**应用主题**（而非系统模式）取色，否则固定主题与
+   * 系统模式相反时键盘配色错配（见 `KeyboardAppearanceUtils` 文件头）。
+   */
+  @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
 
   build() {
     Column() {
@@ -88,6 +96,7 @@ export struct NoteEditorContent {
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .attributeModifier(UIMaterialManager.dialogFieldMaterial)
+        .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
         .onChange((value: string) => {
           if (this.onNoteChange) {
             this.onNoteChange(value)
@@ -114,6 +123,13 @@ export struct KeywordEditorContent {
   @Prop keyword: string = ''
   /** 文本变化回调（回写父组件状态）。 */
   onKeywordChange?: (value: string) => void
+  /**
+   * 当前生效明暗色模式。
+   *
+   * 输入框的键盘沉浸样式必须按**应用主题**（而非系统模式）取色，否则固定主题与
+   * 系统模式相反时键盘配色错配（见 `KeyboardAppearanceUtils` 文件头）。
+   */
+  @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
 
   build() {
     Column() {
@@ -123,6 +139,7 @@ export struct KeywordEditorContent {
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .attributeModifier(UIMaterialManager.dialogFieldMaterial)
+        .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
         .onChange((value: string) => {
           if (this.onKeywordChange) {
             this.onKeywordChange(value)
@@ -148,6 +165,13 @@ export struct BlacklistEditorContent {
   @Prop existingUserIds: string[] = []
   /** 文本变化回调（回写父组件状态）。 */
   onUidChange?: (value: string) => void
+  /**
+   * 当前生效明暗色模式。
+   *
+   * 输入框的键盘沉浸样式必须按**应用主题**（而非系统模式）取色，否则固定主题与
+   * 系统模式相反时键盘配色错配（见 `KeyboardAppearanceUtils` 文件头）。
+   */
+  @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
 
   /**
    * 获取当前 UID 输入的校验错误。
@@ -184,6 +208,7 @@ export struct BlacklistEditorContent {
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .attributeModifier(UIMaterialManager.dialogFieldMaterial)
+        .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
         .onChange((value: string) => {
           if (this.onUidChange) {
             this.onUidChange(value)
@@ -217,6 +242,13 @@ export struct NoteAddContent {
   onNickNameChange?: (value: string) => void
   /** UID 变化回调（回写父组件状态）。 */
   onUidChange?: (value: string) => void
+  /**
+   * 当前生效明暗色模式。
+   *
+   * 输入框的键盘沉浸样式必须按**应用主题**（而非系统模式）取色，否则固定主题与
+   * 系统模式相反时键盘配色错配（见 `KeyboardAppearanceUtils` 文件头）。
+   */
+  @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
 
   build() {
     Column() {
@@ -231,6 +263,7 @@ export struct NoteAddContent {
         .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
         .caretColor(UIMaterialManager.inputForeground)
         .attributeModifier(UIMaterialManager.dialogFieldMaterial)
+        .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
         .onChange((value: string) => {
           if (this.onNickNameChange) {
             this.onNickNameChange(value)
@@ -244,6 +277,7 @@ export struct NoteAddContent {
         .caretColor(UIMaterialManager.inputForeground)
         .attributeModifier(UIMaterialManager.dialogFieldMaterial)
         .margin({ top: 8 })
+        .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
         .onChange((value: string) => {
           if (this.onUidChange) {
             this.onUidChange(value)
@@ -278,6 +312,13 @@ export struct CredentialPasswordContent {
   onConfirm?: (password: string) => void
   /** 取消回调（调用方负责关闭对话框）。 */
   onCancel?: () => void
+  /**
+   * 当前生效明暗色模式。
+   *
+   * 输入框的键盘沉浸样式必须按**应用主题**（而非系统模式）取色，否则固定主题与
+   * 系统模式相反时键盘配色错配（见 `KeyboardAppearanceUtils` 文件头）。
+   */
+  @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
 
   /** 密码是否达到最少位数——决定主按钮的激活 / 未激活外观。 */
   private isActive(): boolean {
@@ -294,6 +335,7 @@ export struct CredentialPasswordContent {
         .caretColor(UIMaterialManager.inputForeground)
         .borderRadius(12)
         .attributeModifier(UIMaterialManager.dialogFieldMaterial)
+        .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
         .onChange((value: string) => {
           if (this.onPasswordChange) {
             this.onPasswordChange(value)

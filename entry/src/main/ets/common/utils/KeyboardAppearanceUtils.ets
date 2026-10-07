@@ -31,6 +31,27 @@
  *
  * 注意：`@StorageProp` 的装饰器参数须为编译期字面量，无法引用
  * `KEY_EFFECTIVE_COLOR_MODE` 常量（见 `AppStorageKeys` 文件头），故此处只能约定字面量。
+ *
+ * ## 已知边界：密码类编辑框的沉浸样式由输入法否决（**不是本工程的缺口**）
+ *
+ * 本文件对**所有**编辑框一视同仁地返回 `LIGHT_` / `DARK_IMMERSIVE`，但 `.type(InputType.Password)`
+ * 的编辑框上键盘仍会显示为输入法的**默认不透明皮肤**，与界面主题不融合。原因在输入法侧：
+ * 密码框会进入**安全输入（防窥）**模式，输入法在该模式下**刻意忽略一切外观定制**，
+ * 包括自定义皮肤与沉浸模式。华为与荣耀官方支持文档均以此为主题：
+ *
+ * - [华为 - 使用三方输入法设置自定义皮肤，在输入密码时不生效](https://consumer.huawei.com/cn/support/content/zh-cn00794670/)
+ * - [荣耀 - 输入法自定义皮肤在输入密码时不生效如何处理](https://club-api.c.hihonor.com/cn/thread-26325895-1-1.html)
+ *
+ * 这属于**平台按安全要求否决**，应用侧没有开关可覆盖：`Panel.setImmersiveMode` 的最终取值
+ * 由输入法应用决定（见官方《输入法应用沉浸模式》），前台应用能做的只有设置 `keyboardAppearance`
+ * ——本文件已经设置。ArkUI 也未提供「掩码但不走密码类型」的替代属性
+ * （`text_input.d.ts` 无任何 mask / obscure 类属性，掩码只有 `InputType.Password` 一条路）。
+ *
+ * 因此：**不要**为了"让密码框也沉浸"去改这里的返回逻辑，也不要给密码框加 `NONE_IMMERSIVE`
+ * 之类的特判——那是把平台行为误判成缺陷。本工程受此影响的编辑框共 3 处：
+ * `AiSettingsPanel` 的 API 密钥、`LoginPage` 的密码、`Dialogs` 的导出/导入加密密码。
+ * 若某字段的产品决策是「可视 > 掩码」，只能改 `.type(InputType.Normal)` 换取沉浸，
+ * 代价是该字段明文显示（需产品明确同意，勿擅自改）。
  */
 
 /** `effectiveColorMode` 的取值：深色 */

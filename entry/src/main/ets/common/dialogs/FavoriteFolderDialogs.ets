@@ -14,6 +14,7 @@
  * 指向对话框组件实例，`name` 会读成 undefined、输入回写也会丢失（详见 `Dialogs.ets` 头部说明）。
  */
 import { UIMaterialManager } from '../managers/UIMaterialManager'
+import { resolveKeyboardAppearance } from '../utils/KeyboardAppearanceUtils'
 
 @Component
 export struct FolderNameEditorContent {
@@ -21,6 +22,13 @@ export struct FolderNameEditorContent {
   @Prop name: string = ''
   /** 名称变化回调（回写父组件状态）。 */
   onNameChange?: (value: string) => void
+  /**
+   * 当前生效明暗色模式。
+   *
+   * 输入框的键盘沉浸样式必须按**应用主题**（而非系统模式）取色，否则固定主题与
+   * 系统模式相反时键盘配色错配（见 `KeyboardAppearanceUtils` 文件头）。
+   */
+  @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
 
   build() {
     Column() {
@@ -33,6 +41,7 @@ export struct FolderNameEditorContent {
         .caretColor(UIMaterialManager.inputForeground)
         .borderRadius(12)
         .attributeModifier(UIMaterialManager.dialogFieldMaterial)
+        .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
         .onChange((value: string): void => {
           if (this.onNameChange) {
             this.onNameChange(value)

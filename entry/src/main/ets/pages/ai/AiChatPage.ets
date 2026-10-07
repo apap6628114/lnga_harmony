@@ -13,6 +13,7 @@ import { appStore } from '../../store/AppStore'
 import { PageScope } from '../../common/concurrency/PageScope'
 import { UIMaterialManager } from '../../common/managers/UIMaterialManager'
 import { TitleScrollEffect } from '../../common/utils/TitleScrollEffect'
+import { resolveKeyboardAppearance } from '../../common/utils/KeyboardAppearanceUtils'
 
 /** 流式输出默认刷新间隔毫秒数 */
 const DEFAULT_FLUSH_INTERVAL_MS: number = 80
@@ -93,6 +94,13 @@ struct AiChatPage {
   @State private title: string = 'AI 对话'
   /** 状态栏高度。 */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
+  /**
+   * 当前生效明暗色模式。
+   *
+   * 底部追问输入框的键盘沉浸样式必须按**应用主题**（而非系统模式）取色，
+   * 否则固定主题与系统模式相反时键盘配色错配（见 `KeyboardAppearanceUtils` 文件头）。
+   */
+  @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
   /** 标题栏渐变模糊与偏色的滚动联动进度。 */
   @State private titleScrollEffectProgress: number = 0
   /** 滚动容器当前视口高度。 */
@@ -660,6 +668,7 @@ struct AiChatPage {
           .padding({ left: 16, right: 16 })
           .borderRadius(22)
           .attributeModifier(UIMaterialManager.inputMaterial)
+          .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
           .enterKeyType(EnterKeyType.Send)
           .onChange((value: string): void => {
             this.inputText = value
