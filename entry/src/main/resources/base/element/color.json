@@ -211,6 +211,26 @@
     {
       "name": "quote_border_3",
       "value": "#1FC08A4A"
+    },
+    {
+      "name": "column_ratio_bar_bg",
+      "value": "#000000"
+    },
+    {
+      "name": "column_ratio_bar_text",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "column_ratio_bar_active_bg",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "column_ratio_bar_active_text",
+      "value": "#000000"
+    },
+    {
+      "name": "column_ratio_bar_divider",
+      "value": "#33FFFFFF"
     }
   ]
 }

@@ -254,8 +254,10 @@ export struct TopicListPanel {
   /**
    * 列表实测宽度（vp），由列表自身的 `onAreaChange` 采集后下传给列表条目。
    *
-   * 预览图区宽度不能由断点硬编码推出：`sm` 是整窗、`md` 是"窗口 − 侧边栏 180"、
-   * `lg` 双列时是"窗口 − 侧边栏 − 活动列"的 40%，任何写死的宽度都会在其中一种形态下失配。
+   * 预览图区宽度不能由断点硬编码推出：`sm` 是整窗、`md` 是"窗口 − 侧边栏"、
+   * `lg` 双列时是"窗口 − 侧边栏 − 活动列"，任何写死的宽度都会在其中一种形态下失配。
+   * （侧边栏宽度与板块/活动列的切分比例**都由用户可调**，默认 180vp 与 40 : 60，
+   * 见 `common/utils/ColumnLayoutMath.ets`，所以连"180""40%"也不能当常量用。）
    * 首帧为 0，由 {@link TopicCardComponent} 回落 `FALLBACK_PREVIEW_AREA_WIDTH`。
    */
   @State listWidth: number = 0
@@ -1308,7 +1310,7 @@ export struct TopicListPanel {
             this.listViewportHeight = newValue.height
           }
           // 列表实测宽度下传条目：预览图高度按"图片区宽度 × 图片比例"算，
-          // 而这个宽度只有列表自己知道（sm 整窗 / md 减侧边栏 / lg 双列再乘 40%）
+          // 而这个宽度只有列表自己知道（sm 整窗 / md 减侧边栏 / lg 双列再切分，比例用户可调）
           if (typeof newValue.width === 'number' && newValue.width > 0 &&
             newValue.width !== this.listWidth) {
             this.listWidth = newValue.width
@@ -1762,8 +1764,10 @@ struct TopicCardComponent {
   /**
    * 条目内**图片区总宽**（vp）：列表实测宽度 − 条目左右内边距 × 2。
    *
-   * 区域宽度的唯一来源。**不能由断点硬编码推出**：`sm` 是整窗、`md` 是"窗口 − 侧边栏 180"、
-   * `lg` 双列时还要再乘 40%，任何写死的宽度都会在其中一种形态下失配（K24）；首帧列表宽度
+   * 区域宽度的唯一来源。**不能由断点硬编码推出**：`sm` 是整窗、`md` 是"窗口 − 侧边栏"、
+   * `lg` 双列时是"窗口 − 侧边栏 − 活动列"，任何写死的宽度都会在其中一种形态下失配（K24）；
+   * 侧边栏宽度与列间比例均可由用户调整（默认 180vp / 40 : 60），更不能用常量推算。
+   * 首帧列表宽度
    * 尚未测得（`listWidth === 0`）时回落 `FALLBACK_PREVIEW_AREA_WIDTH`。
    *
    * @returns 图片区总宽（vp）

@@ -116,3 +116,20 @@ export const KEY_TRACKED_THREAD_VERSION: string = 'trackedThreadVersion'
 
 /** 有未读更新的跟踪帖子数（「跟踪」Tab 角标与入口铃铛合并计数） */
 export const KEY_UNREAD_TRACK_COUNT: string = 'unreadTrackCount'
+
+/**
+ * 列堆栈占比模式开关：激活时在列顶部显示占比读数条、在列交接显示拖动把手。
+ *
+ * **纯内存态，不落盘**：它是一个"正在调整布局"的临时模式，冷启动或重新登录都从关闭开始
+ * （占比本身照常持久化，见下面三个键）。只控制把手与读数是否显示，不影响占比取值。
+ */
+export const KEY_COLUMN_RATIO_MODE: string = 'columnRatioMode'
+
+/** md 断点侧边栏宽度（vp）。默认 180，与改造前的固定宽度一致。 */
+export const KEY_COLUMN_SIDEBAR_MD: string = 'columnSidebarWidthMd'
+
+/** lg 断点侧边栏宽度（vp）。默认 180。 */
+export const KEY_COLUMN_SIDEBAR_LG: string = 'columnSidebarWidthLg'
+
+/** lg 断点板块列在内容区（窗口 − 侧边栏）中的占比。默认 0.4。 */
+export const KEY_COLUMN_BOARD_RATIO_LG: string = 'columnBoardRatioLg'

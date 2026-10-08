@@ -12,6 +12,35 @@ import { NGA_HOSTS } from './NgaDomains'
 /** 标题栏高度（vp）。所有固定标题栏与 Thread 页 contentStartOffset 共用此常量。 */
 export const NAV_BAR_H: number = 44
 
+// ============== 列堆栈占比模式（把手 / 占比标尺） ==============
+
+/**
+ * 列交接拖动把手的**命中宽度**（vp）。
+ *
+ * 可见握柄只有 4vp，命中区必须比它宽得多才按得住。20vp ≈ 3.2mm，横向精度仍要求 ±10vp，
+ * 小于平台建议的 40vp 触控尺寸 —— 靠**纵向贯穿全高**补偿（交接线附近任意高度都能拖），
+ * 这是"好拖"与"少挡内容"之间的折中，不是随手取的数。
+ */
+export const COLUMN_HANDLE_HIT_W: number = 20
+
+/** 把手可见握柄宽度（vp）。 */
+export const COLUMN_HANDLE_GRIP_W: number = 4
+
+/** 把手可见握柄高度（vp）。 */
+export const COLUMN_HANDLE_GRIP_H: number = 48
+
+/**
+ * 占比标尺高度（vp）。
+ *
+ * 读数不是浮在列顶的小胶囊（那样太容易被当成列表内容的一部分，实测关注度不足），而是
+ * 一条横贯窗口的"标尺"：分格宽度 = 各列宽度，分格线正对拖动把手，读数就写在各自分格里，
+ * 一眼能看出"这个数字属于哪一列、边界在哪"。
+ *
+ * 标尺**只短暂显示**（激活模式时亮相 + 拖动全程 + 松手后保留一会儿）：它压在标题栏正下方，
+ * 而各列内容的第一行（主题列表的排序条）正好从那里开始，常驻会盖住它。时机见 `MainPage`。
+ */
+export const COLUMN_READOUT_BAR_H: number = 24
+
 /** Toast 提示距底部的高度（vp）。 */
 export const TOAST_BOTTOM_MARGIN: number = 70
 
@@ -107,6 +136,23 @@ export class AppColors {
   static sheetIndicator: Resource = $r('app.color.sheet_indicator')
   /** 玻璃面板（surfaceMaterial）上列表选中行的半透明琥珀高亮，避免不透明色块与材质割裂。 */
   static selectionTint: Resource = $r('app.color.selection_tint')
+  /**
+   * 列占比读数标尺的**反色**配色：亮色主题下黑底亮字，暗色主题下白底暗字。
+   *
+   * 这套值刻意与所在主题**相反**：标尺是一条临时出现的模式提示，用反色才能跳出来被一眼看到
+   * （正面配色会淹没在页面底色里，实测关注度不足）。因此不能复用 `white` / `black`
+   * ——那两个在亮暗两套资源里同值，必须由限定词目录各给一份相反的值。
+   * 拖动中的分格再反一次色（active 两件套 `..._active_bg` / `..._active_text`）。
+   * 整组共 5 项：底色 / 文字 / 选中底色 / 选中文字 / 分格线。
+   *
+   * 注：`columnRatioBarBg` 同时被复用为拖动把手的握柄填充（握柄要压在列表内容上，同样需要
+   * 最大对比度）。该 token 语义是"底色"，若将来改成带 alpha，必须给握柄单开一个不透明资源。
+   */
+  static columnRatioBarBg: Resource = $r('app.color.column_ratio_bar_bg')
+  static columnRatioBarText: Resource = $r('app.color.column_ratio_bar_text')
+  static columnRatioBarActiveBg: Resource = $r('app.color.column_ratio_bar_active_bg')
+  static columnRatioBarActiveText: Resource = $r('app.color.column_ratio_bar_active_text')
+  static columnRatioBarDivider: Resource = $r('app.color.column_ratio_bar_divider')
   static quoteBorders: Resource[] = [
     $r('app.color.quote_border_1'),
     $r('app.color.quote_border_2'),

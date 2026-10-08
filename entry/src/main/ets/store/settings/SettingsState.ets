@@ -1,4 +1,5 @@
 import { ImageLoadStrategy, ThreadNavMode } from '../../common/constants/Constants'
+import { SIDEBAR_DEFAULT_VP, BOARD_RATIO_DEFAULT } from '../../common/utils/ColumnLayoutMath'
 import { FavBoard } from '../../model/SocialEntries'
 import type { BlacklistEntry } from '../../model/SocialEntries'
 import { FilterKeyword } from '../../model/FilterKeyword'
@@ -55,4 +56,17 @@ export class SettingsState {
   activeAiProfileId: string = ''
   /** 各场景自定义 system prompt（key=场景ID, value=用户自定义文本） */
   scenarioSystemPrompts: Record<string, string> = {}
+  /**
+   * md（两列）侧边栏宽度（vp）。默认 `SIDEBAR_DEFAULT_VP`，与改造前的固定 180 一致。
+   *
+   * 注：「列占比模式」开关**不在这里** —— 它是纯内存态（见 `KEY_COLUMN_RATIO_MODE`）。
+   */
+  columnSidebarMd: number = SIDEBAR_DEFAULT_VP
+  /** lg（三列）侧边栏宽度（vp），默认同 md。 */
+  columnSidebarLg: number = SIDEBAR_DEFAULT_VP
+  /**
+   * lg 板块列在内容区（窗口 − 侧边栏）中的占比。默认 `BOARD_RATIO_DEFAULT`，
+   * 即改造前的 40 : 60。
+   */
+  columnBoardRatioLg: number = BOARD_RATIO_DEFAULT
 }

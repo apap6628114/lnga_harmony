@@ -26,6 +26,10 @@ import {
   KEY_DEBUG_MODE,
   KEY_CONTENT_FONT_SIZE,
   KEY_TOPIC_FONT_SIZE,
+  KEY_COLUMN_RATIO_MODE,
+  KEY_COLUMN_SIDEBAR_MD,
+  KEY_COLUMN_SIDEBAR_LG,
+  KEY_COLUMN_BOARD_RATIO_LG,
 } from '../common/constants/AppStorageKeys'
 
 
@@ -101,6 +105,10 @@ export class SettingsStore extends BaseStore<SettingsState> {
     this.filterKeywordSettings.reset()
     this.noteSettings.reset()
     this.aiSettings.reset()
+    // AppStorage 里的列占比键不在 state 里，必须显式回到默认值：否则会残留上一个账号
+    // 的布局与"占比模式已激活"的内存标记，直到下一次登录才被 syncColumnLayoutStorage 覆盖。
+    // 当前登出态不挂载 MainPage，观察不到，但把这条不变量显式化，免得日后加了登出预览页就漏。
+    this.syncColumnLayoutStorage()
     super.reset()
   }
 
@@ -146,6 +154,23 @@ export class SettingsStore extends BaseStore<SettingsState> {
     AppStorage.setOrCreate(KEY_DEBUG_MODE, this.state.debugMode)
     AppStorage.setOrCreate(KEY_CONTENT_FONT_SIZE, this.state.fontSize)
     AppStorage.setOrCreate(KEY_TOPIC_FONT_SIZE, this.state.topicFontSize)
+    this.syncColumnLayoutStorage()
+  }
+
+  /**
+   * 把列堆栈**占比**设定同步到 AppStorage（供 `MainPage` 以 @StorageProp 响应式读取）。
+   *
+   * 登出后 AppStorage 里的旧值不会被清掉（历史其它键同样如此），所以每次
+   * `loadUserSettings` 都要**无条件**重写一遍，避免下一个账号继承上一个账号的布局。
+   *
+   * 「列占比模式」开关一并在此归零：它是**纯内存态**的临时调整模式，不随账号、
+   * 也不跨会话保留 —— 重新登录后从头开始（此时占比本身照常从 `settings_${uid}` 恢复）。
+   */
+  private syncColumnLayoutStorage(): void {
+    AppStorage.setOrCreate(KEY_COLUMN_RATIO_MODE, false)
+    AppStorage.setOrCreate(KEY_COLUMN_SIDEBAR_MD, this.state.columnSidebarMd)
+    AppStorage.setOrCreate(KEY_COLUMN_SIDEBAR_LG, this.state.columnSidebarLg)
+    AppStorage.setOrCreate(KEY_COLUMN_BOARD_RATIO_LG, this.state.columnBoardRatioLg)
   }
 
   // ============== 设置域 setter ==============
@@ -180,6 +205,31 @@ export class SettingsStore extends BaseStore<SettingsState> {
   setHoldingHand(value: number): void { this.displaySettings.setHoldingHand(value) }
   setSmartGrip(enabled: boolean): void { this.displaySettings.setSmartGrip(enabled) }
   setShowSignature(enabled: boolean): void { this.displaySettings.setShowSignature(enabled) }
+
+  // --- Column Layout (列堆栈占比) ---
+  /**
+   * 切换「列堆栈占比模式」（控制占比读数条与拖动把手的显示）。
+   *
+   * **纯内存态，刻意不落盘**：它是"正在调整布局"的临时模式，冷启动与重新登录一律从
+   * 关闭开始。占比本身由下面的 setter 正常持久化。
+   *
+   * @param enabled - 是否激活
+   */
+  setColumnRatioMode(enabled: boolean): void {
+    AppStorage.setOrCreate(KEY_COLUMN_RATIO_MODE, enabled)
+  }
+  /**
+   * 设置指定断点的侧边栏宽度（vp）。
+   * @param breakpoint - md / lg（sm 无侧边栏，忽略）
+   * @param widthVp - 侧边栏宽度
+   */
+  setColumnSidebarWidth(breakpoint: string, widthVp: number): void {
+    this.displaySettings.setColumnSidebarWidth(breakpoint, widthVp)
+  }
+  /** 设置 lg 断点板块列占内容区的比例。 */
+  setColumnBoardRatio(ratio: number): void { this.displaySettings.setColumnBoardRatio(ratio) }
+  /** 把指定断点的列占比恢复为默认值。 */
+  resetColumnLayout(breakpoint: string): void { this.displaySettings.resetColumnLayout(breakpoint) }
 
   // --- Media (TTS / Image / Video) ---
   setTtsPerson(v: number): void { this.mediaSettings.setTtsPerson(v) }

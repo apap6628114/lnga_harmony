@@ -27,6 +27,7 @@ import threadTrackUnitTest from './ThreadTrackUnit.test';
 import topicReadUnitTest from './TopicReadUnit.test';
 import historyReadLedgerUnitTest from './HistoryReadLedgerUnit.test';
 import imageAnalyzerSessionUnitTest from './ImageAnalyzerSession.test';
+import columnLayoutUnitTest from './ColumnLayoutUnit.test';
 
 /**
  * 注册全部本地单元测试。
@@ -61,4 +62,5 @@ export default function testsuite(): void {
   topicReadUnitTest();
   historyReadLedgerUnitTest();
   imageAnalyzerSessionUnitTest();
+  columnLayoutUnitTest();
 }
