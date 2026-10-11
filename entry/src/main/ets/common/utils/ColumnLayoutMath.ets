@@ -55,7 +55,7 @@ export const SIDEBAR_DEFAULT_VP: number = 180
  *
  * 底栏一侧只需 88vp（左右内边距 20 + 两枚 32vp 按钮 + 一处 4vp 间距），比这条宽松得多，
  * 不构成约束。改造初版这里取 136vp，是因为当时激活态底栏还要多露出一枚约 34vp 的
- * 「重置」，把底栏固有宽度顶到 130vp；该按钮移除后（见 `SidebarComponent.ColumnRatioFooter`），
+ * 「重置」，把底栏固有宽度顶到 130vp；该按钮移除后（见 `SidebarFooterComponent`），
  * 约束重新落回条目内容一侧，于是降到 120vp。
  */
 export const SIDEBAR_MIN_VP: number = 120

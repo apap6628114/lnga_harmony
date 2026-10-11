@@ -8,6 +8,7 @@ import { CategoryDataSource, SidebarDataSource, SidebarSection, SidebarBoardItem
 import type { Category, BoardContent } from '../model/Forum'
 import { Avatar } from '../common/components/Avatar'
 import { BoardIcon } from '../common/components/BoardIcon'
+import { SidebarFooterComponent } from '../common/components/SidebarFooterComponent'
 
 @Component
 export struct CommunityPanel {
@@ -279,61 +280,78 @@ export struct CommunityPanel {
     })
   }
 
+  /**
+   * 单列（sm）内容区的两栏形态：左侧 80vp 图标栏 + 右侧板块内容。
+   *
+   * 图标栏底部挂**与多列侧边栏同一份** {@link SidebarFooterComponent}（`showColumnRatio: false`，
+   * 单列没有列占比可调，只保留设置入口）：设置入口在单列与多列下都落在侧边栏底部同一位置，
+   * 用户换形态时不需要重新找。
+   *
+   * 为此图标栏由单层 `Scroll` 改为「`Scroll`（layoutWeight(1)）+ 底部功能区」的纵向结构 ——
+   * 功能区必须**钉在底部**，跟着横幅/分类一起滚走就失去"固定入口"的意义了；图标栏自身的
+   * 底色与右侧分隔线随之移到外层 `Column`，否则功能区那一截没有底色、分隔线也断在半空。
+   */
   @Builder
   MobileTwoPanelContent() {
     Row() {
-      Scroll() {
-        Column() {
+      Column() {
+        Scroll() {
           Column() {
-            Avatar({
-              avatar: this.authState.avatarUrl,
-              uid: this.authState.uid,
-              name: this.authState.nickName,
-              avatarSize: 36
+            Column() {
+              Avatar({
+                avatar: this.authState.avatarUrl,
+                uid: this.authState.uid,
+                name: this.authState.nickName,
+                avatarSize: 36
+              })
+              Text(this.authState.nickName || '未登录')
+                .fontSize(13).fontWeight(FontWeight.Bold)
+                .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                .margin({ top: 8 })
+            }
+            .width('100%')
+            .padding({ top: 14 + this.statusBarHeight, bottom: 14 })
+            .alignItems(HorizontalAlign.Center)
+            .onClick(() => {
+              if (this.authState.uid) {
+                routerStore.navigateActivity(Screen.profile(this.authState.uid))
+              }
             })
-            Text(this.authState.nickName || '未登录')
-              .fontSize(13).fontWeight(FontWeight.Bold)
-              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-              .margin({ top: 8 })
+
+            Row() {
+              Image($r('app.media.icon_search')).width(14).height(14).fillColor(AppColors.textTertiary).margin({ right: 6 })
+              Text('搜索').fontSize(12).fontColor(AppColors.textTertiary)
+            }
+            .width('100%').height(28).padding({ left: 10, right: 10 })
+            .backgroundColor(AppColors.bgSecondary).borderRadius(8)
+            .margin({ left: 12, right: 12, top: 6, bottom: 6 })
+            .alignItems(VerticalAlign.Center)
+            .onClick(() => {
+              routerStore.navigateSearch()
+            })
+
+            Divider().width('100%').color(AppColors.separator).margin({ top: 4, bottom: 4 })
+
+            if (this.favoritesList.length > 0) {
+              this.SidebarTabItem('__fav__', '收藏板块')
+            }
+            ForEach(this.categories, (cat: Category) => {
+              this.SidebarTabItem(cat.id, cat.name)
+            }, (cat: Category) => cat.id)
           }
           .width('100%')
-          .padding({ top: 14 + this.statusBarHeight, bottom: 14 })
-          .alignItems(HorizontalAlign.Center)
-          .onClick(() => {
-            if (this.authState.uid) {
-              routerStore.navigateActivity(Screen.profile(this.authState.uid))
-            }
-          })
-
-          Row() {
-            Image($r('app.media.icon_search')).width(14).height(14).fillColor(AppColors.textTertiary).margin({ right: 6 })
-            Text('搜索').fontSize(12).fontColor(AppColors.textTertiary)
-          }
-          .width('100%').height(28).padding({ left: 10, right: 10 })
-          .backgroundColor(AppColors.bgSecondary).borderRadius(8)
-          .margin({ left: 12, right: 12, top: 6, bottom: 6 })
-          .alignItems(VerticalAlign.Center)
-          .onClick(() => {
-            routerStore.navigateSearch()
-          })
-
-          Divider().width('100%').color(AppColors.separator).margin({ top: 4, bottom: 4 })
-
-          if (this.favoritesList.length > 0) {
-            this.SidebarTabItem('__fav__', '收藏板块')
-          }
-          ForEach(this.categories, (cat: Category) => {
-            this.SidebarTabItem(cat.id, cat.name)
-          }, (cat: Category) => cat.id)
+          .constraintSize({ minHeight: '100%' })
+          .padding({ bottom: 6 })
         }
         .width('100%')
-        .constraintSize({ minHeight: '100%' })
-        .padding({ bottom: 6 })
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
+        .align(Alignment.Top)
+
+        SidebarFooterComponent({ showColumnRatio: false })
       }
       .width(80).height('100%')
       .backgroundColor(AppColors.bgTertiary)
-      .scrollBar(BarState.Off)
-      .align(Alignment.Top)
       .border({ width: { right: 0.5 }, color: AppColors.separator })
 
       if (this.selectedSectionId === '__fav__') {
