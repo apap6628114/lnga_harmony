@@ -97,8 +97,14 @@ export struct SidebarComponent {
    * 只在多列断点出现 —— 侧边栏本身在 `sm` 是 `Visibility.None`，整块随父一起隐藏，
    * 不需要在这里再判一次断点。
    *
-   * 「重置」只在模式激活时露出：占比可以拖到很窄，没有一键还原的话用户可能把自己锁在
-   * 一个难用的布局里；常驻又会和普通状态下的极简底部冲突。
+   * 两枚按钮都靠左，没有需要推开的右侧元素（`Blank()` 已随「重置」一并移除）。
+   *
+   * **「重置」按钮已移除，不要加回来**：它原本只在激活态露出，理由是"占比能拖得很窄，
+   * 怕用户把自己锁死在难用的布局里"。现在这条兜底由两根更靠前的防线承担 ——
+   * ① 侧边栏有 `SIDEBAR_MIN_VP` 下限、板块列有 `BOARD_RATIO_MIN`/`MAX`，把手**拖不出**
+   * 可用区间；② 读数标尺在拖动全程显示当前数值，用户看得见自己拖到了哪，也就能原路拖回来。
+   * 留着它反而有两个代价：激活态底栏凭空多出一个元素（切换时布局跳动），且它约 34vp 的
+   * 固有宽度会把侧边栏最小宽度顶到 136vp（见 `SIDEBAR_MIN_VP` 的推导）。
    */
   @Builder
   ColumnRatioFooter() {
@@ -106,21 +112,6 @@ export struct SidebarComponent {
       this.FooterButton(FOOTER_SETTINGS)
 
       this.FooterButton(FOOTER_COLUMN_RATIO)
-
-      Blank()
-
-      if (this.columnRatioMode) {
-        Text('重置')
-          .fontSize(11)
-          .fontColor(AppColors.textSecondary)
-          .padding({ left: 6, right: 6, top: 6, bottom: 6 })
-          .borderRadius(8)
-          .accessibilityText('恢复默认列占比')
-          .onClick(() => {
-            appStore.settingsStore.resetColumnLayout(this.currentBreakpoint)
-            appStore.showToast('已恢复默认列占比')
-          })
-      }
     }
     .width('100%')
     // 底部额外留出系统导航条高度：手势条压在按钮上会同时吃掉点击与观感
@@ -138,9 +129,7 @@ export struct SidebarComponent {
   @Builder
   FooterButton(kind: number) {
     Stack() {
-      Image(kind === FOOTER_SETTINGS
-        ? $r('app.media.profile_settings')
-        : $r('app.media.icon_column_ratio'))
+      Image(this.footerIcon(kind))
         .width(FOOTER_BUTTON_ICON)
         .height(FOOTER_BUTTON_ICON)
         .fillColor(this.footerIconColor(kind))
@@ -153,6 +142,30 @@ export struct SidebarComponent {
     .onClick(() => {
       this.handleFooterTap(kind)
     })
+  }
+
+  /**
+   * 底栏图标资源。
+   *
+   * 占比按钮**随状态换形**，不只是换色：
+   * - 未激活：左右两条竖列块 + 夹在中间的双向箭头（`icon_column_ratio`）—— 拖动隐喻，
+   *   读作"两列之间可以左右拖"；改造初版那枚静态「三竖条」只说得出"这是列布局"，
+   *   说不出"点进去能调宽度、拖的是哪条线"；
+   * - 激活后：换成叉号（`icon_close`）—— 退出隐喻，按钮当下唯一的作用就是关掉这个模式。
+   *
+   * 只换色（primary 高亮）时，用户既看不出自己正处在模式里，更看不出该怎么退出：
+   * 一个开关的两个状态必须各自给出一个明确的动作。底色高亮仍保留，负责表达"模式开着"。
+   *
+   * 重画这枚图标时注意**小尺寸可辨识度**：它实际只按 18vp 渲染（`FOOTER_BUTTON_ICON`），
+   * 两倍屏下也就 36 物理像素。实测在这个尺寸下，细竖线（宽 ≤ 1.5 于 24 视框）会被抗锯齿
+   * 抹成灰线、视觉重量撑不住，箭头也会和线粘成一团；所以用**实心列块**（宽 2.2）划出两侧
+   * 边界，箭头（翼展 7.6）夹在中间并留出 0.4 以上间隙。
+   */
+  private footerIcon(kind: number): Resource {
+    if (kind === FOOTER_SETTINGS) {
+      return $r('app.media.profile_settings')
+    }
+    return this.columnRatioMode ? $r('app.media.icon_close') : $r('app.media.icon_column_ratio')
   }
 
   private footerIconColor(kind: number): Resource {
@@ -179,13 +192,14 @@ export struct SidebarComponent {
   /**
    * 底栏按钮点击。
    *
-   * 占比按钮**必须配 Toast**：三竖图标本身表意不足，用户按下去之前无从知道它是干什么的，
-   * 必须在按下后立刻用一句话说清"刚才开了什么、接下来怎么用"。
+   * 占比按钮**必须配 Toast**：图标再直白也只说得清"这里能调列宽"，说不清把手在哪、
+   * 松开后怎么退出，必须在按下后立刻用一句话说清"刚才开了什么、接下来怎么用"。
    *
-   * `animateTo` 只负责**按钮自身的配色**（`backgroundColor` / `fillColor`）走 180ms 缓动；
-   * MainPage 读数标尺的淡入不依赖它 —— 标尺的 `TransitionEffect` 自带 `animation()` 参数，
-   * 属"直接增删组件"式自播（见组件内转场文档）。因此**不要**删掉 MainPage 里的
-   * `.animation(...)`，那才是标尺动画的承重件。
+   * `animateTo` 只负责**底色与图标色**（`backgroundColor` / `fillColor`）走 180ms 缓动；
+   * 图标**换形不走缓动**（`Image` 的 `src` 是资源替换，没有可补间的中间态），瞬时切换反而
+   * 让"按钮的作用已经变了"这件事更干脆。MainPage 读数标尺的淡入也不依赖它 —— 标尺的
+   * `TransitionEffect` 自带 `animation()` 参数，属"直接增删组件"式自播（见组件内转场文档）。
+   * 因此**不要**删掉 MainPage 里的 `.animation(...)`，那才是标尺动画的承重件。
    */
   private handleFooterTap(kind: number): void {
     if (kind === FOOTER_SETTINGS) {
