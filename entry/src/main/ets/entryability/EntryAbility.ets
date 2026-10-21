@@ -13,6 +13,7 @@ import { UIContext } from '@ohos.arkui.UIContext'
 import { appStore } from '../store/AppStore';
 import { initStatusBarManager, updateStatusBarStyle } from '../common/managers/StatusBarManager';
 import { initScreenOnManager } from '../common/managers/ScreenOnManager';
+import { initWindowOrientationManager } from '../common/managers/WindowOrientationManager';
 import { startNetworkMonitor } from '../common/managers/NetworkMonitor';
 import {
   KEY_THEME_NAME,
@@ -179,13 +180,14 @@ export default class EntryAbility extends UIAbility {
         this.enableImageDecodeCache(mainWindow)
 
         mainWindow.setWindowLayoutFullScreen(true)
-        mainWindow.setPreferredOrientation(window.Orientation.AUTO_ROTATION_RESTRICTED)
-          .catch((error: Error) => {
-            logger.error('Failed to enable auto rotation. Cause: %{public}s', formatError(error))
-          })
+        // 旋转策略不在生命周期里设置：应用级策略由 module.json5 的 `orientation`
+        // （`follow_desktop`）声明。官方《窗口方向》指出在 Ability 生命周期里调
+        // setPreferredOrientation 会让应用启动时多播一次旋转动画，推荐改用配置文件。
+        // 需要临时改方向的场景（图片查看器）走 WindowOrientationManager 覆盖并恢复。
 
         initStatusBarManager(mainWindow)
         initScreenOnManager(mainWindow)
+        initWindowOrientationManager(mainWindow)
         // 官方 NOTE：setColorMode 须在窗口创建且页面加载完成后调用。
         // appStore.init 可能先于页面加载完成（此时 init 尾部的 applyCurrentTheme
         // 调 setColorMode 不满足调用时机），此处兜底：已初始化则重放 applyCurrentTheme，
@@ -200,7 +202,8 @@ export default class EntryAbility extends UIAbility {
 
         this.updateSafeArea(mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM))
 
-        this.updateBreakpoint(mainWindow.getWindowProperties().windowRect.width)
+        const initialRect: window.Rect = mainWindow.getWindowProperties().windowRect
+        this.updateBreakpoint(initialRect.width)
         mainWindow.on('windowSizeChange', (size: window.Size) => {
           this.updateBreakpoint(size.width)
           this.updateSafeArea(mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM))
@@ -266,7 +269,24 @@ export default class EntryAbility extends UIAbility {
     logger.info( '%{public}s', 'Ability onBackground');
   }
 
-  /** 根据当前窗口宽度更新全局响应式断点。 */
+  /**
+   * 根据当前窗口宽度更新全局响应式断点。
+   *
+   * 断点**只由窗口宽度决定**（600 / 840vp），不叠加窗口高度，也不要读取屏幕方向：
+   * - 官方《窗口旋转》明确 `display.Orientation` 只用于辅助 sensor 与相机做方向修正，
+   *   不建议用于窗口布局适配，布局只认窗口尺寸；
+   * - `currentBreakpoint` 是全局共享的**宽档位**：`SheetWidthConstants` 等多处依赖
+   *   「非 sm ⇒ 窗口宽度 ≥ 600vp」这一前提（半模态按宽度收敛）。若把"窗口太矮"也折进
+   *   这个值，宽而矮的窗口会得到 `sm`，半模态限宽失效、面板横贯整窗，反而更糟；
+   * - 官方 `HeightBreakpoint` 是按**宽高比**定义的（`enums.d.ts`），平板横屏同样落在
+   *   `HEIGHT_SM`，无法区分"手机横屏"与"平板横屏"，不适合作为"能否多栏"的判据。
+   *   真要按高度做特殊布局，应在**消费端**用 `getWindowHeightBreakpoint()` 单独判断，
+   *   不要改写全局宽档位。
+   *
+   * 直板机横屏这一场景已由 `follow_desktop` 关闭（应用固定竖屏），无需在这里兜底。
+   *
+   * @param windowWidth - 窗口宽度（px）
+   */
   private updateBreakpoint(windowWidth: number): void {
     let densityPixels: number = 1
     try {

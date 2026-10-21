@@ -816,8 +816,19 @@ export struct ImageViewer {
           )
         )
         .onAreaChange((oldValue: Area, newValue: Area) => {
-          if ((newValue.width as number) > 0) this.containerW = newValue.width as number
-          if ((newValue.height as number) > 0) this.containerH = newValue.height as number
+          const newW: number = newValue.width as number
+          const newH: number = newValue.height as number
+          if (newW > 0) this.containerW = newW
+          if (newH > 0) this.containerH = newH
+          // 容器尺寸变化（窗口旋转、折叠展开、分屏）后重新收敛平移量：缩放倍数与平移量会
+          // 原样保留，不重算会把已放大的图片甩出可视区，直到用户再拖一次才回正。
+          // 查看器已放开旋转（WindowOrientationManager），这条路径由此变得可触达。
+          const sizeChanged: boolean =
+            newW !== (oldValue.width as number) || newH !== (oldValue.height as number)
+          if (sizeChanged && this.zoomScale > 1) {
+            this.zoomOffsetX = this.clampOffsetX(this.zoomScale, this.zoomOffsetX)
+            this.zoomOffsetY = this.clampOffsetY(this.zoomScale, this.zoomOffsetY)
+          }
         })
 
         /* 动态照片播放按钮：**与右上角关闭按钮同层同款**（都在 UI 层，不在图片层）。

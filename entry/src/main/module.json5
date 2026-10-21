@@ -41,7 +41,12 @@
         "label": "$string:EntryAbility_label",
         "startWindowIcon": "$media:startIcon",
         "startWindowBackground": "$color:bg",
-        "orientation": "unspecified",
+        // 旋转策略：跟随桌面（见 WindowOrientationManager.APP_ORIENTATION）。
+        // 直板机桌面固定竖屏 → 应用固定竖屏；平板与折叠屏展开态跟随桌面自动旋转，
+        // 且折叠状态切换时策略自动更新。官方《窗口方向》最佳实践「应用首页案例」推荐值：
+        // 内容型应用在类直板机上横屏体验不佳（列表与正文的纵向空间被压掉大半），
+        // 应固定竖屏，只在非类直板机开放旋转。图片查看器属例外，进入时临时放开、退出恢复。
+        "orientation": "follow_desktop",
         "exported": true,
         "backgroundModes": [
           "audioPlayback"

@@ -2,6 +2,12 @@ import { window } from '@kit.ArkUI'
 import { floatingLayerStore, FloatingLayerStoreClass, FloatingPage } from '../../store/FloatingLayerStore'
 import { AppColors, SheetWidthConstants } from '../constants/Constants'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
+import {
+  applyMediaOverlayOrientation,
+  enterMediaOverlayOrientation,
+  exitMediaOverlayOrientation,
+  restoreAppOrientation
+} from '../managers/WindowOrientationManager'
 import { DOMAIN_UI, formatError, Logger } from '../utils/Logger'
 import { ImageViewer } from './ImageViewer'
 import { ProfileCardPopup } from './ProfileCardPopup'
@@ -69,9 +75,19 @@ export struct FloatingLayerComponent {
     this.keyboardHeightVp = this.getUIContext().px2vp(height)
   }
 
-  /** 组件显示时订阅主窗口软键盘高度变化。 */
+  /** 组件显示时订阅主窗口软键盘高度变化，并校正一次旋转策略。 */
   aboutToAppear(): void {
     this.subscribeKeyboardHeightChange()
+    // 旋转策略的幂等校正：模态的 onDisappear 只在"回退动画结束"时回调，宿主被整体
+    // 销毁（页面替换、后台恢复重建等）时**不保证补发**。不校正会停在"查看器已关但仍
+    // 可旋转"，且没有任何自愈路径。这里按浮层真实状态（store 是显隐单一真源）对一次：
+    // 查看器仍在显示 → 只补设置、**不重拍快照**（否则会把已放开的策略记成恢复值）；
+    // 否则 → 直接回到应用级策略并清空快照。
+    if (this.floating.top === FloatingPage.IMAGE_VIEWER) {
+      applyMediaOverlayOrientation()
+    } else {
+      restoreAppOrientation()
+    }
   }
 
   /** 组件消失时注销监听，避免组件销毁后继续接收窗口事件。 */
@@ -186,14 +202,30 @@ export struct FloatingLayerComponent {
          整页内容自下而上推入会被读成"翻页"，淡入淡出才符合"叠一层浮层"的语义。
          （该字段与自定义 `transition` 互斥，见本地 SDK `ContentCoverOptions.modalTransition` 声明。） */
       modalTransition: ModalTransition.ALPHA,
+      /* 旋转策略：进入时放开（横图、长截图都能用），退出时恢复进入前的策略。
+         时机用 `onWillAppear`（动画开始前）而不是 `onAppear`（动画结束后）：后者会让
+         用户先看到竖屏查看器淡入、动画结束才补一次 90° 旋转，读成两段动效。 */
+      onWillAppear: () => {
+        enterMediaOverlayOrientation()
+      },
       onWillDismiss: (action: DismissContentCoverAction) => {
         action.dismiss()
         this.floating.remove(FloatingPage.IMAGE_VIEWER)
       },
-      // 兜底：任何关闭路径（含状态驱动关闭与系统关闭动画收尾）结束后都不残留浮层状态。
+      // 兜底：任何关闭路径（含状态驱动关闭与系统关闭动画收尾）结束后都不残留浮层状态，
+      // 并把旋转策略恢复为进入前的值。
+      //
+      // **恢复必须与状态清理同守卫**：`onDisappear` 是"回退动画结束后"才回调，若关闭
+      // 动画期间用户又打开了查看器（`LinkUtils.openImageViewer` 是公共入口），旧实例的
+      // 收尾回调会晚于新实例的 `onWillAppear` 到达——无守卫地恢复会把策略降回
+      // `follow_desktop`，而查看器实际正开着，直板机上再也转不动。
       onDisappear: () => {
         if (this.floating.top === FloatingPage.IMAGE_VIEWER) {
           this.floating.remove(FloatingPage.IMAGE_VIEWER)
+        }
+        // 仅当查看器确实已关闭时才恢复；仍为 IMAGE_VIEWER 说明是旧实例的收尾，忽略。
+        if (this.floating.top !== FloatingPage.IMAGE_VIEWER) {
+          exitMediaOverlayOrientation()
         }
       }
     }
