@@ -5,6 +5,7 @@ import type { BlacklistEntry } from '../../model/SocialEntries'
 import { FilterKeyword } from '../../model/FilterKeyword'
 import type { UserNoteEntry } from '../../model/NoteInfo'
 import type { AiProviderProfile } from '../../model/AiConfig'
+import type { AiSearchProfile } from '../../model/AiSearchConfig'
 
 
 /**
@@ -54,6 +55,10 @@ export class SettingsState {
   aiProfiles: AiProviderProfile[] = []
   /** 当前激活的自定义 AI 配置 ID */
   activeAiProfileId: string = ''
+  /** 搜索服务配置列表（联网工具执行后端） */
+  aiSearchProfiles: AiSearchProfile[] = []
+  /** 当前激活的搜索服务配置 ID */
+  activeAiSearchProfileId: string = ''
   /** 各场景自定义 system prompt（key=场景ID, value=用户自定义文本） */
   scenarioSystemPrompts: Record<string, string> = {}
   /**

@@ -39,9 +39,12 @@ const OL_ITEM_RE: RegExp = /^(\d+)\.\s+(.+)$/
 const BLOCKQUOTE_RE: RegExp = /^>\s?(.*)$/
 /** 分隔线正则：3 个以上 `-` / `*` / `_` */
 const HR_RE: RegExp = /^[-*_]{3,}\s*$/
-
-/** 行首转义正则：`\*` / `\-` 等 */
-const ESCAPE_RE: RegExp = /\\([*_~`#[\]()\-+.!|])/g
+/** 块级图片正则：整行只包含一个 `![alt](url)` */
+const IMAGE_LINE_RE: RegExp = /^!\[([^\]]*)\]\(\s*([^)\s]+)\s*\)\s*$/
+/** 表格分隔行正则：`| --- | :---: | ---: |` */
+const TABLE_DIVIDER_RE: RegExp = /^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/
+/** 任务列表项前缀正则：`[ ]` / `[x]` */
+const TASK_PREFIX_RE: RegExp = /^\[([ xX])\]\s+(.*)$/
 
 /** 块级稳定 key 的序列号计数器，每次 parseMd 调用时重置。 */
 let keySerialMap: Record<string, number> = {}
@@ -101,6 +104,27 @@ function parseBlocks(lines: string[]): MdNode[] {
       assignStableKeys(codeNode, buildStableKey('code', fenceResult.content))
       result.push(codeNode)
       i = fenceResult.nextLine
+      continue
+    }
+
+    // 表格 — 当前行含竖线且下一行是分隔行
+    if (line.indexOf('|') >= 0 && i + 1 < len && isTableDivider(lines[i + 1])) {
+      const tableResult: TableResult = consumeTable(lines, i)
+      assignStableKeys(tableResult.node, buildStableKey('table', tableSignature(tableResult.node)))
+      result.push(tableResult.node)
+      i = tableResult.nextLine
+      continue
+    }
+
+    // 块级图片 — 整行只有一个 ![alt](url)
+    const imageMatch = IMAGE_LINE_RE.exec(line)
+    if (imageMatch !== null) {
+      const imageNode: MdNode = new MdNode(MdNodeType.IMAGE)
+      imageNode.text = imageMatch[1]
+      imageNode.href = imageMatch[2]
+      assignStableKeys(imageNode, buildStableKey('img', imageMatch[2]))
+      result.push(imageNode)
+      i++
       continue
     }
 
@@ -193,6 +217,22 @@ class CodeFenceResult {
   nextLine: number = 0
 }
 
+/** consumeTable 返回值 */
+class TableResult {
+  /** 构建的表格节点 */
+  node: MdNode = new MdNode(MdNodeType.TABLE)
+  /** 消费结束后下一个待处理行索引 */
+  nextLine: number = 0
+}
+
+/** 任务列表前缀解析结果 */
+class TaskPrefixResult {
+  /** 勾选状态：-1 非任务，0 未完成，1 已完成 */
+  checked: number = -1
+  /** 去除前缀后的文本 */
+  text: string = ''
+}
+
 /** consumeList 返回值 */
 class ListResult {
   /** 构建的列表节点 */
@@ -250,7 +290,176 @@ function consumeCodeFence(lines: string[], startLine: number): CodeFenceResult {
 }
 
 /**
+ * 判断一行是否为 GFM 表格分隔行（`| --- | :---: |`）。
+ *
+ * @param line - 文本行
+ * @returns true 表示分隔行
+ */
+function isTableDivider(line: string): boolean {
+  const trimmed: string = line.trim()
+  if (trimmed.indexOf('-') < 0 || trimmed.indexOf('|') < 0) {
+    return false
+  }
+  return TABLE_DIVIDER_RE.test(trimmed)
+}
+
+/**
+ * 按竖线拆分表格行，去掉首尾竖线与单元格空白。
+ *
+ * @param line - 表格行文本
+ * @returns 单元格文本数组
+ */
+function splitTableRow(line: string): string[] {
+  let trimmed: string = line.trim()
+  if (trimmed.startsWith('|')) {
+    trimmed = trimmed.substring(1)
+  }
+  if (trimmed.endsWith('|')) {
+    trimmed = trimmed.substring(0, trimmed.length - 1)
+  }
+  if (trimmed.length === 0) {
+    return []
+  }
+  const parts: string[] = trimmed.split('|')
+  const result: string[] = []
+  for (let i: number = 0; i < parts.length; i++) {
+    result.push(parts[i].trim())
+  }
+  return result
+}
+
+/**
+ * 解析表格分隔行中的对齐声明。
+ *
+ * @param line - 分隔行
+ * @returns 每个单元格的对齐方式（left / center / right）
+ */
+function parseTableAligns(line: string): string[] {
+  const cells: string[] = splitTableRow(line)
+  const result: string[] = []
+  for (let i: number = 0; i < cells.length; i++) {
+    const cell: string = cells[i].trim()
+    const left: boolean = cell.startsWith(':')
+    const right: boolean = cell.endsWith(':')
+    if (left && right) {
+      result.push('center')
+    } else if (right) {
+      result.push('right')
+    } else {
+      result.push('left')
+    }
+  }
+  return result
+}
+
+/**
+ * 构建表格行节点。
+ *
+ * @param cells - 单元格文本
+ * @param aligns - 对齐方式
+ * @param header - 是否为表头行
+ * @param columnCount - 表格列数（不足补空单元格）
+ * @returns TABLE_ROW 节点
+ */
+function buildTableRow(cells: string[], aligns: string[], header: boolean, columnCount: number): MdNode {
+  const row: MdNode = new MdNode(MdNodeType.TABLE_ROW)
+  row.level = header ? 1 : 0
+  for (let i: number = 0; i < columnCount; i++) {
+    const cell: MdNode = new MdNode(MdNodeType.TABLE_CELL)
+    cell.align = aligns.length > i ? aligns[i] : 'left'
+    const cellText: string = i < cells.length ? cells[i] : ''
+    cell.children = parseInline(cellText)
+    row.children.push(cell)
+  }
+  return row
+}
+
+/**
+ * 消费从 startLine 开始的 GFM 表格。
+ *
+ * @param lines - 全部文本行
+ * @param startLine - 表头行索引
+ * @returns 表格节点及下一行索引
+ */
+function consumeTable(lines: string[], startLine: number): TableResult {
+  const result: TableResult = new TableResult()
+  const tableNode: MdNode = new MdNode(MdNodeType.TABLE)
+  const headerCells: string[] = splitTableRow(lines[startLine])
+  const aligns: string[] = parseTableAligns(lines[startLine + 1])
+  const columnCount: number = headerCells.length
+  if (columnCount > 0) {
+    tableNode.children.push(buildTableRow(headerCells, aligns, true, columnCount))
+  }
+
+  let i: number = startLine + 2
+  const len: number = lines.length
+  while (i < len) {
+    const line: string = lines[i]
+    if (line.trim().length === 0 || line.indexOf('|') < 0) {
+      break
+    }
+    if (isTableDivider(line)) {
+      break
+    }
+    const cells: string[] = splitTableRow(line)
+    if (cells.length === 0) {
+      break
+    }
+    tableNode.children.push(buildTableRow(cells, aligns, false, columnCount))
+    i++
+  }
+
+  result.node = tableNode
+  result.nextLine = i
+  return result
+}
+
+/**
+ * 生成表格的稳定签名（用于 ForEach key）。
+ *
+ * @param table - 表格节点
+ * @returns 内容签名
+ */
+function tableSignature(table: MdNode): string {
+  let signature: string = ''
+  for (let i: number = 0; i < table.children.length; i++) {
+    const row: MdNode = table.children[i]
+    for (let j: number = 0; j < row.children.length; j++) {
+      const cell: MdNode = row.children[j]
+      for (let k: number = 0; k < cell.children.length; k++) {
+        signature += cell.children[k].text + '|'
+      }
+      signature += ';'
+    }
+    signature += '/'
+  }
+  return signature
+}
+
+/**
+ * 解析任务列表项前缀（`[ ]` / `[x]`）。
+ *
+ * @param text - 列表项文本
+ * @returns 勾选状态与去前缀文本
+ */
+function parseTaskPrefix(text: string): TaskPrefixResult {
+  const result: TaskPrefixResult = new TaskPrefixResult()
+  const match = TASK_PREFIX_RE.exec(text)
+  if (match === null) {
+    result.text = text
+    return result
+  }
+  result.checked = match[1] === ' ' ? 0 : 1
+  result.text = match[2]
+  return result
+}
+
+/**
  * 消费从 startLine 开始的连续列表项，构建 UNORDERED_LIST 或 ORDERED_LIST 节点。
+ *
+ * 支持两种扩展：
+ * - 任务列表项（`- [ ]` / `- [x]`）记录勾选状态；
+ * - 缩进 ≥ 2 空格的列表项作为上一项的子列表（仅一层）。
  *
  * @param lines - 全部文本行
  * @param startLine - 第一个列表项所在行号
@@ -261,28 +470,52 @@ function consumeList(lines: string[], startLine: number, listType: MdNodeType): 
   const result: ListResult = new ListResult()
   const listNode: MdNode = new MdNode(listType)
   const itemRe: RegExp = listType === MdNodeType.ORDERED_LIST ? OL_ITEM_RE : UL_ITEM_RE
+  const groupIndex: number = listType === MdNodeType.ORDERED_LIST ? 2 : 1
   const len: number = lines.length
 
   let i: number = startLine
+  let currentSubList: MdNode | null = null
   while (i < len) {
-    const line: string = lines[i]
+    const rawLine: string = lines[i]
 
     // 空行 — 列表结束
-    if (line.trim().length === 0) {
+    if (rawLine.trim().length === 0) {
       break
     }
 
-    const match = itemRe.exec(line)
+    // 统计缩进量，用于识别子列表
+    let indent: number = 0
+    while (indent < rawLine.length) {
+      const ch: string = rawLine.charAt(indent)
+      if (ch !== ' ' && ch !== '\t') {
+        break
+      }
+      indent++
+    }
+    const content: string = rawLine.substring(indent)
+    const match = itemRe.exec(content)
     if (match === null) {
       break
     }
 
-    // 有序列表正则有两个捕获组 (数字, 内容)，无序列表仅一个 (内容)
-    const groupIndex: number = listType === MdNodeType.ORDERED_LIST ? 2 : 1
     const itemText: string = match[groupIndex]
     const itemNode: MdNode = new MdNode(MdNodeType.LIST_ITEM)
-    itemNode.children = parseInline(itemText)
-    listNode.children.push(itemNode)
+    const task: TaskPrefixResult = parseTaskPrefix(itemText)
+    itemNode.checked = task.checked
+    itemNode.children = parseInline(task.text)
+
+    if (indent >= 2 && listNode.children.length > 0) {
+      // 子列表：挂到上一个列表项的 children 末尾
+      if (currentSubList === null) {
+        currentSubList = new MdNode(listType)
+        const parent: MdNode = listNode.children[listNode.children.length - 1]
+        parent.children.push(currentSubList)
+      }
+      currentSubList.children.push(itemNode)
+    } else {
+      currentSubList = null
+      listNode.children.push(itemNode)
+    }
     i++
   }
 
@@ -363,7 +596,7 @@ function consumeParagraph(lines: string[], startLine: number): ParaResult {
     }
 
     // 块级标记 — 段落结束
-    if (isBlockStart(line)) {
+    if (isBlockStart(line) || isTableStart(lines, i)) {
       break
     }
 
@@ -388,7 +621,25 @@ function isBlockStart(line: string): boolean {
     UL_ITEM_RE.test(line) ||
     OL_ITEM_RE.test(line) ||
     BLOCKQUOTE_RE.test(line) ||
-    HR_RE.test(line)
+    HR_RE.test(line) ||
+    IMAGE_LINE_RE.test(line)
+}
+
+/**
+ * 判断从指定行开始是否为 GFM 表格（当前行含竖线且下一行是分隔行）。
+ *
+ * @param lines - 全部文本行
+ * @param index - 待判断行索引
+ * @returns true 表示表格起始行
+ */
+function isTableStart(lines: string[], index: number): boolean {
+  if (index + 1 >= lines.length) {
+    return false
+  }
+  if (lines[index].indexOf('|') < 0) {
+    return false
+  }
+  return isTableDivider(lines[index + 1])
 }
 
 // ============================================================
@@ -511,6 +762,26 @@ export function parseInline(text: string): MdNode[] {
       continue
     }
 
+    // 图片 `![alt](url)`
+    if (ch === '!' && pos + 1 < len && text.charAt(pos + 1) === '[') {
+      const closeBracket: number = text.indexOf(']', pos + 2)
+      if (closeBracket >= 0 && closeBracket + 1 < len && text.charAt(closeBracket + 1) === '(') {
+        const closeParen: number = text.indexOf(')', closeBracket + 2)
+        if (closeParen >= 0) {
+          flushText(text, textStart, pos, result)
+          const imageNode: MdNode = new MdNode(MdNodeType.IMAGE)
+          imageNode.text = text.substring(pos + 2, closeBracket)
+          imageNode.href = text.substring(closeBracket + 2, closeParen)
+          result.push(imageNode)
+          pos = closeParen + 1
+          textStart = pos
+          continue
+        }
+      }
+      pos++
+      continue
+    }
+
     // 链接 `[text](url)`
     if (ch === '[') {
       const linkEnd: number = findLinkClose(text, pos, len)
@@ -551,11 +822,104 @@ export function parseInline(text: string): MdNode[] {
  * @param result - 目标节点数组
  */
 function flushText(text: string, start: number, end: number, result: MdNode[]): void {
-  if (end > start) {
-    const textNode: MdNode = new MdNode(MdNodeType.TEXT)
-    textNode.text = text.substring(start, end)
-    result.push(textNode)
+  if (end <= start) {
+    return
   }
+  const segment: string = text.substring(start, end)
+  let pos: number = 0
+  while (pos < segment.length) {
+    const urlStart: number = findUrlStart(segment, pos)
+    if (urlStart < 0) {
+      pushTextNode(segment.substring(pos), result)
+      return
+    }
+    if (urlStart > pos) {
+      pushTextNode(segment.substring(pos, urlStart), result)
+    }
+    const urlEnd: number = findUrlEnd(segment, urlStart)
+    const url: string = segment.substring(urlStart, urlEnd)
+    if (url.length > 8) {
+      const link: MdNode = new MdNode(MdNodeType.LINK)
+      link.text = url
+      link.href = url
+      result.push(link)
+    } else {
+      pushTextNode(url, result)
+    }
+    pos = urlEnd
+  }
+}
+
+/**
+ * 追加一个纯文本节点。
+ *
+ * @param value - 文本内容
+ * @param result - 目标节点数组
+ */
+function pushTextNode(value: string, result: MdNode[]): void {
+  if (value.length === 0) {
+    return
+  }
+  const node: MdNode = new MdNode(MdNodeType.TEXT)
+  node.text = value
+  result.push(node)
+}
+
+/**
+ * 查找文本段中下一个裸链接的起点。
+ *
+ * @param segment - 文本段
+ * @param from - 搜索起点
+ * @returns 链接起点，未找到返回 -1
+ */
+function findUrlStart(segment: string, from: number): number {
+  const httpIndex: number = segment.indexOf('http://', from)
+  const httpsIndex: number = segment.indexOf('https://', from)
+  if (httpIndex < 0) {
+    return httpsIndex
+  }
+  if (httpsIndex < 0) {
+    return httpIndex
+  }
+  return Math.min(httpIndex, httpsIndex)
+}
+
+/**
+ * 查找裸链接的结束位置。
+ *
+ * 遇到空白、常见分隔符或中文标点即结束；尾部的英文标点会被剥离。
+ *
+ * @param segment - 文本段
+ * @param start - 链接起点
+ * @returns 链接结束位置（不含）
+ */
+function findUrlEnd(segment: string, start: number): number {
+  let i: number = start
+  const len: number = segment.length
+  while (i < len) {
+    const ch: string = segment.charAt(i)
+    if (ch === ' ' || ch === '\n' || ch === '\t') {
+      break
+    }
+    if (ch === ')' || ch === ']' || ch === '}' || ch === '>' || ch === '"' || ch === '\'') {
+      break
+    }
+    if (ch === '，' || ch === '。' || ch === '；' || ch === '：' || ch === '！' ||
+      ch === '？' || ch === '、' || ch === '（' || ch === '）' || ch === '“' || ch === '”') {
+      break
+    }
+    i++
+  }
+  // 剥离尾部英文标点
+  while (i > start) {
+    const last: string = segment.charAt(i - 1)
+    if (last === '.' || last === ',' || last === ';' || last === ':' || last === '!' || last === '?') {
+      i--
+    } else {
+      break
+    }
+  }
+  return i
 }
 
 /**

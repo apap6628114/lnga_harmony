@@ -81,6 +81,10 @@ export struct MdNodesView {
       this.RenderBlockquote(node)
     } else if (node.type === MdNodeType.THEMATIC_BREAK) {
       this.RenderThematicBreak()
+    } else if (node.type === MdNodeType.IMAGE) {
+      this.RenderImageBlock(node)
+    } else if (node.type === MdNodeType.TABLE) {
+      this.RenderTable(node)
     }
   }
 
@@ -148,24 +152,7 @@ export struct MdNodesView {
   RenderUnorderedList(node: MdNode) {
     Column() {
       ForEach(node.children, (item: MdNode) => {
-        Row() {
-          Text('•')
-            .fontSize(15)
-            .fontColor(AppColors.textPrimary)
-            .margin({ right: 6 })
-          Text() {
-            ForEach(item.children, (child: MdNode) => {
-              this.RenderSpanLeaf(child)
-            }, (child: MdNode) => this.renderKey(child, 'uli'))
-          }
-          .fontSize(15)
-          .fontColor(AppColors.textPrimary)
-          .lineHeight(26)
-          .layoutWeight(1)
-        }
-        .width('100%')
-        .padding({ top: 2, bottom: 2 })
-        .alignItems(VerticalAlign.Top)
+        this.RenderListItem(item, 0)
       }, (item: MdNode) => this.renderKey(item, 'uli'))
     }
     .width('100%')
@@ -179,30 +166,93 @@ export struct MdNodesView {
   RenderOrderedList(node: MdNode) {
     Column() {
       ForEach(node.children, (item: MdNode, index: number) => {
-        Row() {
-          Text((index + 1).toString() + '.')
-            .fontSize(15)
-            .fontColor(AppColors.textPrimary)
-            .margin({ right: 6 })
-          Text() {
-            ForEach(item.children, (child: MdNode) => {
-              this.RenderSpanLeaf(child)
-            }, (child: MdNode) => this.renderKey(child, 'ol'))
-          }
-          .fontSize(15)
-          .fontColor(AppColors.textPrimary)
-          .lineHeight(26)
-          .layoutWeight(1)
-        }
-        .width('100%')
-        .padding({ top: 2, bottom: 2 })
-        .alignItems(VerticalAlign.Top)
+        this.RenderListItem(item, index + 1)
       }, (item: MdNode) => this.renderKey(item, 'ol'))
     }
     .width('100%')
     .padding({ left: 8 })
     .margin({ top: 4, bottom: 4 })
     .alignItems(HorizontalAlign.Start)
+  }
+
+  /**
+   * 渲染单个列表项（支持任务勾选与一层子列表）。
+   *
+   * @param item - 列表项节点
+   * @param order - 有序列表序号（0 表示无序列表）
+   */
+  @Builder
+  RenderListItem(item: MdNode, order: number) {
+    Column() {
+      Row() {
+        Text(this.listMarker(item, order))
+          .fontSize(15)
+          .fontColor(item.checked === 1 ? AppColors.textTertiary : AppColors.textPrimary)
+          .margin({ right: 6 })
+          .width(20)
+          .textAlign(TextAlign.End)
+        Text() {
+          ForEach(item.children, (child: MdNode) => {
+            if (this.isInlineNode(child)) {
+              this.RenderSpanLeaf(child)
+            }
+          }, (child: MdNode) => this.renderKey(child, 'li'))
+        }
+        .fontSize(15)
+        .fontColor(item.checked === 1 ? AppColors.textTertiary : AppColors.textPrimary)
+        .decoration({ type: item.checked === 1 ? TextDecorationType.LineThrough : TextDecorationType.None })
+        .lineHeight(26)
+        .layoutWeight(1)
+      }
+      .width('100%')
+      .padding({ top: 2, bottom: 2 })
+      .alignItems(VerticalAlign.Top)
+
+      // 子列表（缩进嵌套）
+      ForEach(item.children, (child: MdNode) => {
+        if (child.type === MdNodeType.UNORDERED_LIST) {
+          this.RenderUnorderedList(child)
+        } else if (child.type === MdNodeType.ORDERED_LIST) {
+          this.RenderOrderedList(child)
+        }
+      }, (child: MdNode) => 'sub_' + this.renderKey(child, 's'))
+    }
+    .width('100%')
+    .padding({ left: 10 })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  /**
+   * 列表项前缀：任务框 / 序号 / 圆点。
+   *
+   * @param item - 列表项
+   * @param order - 有序序号（0 表示无序）
+   * @returns 前缀文本
+   */
+  private listMarker(item: MdNode, order: number): string {
+    if (item.checked >= 0) {
+      return item.checked === 1 ? '☑' : '☐'
+    }
+    if (order > 0) {
+      return order.toString() + '.'
+    }
+    return '•'
+  }
+
+  /**
+   * 判断节点是否为可内联渲染的类型。
+   *
+   * @param node - Markdown 节点
+   * @returns true 表示可内联渲染
+   */
+  private isInlineNode(node: MdNode): boolean {
+    return node.type === MdNodeType.TEXT ||
+      node.type === MdNodeType.BOLD ||
+      node.type === MdNodeType.ITALIC ||
+      node.type === MdNodeType.STRIKETHROUGH ||
+      node.type === MdNodeType.CODE_INLINE ||
+      node.type === MdNodeType.LINK ||
+      node.type === MdNodeType.IMAGE
   }
 
   /** 渲染引用块。 */
@@ -241,6 +291,69 @@ export struct MdNodesView {
       .width('100%')
   }
 
+  /** 渲染块级图片。 */
+  @Builder
+  RenderImageBlock(node: MdNode) {
+    Column() {
+      Image(node.href)
+        .width('100%')
+        .constraintSize({ maxHeight: 320 })
+        .objectFit(ImageFit.Contain)
+        .borderRadius(8)
+        .backgroundColor(AppColors.bgSecondary)
+
+      if (node.text.length > 0) {
+        Text(node.text)
+          .fontSize(11)
+          .fontColor(AppColors.textTertiary)
+          .margin({ top: 4 })
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+    }
+    .width('100%')
+    .margin({ top: 6, bottom: 6 })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  /** 渲染 GFM 表格。 */
+  @Builder
+  RenderTable(node: MdNode) {
+    Column() {
+      ForEach(node.children, (row: MdNode) => {
+        Row() {
+          ForEach(row.children, (cell: MdNode) => {
+            Text() {
+              ForEach(cell.children, (child: MdNode) => {
+                this.RenderSpanLeaf(child)
+              }, (child: MdNode) => this.renderKey(child, 'tc'))
+            }
+            .fontSize(13)
+            .fontWeight(row.level === 1 ? FontWeight.Bold : FontWeight.Normal)
+            .fontColor(AppColors.textPrimary)
+            .lineHeight(20)
+            .layoutWeight(1)
+            .padding({ left: 8, right: 8, top: 6, bottom: 6 })
+            .textAlign(cell.align === 'center' ? TextAlign.Center :
+              (cell.align === 'right' ? TextAlign.End : TextAlign.Start))
+          }, (cell: MdNode) => this.renderKey(cell, 'tcell'))
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Top)
+        .backgroundColor(row.level === 1 ? AppColors.bgTertiary : Color.Transparent)
+        .border({
+          width: { bottom: 0.5 },
+          color: { bottom: AppColors.separator },
+          style: { bottom: BorderStyle.Solid }
+        })
+      }, (row: MdNode) => this.renderKey(row, 'trow'))
+    }
+    .width('100%')
+    .margin({ top: 6, bottom: 6 })
+    .borderRadius(8)
+    .clip(true)
+  }
+
   /**
    * 返回 ArkUI ForEach 使用的渲染 key。
    *
@@ -277,15 +390,44 @@ export struct MdNodesView {
             this.onLinkClick(node.href)
           }
         })
+    } else if (node.type === MdNodeType.IMAGE) {
+      // 内联图片无法放进 Text，降级为可点击的「图片」标记
+      Span(node.text.length > 0 ? '[图片] ' + node.text : '[图片]')
+        .fontColor(AppColors.primary)
+        .onClick(() => {
+          if (node.href.length > 0) {
+            this.onLinkClick(node.href)
+          }
+        })
     } else if (node.type === MdNodeType.BOLD) {
-      Span(node.text).fontWeight(FontWeight.Bold).fontColor(AppColors.textPrimary)
+      Span(this.inlineText(node)).fontWeight(FontWeight.Bold).fontColor(AppColors.textPrimary)
     } else if (node.type === MdNodeType.ITALIC) {
-      Span(node.text).fontStyle(FontStyle.Italic).fontColor(AppColors.textPrimary)
+      Span(this.inlineText(node)).fontStyle(FontStyle.Italic).fontColor(AppColors.textPrimary)
     } else if (node.type === MdNodeType.STRIKETHROUGH) {
-      Span(node.text).decoration({ type: TextDecorationType.LineThrough }).fontColor(AppColors.textPrimary)
+      Span(this.inlineText(node)).decoration({ type: TextDecorationType.LineThrough }).fontColor(AppColors.textPrimary)
     } else {
       Span(node.text).fontColor(AppColors.textPrimary)
     }
+  }
+
+  /**
+   * 提取内联节点的纯文本（含嵌套子节点）。
+   *
+   * 粗体/斜体内部若含裸链接，解析器会拆成多个子节点、text 为空，
+   * 此时按子节点递归拼接，保证内容不丢失（链接样式在内联格式内降级）。
+   *
+   * @param node - 内联节点
+   * @returns 纯文本
+   */
+  private inlineText(node: MdNode): string {
+    if (node.text.length > 0) {
+      return node.text
+    }
+    let text: string = ''
+    for (let i: number = 0; i < node.children.length; i++) {
+      text += this.inlineText(node.children[i])
+    }
+    return text
   }
 
   /**

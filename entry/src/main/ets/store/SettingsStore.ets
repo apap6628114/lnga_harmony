@@ -17,6 +17,7 @@ import { CheckinSettings } from './settings/domain/CheckinSettings'
 import { AiSettings } from './settings/domain/AiSettings'
 import type { AuthState } from './AuthStore'
 import type { AiProviderProfile } from '../model/AiConfig'
+import type { AiSearchProfile } from '../model/AiSearchConfig'
 import {
   KEY_SHOW_SIGNATURE,
   KEY_IMAGE_LOAD_STRATEGY,
@@ -155,6 +156,10 @@ export class SettingsStore extends BaseStore<SettingsState> {
     AppStorage.setOrCreate(KEY_CONTENT_FONT_SIZE, this.state.fontSize)
     AppStorage.setOrCreate(KEY_TOPIC_FONT_SIZE, this.state.topicFontSize)
     this.syncColumnLayoutStorage()
+    // 旧版本搜索配置迁移后回写一次，避免每次冷启动重新迁移、id 漂移
+    if (this.aiSettings.consumeSearchMigration()) {
+      this.persistSettings()
+    }
   }
 
   /**
@@ -289,6 +294,13 @@ export class SettingsStore extends BaseStore<SettingsState> {
   deleteAiProfile(id: string): void { this.aiSettings.deleteProfile(id) }
   setActiveAiProfile(id: string): void { this.aiSettings.setActiveProfile(id) }
   getActiveAiProfile(): AiProviderProfile | null { return this.aiSettings.getActiveProfile() }
+
+  // --- AI Search Providers ---
+  addAiSearchProfile(profile: AiSearchProfile): void { this.aiSettings.addSearchProfile(profile) }
+  updateAiSearchProfile(profile: AiSearchProfile): void { this.aiSettings.updateSearchProfile(profile) }
+  deleteAiSearchProfile(id: string): void { this.aiSettings.deleteSearchProfile(id) }
+  setActiveAiSearchProfile(id: string): void { this.aiSettings.setActiveSearchProfile(id) }
+  getActiveAiSearchProfile(): AiSearchProfile | null { return this.aiSettings.getActiveSearchProfile() }
 
   // --- AI Scenario Prompts ---
   getScenarioPrompt(scenario: string): string { return this.aiSettings.getScenarioPrompt(scenario) }

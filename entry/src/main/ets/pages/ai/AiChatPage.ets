@@ -1,10 +1,12 @@
-import { ChatMessage, RequestCanceller } from '../../service/ai/ResponsesApiClient'
+import { ChatMessage, RequestCanceller } from '../../service/ai/AiProtocolTypes'
 import {
   chatCompleteWithActiveAiStream,
   formatAiCompletionError,
-  ToolCallInfo,
+  getToolAvailabilityHint,
+  ToolInvocationCallback,
   AiChatResult
 } from '../../service/ai/ActiveAiService'
+import { AiToolInvocation, AiToolSource } from '../../service/ai/tools/AiToolAdapter'
 import { MdContentView } from '../../common/components/MdContentView'
 import { MdStreamingContentView } from '../../common/components/MdStreamingContentView'
 import { PanelNavBar } from '../../common/components/PanelNavBar'
@@ -14,6 +16,9 @@ import { PageScope } from '../../common/concurrency/PageScope'
 import { UIMaterialManager } from '../../common/managers/UIMaterialManager'
 import { TitleScrollEffect } from '../../common/utils/TitleScrollEffect'
 import { resolveKeyboardAppearance } from '../../common/utils/KeyboardAppearanceUtils'
+import { openSystemLink } from '../../common/utils/LinkUtils'
+import { pasteboard } from '@kit.BasicServicesKit'
+import { common } from '@kit.AbilityKit'
 
 /** 流式输出默认刷新间隔毫秒数 */
 const DEFAULT_FLUSH_INTERVAL_MS: number = 80
@@ -29,6 +34,8 @@ const CHUNK_SPARSE_THRESHOLD_MS: number = 180
 const FLUSH_DECAY_RATE: number = 0.7
 /** 稀疏到达时刷新间隔的增量（毫秒）。线性回升，避免极端情况下间隔过小。 */
 const FLUSH_IDLE_INCREASE: number = 20
+/** 气泡内最多展示的引用来源条数。 */
+const MAX_VISIBLE_SOURCES: number = 4
 
 /**
  * 聊天气泡。
@@ -45,10 +52,20 @@ class ChatBubble {
   content: string = ''
   /** AI 是否仍在流式生成中 */
   isStreaming: boolean = false
-  /** 工具调用信息（仅 assistant 角色，联网搜索时记录搜索过程） */
-  toolCallInfo?: ToolCallInfo
-  /** 该轮 assistant 响应的原始输出 items（含 web_search_call，多轮回传用） */
-  outputItems?: Object[]
+  /** 本轮工具调用时间线 */
+  toolInvocations: AiToolInvocation[] = []
+  /** 本轮引用来源 */
+  sources: AiToolSource[] = []
+  /** 是否被用户主动停止 */
+  stopped: boolean = false
+  /** 是否调用失败（可重试） */
+  failed: boolean = false
+  /**
+   * 是否为本机生成的提示文案（错误说明、空回答兜底等）。
+   *
+   * 这类内容不属于模型回复，不能作为 assistant 历史回传给下一轮。
+   */
+  localOnly: boolean = false
 
   constructor(role: string, content: string, isStreaming: boolean) {
     this.id = 'cb_' + Date.now() + '_' + Math.floor(Math.random() * 100000)
@@ -61,11 +78,13 @@ class ChatBubble {
 /**
  * AI 对话页 — ChatGPT 式流式聊天界面。
  *
- * 支持预填充初始问题和连续多轮对话，可用于帖子总结和用户分析等场景。
+ * 支持预填充初始问题、连续多轮对话、工具调用时间线、停止生成、
+ * 重新生成与复制回答。
  *
  * 路由参数：
  * - initialPrompt: string — 预填充的第一条用户消息
  * - title: string — 导航栏标题
+ * - scenario: string — 场景标识（注入对应 system prompt）
  */
 @Entry
 @Component
@@ -78,18 +97,10 @@ struct AiChatPage {
   @State private isSending: boolean = false
   /** AI 流式输出当前累积文本（渲染用） */
   @State private streamingText: string = ''
-  /** AI 处理阶段状态文案（联网搜索时显示不同提示） */
+  /** AI 处理阶段状态文案 */
   @State private aiStatus: string = ''
-  /** 工具调用当前阶段（空字符串=无工具调用，analyzing/searching/compiling/complete） */
-  @State private toolPhase: string = ''
-  /** 工具调用阶段图标（SVG 资源，按主题着色） */
-  @State private toolIcon: Resource = $r('app.media.icon_ai_analyzing')
-  /** 工具调用阶段描述 */
-  @State private toolDescription: string = ''
-  /** 搜索关键词（仅 searching/compiling/complete 阶段） */
-  @State private toolSummary: string = ''
-  /** 搜索结果数量 */
-  @State private toolCount: number = 0
+  /** 当前轮工具调用时间线 */
+  @State private toolInvocations: AiToolInvocation[] = []
   /** 导航栏标题 */
   @State private title: string = 'AI 对话'
   /** 状态栏高度。 */
@@ -123,8 +134,10 @@ struct AiChatPage {
   private adaptiveFlushMs: number = DEFAULT_FLUSH_INTERVAL_MS
   /** 页面出现会话作用域，驱动异步回调的存活与代际校验。 */
   private scope: PageScope = new PageScope()
-  /** 当前请求取消令牌（页面销毁时中断进行中的流式请求）。 */
+  /** 当前请求取消令牌（停止生成 / 页面销毁时中断请求）。 */
   private requestCanceller: RequestCanceller = new RequestCanceller()
+  /** 用户是否主动点了「停止」。 */
+  private userStopped: boolean = false
 
   /** 滚动控制器 */
   private scroller: Scroller = new Scroller()
@@ -160,6 +173,10 @@ struct AiChatPage {
     if (this.initialPrompt.length > 0) {
       this.sendMessage(this.initialPrompt)
     }
+    const toolHint: string = getToolAvailabilityHint()
+    if (toolHint.length > 0) {
+      appStore.showToast(toolHint)
+    }
   }
 
   aboutToDisappear(): void {
@@ -172,9 +189,6 @@ struct AiChatPage {
 
   /**
    * 页面构建完成且可见时触发，确保聊天内容滚动到底部。
-   *
-   * 此钩子在首次 build() 完成后触发，比 aboutToAppear 中
-   * 的 setTimeout(0) 更可靠，能保证布局已完整计算。
    */
   onPageShow(): void {
     this.scrollToBottom()
@@ -189,16 +203,44 @@ struct AiChatPage {
     if (text.trim().length === 0 || this.isSending) {
       return
     }
-
-    const requestId: number = this.scope.begin()
     const userBubble: ChatBubble = new ChatBubble('user', text, false)
     this.bubbles.push(userBubble)
     this.inputText = ''
+    await this.requestAnswer()
+  }
+
+  /**
+   * 重新生成：移除尾部 AI 气泡后，用同一段历史重新请求。
+   */
+  private async regenerate(): Promise<void> {
+    if (this.isSending) {
+      return
+    }
+    if (this.bubbles.length === 0) {
+      return
+    }
+    const lastIndex: number = this.bubbles.length - 1
+    if (this.bubbles[lastIndex].role !== 'assistant') {
+      return
+    }
+    // 只移除最后一条 AI 气泡：按钮只在最后一条显示，避免误删历史
+    this.bubbles.pop()
+    await this.requestAnswer()
+  }
+
+  /**
+   * 发起一次 AI 请求（调用方负责维护 bubbles 中的用户消息）。
+   */
+  private async requestAnswer(): Promise<void> {
+    if (this.isSending) {
+      return
+    }
+    const requestId: number = this.scope.begin()
     this.isSending = true
+    this.userStopped = false
     this.resetStreamingState()
     this.requestCanceller = new RequestCanceller()
 
-    // 构建对话历史（不含正在生成的 AI 回复）
     const history: ChatMessage[] = this.buildHistory()
 
     // 延迟到下一帧渲染完成后滚动，避免在旧内容上滚动
@@ -208,68 +250,68 @@ struct AiChatPage {
       }
     }, 0)
 
-	    try {
-	      const result: AiChatResult = await chatCompleteWithActiveAiStream(
-	        history,
-	        (chunk: string): void => {
-            if (!this.isActiveRequest(requestId)) {
-              return
-            }
-	          this.appendStreamingChunk(chunk)
-	        },
-	        (status: string): void => {
-            if (!this.isActiveRequest(requestId)) {
-              return
-            }
-	          this.aiStatus = status
-	        },
-	        (info: ToolCallInfo): void => {
-            if (!this.isActiveRequest(requestId)) {
-              return
-            }
-	          // 原子 @State 字段逐一赋值，确保 ArkUI 可靠检测变化
-	          this.toolPhase = info.phase
-	          this.toolIcon = info.phaseIcon
-	          this.toolDescription = info.phaseDescription
-	          this.toolSummary = info.summary
-	          this.toolCount = info.count
-	        },
-	        this.requestCanceller
-	      )
-        if (!this.isActiveRequest(requestId)) {
-          return
-        }
-	      // 流式完成 — 强制同步缓冲到状态，避免添加气泡前闪现「思考中」帧
-	      this.flushStreamingText()
-	      // 流式完成 — 添加完整的 AI 气泡
-	      let finalText: string = result.text
-	      // 部分内容被截断时追加弱提示，避免用户误以为回答已完整结束
-	      if (result.truncated) {
-	        finalText += '\n\n⚠️ 回答已达模型输出上限被截断，可精简对话上下文或更换支持更长输出的模型后重试'
-	      }
-	      if (this.toolPhase.length > 0) {
-	        const savedInfo: ToolCallInfo = new ToolCallInfo()
-	        savedInfo.phase = this.toolPhase
-	        savedInfo.phaseIcon = this.toolIcon
-	        savedInfo.phaseDescription = this.toolDescription
-	        savedInfo.summary = this.toolSummary
-	        savedInfo.count = this.toolCount
-	        const aiBubble: ChatBubble = new ChatBubble('assistant', finalText, false)
-	        aiBubble.toolCallInfo = savedInfo
-	        aiBubble.outputItems = result.outputItems.length > 0 ? result.outputItems : undefined
-	        this.bubbles.push(aiBubble)
-	      } else {
-	        const aiBubble: ChatBubble = new ChatBubble('assistant', finalText, false)
-	        aiBubble.outputItems = result.outputItems.length > 0 ? result.outputItems : undefined
-	        this.bubbles.push(aiBubble)
-	      }
+    const toolCallback: ToolInvocationCallback = (invocations: AiToolInvocation[]): void => {
+      if (!this.isActiveRequest(requestId)) {
+        return
+      }
+      this.toolInvocations = invocations
+    }
+
+    try {
+      const result: AiChatResult = await chatCompleteWithActiveAiStream(
+        history,
+        (chunk: string): void => {
+          if (!this.isActiveRequest(requestId)) {
+            return
+          }
+          this.appendStreamingChunk(chunk)
+        },
+        (status: string): void => {
+          if (!this.isActiveRequest(requestId)) {
+            return
+          }
+          this.aiStatus = status
+        },
+        toolCallback,
+        this.requestCanceller
+      )
+      if (!this.isActiveRequest(requestId)) {
+        return
+      }
+      // 流式完成 — 强制同步缓冲到状态，避免添加气泡前闪现「思考中」帧
+      this.flushStreamingText()
+      let finalText: string = result.text
+      // 部分内容被截断时追加弱提示，避免用户误以为回答已完整结束
+      if (result.truncated) {
+        finalText += '\n\n⚠️ 回答已达模型输出上限被截断，可精简对话上下文或更换支持更长输出的模型后重试'
+      }
+      if (result.hitStepLimit) {
+        finalText += '\n\n⚠️ 已达到工具调用轮数上限并强制收尾，可提高「Agent 轮数」或拆分问题后重试'
+      }
+      const aiBubble: ChatBubble = new ChatBubble('assistant', finalText, false)
+      aiBubble.toolInvocations = result.toolInvocations
+      aiBubble.sources = result.sources
+      aiBubble.localOnly = result.localFallback
+      this.bubbles.push(aiBubble)
     } catch (err) {
       if (!this.isActiveRequest(requestId)) {
+        return
+      }
+      if (this.userStopped) {
+        // 用户主动停止：用完整缓冲而非已刷新快照，避免丢掉最后 30-200ms 的增量
+        const partial: string = this.streamBuffer.trim()
+        const stoppedBubble: ChatBubble = new ChatBubble(
+          'assistant', partial.length > 0 ? partial : '已停止生成', false)
+        stoppedBubble.stopped = true
+        stoppedBubble.toolInvocations = this.toolInvocations
+        this.bubbles.push(stoppedBubble)
         return
       }
       const e: Error = err as Error
       const errorText: string = formatAiCompletionError(e)
       const aiBubble: ChatBubble = new ChatBubble('assistant', errorText, false)
+      aiBubble.failed = true
+      aiBubble.localOnly = true
       this.bubbles.push(aiBubble)
     } finally {
       if (this.isActiveRequest(requestId)) {
@@ -282,6 +324,17 @@ struct AiChatPage {
         }, 0)
       }
     }
+  }
+
+  /**
+   * 停止当前生成。
+   */
+  private stopGenerating(): void {
+    if (!this.isSending) {
+      return
+    }
+    this.userStopped = true
+    this.requestCanceller.cancel()
   }
 
   /**
@@ -310,10 +363,8 @@ struct AiChatPage {
     if (this.lastChunkTimeMs > 0) {
       const gap: number = now - this.lastChunkTimeMs
       if (gap < CHUNK_BURST_THRESHOLD_MS) {
-        // chunk 快速连续到达 → 指数衰减加速刷新，比线性加减收敛更快
         this.adaptiveFlushMs = Math.max(MIN_FLUSH_INTERVAL_MS, Math.floor(this.adaptiveFlushMs * FLUSH_DECAY_RATE))
       } else if (gap > CHUNK_SPARSE_THRESHOLD_MS) {
-        // chunk 稀疏到达 → 线性增加刷新频率节省资源
         this.adaptiveFlushMs = Math.min(MAX_FLUSH_INTERVAL_MS, this.adaptiveFlushMs + FLUSH_IDLE_INCREASE)
       }
     }
@@ -362,9 +413,6 @@ struct AiChatPage {
 
   /**
    * 安排一次流式输出滚动，合并同一帧内的重复滚动请求。
-   *
-   * 流式输出期间始终强制滚到底部（用户主动生成内容，预期看到滚动）。
-   * 使用高 velocity 使滚动接近瞬时完成，避免默认动画追不上内容增长。
    */
   private scheduleStreamingScroll(): void {
     if (this.streamScrollTimer >= 0) {
@@ -399,11 +447,7 @@ struct AiChatPage {
     this.streamBuffer = ''
     this.streamingText = ''
     this.aiStatus = ''
-    this.toolPhase = ''
-    this.toolIcon = $r('app.media.icon_ai_analyzing')
-    this.toolDescription = ''
-    this.toolSummary = ''
-    this.toolCount = 0
+    this.toolInvocations = []
     this.lastChunkTimeMs = 0
     this.adaptiveFlushMs = DEFAULT_FLUSH_INTERVAL_MS
   }
@@ -412,14 +456,11 @@ struct AiChatPage {
    * 从已完成的对话气泡中构建 ChatMessage 数组。
    *
    * 若有场景 system prompt，在消息数组开头插入 system role 消息。
-   * assistant 消息携带该轮原始输出 items（含 web_search_call），
-   * 由客户端序列化为 Responses API 输入时原样回传。
    *
    * @returns API 调用的对话历史
    */
   private buildHistory(): ChatMessage[] {
     const messages: ChatMessage[] = []
-    // 前置 system prompt（用于场景任务的角色设定和输出约束）
     if (this.systemPrompt.length > 0) {
       messages.push(new ChatMessage('system', this.systemPrompt))
     }
@@ -427,12 +468,9 @@ struct AiChatPage {
       const b: ChatBubble = this.bubbles[i]
       if (b.role === 'user') {
         messages.push(new ChatMessage('user', b.content))
-      } else if (b.role === 'assistant' && !b.isStreaming && b.content.length > 0) {
-        const assistantMsg: ChatMessage = new ChatMessage('assistant', b.content)
-        if (b.outputItems && b.outputItems.length > 0) {
-          assistantMsg.outputItems = b.outputItems
-        }
-        messages.push(assistantMsg)
+      } else if (b.role === 'assistant' && !b.isStreaming && b.content.length > 0 &&
+        !b.failed && !b.stopped && !b.localOnly) {
+        messages.push(new ChatMessage('assistant', b.content))
       }
     }
     return messages
@@ -444,107 +482,74 @@ struct AiChatPage {
   }
 
   /**
-   * 若用户当前位于底部则滚动到底部（用于流式输出过程）。
+   * 复制文本到剪贴板。
    *
-   * 防止用户上翻阅读历史内容时被流式滚动干扰。
+   * @param text - 待复制文本
    */
-  private scrollToBottomIfAtEnd(): void {
-    if (this.scroller.isAtEnd()) {
-      this.scroller.scrollEdge(Edge.Bottom)
+  private copyText(text: string): void {
+    try {
+      const data: pasteboard.PasteData =
+        pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text)
+      pasteboard.getSystemPasteboard().setData(data).then((): void => {
+        appStore.showToast('已复制')
+      }).catch((): void => {
+        appStore.showToast('复制失败')
+      })
+    } catch (e) {
+      appStore.showToast('复制失败')
     }
+  }
+
+  /**
+   * 用系统浏览器打开外部链接。
+   *
+   * @param href - 链接地址
+   */
+  private openExternalLink(href: string): void {
+    if (href.length === 0) {
+      return
+    }
+    const hostContext: Context | undefined = this.getUIContext().getHostContext()
+    if (hostContext !== undefined) {
+      openSystemLink(href, hostContext as common.UIAbilityContext)
+    }
+  }
+
+  /**
+   * 判断某条气泡是否需要展示「重试」。
+   *
+   * @param bubble - 气泡
+   * @returns true 表示可重试
+   */
+  private canRetry(bubble: ChatBubble): boolean {
+    if (this.isSending) {
+      return false
+    }
+    if (bubble.role !== 'assistant') {
+      return false
+    }
+    // 只有最后一条 AI 气泡可以重试：regenerate 只弹出尾部气泡，
+    // 中段气泡显示「重新生成」会与点击后的实际行为不一致。
+    const lastIndex: number = this.bubbles.length - 1
+    return lastIndex >= 0 && this.bubbles[lastIndex].id === bubble.id
   }
 
   build() {
     Stack() {
       Column() {
         Scroll(this.scroller) {
-        Column() {
-          ForEach(this.bubbles, (bubble: ChatBubble) => {
-            this.RenderBubble(bubble)
-          }, (bubble: ChatBubble) => bubble.id)
+          Column() {
+            ForEach(this.bubbles, (bubble: ChatBubble) => {
+              this.RenderBubble(bubble)
+            }, (bubble: ChatBubble) => bubble.id)
 
-		          if (this.isSending) {
-		            Row() {
-		              Column() {
-		                // === 工具调用指示器（纯文本沉浸式，无背景无边框） ===
-		                if (this.toolPhase.length > 0) {
-		                  if (this.toolPhase === 'complete') {
-		                    // 完成态：很淡的一行
-		                    Row() {
-		                      Image($r('app.media.icon_checkmark'))
-		                        .width(12).height(12)
-		                        .fillColor(AppColors.textTertiary)
-		                      Text(this.toolDescription)
-		                        .fontSize(12)
-		                        .fontColor(AppColors.textTertiary)
-		                        .layoutWeight(1)
-		                        .maxLines(1)
-		                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-		                    }
-		                    .width('100%')
-		                    .alignItems(VerticalAlign.Center)
-		                    .padding({ bottom: 6 })
-		                  } else {
-			                    // 活跃态：统一所有进行中状态（分析/搜索/生成），无装饰
-			                    Row() {
-			                      Image(this.toolIcon)
-			                        .width(15).height(15)
-			                        .fillColor(AppColors.primary)
-			                      Text(this.streamingText.length > 0 ? '正在生成回答...' : this.toolDescription)
-			                        .fontSize(14)
-			                        .fontColor(AppColors.textPrimary)
-			                        .layoutWeight(1)
-			                        .margin({ left: 5 })
-			                        .maxLines(2)
-			                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-			                      if (this.streamingText.length === 0) {
-			                        LoadingProgress()
-			                          .width(14).height(14)
-			                          .color(AppColors.primary)
-			                          .margin({ left: 6 })
-			                      }
-			                    }
-		                    .width('100%')
-		                    .alignItems(VerticalAlign.Center)
-		                    .margin({ bottom: 8 })
-		                  }
-		                }
-
-		                // === 流式内容或加载状态 ===
-		                if (this.streamingText.length > 0) {
-		                  MdStreamingContentView({ text: this.streamingText })
-		                } else if (this.toolPhase.length === 0) {
-		                  Row() {
-		                    LoadingProgress()
-		                      .width(20).height(20)
-		                      .color(AppColors.primary)
-		                    if (this.aiStatus.length > 0) {
-		                      Text('  ' + this.aiStatus)
-		                        .fontSize(15)
-		                        .fontColor(AppColors.textSecondary)
-		                    } else {
-		                      Text('  AI 思考中...')
-		                        .fontSize(15)
-		                        .fontColor(AppColors.textSecondary)
-		                    }
-		                  }
-		                }
-		              }
-		              .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-		              .backgroundColor(AppColors.bgSecondary)
-		              .borderRadius({ topLeft: 4, topRight: 14, bottomLeft: 14, bottomRight: 14 })
-		              .width('100%')
-		              .constraintSize({ maxWidth: '85%' })
-		            }
-		            .width('100%')
-		            .justifyContent(FlexAlign.Start)
-		            .margin({ top: 6, bottom: 6 })
-		            .alignItems(VerticalAlign.Top)
-		          }
-        }
-        .width('100%')
-        .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-        .alignItems(HorizontalAlign.Start)
+            if (this.isSending) {
+              this.RenderStreamingBubble()
+            }
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+          .alignItems(HorizontalAlign.Start)
         }
         .width('100%')
         .layoutWeight(1)
@@ -591,7 +596,101 @@ struct AiChatPage {
   }
 
   // ============================================================
-  // 气泡渲染
+  // 流式气泡（含工具时间线）
+  // ============================================================
+
+  /** 渲染正在生成的 AI 气泡。 */
+  @Builder
+  RenderStreamingBubble() {
+    Row() {
+      Column() {
+        // === 工具调用时间线 ===
+        if (this.toolInvocations.length > 0) {
+          ForEach(this.toolInvocations, (invocation: AiToolInvocation) => {
+            Row() {
+              Image(this.toolIcon(invocation))
+                .width(13).height(13)
+                .fillColor(invocation.status === 'failed' ? AppColors.destructive :
+                  (invocation.status === 'running' ? AppColors.primary : AppColors.textTertiary))
+              Text(invocation.displayName)
+                .fontSize(12)
+                .fontColor(AppColors.textSecondary)
+                .margin({ left: 6 })
+              Text(this.toolSummaryText(invocation))
+                .fontSize(12)
+                .fontColor(AppColors.textTertiary)
+                .layoutWeight(1)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .margin({ left: 6 })
+              if (invocation.status === 'running') {
+                LoadingProgress()
+                  .width(12).height(12)
+                  .color(AppColors.primary)
+                  .margin({ left: 4 })
+              } else if (invocation.status === 'failed') {
+                Text('失败')
+                  .fontSize(11)
+                  .fontColor(AppColors.destructive)
+                  .margin({ left: 4 })
+              } else if (invocation.count > 0) {
+                Text(invocation.count.toString() + ' 条')
+                  .fontSize(11)
+                  .fontColor(AppColors.textTertiary)
+                  .margin({ left: 4 })
+              }
+            }
+            .width('100%')
+            .alignItems(VerticalAlign.Center)
+            .margin({ bottom: 5 })
+          }, (invocation: AiToolInvocation): string => invocation.id + '_' + invocation.status)
+        }
+
+        // === 状态提示（无正文且无工具时显示） ===
+        if (this.streamingText.length === 0 && this.toolInvocations.length === 0) {
+          Row() {
+            LoadingProgress()
+              .width(20).height(20)
+              .color(AppColors.primary)
+            Text('  ' + (this.aiStatus.length > 0 ? this.aiStatus : 'AI 思考中...'))
+              .fontSize(15)
+              .fontColor(AppColors.textSecondary)
+          }
+        } else if (this.streamingText.length === 0) {
+          Row() {
+            LoadingProgress()
+              .width(14).height(14)
+              .color(AppColors.primary)
+            Text('  ' + (this.aiStatus.length > 0 ? this.aiStatus : '正在生成回答...'))
+              .fontSize(13)
+              .fontColor(AppColors.textSecondary)
+          }
+          .margin({ top: 2 })
+        }
+
+        // === 流式正文 ===
+        if (this.streamingText.length > 0) {
+          MdStreamingContentView({
+            text: this.streamingText,
+            onLinkClick: (href: string): void => { this.openExternalLink(href) }
+          })
+            .margin({ top: this.toolInvocations.length > 0 ? 6 : 0 })
+        }
+      }
+      .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+      .backgroundColor(AppColors.bgSecondary)
+      .borderRadius({ topLeft: 4, topRight: 14, bottomLeft: 14, bottomRight: 14 })
+      .width('100%')
+      .constraintSize({ maxWidth: '85%' })
+    }
+    .width('100%')
+    .justifyContent(FlexAlign.Start)
+    .margin({ top: 6, bottom: 6 })
+    .alignItems(VerticalAlign.Top)
+  }
+
+  // ============================================================
+  // 已完成气泡
   // ============================================================
 
   /** 渲染单条已完成的聊天气泡。 */
@@ -613,28 +712,105 @@ struct AiChatPage {
       } else {
         // AI 气泡：撑满宽度（给 MdContentView 确定宽度上下文），左对齐
         Column() {
-	          // 工具调用摘要（ChatGPT 风格：紧凑一行，无分隔线）
-	          if (bubble.toolCallInfo) {
-	            Row() {
-	              Image($r('app.media.icon_globe'))
-	                .width(12).height(12)
-	                .fillColor(AppColors.textTertiary)
-		              Text(bubble.toolCallInfo.summary.length > 0 ?
-		                '"' + bubble.toolCallInfo.summary + '"' :
-		                '已搜索互联网')
-		                .fontSize(12)
-		                .fontColor(AppColors.textTertiary)
-		              if (bubble.toolCallInfo.count > 0) {
-		                Text(' · ' + bubble.toolCallInfo.count.toString() + ' 条结果')
-	                  .fontSize(12)
-	                  .fontColor(AppColors.textTertiary)
-	              }
-	            }
-	            .width('100%')
-	            .alignItems(VerticalAlign.Center)
-	            .padding({ bottom: 8 })
-	          }
-          MdContentView({ text: bubble.content })
+          // 工具调用时间线（完整轮次）
+          if (bubble.toolInvocations.length > 0) {
+            ForEach(bubble.toolInvocations, (invocation: AiToolInvocation) => {
+              Row() {
+                Image(this.toolIcon(invocation))
+                  .width(12).height(12)
+                  .fillColor(invocation.status === 'failed' ? AppColors.destructive : AppColors.textTertiary)
+                Text(invocation.displayName)
+                  .fontSize(12)
+                  .fontColor(AppColors.textTertiary)
+                  .margin({ left: 6 })
+                Text(this.toolSummaryText(invocation))
+                  .fontSize(12)
+                  .fontColor(AppColors.textTertiary)
+                  .layoutWeight(1)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .margin({ left: 6 })
+                if (invocation.status === 'failed') {
+                  Text('失败')
+                    .fontSize(11)
+                    .fontColor(AppColors.destructive)
+                } else if (invocation.count > 0) {
+                  Text(invocation.count.toString() + ' 条')
+                    .fontSize(11)
+                    .fontColor(AppColors.textTertiary)
+                }
+              }
+              .width('100%')
+              .alignItems(VerticalAlign.Center)
+              .margin({ bottom: 5 })
+            }, (invocation: AiToolInvocation): string => invocation.id + '_' + invocation.status)
+          }
+
+          MdContentView({
+            text: bubble.content,
+            onLinkClick: (href: string): void => { this.openExternalLink(href) }
+          })
+
+          // 引用来源
+          if (bubble.sources.length > 0) {
+            Column() {
+              Text('参考来源')
+                .fontSize(11)
+                .fontColor(AppColors.textTertiary)
+                .width('100%')
+                .margin({ bottom: 3 })
+
+              ForEach(bubble.sources.slice(0, MAX_VISIBLE_SOURCES), (source: AiToolSource, index: number) => {
+                Text((index + 1).toString() + '. ' + (source.title.length > 0 ? source.title : source.url))
+                  .fontSize(11)
+                  .fontColor(AppColors.primary)
+                  .width('100%')
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .margin({ bottom: 3 })
+                  .onClick((): void => {
+                    this.openExternalLink(source.url)
+                  })
+              }, (source: AiToolSource): string => source.url)
+            }
+            .width('100%')
+            .margin({ top: 8 })
+            .padding({ top: 6 })
+            .border({
+              width: { top: 0.5 },
+              color: { top: AppColors.separator },
+              style: { top: BorderStyle.Solid }
+            })
+          }
+
+          // 气泡操作行
+          Row() {
+            if (bubble.stopped) {
+              Text('已停止')
+                .fontSize(11)
+                .fontColor(AppColors.textTertiary)
+            }
+            Blank()
+            if (this.canRetry(bubble) && bubble.content.length > 0) {
+              Text('↻ 重新生成')
+                .fontSize(11)
+                .fontColor(AppColors.textTertiary)
+                .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+                .onClick((): void => {
+                  this.regenerate()
+                })
+            }
+            Text('复制')
+              .fontSize(11)
+              .fontColor(AppColors.textTertiary)
+              .padding({ left: 8, right: 4, top: 4, bottom: 4 })
+              .onClick((): void => {
+                this.copyText(bubble.content)
+              })
+          }
+          .width('100%')
+          .margin({ top: 6 })
+          .alignItems(VerticalAlign.Center)
         }
         .padding({ left: 14, right: 14, top: 10, bottom: 10 })
         .backgroundColor(AppColors.bgSecondary)
@@ -650,6 +826,66 @@ struct AiChatPage {
   }
 
   // ============================================================
+  // 工具展示辅助
+  // ============================================================
+
+  /**
+   * 工具调用图标。
+   *
+   * @param invocation - 工具调用记录
+   * @returns 图标资源
+   */
+  private toolIcon(invocation: AiToolInvocation): Resource {
+    if (invocation.name === 'web_fetch') {
+      return $r('app.media.icon_link')
+    }
+    if (invocation.name === 'web_search') {
+      return $r('app.media.icon_search')
+    }
+    return $r('app.media.icon_ai_analyzing')
+  }
+
+  /**
+   * 工具调用摘要文案（参数可能是 JSON，截断展示）。
+   *
+   * @param invocation - 工具调用记录
+   * @returns 摘要
+   */
+  private toolSummaryText(invocation: AiToolInvocation): string {
+    let summary: string = invocation.summary.trim()
+    if (summary.startsWith('{')) {
+      summary = this.extractArgumentPreview(summary)
+    }
+    if (summary.length > 60) {
+      return summary.substring(0, 60) + '…'
+    }
+    return summary
+  }
+
+  /**
+   * 从 JSON 参数里提取 query / url 作为展示文案。
+   *
+   * @param argumentsText - 参数 JSON
+   * @returns 展示文案
+   */
+  private extractArgumentPreview(argumentsText: string): string {
+    try {
+      const parsed: Record<string, Object> = JSON.parse(argumentsText) as Record<string, Object>
+      const query: Object | undefined = parsed['query']
+      if (typeof query === 'string') {
+        return query as string
+      }
+      const url: Object | undefined = parsed['url']
+      if (typeof url === 'string') {
+        return url as string
+      }
+    } catch (e) {
+      return argumentsText
+    }
+    return argumentsText
+  }
+
+  // ============================================================
   // 底部输入栏
   // ============================================================
 
@@ -658,7 +894,7 @@ struct AiChatPage {
   RenderInputBar() {
     Column() {
       Row() {
-        TextInput({ text: this.inputText, placeholder: '输入追问…' })
+        TextInput({ text: this.inputText, placeholder: this.isSending ? '正在生成，可点停止…' : '输入追问…' })
           .layoutWeight(1)
           .fontSize(15)
           .fontColor(UIMaterialManager.inputForeground)
@@ -670,6 +906,7 @@ struct AiChatPage {
           .attributeModifier(UIMaterialManager.inputMaterial)
           .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
           .enterKeyType(EnterKeyType.Send)
+          .enabled(!this.isSending)
           .onChange((value: string): void => {
             this.inputText = value
           })
@@ -677,20 +914,36 @@ struct AiChatPage {
             this.sendMessage(this.inputText)
           })
 
-        Button(this.isSending ? '生成中…' : '发送')
-          .type(ButtonType.Capsule)
-          .fontSize(14)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(AppColors.white)
-          .backgroundColor(AppColors.primary)
-          .height(44)
-          .constraintSize({ minWidth: 76 })
-          .padding({ left: 16, right: 16 })
-          .margin({ left: 8 })
-          .enabled(!this.isSending && this.inputText.trim().length > 0)
-          .onClick((): void => {
-            this.sendMessage(this.inputText)
-          })
+        if (this.isSending) {
+          Button('停止')
+            .type(ButtonType.Capsule)
+            .fontSize(14)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(AppColors.white)
+            .backgroundColor(AppColors.destructive)
+            .height(44)
+            .constraintSize({ minWidth: 76 })
+            .padding({ left: 16, right: 16 })
+            .margin({ left: 8 })
+            .onClick((): void => {
+              this.stopGenerating()
+            })
+        } else {
+          Button('发送')
+            .type(ButtonType.Capsule)
+            .fontSize(14)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(AppColors.white)
+            .backgroundColor(AppColors.primary)
+            .height(44)
+            .constraintSize({ minWidth: 76 })
+            .padding({ left: 16, right: 16 })
+            .margin({ left: 8 })
+            .enabled(this.inputText.trim().length > 0)
+            .onClick((): void => {
+              this.sendMessage(this.inputText)
+            })
+        }
       }
       .width('100%')
       .constraintSize({ maxWidth: 720 })

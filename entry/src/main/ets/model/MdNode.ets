@@ -33,6 +33,14 @@ export enum MdNodeType {
   THEMATIC_BREAK,
   /** 链接 `[text](url)` */
   LINK,
+  /** 图片 `![alt](url)`（块级独占一行，或内联降级为文本） */
+  IMAGE,
+  /** 表格（GFM `| a | b |` + 分隔行） */
+  TABLE,
+  /** 表格行（children 为 TABLE_CELL） */
+  TABLE_ROW,
+  /** 表格单元格（children 为内联节点） */
+  TABLE_CELL,
 }
 
 /** 全局节点 ID 计数器，确保 ForEach key 唯一 */
@@ -55,12 +63,16 @@ export class MdNode {
   text: string = ''
   /** 子节点（树形结构） */
   children: MdNode[] = []
-  /** 标题级别 (1-6)，仅 HEADING 类型有效 */
+  /** 标题级别 (1-6)，仅 HEADING 有效；表格行用 1 表示表头 */
   level: number = 1
-  /** 链接 URL，仅 LINK 类型有效 */
+  /** 链接 / 图片 URL，仅 LINK / IMAGE 有效 */
   href: string = ''
   /** 代码块语言标识，仅 CODE_BLOCK 类型有效 */
   language: string = ''
+  /** 任务列表勾选状态：-1 非任务项，0 未完成，1 已完成 */
+  checked: number = -1
+  /** 表格单元格对齐：left / center / right */
+  align: string = 'left'
 
   /**
    * 创建 MD 节点并分配唯一 ID。

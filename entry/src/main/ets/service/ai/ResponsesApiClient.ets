@@ -1,215 +1,114 @@
 /**
- * DeepSeek Responses API 客户端。
+ * OpenAI Responses API 客户端。
  *
- * 全面对接 DeepSeek 的 /responses 端点：
- * - 内置服务端联网搜索工具 web_search，无需任何第三方搜索服务
- * - 语义化 SSE 事件流（response.* 事件序列，以 response.completed / incomplete / failed 结束）
- * - 无状态 API：多轮上下文由客户端回传历史 items（含 web_search_call 原样回传）
+ * 面向 DeepSeek 官方（`/responses`）以及任何兼容 Responses 契约的服务商：
+ * - 语义化 SSE 事件流（response.* 事件，以 completed / incomplete / failed 结束）
+ * - 无状态 API：多轮上下文由客户端回传历史 items（含 reasoning / function_call）
+ * - function 工具：客户端执行后以 function_call_output 回传
+ *
+ * 协议细节与厂商无关，只使用 OpenAI Responses 公开字段；
+ * 服务端内置工具（web_search 等）不在此声明，联网能力统一走客户端工具层。
  */
 
 import { http } from '@kit.NetworkKit'
 import { util } from '@kit.ArkTS'
+import { AiProviderProfile } from '../../model/AiConfig'
+import { buildChatUrl, extractServerError } from './AiEndpoint'
+import {
+  AiToolDefinition,
+  ChatMessage,
+  ChatStreamChunkCallback,
+  ChatTurnOptions,
+  ChatTurnResult,
+  ReasoningStreamCallback,
+  RequestCanceller,
+  ToolCall,
+  ToolCallFunction
+} from './AiProtocolTypes'
 import { Logger, DOMAIN_SERVICE } from '../../common/utils/Logger'
-import type { AiProviderProfile } from '../../model/AiConfig'
-import { AiTestResult, DEFAULT_DEEPSEEK_ENDPOINT } from '../../model/AiConfig'
 
 const logger = new Logger(DOMAIN_SERVICE, 'ResponsesApiClient')
 
-/** 请求超时毫秒数（联网搜索可能比普通对话耗时更长） */
-const REQUEST_TIMEOUT: number = 90000
-/** 连接超时毫秒数 */
+/** 请求超时毫秒数（多步工具调用可能较长）。 */
+const REQUEST_TIMEOUT: number = 120000
+/** 连接超时毫秒数。 */
 const CONNECT_TIMEOUT: number = 15000
-/** 服务端内置联网搜索工具类型名 */
-const WEB_SEARCH_TOOL_TYPE: string = 'web_search'
 
-/** 流式响应文本增量回调。 */
-export type ChatStreamChunkCallback = (chunk: string) => void
-
-/** 服务端联网搜索状态回调。phase: searching | completed | failed */
-export type WebSearchStateCallback = (phase: string, query: string) => void
-
-/**
- * 对话消息。
- *
- * 用于构建 Responses API 输入 items。
- * assistant 消息可携带该轮原始输出 items（含 web_search_call），回传历史时原样展开。
- */
-export class ChatMessage {
-  /** 消息角色（user / assistant / system） */
-  role: string
-  /** 消息内容 */
-  content: string
-  /** 该条 assistant 消息对应的原始响应输出 items（可选） */
-  outputItems?: Object[]
-
-  /**
-   * 创建对话消息。
-   *
-   * @param role - 消息角色
-   * @param content - 消息内容
-   */
-  constructor(role: string, content: string) {
-    this.role = role
-    this.content = content
-  }
-}
-
-/** Responses API 调用结果。 */
-export class ResponseResult {
-  /** 助手回复完整文本 */
-  content: string = ''
-  /** 本响应的输出 items 数组（用于多轮对话回传） */
-  outputItems: Object[] = []
-  /** 响应状态（'completed' | 'incomplete'） */
-  status: string = ''
-  /** 是否因达到服务端输出长度上限被截断 */
-  truncated: boolean = false
+/** 尚未完成的 function_call 累积项。 */
+class PendingFunctionCall {
+  /** 输出 item ID */
+  itemId: string = ''
+  /** 输出下标 */
+  outputIndex: number = -1
+  /** 调用 ID */
+  callId: string = ''
+  /** 函数名 */
+  name: string = ''
+  /** 参数 JSON 累积 */
+  arguments: string = ''
 }
 
 /**
- * 请求取消令牌。
+ * Responses 语义化 SSE 解析器。
  *
- * 页面销毁等场景可调用 cancel() 中断进行中的流式请求。
- */
-export class RequestCanceller {
-  /** 是否已取消。 */
-  private cancelled: boolean = false
-  /** 取消处理器（由客户端内部注册）。 */
-  private handler: (() => void) | null = null
-
-  /**
-   * 发起取消，触发客户端中断请求。
-   */
-  cancel(): void {
-    if (this.cancelled) {
-      return
-    }
-    this.cancelled = true
-    if (this.handler) {
-      this.handler()
-    }
-  }
-
-  /**
-   * 判断是否已取消。
-   *
-   * @returns true 表示已取消
-   */
-  isCancelled(): boolean {
-    return this.cancelled
-  }
-
-  /**
-   * 注册取消处理器（仅供客户端内部使用）。
-   *
-   * @param handler - 取消时执行的回调
-   */
-  setHandler(handler: () => void): void {
-    this.handler = handler
-  }
-}
-
-/**
- * Responses API 语义化 SSE 事件解析器。
- *
- * 事件格式为 OpenAI Responses 兼容的：
- *   event: <type>
- *   data: { ...json... }
- * 同时兼容 data JSON 内直接携带 event 字段的格式（DeepSeek 文档描述）。
+ * 只关心四类信息：正文增量、思维链增量、function_call 参数、最终 response。
  */
 class ResponsesEventParser {
-  /** 尚未解析成完整事件的文本。 */
+  /** 尚未解析成完整事件块的文本。 */
   private pendingText: string = ''
-  /** 累积的助手回复文本。 */
+  /** 累积正文。 */
   private text: string = ''
-  /** 最终响应携带的完整输出 items。 */
+  /** 累积思维链。 */
+  private reasoning: string = ''
+  /** 最终 response.output。 */
   private outputItems: Object[] = []
-  /** response.failed 事件携带的错误信息。 */
+  /** response.failed 的错误信息。 */
   private errorMessage: string = ''
-  /** 最终响应状态（'completed' | 'incomplete'）。 */
+  /** 最终状态。 */
   private status: string = ''
-  /** 最近一次搜索关键词。 */
-  private lastSearchQuery: string = ''
+  /** 未完成的 function_call 累积表。 */
+  private pendingCalls: PendingFunctionCall[] = []
 
   /**
-   * 追加一段响应文本并解析其中完整的事件。
+   * 追加响应文本并解析完整事件块。
    *
-   * @param text - 新收到的 UTF-8 文本
-   * @param onDelta - 文本增量回调
-   * @param onSearch - 服务端搜索状态回调
+   * @param text - 新收到的文本
+   * @param onDelta - 正文增量回调
+   * @param onReasoning - 思维链增量回调
    */
-  append(text: string, onDelta: ChatStreamChunkCallback, onSearch: WebSearchStateCallback): void {
+  append(text: string, onDelta: ChatStreamChunkCallback, onReasoning: ReasoningStreamCallback): void {
     this.pendingText += text
     this.pendingText = this.pendingText.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-    this.parseAvailableEvents(onDelta, onSearch)
-  }
-
-  /**
-   * 结束解析并处理剩余缓冲。
-   *
-   * @param onDelta - 文本增量回调
-   * @param onSearch - 服务端搜索状态回调
-   * @returns 助手回复完整文本
-   */
-  finish(onDelta: ChatStreamChunkCallback, onSearch: WebSearchStateCallback): string {
-    if (this.pendingText.trim().length > 0) {
-      this.parseEvent(this.pendingText, onDelta, onSearch)
-      this.pendingText = ''
-    }
-    return this.text
-  }
-
-  /**
-   * 获取解析到的错误信息。
-   *
-   * @returns 错误信息，无错误时返回空字符串
-   */
-  getError(): string {
-    return this.errorMessage
-  }
-
-  /**
-   * 获取响应携带的完整输出 items。
-   *
-   * @returns 输出 items 数组
-   */
-  getOutputItems(): Object[] {
-    return this.outputItems
-  }
-
-  /**
-   * 获取最终响应状态。
-   *
-   * @returns 状态值（'completed' | 'incomplete'），未知时返回空字符串
-   */
-  getStatus(): string {
-    return this.status
-  }
-
-  /**
-   * 循环解析当前缓冲中完整的事件块。
-   *
-   * @param onDelta - 文本增量回调
-   * @param onSearch - 服务端搜索状态回调
-   */
-  private parseAvailableEvents(onDelta: ChatStreamChunkCallback, onSearch: WebSearchStateCallback): void {
     let separatorIndex: number = this.pendingText.indexOf('\n\n')
     while (separatorIndex >= 0) {
-      const eventText: string = this.pendingText.substring(0, separatorIndex)
+      const block: string = this.pendingText.substring(0, separatorIndex)
       this.pendingText = this.pendingText.substring(separatorIndex + 2)
-      this.parseEvent(eventText, onDelta, onSearch)
+      this.parseBlock(block, onDelta, onReasoning)
       separatorIndex = this.pendingText.indexOf('\n\n')
     }
   }
 
   /**
-   * 解析单个 SSE 事件块（event: 行 + data: 行）。
+   * 结束解析并处理剩余缓冲。
    *
-   * @param block - SSE 事件块文本
-   * @param onDelta - 文本增量回调
-   * @param onSearch - 服务端搜索状态回调
+   * @param onDelta - 正文增量回调
+   * @param onReasoning - 思维链增量回调
    */
-  private parseEvent(block: string, onDelta: ChatStreamChunkCallback, onSearch: WebSearchStateCallback): void {
+  finish(onDelta: ChatStreamChunkCallback, onReasoning: ReasoningStreamCallback): void {
+    if (this.pendingText.trim().length > 0) {
+      this.parseBlock(this.pendingText, onDelta, onReasoning)
+      this.pendingText = ''
+    }
+  }
+
+  /**
+   * 解析单个 SSE 事件块。
+   *
+   * @param block - 事件块文本
+   * @param onDelta - 正文增量回调
+   * @param onReasoning - 思维链增量回调
+   */
+  private parseBlock(block: string, onDelta: ChatStreamChunkCallback, onReasoning: ReasoningStreamCallback): void {
     const lines: string[] = block.split('\n')
     let eventType: string = ''
     let dataText: string = ''
@@ -218,482 +117,618 @@ class ResponsesEventParser {
       if (line.startsWith('event:')) {
         eventType = line.substring(6).trim()
       } else if (line.startsWith('data:')) {
-        dataText = line.substring(5).trim()
+        const payload: string = line.substring(5).trim()
+        if (payload.length > 0) {
+          if (dataText.length > 0) {
+            dataText += '\n'
+          }
+          dataText += payload
+        }
       }
     }
-    // 兼容 data JSON 内直接携带 event 字段的格式
-    if (eventType.length === 0 && dataText.length > 0) {
-      try {
-        const json: Record<string, Object> = JSON.parse(dataText) as Record<string, Object>
-        eventType = (json['event'] as string) ?? ''
-      } catch (e) {
-        return
-      }
+    if (dataText.length === 0) {
+      return
+    }
+
+    let json: Record<string, Object> = {}
+    try {
+      json = JSON.parse(dataText) as Record<string, Object>
+    } catch (e) {
+      logger.warn('parseBlock: 非 JSON 数据块已跳过')
+      return
+    }
+    if (eventType.length === 0) {
+      const typeRaw: Object | undefined = json['type']
+      eventType = typeof typeRaw === 'string' ? typeRaw as string : ''
     }
     if (eventType.length === 0) {
       return
     }
-    this.dispatch(eventType, dataText, onDelta, onSearch)
+    this.dispatch(eventType, json, onDelta, onReasoning)
   }
 
   /**
-   * 按事件类型分发处理。
+   * 按事件类型分发。
    *
    * @param eventType - 事件类型
-   * @param dataText - data JSON 字符串
-   * @param onDelta - 文本增量回调
-   * @param onSearch - 服务端搜索状态回调
+   * @param json - data JSON
+   * @param onDelta - 正文增量回调
+   * @param onReasoning - 思维链增量回调
    */
   private dispatch(
     eventType: string,
-    dataText: string,
+    json: Record<string, Object>,
     onDelta: ChatStreamChunkCallback,
-    onSearch: WebSearchStateCallback
+    onReasoning: ReasoningStreamCallback
   ): void {
     if (eventType === 'response.output_text.delta') {
-      this.handleTextDelta(dataText, onDelta)
-      return
-    }
-    if (eventType.indexOf('response.web_search_call') === 0) {
-      this.handleWebSearch(eventType, dataText, onSearch)
-      return
-    }
-    if (eventType === 'response.completed' || eventType === 'response.incomplete') {
-      this.handleResponseFinal(dataText)
-      return
-    }
-    if (eventType === 'response.failed') {
-      this.handleFailed(dataText)
-      return
-    }
-    // 其他事件（created / in_progress / output_item.* / content_part.* / reasoning.* 等）忽略
-  }
-
-  /**
-   * 处理文本增量事件。
-   *
-   * @param dataText - data JSON 字符串
-   * @param onDelta - 文本增量回调
-   */
-  private handleTextDelta(dataText: string, onDelta: ChatStreamChunkCallback): void {
-    try {
-      const json: Record<string, Object> = JSON.parse(dataText) as Record<string, Object>
-      const delta: string = (json['delta'] as string) ?? ''
+      const delta: string = readString(json, 'delta')
       if (delta.length > 0) {
         this.text += delta
         onDelta(delta)
       }
-    } catch (e) {
-      logger.warn('handleTextDelta: 解析失败')
+      return
+    }
+    if (eventType === 'response.reasoning_text.delta') {
+      const delta: string = readString(json, 'delta')
+      if (delta.length > 0) {
+        this.reasoning += delta
+        onReasoning(delta)
+      }
+      return
+    }
+    if (eventType === 'response.output_item.added') {
+      this.handleOutputItemAdded(json)
+      return
+    }
+    if (eventType === 'response.function_call_arguments.delta') {
+      this.handleArgumentsDelta(json)
+      return
+    }
+    if (eventType === 'response.function_call_arguments.done') {
+      this.handleArgumentsDone(json)
+      return
+    }
+    if (eventType === 'response.completed' || eventType === 'response.incomplete') {
+      this.handleFinal(json)
+      return
+    }
+    if (eventType === 'response.failed') {
+      this.handleFailed(json)
     }
   }
 
   /**
-   * 处理服务端联网搜索状态事件。
+   * 处理 output_item.added：登记 function_call 槽位。
    *
-   * @param eventType - 事件类型
-   * @param dataText - data JSON 字符串
-   * @param onSearch - 服务端搜索状态回调
+   * @param json - data JSON
    */
-  private handleWebSearch(eventType: string, dataText: string, onSearch: WebSearchStateCallback): void {
-    let query: string = ''
-    try {
-      const json: Record<string, Object> = JSON.parse(dataText) as Record<string, Object>
-      const item: Record<string, Object> = json['item'] as Record<string, Object>
-      if (item) {
-        query = (item['query'] as string) ?? ''
-      }
-      if (query.length === 0) {
-        query = (json['query'] as string) ?? ''
-      }
-    } catch (e) {
-      // 静默跳过
+  private handleOutputItemAdded(json: Record<string, Object>): void {
+    const itemRaw: Object | undefined = json['item']
+    if (itemRaw === undefined || itemRaw === null) {
+      return
     }
-    if (query.length > 0) {
-      this.lastSearchQuery = query
+    const item: Record<string, Object> = itemRaw as Record<string, Object>
+    if (readString(item, 'type') !== 'function_call') {
+      return
     }
-    if (eventType === 'response.web_search_call.completed') {
-      onSearch('completed', this.lastSearchQuery)
-    } else if (eventType === 'response.web_search_call.failed') {
-      onSearch('failed', this.lastSearchQuery)
-    } else {
-      onSearch('searching', this.lastSearchQuery)
+    const pending: PendingFunctionCall = new PendingFunctionCall()
+    pending.itemId = readString(item, 'id')
+    pending.callId = readString(item, 'call_id')
+    pending.name = readString(item, 'name')
+    pending.arguments = readString(item, 'arguments')
+    const indexRaw: Object | undefined = json['output_index']
+    pending.outputIndex = typeof indexRaw === 'number' ? indexRaw as number : -1
+    this.pendingCalls.push(pending)
+  }
+
+  /**
+   * 处理参数增量。
+   *
+   * @param json - data JSON
+   */
+  private handleArgumentsDelta(json: Record<string, Object>): void {
+    const delta: string = readString(json, 'delta')
+    if (delta.length === 0) {
+      return
+    }
+    const target: PendingFunctionCall | null = this.findPendingCall(json)
+    if (target !== null) {
+      target.arguments += delta
     }
   }
 
   /**
-   * 处理最终响应事件（completed / incomplete），保存完整输出 items。
+   * 处理参数完整事件。
    *
-   * @param dataText - data JSON 字符串
+   * @param json - data JSON
    */
-  private handleResponseFinal(dataText: string): void {
-    try {
-      const json: Record<string, Object> = JSON.parse(dataText) as Record<string, Object>
-      const response: Record<string, Object> = json['response'] as Record<string, Object>
-      if (!response) {
-        return
-      }
-      const output: Object[] = (response['output'] as Object[]) ?? []
-      this.outputItems = output
-      const respStatus: string = (response['status'] as string) ?? ''
-      if (respStatus.length > 0) {
-        this.status = respStatus
-      }
-      // 从 output 提取完整文本（兜底，防止 delta 遗漏）
-      const fullText: string = extractOutputText(output)
-      if (fullText.length > this.text.length) {
-        this.text = fullText
-      }
-    } catch (e) {
-      logger.warn('handleResponseFinal: 解析失败')
+  private handleArgumentsDone(json: Record<string, Object>): void {
+    const args: string = readString(json, 'arguments')
+    const target: PendingFunctionCall | null = this.findPendingCall(json)
+    if (target !== null && args.length > target.arguments.length) {
+      target.arguments = args
     }
   }
 
   /**
-   * 处理响应失败事件。
+   * 定位参数增量所属的 function_call 槽位。
    *
-   * @param dataText - data JSON 字符串
+   * @param json - data JSON
+   * @returns 槽位，无匹配时返回 null
    */
-  private handleFailed(dataText: string): void {
-    try {
-      const json: Record<string, Object> = JSON.parse(dataText) as Record<string, Object>
-      const response: Record<string, Object> = json['response'] as Record<string, Object>
-      let errMsg: string = ''
-      if (response && response['error']) {
-        const errObj: Record<string, Object> = response['error'] as Record<string, Object>
-        errMsg = (errObj['message'] as string) ?? ''
-      }
-      if (errMsg.length === 0) {
-        const topErr: Record<string, Object> = json['error'] as Record<string, Object>
-        if (topErr) {
-          errMsg = (topErr['message'] as string) ?? ''
+  private findPendingCall(json: Record<string, Object>): PendingFunctionCall | null {
+    const itemId: string = readString(json, 'item_id')
+    if (itemId.length > 0) {
+      for (let i: number = 0; i < this.pendingCalls.length; i++) {
+        if (this.pendingCalls[i].itemId === itemId) {
+          return this.pendingCalls[i]
         }
       }
-      this.errorMessage = errMsg.length > 0 ? errMsg : 'AI 响应失败'
-      logger.error('response.failed: %{public}s', this.errorMessage)
-    } catch (e) {
-      this.errorMessage = 'AI 响应解析失败'
     }
+    const indexRaw: Object | undefined = json['output_index']
+    if (typeof indexRaw === 'number') {
+      const outputIndex: number = indexRaw as number
+      for (let i: number = 0; i < this.pendingCalls.length; i++) {
+        if (this.pendingCalls[i].outputIndex === outputIndex) {
+          return this.pendingCalls[i]
+        }
+      }
+    }
+    if (this.pendingCalls.length > 0) {
+      return this.pendingCalls[this.pendingCalls.length - 1]
+    }
+    return null
+  }
+
+  /**
+   * 处理最终响应事件。
+   *
+   * @param json - data JSON
+   */
+  private handleFinal(json: Record<string, Object>): void {
+    const responseRaw: Object | undefined = json['response']
+    if (responseRaw === undefined || responseRaw === null) {
+      return
+    }
+    const response: Record<string, Object> = responseRaw as Record<string, Object>
+    const outputRaw: Object | undefined = response['output']
+    if (outputRaw !== undefined && outputRaw !== null && Array.isArray(outputRaw)) {
+      this.outputItems = outputRaw as Object[]
+    }
+    const status: string = readString(response, 'status')
+    if (status.length > 0) {
+      this.status = status
+    }
+    // 兜底：delta 丢失时从完整 output 提取正文
+    const fullText: string = extractOutputText(this.outputItems)
+    if (fullText.length > this.text.length) {
+      this.text = fullText
+    }
+    this.mergePendingCallsFromOutput()
+  }
+
+  /**
+   * 用最终 output 中的 function_call item 补全累积参数。
+   */
+  private mergePendingCallsFromOutput(): void {
+    for (let i: number = 0; i < this.outputItems.length; i++) {
+      const item: Record<string, Object> = this.outputItems[i] as Record<string, Object>
+      if (readString(item, 'type') !== 'function_call') {
+        continue
+      }
+      const callId: string = readString(item, 'call_id')
+      const name: string = readString(item, 'name')
+      const args: string = readString(item, 'arguments')
+      let matched: PendingFunctionCall | null = null
+      for (let j: number = 0; j < this.pendingCalls.length; j++) {
+        const pending: PendingFunctionCall = this.pendingCalls[j]
+        if ((callId.length > 0 && pending.callId === callId) ||
+          (pending.name === name && pending.callId.length === 0)) {
+          matched = pending
+          break
+        }
+      }
+      if (matched === null) {
+        matched = new PendingFunctionCall()
+        matched.callId = callId
+        matched.name = name
+        this.pendingCalls.push(matched)
+      }
+      if (callId.length > 0) {
+        matched.callId = callId
+      }
+      if (name.length > 0) {
+        matched.name = name
+      }
+      if (args.length > 0) {
+        matched.arguments = args
+      }
+    }
+  }
+
+  /**
+   * 处理 response.failed。
+   *
+   * @param json - data JSON
+   */
+  private handleFailed(json: Record<string, Object>): void {
+    let message: string = ''
+    const responseRaw: Object | undefined = json['response']
+    if (responseRaw !== undefined && responseRaw !== null) {
+      const response: Record<string, Object> = responseRaw as Record<string, Object>
+      const errorRaw: Object | undefined = response['error']
+      if (errorRaw !== undefined && errorRaw !== null) {
+        message = readString(errorRaw as Record<string, Object>, 'message')
+      }
+    }
+    if (message.length === 0) {
+      const errorRaw: Object | undefined = json['error']
+      if (errorRaw !== undefined && errorRaw !== null) {
+        message = readString(errorRaw as Record<string, Object>, 'message')
+      }
+    }
+    this.errorMessage = message.length > 0 ? message : 'AI 响应失败'
+    logger.error('response.failed: %{public}s', this.errorMessage)
+  }
+
+  /**
+   * 获取累积正文。
+   *
+   * @returns 正文
+   */
+  getText(): string {
+    return this.text
+  }
+
+  /**
+   * 获取累积思维链。
+   *
+   * @returns 思维链
+   */
+  getReasoning(): string {
+    return this.reasoning
+  }
+
+  /**
+   * 获取最终输出 items。
+   *
+   * @returns output items
+   */
+  getOutputItems(): Object[] {
+    return this.outputItems
+  }
+
+  /**
+   * 获取错误信息。
+   *
+   * @returns 错误信息，无错误时为空字符串
+   */
+  getError(): string {
+    return this.errorMessage
+  }
+
+  /**
+   * 获取响应状态。
+   *
+   * @returns status
+   */
+  getStatus(): string {
+    return this.status
+  }
+
+  /**
+   * 导出本轮工具调用。
+   *
+   * @returns 工具调用列表
+   */
+  getToolCalls(): ToolCall[] {
+    const result: ToolCall[] = []
+    for (let i: number = 0; i < this.pendingCalls.length; i++) {
+      const pending: PendingFunctionCall = this.pendingCalls[i]
+      if (pending.name.length === 0) {
+        continue
+      }
+      const call: ToolCall = new ToolCall()
+      call.id = pending.callId.length > 0 ? pending.callId : 'call_' + Date.now().toString(36) + '_' + i.toString()
+      call.type = 'function'
+      call.function = new ToolCallFunction()
+      call.function.name = pending.name
+      call.function.arguments = pending.arguments
+      result.push(call)
+    }
+    return result
   }
 }
 
 /**
- * 向 DeepSeek /responses 端点发送流式请求。
+ * 发起一次 Responses API 请求。
  *
- * 自动携带服务端内置 web_search 工具声明，
- * 实时解析语义化 SSE 事件并输出文本增量与搜索状态。
- * 支持外部取消（canceller）与整体超时看门狗，避免请求永久挂起。
- *
- * @param profile - AI 提供方配置
- * @param messages - 对话消息列表
- * @param onDelta - 文本增量回调
- * @param onSearch - 可选的服务端搜索状态回调
- * @param canceller - 可选的取消令牌（页面销毁时调用 cancel() 中断请求）
- * @returns 响应结果（含完整文本与输出 items）
+ * @param profile - AI 配置
+ * @param messages - 对话消息
+ * @param options - 请求选项
+ * @param canceller - 可选取消令牌
+ * @returns 单轮结果
  */
-export async function createResponseStream(
+export async function requestResponses(
   profile: AiProviderProfile,
   messages: ChatMessage[],
-  onDelta: ChatStreamChunkCallback,
-  onSearch?: WebSearchStateCallback,
+  options: ChatTurnOptions,
   canceller?: RequestCanceller
-): Promise<ResponseResult> {
-  const url: string = buildResponsesUrl()
-  const body: string = buildRequestBody(profile, messages, true)
-  const decoder: util.TextDecoder = util.TextDecoder.create('utf-8')
-  const parser: ResponsesEventParser = new ResponsesEventParser()
-  const httpRequest: http.HttpRequest = http.createHttp()
-  const searchCallback: WebSearchStateCallback = onSearch ?? ((phase: string, query: string): void => {
-  })
-
-  return new Promise<ResponseResult>((resolve: (value: ResponseResult) => void, reject: (reason: Error) => void): void => {
-    let settled: boolean = false
-    let streamError: Error | null = null
-    let watchdog: number = -1
-    /** 非 200 状态码（不为 0 时表示响应为错误体，累积后提取详情）。 */
-    let errorStatusCode: number = 0
-    /** 非 200 时累积的错误响应体文本。 */
-    let errorBody: string = ''
-
-    const cleanup = (): void => {
-      if (watchdog >= 0) {
-        clearTimeout(watchdog)
-        watchdog = -1
-      }
-      httpRequest.off('dataReceive', dataReceiveCallback)
-      httpRequest.off('dataEnd', dataEndCallback)
-      httpRequest.destroy()
-    }
-
-    const rejectOnce = (error: Error): void => {
-      if (settled) {
-        return
-      }
-      settled = true
-      cleanup()
-      reject(error)
-    }
-
-    const resolveOnce = (result: ResponseResult): void => {
-      if (settled) {
-        return
-      }
-      settled = true
-      cleanup()
-      resolve(result)
-    }
-
-    // 整体看门狗：超过请求超时仍未结束则拒绝，防止连接中断时 Promise 永久挂起
-    watchdog = setTimeout((): void => {
-      logger.warn('createResponseStream watchdog timeout')
-      rejectOnce(new Error('AI 请求超时，请稍后重试'))
-    }, REQUEST_TIMEOUT)
-
-    const dataReceiveCallback = (data: ArrayBuffer): void => {
-      try {
-        const decodedText: string | undefined = decoder.decodeWithStream(new Uint8Array(data), { stream: true })
-        const text: string = decodedText ?? ''
-        if (text.length === 0) {
-          return
-        }
-        if (errorStatusCode !== 0) {
-          // 错误响应体：累积文本，待 dataEnd 时提取服务端错误详情
-          errorBody += text
-          return
-        }
-        parser.append(text, onDelta, searchCallback)
-      } catch (err) {
-        const e: Error = err as Error
-        streamError = new Error(e.message || 'AI 流式响应解析失败')
-      }
-    }
-
-    const dataEndCallback = (): void => {
-      try {
-        if (streamError) {
-          rejectOnce(streamError)
-          return
-        }
-        const decodedTail: string | undefined = decoder.decodeWithStream(new Uint8Array(new ArrayBuffer(0)), {
-          stream: false
-        })
-        const tail: string = decodedTail ?? ''
-        if (errorStatusCode !== 0) {
-          // 非 200：先冲刷解码器剩余文本，再提取服务端 error.message 作为详情
-          if (tail.length > 0) {
-            errorBody += tail
-          }
-          const detail: string = extractServerError(errorBody)
-          rejectOnce(new Error(errorStatusCode.toString() + (detail.length > 0 ? '\n' + detail : '')))
-          return
-        }
-        if (tail.length > 0) {
-          parser.append(tail, onDelta, searchCallback)
-        }
-        const content: string = parser.finish(onDelta, searchCallback)
-        const errMsg: string = parser.getError()
-        if (errMsg.length > 0) {
-          rejectOnce(new Error(errMsg))
-          return
-        }
-        if (content.length === 0) {
-          // response.incomplete 表示被服务端输出长度上限截断（模型上下文或服务端配额），
-          // 与"格式不兼容"区分提示
-          if (parser.getStatus() === 'incomplete') {
-            rejectOnce(new Error('回答超长被截断，请更换支持更长输出的模型'))
-          } else {
-            rejectOnce(new Error('AI 响应为空或格式不兼容'))
-          }
-          return
-        }
-        const result: ResponseResult = new ResponseResult()
-        result.content = content
-        result.outputItems = parser.getOutputItems()
-        result.status = parser.getStatus()
-        result.truncated = parser.getStatus() === 'incomplete'
-        resolveOnce(result)
-      } catch (err) {
-        const e: Error = err as Error
-        rejectOnce(new Error(e.message || 'AI 流式响应解析失败'))
-      }
-    }
-
-    // 注册外部取消：销毁请求并拒绝，由调用方决定是否吞掉该错误
-    if (canceller) {
-      canceller.setHandler((): void => {
-        httpRequest.destroy()
-        rejectOnce(new Error('请求已取消'))
-      })
-    }
-
-    httpRequest.on('dataReceive', dataReceiveCallback)
-    httpRequest.on('dataEnd', dataEndCallback)
-    httpRequest.requestInStream(url, {
-      method: http.RequestMethod.POST,
-      header: buildHeaders(profile.apiKey),
-      extraData: body,
-      readTimeout: REQUEST_TIMEOUT,
-      connectTimeout: CONNECT_TIMEOUT
-    }).then((statusCode: number): void => {
-      if (statusCode !== 200) {
-        logger.warn('createResponseStream failed: HTTP %d, 等待响应体提取详情', statusCode)
-        // 不立即拒绝：继续接收错误响应体，dataEnd 时提取 error.message 后统一拒绝
-        errorStatusCode = statusCode
-      }
-    }).catch((err: Error): void => {
-      logger.warn('createResponseStream request error: %{public}s', err.message ?? '')
-      rejectOnce(err)
-    })
-  })
+): Promise<ChatTurnResult> {
+  const url: string = buildChatUrl(profile.endpoint, profile.protocol)
+  const body: string = buildResponsesBody(profile, messages, options)
+  if (options.stream) {
+    return streamResponses(url, profile.apiKey, body, options, canceller)
+  }
+  return requestResponsesOnce(url, profile.apiKey, body, options)
 }
 
 /**
- * 向 DeepSeek /responses 端点发送非流式请求。
+ * 非流式请求。
  *
- * @param profile - AI 提供方配置
- * @param messages - 对话消息列表
- * @returns 响应结果
+ * @param url - 请求 URL
+ * @param apiKey - API 密钥
+ * @param body - 请求体
+ * @param options - 请求选项
+ * @returns 单轮结果
  */
-export async function createResponse(profile: AiProviderProfile, messages: ChatMessage[]): Promise<ResponseResult> {
-  const url: string = buildResponsesUrl()
-  const body: string = buildRequestBody(profile, messages, false)
-
+async function requestResponsesOnce(
+  url: string,
+  apiKey: string,
+  body: string,
+  options: ChatTurnOptions
+): Promise<ChatTurnResult> {
   const httpRequest: http.HttpRequest = http.createHttp()
   try {
     const response: http.HttpResponse = await httpRequest.request(url, {
       method: http.RequestMethod.POST,
-      header: buildHeaders(profile.apiKey),
+      header: buildHeaders(apiKey, false),
       extraData: body,
       expectDataType: http.HttpDataType.STRING,
       readTimeout: REQUEST_TIMEOUT,
       connectTimeout: CONNECT_TIMEOUT
     })
-
     const statusCode: number = response.responseCode
     const responseText: string = (response.result as string) ?? ''
-
     if (statusCode !== 200) {
-      logger.warn('createResponse failed: HTTP %d, body: %{public}s', statusCode, responseText.substring(0, 300))
       const detail: string = extractServerError(responseText)
       throw new Error(statusCode.toString() + (detail.length > 0 ? '\n' + detail : ''))
     }
-    return parseResponseJson(responseText)
+    const result: ChatTurnResult = parseResponsesJson(responseText)
+    if (result.text.length > 0) {
+      options.onDelta(result.text)
+    }
+    if (result.reasoning.length > 0) {
+      options.onReasoning(result.reasoning)
+    }
+    return result
   } finally {
     httpRequest.destroy()
   }
 }
 
 /**
- * 测试与 DeepSeek 端点的连接。
+ * 流式请求。
  *
- * 发送简短测试消息验证 API Key 有效性和模型可用性。
- *
- * @param profile - AI 提供方配置
- * @returns 测试结果
+ * @param url - 请求 URL
+ * @param apiKey - API 密钥
+ * @param body - 请求体
+ * @param options - 请求选项
+ * @param canceller - 可选取消令牌
+ * @returns 单轮结果
  */
-export async function testConnection(profile: AiProviderProfile): Promise<AiTestResult> {
-  const messages: ChatMessage[] = [
-    new ChatMessage('user', '请用一句简短的中文确认连接成功。')
-  ]
-  const result: AiTestResult = new AiTestResult()
-  const startTime: number = Date.now()
-  try {
-    const response: ResponseResult = await createResponse(profile, messages)
-    result.durationMs = Date.now() - startTime
-    result.success = true
-    result.message = response.content
-  } catch (err) {
-    result.durationMs = Date.now() - startTime
-    result.success = false
-    const e: Error = err as Error
-    result.errorMessage = e.message || '连接失败'
-  }
-  return result
-}
+function streamResponses(
+  url: string,
+  apiKey: string,
+  body: string,
+  options: ChatTurnOptions,
+  canceller?: RequestCanceller
+): Promise<ChatTurnResult> {
+  const decoder: util.TextDecoder = util.TextDecoder.create('utf-8')
+  const parser: ResponsesEventParser = new ResponsesEventParser()
+  const httpRequest: http.HttpRequest = http.createHttp()
 
-/**
- * 构造 Responses API 请求 URL。
- *
- * 全面转向 DeepSeek 后端点恒定，忽略配置中的旧端点字段
- * （旧 OpenAI 兼容端点不支持 Responses API，不提供任何兼容）。
- *
- * @returns 完整的 /responses URL
- */
-function buildResponsesUrl(): string {
-  return DEFAULT_DEEPSEEK_ENDPOINT + '/responses'
+  return new Promise<ChatTurnResult>(
+    (resolve: (value: ChatTurnResult) => void, reject: (reason: Error) => void): void => {
+      let settled: boolean = false
+      let streamError: Error | null = null
+      let watchdog: number = -1
+      let errorStatusCode: number = 0
+      let errorBody: string = ''
+
+      const cleanup = (): void => {
+        if (watchdog >= 0) {
+          clearTimeout(watchdog)
+          watchdog = -1
+        }
+        httpRequest.off('dataReceive', dataReceiveCallback)
+        httpRequest.off('dataEnd', dataEndCallback)
+        httpRequest.destroy()
+      }
+
+      const rejectOnce = (error: Error): void => {
+        if (settled) {
+          return
+        }
+        settled = true
+        cleanup()
+        reject(error)
+      }
+
+      const resolveOnce = (result: ChatTurnResult): void => {
+        if (settled) {
+          return
+        }
+        settled = true
+        cleanup()
+        resolve(result)
+      }
+
+      watchdog = setTimeout((): void => {
+        logger.warn('streamResponses watchdog timeout')
+        rejectOnce(new Error('AI 请求超时，请稍后重试'))
+      }, REQUEST_TIMEOUT)
+
+      const dataReceiveCallback = (data: ArrayBuffer): void => {
+        try {
+          const text: string = decoder.decodeToString(new Uint8Array(data), { stream: true })
+          if (text.length === 0) {
+            return
+          }
+          if (errorStatusCode !== 0) {
+            errorBody += text
+            return
+          }
+          parser.append(text, options.onDelta, options.onReasoning)
+        } catch (err) {
+          const e: Error = err as Error
+          streamError = new Error(e.message || 'AI 流式响应解析失败')
+        }
+      }
+
+      const dataEndCallback = (): void => {
+        try {
+          if (streamError) {
+            rejectOnce(streamError)
+            return
+          }
+          const tail: string = decoder.decodeToString(new Uint8Array(new ArrayBuffer(0)), { stream: false })
+          if (errorStatusCode !== 0) {
+            if (tail.length > 0) {
+              errorBody += tail
+            }
+            const detail: string = extractServerError(errorBody)
+            rejectOnce(new Error(errorStatusCode.toString() + (detail.length > 0 ? '\n' + detail : '')))
+            return
+          }
+          if (tail.length > 0) {
+            parser.append(tail, options.onDelta, options.onReasoning)
+          }
+          parser.finish(options.onDelta, options.onReasoning)
+          const errMsg: string = parser.getError()
+          if (errMsg.length > 0) {
+            rejectOnce(new Error(errMsg))
+            return
+          }
+          const text: string = parser.getText()
+          const toolCalls: ToolCall[] = parser.getToolCalls()
+          if (text.length === 0 && toolCalls.length === 0) {
+            if (parser.getStatus() === 'incomplete') {
+              rejectOnce(new Error('回答超长被截断，请更换支持更长输出的模型'))
+            } else {
+              rejectOnce(new Error('AI 响应为空或格式不兼容'))
+            }
+            return
+          }
+          const result: ChatTurnResult = new ChatTurnResult()
+          result.text = text
+          result.reasoning = parser.getReasoning()
+          result.toolCalls = toolCalls
+          result.outputItems = parser.getOutputItems()
+          result.status = parser.getStatus()
+          result.truncated = parser.getStatus() === 'incomplete'
+          resolveOnce(result)
+        } catch (err) {
+          const e: Error = err as Error
+          rejectOnce(new Error(e.message || 'AI 流式响应解析失败'))
+        }
+      }
+
+      if (canceller) {
+        canceller.setHandler((): void => {
+          httpRequest.destroy()
+          rejectOnce(new Error('请求已取消'))
+        })
+      }
+
+      httpRequest.on('dataReceive', dataReceiveCallback)
+      httpRequest.on('dataEnd', dataEndCallback)
+      httpRequest.requestInStream(url, {
+        method: http.RequestMethod.POST,
+        header: buildHeaders(apiKey, true),
+        extraData: body,
+        readTimeout: REQUEST_TIMEOUT,
+        connectTimeout: CONNECT_TIMEOUT
+      }).then((statusCode: number): void => {
+        if (statusCode !== 200) {
+          logger.warn('streamResponses: HTTP %{public}d', statusCode)
+          errorStatusCode = statusCode
+        }
+      }).catch((err: Error): void => {
+        logger.warn('streamResponses request error: %{public}s', err.message ?? '')
+        rejectOnce(err)
+      })
+    })
 }
 
 /**
  * 构造请求头。
  *
  * @param apiKey - API 密钥
- * @returns HTTP 请求头对象
+ * @param stream - 是否流式
+ * @returns 请求头
  */
-function buildHeaders(apiKey: string): Record<string, string> {
+function buildHeaders(apiKey: string, stream: boolean): Record<string, string> {
   const headers: Record<string, string> = {}
   headers['Content-Type'] = 'application/json'
-  headers['Accept'] = 'text/event-stream'
+  headers['Accept'] = stream ? 'text/event-stream' : 'application/json'
   headers['Authorization'] = 'Bearer ' + apiKey
   return headers
 }
 
 /**
- * 构造请求体 JSON 字符串。
+ * 构造 Responses 请求体。
  *
- * 不携带 max_output_tokens：输出长度完全交给服务端按模型能力决定，
- * 客户端不设上限，避免把长回答截断。
+ * 不携带 max_output_tokens：输出长度交给服务端按模型能力决定。
  *
- * 始终携带服务端内置 web_search 工具声明（tool_choice=auto），
- * 由模型自行判断是否需要联网搜索。
- *
- * @param profile - AI 提供方配置
- * @param messages - 消息列表
- * @param stream - 是否流式
- * @returns JSON 字符串
+ * @param profile - AI 配置
+ * @param messages - 对话消息
+ * @param options - 请求选项
+ * @returns 请求体 JSON
  */
-function buildRequestBody(profile: AiProviderProfile, messages: ChatMessage[], stream: boolean): string {
-  const bodyObj: Record<string, Object> = {}
-  bodyObj['model'] = profile.modelName
-  bodyObj['stream'] = stream
-  bodyObj['temperature'] = profile.temperature
+function buildResponsesBody(profile: AiProviderProfile, messages: ChatMessage[], options: ChatTurnOptions): string {
+  const body: Record<string, Object> = {}
+  body['model'] = profile.modelName
+  body['stream'] = options.stream
+  body['temperature'] = profile.temperature
+  body['input'] = buildInputItems(messages)
 
-  const toolObj: Record<string, string> = {}
-  toolObj['type'] = WEB_SEARCH_TOOL_TYPE
-  bodyObj['tools'] = [toolObj]
-  bodyObj['tool_choice'] = 'auto'
-
-  bodyObj['input'] = buildInputItems(messages)
   const instructions: string = collectInstructions(messages)
   if (instructions.length > 0) {
-    bodyObj['instructions'] = instructions
+    body['instructions'] = instructions
   }
-
-  return JSON.stringify(bodyObj)
+  if (options.tools.length > 0) {
+    body['tools'] = serializeTools(options.tools)
+    body['tool_choice'] = 'auto'
+  }
+  return JSON.stringify(body)
 }
 
 /**
- * 收集所有 system 消息作为 instructions 参数。
+ * 收集 system 消息作为 instructions。
  *
- * @param messages - 消息列表
- * @returns 拼接后的 system 指令文本
+ * @param messages - 对话消息
+ * @returns 拼接后的指令文本
  */
 function collectInstructions(messages: ChatMessage[]): string {
   const parts: string[] = []
   for (let i: number = 0; i < messages.length; i++) {
-    if (messages[i].role === 'system' && messages[i].content.trim().length > 0) {
-      parts.push(messages[i].content)
+    const msg: ChatMessage = messages[i]
+    if (msg.role === 'system' && msg.content.trim().length > 0) {
+      parts.push(msg.content)
     }
   }
   return parts.join('\n\n')
 }
 
 /**
- * 将消息列表构建为 Responses API 输入 items。
+ * 构造 Responses 输入 items。
  *
- * assistant 消息携带 outputItems 时原样展开（保持 message 与
- * web_search_call 的原始顺序，服务端自动恢复搜索结果）。
+ * assistant 消息携带 outputItems 时原样展开（保持 reasoning / function_call
+ * 原始顺序）；tool 消息转为 function_call_output。
  *
- * @param messages - 消息列表
+ * @param messages - 对话消息
  * @returns 输入 items 数组
  */
 function buildInputItems(messages: ChatMessage[]): Object[] {
@@ -703,7 +738,15 @@ function buildInputItems(messages: ChatMessage[]): Object[] {
     if (msg.role === 'system') {
       continue
     }
-    if (msg.role === 'assistant' && msg.outputItems && msg.outputItems.length > 0) {
+    if (msg.role === 'tool') {
+      const outputItem: Record<string, Object> = {}
+      outputItem['type'] = 'function_call_output'
+      outputItem['call_id'] = msg.toolCallId ?? ''
+      outputItem['output'] = msg.content
+      items.push(outputItem)
+      continue
+    }
+    if (msg.role === 'assistant' && msg.outputItems !== undefined && msg.outputItems.length > 0) {
       for (let j: number = 0; j < msg.outputItems.length; j++) {
         items.push(msg.outputItems[j])
       }
@@ -718,58 +761,87 @@ function buildInputItems(messages: ChatMessage[]): Object[] {
     const part: Record<string, string> = {}
     part['type'] = msg.role === 'assistant' ? 'output_text' : 'input_text'
     part['text'] = msg.content
-    const contentArr: Object[] = []
-    contentArr.push(part)
-    item['content'] = contentArr
+    const content: Object[] = []
+    content.push(part)
+    item['content'] = content
     items.push(item)
   }
   return items
 }
 
 /**
+ * 序列化工具声明（Responses 格式：函数字段扁平）。
+ *
+ * @param tools - 协议无关工具定义
+ * @returns Responses tools 数组
+ */
+function serializeTools(tools: AiToolDefinition[]): Object[] {
+  const result: Object[] = []
+  for (let i: number = 0; i < tools.length; i++) {
+    const tool: AiToolDefinition = tools[i]
+    const item: Record<string, Object> = {}
+    item['type'] = 'function'
+    item['name'] = tool.name
+    item['description'] = tool.description
+    item['parameters'] = tool.parameters
+    result.push(item)
+  }
+  return result
+}
+
+/**
  * 解析非流式响应 JSON。
  *
- * @param responseText - 响应 JSON 字符串
- * @returns 响应结果
+ * @param responseText - 响应文本
+ * @returns 单轮结果
  */
-function parseResponseJson(responseText: string): ResponseResult {
-  const result: ResponseResult = new ResponseResult()
+function parseResponsesJson(responseText: string): ChatTurnResult {
   let json: Record<string, Object> = {}
   try {
     json = JSON.parse(responseText) as Record<string, Object>
   } catch (e) {
     throw new Error('AI 响应解析失败')
   }
-  const errObj: Record<string, Object> = json['error'] as Record<string, Object>
-  if (errObj && errObj['message']) {
-    throw new Error((errObj['message'] as string) ?? 'AI 响应错误')
+  const errObj: Object | undefined = json['error']
+  if (errObj !== undefined && errObj !== null) {
+    const message: string = readString(errObj as Record<string, Object>, 'message')
+    throw new Error(message.length > 0 ? message : 'AI 响应错误')
   }
-  const output: Object[] = (json['output'] as Object[]) ?? []
-  result.outputItems = output
-  result.content = extractOutputText(output)
-  result.status = (json['status'] as string) ?? ''
+  const result: ChatTurnResult = new ChatTurnResult()
+  const outputRaw: Object | undefined = json['output']
+  if (outputRaw !== undefined && outputRaw !== null && Array.isArray(outputRaw)) {
+    result.outputItems = outputRaw as Object[]
+  }
+  result.text = extractOutputText(result.outputItems)
+  result.reasoning = extractReasoningText(result.outputItems)
+  result.toolCalls = extractToolCalls(result.outputItems)
+  result.status = readString(json, 'status')
   result.truncated = result.status === 'incomplete'
   return result
 }
 
 /**
- * 从输出 items 中提取 message 类型的完整文本。
+ * 从输出 items 提取正文。
  *
- * @param output - 输出 items 数组
- * @returns 拼接后的助手回复文本
+ * @param output - output items
+ * @returns 正文文本
  */
 function extractOutputText(output: Object[]): string {
   let text: string = ''
   for (let i: number = 0; i < output.length; i++) {
     const item: Record<string, Object> = output[i] as Record<string, Object>
-    if ((item['type'] as string) !== 'message') {
+    if (readString(item, 'type') !== 'message') {
       continue
     }
-    const content: Object[] = (item['content'] as Object[]) ?? []
+    const contentRaw: Object | undefined = item['content']
+    if (contentRaw === undefined || contentRaw === null || !Array.isArray(contentRaw)) {
+      continue
+    }
+    const content: Object[] = contentRaw as Object[]
     for (let j: number = 0; j < content.length; j++) {
       const part: Record<string, Object> = content[j] as Record<string, Object>
-      if ((part['type'] as string) === 'output_text') {
-        text += (part['text'] as string) ?? ''
+      if (readString(part, 'type') === 'output_text') {
+        text += readString(part, 'text')
       }
     }
   }
@@ -777,23 +849,70 @@ function extractOutputText(output: Object[]): string {
 }
 
 /**
- * 从非 200 响应体中提取服务端 error.message。
+ * 从输出 items 提取思维链。
  *
- * @param responseText - 响应体文本
- * @returns 服务端错误描述，无则返回空字符串
+ * @param output - output items
+ * @returns 思维链文本
  */
-function extractServerError(responseText: string): string {
-  if (responseText.length === 0) {
-    return ''
-  }
-  try {
-    const json: Record<string, Object> = JSON.parse(responseText) as Record<string, Object>
-    const errObj: Record<string, Object> = json['error'] as Record<string, Object>
-    if (errObj && errObj['message']) {
-      return (errObj['message'] as string) ?? ''
+function extractReasoningText(output: Object[]): string {
+  let text: string = ''
+  for (let i: number = 0; i < output.length; i++) {
+    const item: Record<string, Object> = output[i] as Record<string, Object>
+    if (readString(item, 'type') !== 'reasoning') {
+      continue
     }
-  } catch (e) {
-    // 响应体非 JSON 时忽略
+    const contentRaw: Object | undefined = item['content']
+    if (contentRaw === undefined || contentRaw === null || !Array.isArray(contentRaw)) {
+      continue
+    }
+    const content: Object[] = contentRaw as Object[]
+    for (let j: number = 0; j < content.length; j++) {
+      const part: Record<string, Object> = content[j] as Record<string, Object>
+      if (readString(part, 'type') === 'reasoning_text') {
+        text += readString(part, 'text')
+      }
+    }
   }
-  return ''
+  return text
+}
+
+/**
+ * 从输出 items 提取 function_call。
+ *
+ * @param output - output items
+ * @returns 工具调用列表
+ */
+function extractToolCalls(output: Object[]): ToolCall[] {
+  const result: ToolCall[] = []
+  for (let i: number = 0; i < output.length; i++) {
+    const item: Record<string, Object> = output[i] as Record<string, Object>
+    if (readString(item, 'type') !== 'function_call') {
+      continue
+    }
+    const name: string = readString(item, 'name')
+    if (name.length === 0) {
+      continue
+    }
+    const call: ToolCall = new ToolCall()
+    const callId: string = readString(item, 'call_id')
+    call.id = callId.length > 0 ? callId : 'call_' + Date.now().toString(36) + '_' + i.toString()
+    call.type = 'function'
+    call.function = new ToolCallFunction()
+    call.function.name = name
+    call.function.arguments = readString(item, 'arguments')
+    result.push(call)
+  }
+  return result
+}
+
+/**
+ * 安全读取字符串字段。
+ *
+ * @param record - 记录对象
+ * @param key - 字段名
+ * @returns 字符串值，缺失时为空字符串
+ */
+function readString(record: Record<string, Object>, key: string): string {
+  const value: Object | undefined = record[key]
+  return typeof value === 'string' ? value as string : ''
 }

@@ -1,66 +1,62 @@
 /**
- * 自定义 AI 激活配置与调用门面（DeepSeek Responses API）。
+ * 当前激活 AI 配置的调用门面。
  *
- * 统一封装当前激活的 DeepSeek AI 配置校验、调用与错误文案，
- * 页面层不再直接处理配置索引或额外调用分支。
- * 联网搜索由 DeepSeek 服务端内置 web_search 工具执行，
- * 客户端仅透传搜索状态用于 UI 展示，无需任何第三方搜索服务。
+ * 页面只依赖这里：配置校验、Agent 循环、工具时间线、错误文案全部收敛在本层。
+ * 协议差异在 AiChatClient 里分流，页面不感知 Responses / Chat Completions。
  */
 
 import { appStore } from '../../store/AppStore'
-import type { AiProviderProfile } from '../../model/AiConfig'
 import {
-  createResponseStream,
-  ChatMessage,
-  ChatStreamChunkCallback,
-  ResponseResult,
-  RequestCanceller
-} from './ResponsesApiClient'
+  AiProviderProfile,
+  hasToolSwitchesOn
+} from '../../model/AiConfig'
+import { AiSearchProfile } from '../../model/AiSearchConfig'
+import { ChatMessage, RequestCanceller } from './AiProtocolTypes'
+import { runAiAgent, AiAgentOptions, AiAgentResult } from './AiAgentRunner'
+import { AiToolInvocation, AiToolSource } from './tools/AiToolAdapter'
+import { aiSearchProviderRegistry } from './search/SearchProviderRegistry'
 import { translateError } from './AiErrorTranslator'
 import { Logger, DOMAIN_SERVICE } from '../../common/utils/Logger'
 
 const logger = new Logger(DOMAIN_SERVICE, 'ActiveAiService')
 
-/** AI 处理阶段状态回调，用于 UI 展示不同阶段的提示文案。 */
+/** AI 处理阶段状态回调。 */
 export type ChatStatusCallback = (status: string) => void
 
 /**
- * 服务端联网搜索阶段信息，用于 UI 展示搜索进度。
+ * 工具调用时间线回调。
  *
- * @property phase - 当前阶段: '' | 'analyzing' | 'searching' | 'compiling' | 'complete'
- * @property summary - 搜索关键词
- * @property count - 结果计数（服务端不返回，恒为 0）
- * @property phaseIcon - 阶段图标 SVG 资源（服务层预计算，UI 层按主题着色）
- * @property phaseDescription - 阶段描述文案（服务层预计算）
+ * 每次工具开始执行、执行完成或失败时回调一次，携带当前完整时间线快照，
+ * 页面直接整体替换即可（避免局部合并导致的状态漏更新）。
  */
-export class ToolCallInfo {
-  /** 当前阶段: '' | analyzing | searching | compiling | complete */
-  phase: string = 'analyzing'
-  /** 搜索关键词 */
-  summary: string = ''
-  /** 结果计数 */
-  count: number = 0
-  /** 阶段图标 SVG 资源 */
-  phaseIcon: Resource = $r('app.media.icon_ai_analyzing')
-  /** 阶段描述文案 */
-  phaseDescription: string = 'AI 正在分析...'
-}
+export type ToolInvocationCallback = (invocations: AiToolInvocation[]) => void
 
-/** 服务端搜索阶段信息回调。 */
-export type ToolCallCallback = (info: ToolCallInfo) => void
-
-/** 对话调用结果（含用于多轮回传的输出 items）。 */
+/** 对话调用结果。 */
 export class AiChatResult {
   /** 助手回复完整文本 */
   text: string = ''
-  /** 本响应的输出 items（含 web_search_call 等），回传历史时原样展开 */
+  /** 思维链文本（模型支持时非空） */
+  reasoning: string = ''
+  /** 本响应的输出 items（Responses 历史回传用） */
   outputItems: Object[] = []
   /** 是否因达到服务端输出长度上限被截断 */
   truncated: boolean = false
+  /** 工具调用时间线 */
+  toolInvocations: AiToolInvocation[] = []
+  /** 引用来源（搜索 / 抓取结果） */
+  sources: AiToolSource[] = []
+  /** 是否因工具轮数上限被强制收尾 */
+  hitStepLimit: boolean = false
+  /**
+   * 本次文本是否为本机生成的兜底文案（模型没有产出内容时）。
+   *
+   * 页面据此标记气泡，避免把本机提示当成模型回复写回历史。
+   */
+  localFallback: boolean = false
 }
 
 /**
- * 获取当前激活的自定义 AI 配置。
+ * 获取当前激活的 AI 配置。
  *
  * @returns 当前激活配置，若未选择或配置不存在则返回 null
  */
@@ -69,7 +65,7 @@ export function getActiveAiProfile(): AiProviderProfile | null {
 }
 
 /**
- * 获取当前自定义 AI 配置不可用时的用户提示。
+ * 获取当前 AI 配置不可用时的用户提示。
  *
  * @returns 空字符串表示配置可用，否则为用户可读的错误提示
  */
@@ -81,33 +77,57 @@ export function getActiveAiValidationMessage(): string {
     }
     return '请先在设置中选择 AI 配置'
   }
-  if (profile.apiKey.trim().length === 0) {
-    return '请先在 AI 配置中填写 API 密钥'
+  if (profile.endpoint.trim().length === 0) {
+    return '请先在 AI 配置中填写服务地址'
   }
   if (profile.modelName.trim().length === 0) {
     return '请先在 AI 配置中填写模型名称'
+  }
+  if (profile.apiKey.trim().length === 0) {
+    return '请先在 AI 配置中填写 API 密钥'
   }
   return ''
 }
 
 /**
- * 使用当前激活的自定义 AI 配置发起可流式展示的对话补全。
+ * 获取当前配置的工具可用性提示（不阻断对话，仅用于 UI 提示）。
  *
- * 请求自动携带服务端内置 web_search 工具声明，
- * 模型判断需要联网搜索时由 DeepSeek 服务端执行并自动注入结果。
+ * @returns 空字符串表示工具可用；否则为提示文案
+ */
+export function getToolAvailabilityHint(): string {
+  const profile: AiProviderProfile | null = getActiveAiProfile()
+  if (!profile || !hasToolSwitchesOn(profile)) {
+    return ''
+  }
+  const search: AiSearchProfile | null = appStore.settingsStore.getActiveAiSearchProfile()
+  if (search === null) {
+    return '请先在「搜索服务」中添加并激活一套配置'
+  }
+  const provider = aiSearchProviderRegistry.get(search.providerKind)
+  if (provider.isAvailable(search)) {
+    return ''
+  }
+  return provider.getUnavailableHint()
+}
+
+/**
+ * 使用当前激活配置发起带工具能力的对话。
+ *
+ * 模型可以多轮请求 web_search / web_fetch，客户端执行后回传，
+ * 直到产出最终回答或用完工具轮数。
  *
  * @param messages - 对话消息列表
  * @param onDelta - 文本增量回调
  * @param onStatus - 可选的状态更新回调
- * @param onToolCall - 可选的服务端搜索阶段回调
- * @param canceller - 可选的请求取消令牌（页面销毁时调用 cancel() 中断请求）
- * @returns 对话结果（完整文本与输出 items）
+ * @param onToolCall - 可选的工具时间线回调
+ * @param canceller - 可选的请求取消令牌
+ * @returns 对话结果
  */
 export async function chatCompleteWithActiveAiStream(
   messages: ChatMessage[],
-  onDelta: ChatStreamChunkCallback,
+  onDelta: (chunk: string) => void,
   onStatus?: ChatStatusCallback,
-  onToolCall?: ToolCallCallback,
+  onToolCall?: ToolInvocationCallback,
   canceller?: RequestCanceller
 ): Promise<AiChatResult> {
   const profile: AiProviderProfile | null = getActiveAiProfile()
@@ -116,97 +136,94 @@ export async function chatCompleteWithActiveAiStream(
     throw new Error(validationMessage.length > 0 ? validationMessage : '请先在设置中选择 AI 配置')
   }
 
-  const toolCallInfo: ToolCallInfo = createToolInfo(
-    'analyzing', $r('app.media.icon_ai_analyzing'), 'AI 正在分析...', '', 0)
-  onToolCall?.(toolCallInfo)
-  onStatus?.('AI 正在分析...')
-
-  let searched: boolean = false
-  let searchFailed: boolean = false
-  let lastQuery: string = ''
-  const result: ResponseResult = await createResponseStream(
-    profile,
-    messages,
-    onDelta,
-    (phase: string, query: string): void => {
-      if (query.length > 0) {
-        lastQuery = query
-      }
-      if (phase === 'searching') {
-        searched = true
-        const info: ToolCallInfo = createToolInfo(
-          'searching', $r('app.media.icon_search'),
-          query.length > 0 ? '正在搜索: ' + query : '正在搜索互联网...',
-          query, 0
-        )
-        onToolCall?.(info)
-        onStatus?.('正在搜索互联网...')
-      } else if (phase === 'completed') {
-        const info: ToolCallInfo = createToolInfo(
-          'compiling', $r('app.media.icon_chat_bubble'),
-          query.length > 0 ? '搜索完成，正在结合结果回答...' : '搜索完成，正在生成回答...',
-          query, 0
-        )
-        onToolCall?.(info)
-        onStatus?.('正在结合搜索结果生成回答...')
-      } else if (phase === 'failed') {
-        searchFailed = true
-        onStatus?.('搜索失败，继续回答...')
-      }
-    },
-    canceller
-  )
-
-  // 最终状态：发生过联网搜索时标记完成，供气泡展示搜索摘要（失败时如实提示）
-  if (searched) {
-    const info: ToolCallInfo = createToolInfo(
-      'complete',
-      searchFailed ? $r('app.media.icon_globe') : $r('app.media.icon_checkmark'),
-      searchFailed ? '搜索失败，已基于已有知识回答' : '已搜索互联网',
-      lastQuery, 0
-    )
-    onToolCall?.(info)
-  } else {
-    onToolCall?.(createToolInfo('', $r('app.media.icon_ai_analyzing'), '', '', 0))
+  const invocations: AiToolInvocation[] = []
+  const options: AiAgentOptions = new AiAgentOptions()
+  options.onDelta = onDelta
+  options.onStatus = (status: string): void => {
+    onStatus?.(status)
   }
+  options.onToolInvocation = (invocation: AiToolInvocation): void => {
+    replaceInvocation(invocations, invocation)
+    onToolCall?.(copyInvocations(invocations))
+  }
+  options.canceller = canceller ?? null
 
-  const chatResult: AiChatResult = new AiChatResult()
-  chatResult.text = result.content
-  chatResult.outputItems = result.outputItems
-  chatResult.truncated = result.truncated
-  logger.info('chatComplete done: text=%d chars, items=%d, truncated=%s',
-    result.content.length, result.outputItems.length, String(result.truncated))
-  return chatResult
+  const agentResult: AiAgentResult = await runAiAgent(
+    profile, appStore.settingsStore.getActiveAiSearchProfile(), messages, options)
+
+  const result: AiChatResult = new AiChatResult()
+  result.text = agentResult.text
+  result.reasoning = agentResult.reasoning
+  // 工具调用轮次的中间 items 不跨轮保留：最终回答已包含工具结论，
+  // 页面历史回传使用纯文本即可（两种协议都能接受）。
+  result.outputItems = []
+  result.truncated = agentResult.truncated
+  result.toolInvocations = agentResult.toolInvocations
+  result.sources = agentResult.sources
+  result.hitStepLimit = agentResult.hitStepLimit
+
+  if (result.text.trim().length === 0) {
+    const failureText: string = buildEmptyAnswerText(agentResult)
+    result.text = failureText
+    result.localFallback = true
+    onDelta(failureText)
+  }
+  logger.info('chatComplete done: text=%d chars, tools=%d, truncated=%s',
+    result.text.length, result.toolInvocations.length, String(result.truncated))
+  return result
 }
 
-// ============================================================
-// UI 状态辅助
-// ============================================================
+/**
+ * 在时间线中替换同名同 ID 的记录，不存在则追加。
+ *
+ * @param invocations - 时间线
+ * @param invocation - 新记录
+ */
+function replaceInvocation(invocations: AiToolInvocation[], invocation: AiToolInvocation): void {
+  for (let i: number = 0; i < invocations.length; i++) {
+    if (invocations[i].id === invocation.id) {
+      invocations[i] = invocation
+      return
+    }
+  }
+  invocations.push(invocation)
+}
 
 /**
- * 创建搜索阶段状态对象。
+ * 拷贝时间线，避免页面状态与内部数组共享引用。
  *
- * @param phase - 阶段值
- * @param icon - 阶段图标 SVG 资源
- * @param description - 阶段描述
- * @param summary - 搜索关键词
- * @param count - 结果计数
- * @returns 搜索阶段状态
+ * @param invocations - 时间线
+ * @returns 拷贝
  */
-function createToolInfo(
-  phase: string,
-  icon: Resource,
-  description: string,
-  summary: string,
-  count: number
-): ToolCallInfo {
-  const info: ToolCallInfo = new ToolCallInfo()
-  info.phase = phase
-  info.phaseIcon = icon
-  info.phaseDescription = description
-  info.summary = summary
-  info.count = count
-  return info
+function copyInvocations(invocations: AiToolInvocation[]): AiToolInvocation[] {
+  const result: AiToolInvocation[] = []
+  for (let i: number = 0; i < invocations.length; i++) {
+    result.push(invocations[i])
+  }
+  return result
+}
+
+/**
+ * 构造空回答时的用户可读文案。
+ *
+ * @param agentResult - Agent 结果
+ * @returns 文案
+ */
+function buildEmptyAnswerText(agentResult: AiAgentResult): string {
+  if (agentResult.toolInvocations.length > 0) {
+    let reason: string = ''
+    for (let i: number = 0; i < agentResult.toolInvocations.length; i++) {
+      if (agentResult.toolInvocations[i].errorMessage.length > 0) {
+        reason = agentResult.toolInvocations[i].errorMessage
+        break
+      }
+    }
+    if (reason.length > 0) {
+      return '工具执行失败：' + reason + '\n\n我没有获取到可用信息，因此不会基于未确认的内容继续推断。'
+    }
+    return '工具执行完成，但模型没有给出回答。可以换一种问法重试。'
+  }
+  return 'AI 没有返回内容，请稍后重试。'
 }
 
 /**
@@ -219,6 +236,9 @@ function createToolInfo(
  * @returns 用户可读错误信息
  */
 export function formatAiCompletionError(err: Error): string {
+  if (err.message === '请求已取消') {
+    return '已停止生成'
+  }
   const code: number = parseInt(err.message)
   if (!isNaN(code)) {
     const info = translateError(code, err.message)
