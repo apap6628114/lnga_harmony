@@ -7,7 +7,8 @@ import { ngaClient } from '../NgaClient';
 import { appStore } from '../../store/AppStore';
 import type { Session } from '../../store/SessionRegistry';
 import { getSignedUser } from './UserApi';
-import { extractAppUser } from '../../parser/AppUserParser';
+import { checkSessionByCredential } from './SessionApi';
+import { SessionCheckResult, SessionVerdict } from './AuthErrors';
 import {
   CaptchaResult, LoginStep1Result, LoginStep2Result,
   InjectResult,
@@ -188,25 +189,39 @@ function generateLoginToken(): string {
 
 // ============== 会话校验 ==============
 
+/**
+ * 校验当前应用 token 对应的 NGA 会话是否仍被服务端接受。
+ *
+ * 三态语义见 `AuthErrors.SessionVerdict`：只有 `INVALID` 才允许清登录态，
+ * `UNKNOWN`（网络/服务端异常、超时、频率限制）必须按"保留登录态"处理。
+ *
+ * @param token - 当前应用会话令牌
+ * @returns 三态结论；token 查不到会话时直接 INVALID
+ */
+export async function checkSession(token: string): Promise<SessionCheckResult> {
+  const result: SessionCheckResult = new SessionCheckResult()
+  const session: Session | null = appStore.getSession(token)
+  if (session === null) {
+    result.verdict = SessionVerdict.INVALID
+    result.message = '会话不存在'
+    return result
+  }
+  return checkSessionByCredential(session.uid, session.cid)
+}
+
+/**
+ * 会话是否"未被明确判失效"。
+ *
+ * ⚠️ 已废弃语义：旧实现用 `ucp/get` 判登录态——该接口匿名也返回 `code=0` +
+ * 用户对象（实测），假阳性是"凭证失效却沉默通过"的根源。新代码请用
+ * {@link checkSession} 的三态结果区分 VALID/INVALID/UNKNOWN。
+ *
+ * @param token - 当前应用会话令牌
+ * @returns 非 INVALID 即 true（UNKNOWN 保留登录态）
+ */
 export async function verifyToken(token: string): Promise<boolean> {
-  const session = appStore.getSession(token);
-  if (!session) {
-    return false;
-  }
-  try {
-    const params: Record<string, string> = {
-      'uid': session.uid,
-    };
-    const raw: Record<string, Object> = await ngaClient.postSigned(
-      '/nuke.php', 'ucp', 'get', params, { uid: session.uid, cid: session.cid }, '', '12'
-    ) as Record<string, Object>;
-    const code: Object | undefined = raw['code'];
-    const user: Record<string, Object> | null = extractAppUser(raw);
-    return (code === undefined || Number(code) === 0) && user !== null;
-  } catch (e) {
-    // 网络异常时无法验证，默认视为有效，避免离线时强制登出
-    return true;
-  }
+  const result: SessionCheckResult = await checkSession(token)
+  return result.verdict !== SessionVerdict.INVALID
 }
 
 // ============== 凭据注入（直登） ==============
@@ -220,6 +235,17 @@ export async function injectCredentials(uid: string, cid: string): Promise<Injec
   }
 
   try {
+    // 先向服务端确认这组 uid+cid 真的可用，再建立本地会话：
+    // 旧实现只尝试取昵称（失败也被吞掉），任意垃圾凭据都会"登录成功"，
+    // 随后所有接口报未登录——这是"导入凭证后状态错乱"的来源。
+    const check: SessionCheckResult = await checkSessionByCredential(uid, cid);
+    if (check.verdict !== SessionVerdict.VALID) {
+      result.error = check.verdict === SessionVerdict.INVALID
+        ? '凭据无效或已过期'
+        : '无法验证凭据，请检查网络后重试';
+      return result;
+    }
+
     let nickName = uid;
     const avatarUrl = NGA_AVATAR_BASE + uid + '.png';
 

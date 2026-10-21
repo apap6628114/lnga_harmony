@@ -250,6 +250,11 @@ export default class EntryAbility extends UIAbility {
     appStore.setForegroundActive(true)
     if (appStore.isInitialized) {
       appStore.autoCheckinIfNeeded();
+      // 前台恢复校验：距上次校验超过 10 分钟才发一次 iflogin（约 80~230ms），
+      // 覆盖"隔夜回来 cid 已失效"——不阻塞 UI，UNKNOWN 不清登录态。
+      appStore.sessionGuard.verifyOnForeground().catch((e: Error): void => {
+        logger.warn('前台会话校验失败: %{public}s', formatError(e));
+      });
     }
     logger.info( '%{public}s', 'Ability onForeground');
   }

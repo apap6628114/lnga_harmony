@@ -25,7 +25,7 @@
 
 import { appStore } from '../store/AppStore'
 import { routerStore, RouterStoreClass } from '../store/RouterStore'
-import { verifyToken } from '../service/api/AuthApi'
+import { SessionVerdict } from '../service/api/AuthErrors'
 
 import { floatingLayerStore, FloatingLayerStoreClass, FloatingPage } from '../store/FloatingLayerStore'
 import {
@@ -130,12 +130,27 @@ struct MainPage {
   aboutToAppear(): void {
     // 登录进入主页面后保持屏幕常亮（不息屏），离开主页面时恢复自动息屏
     enableKeepScreenOn()
-    this.checkAuth()
+    // 会话守卫在网络层确认失效后需要有人跳登录页：store 层不持有 UIContext，
+    // 由本页注入路由动作（MainPage 是登录后的常驻页面，浮层页面都叠在它上面）。
+    appStore.sessionGuard.attachNavigator((): void => { this.routeToLoginPage() })
+    this.checkAuth().catch((e: Error): void => {
+      logger.error('checkAuth failed: %{public}s', (e as Error).message)
+    })
   }
 
   aboutToDisappear(): void {
     disableKeepScreenOn()
     this.clearReadoutBarTimer()
+    appStore.sessionGuard.detachNavigator()
+  }
+
+  /** 跳登录页（路由失败只记日志：此时用户已经确认失效，不应再卡在当前页）。 */
+  private routeToLoginPage(): void {
+    try {
+      this.getUIContext().getRouter().replaceUrl({ url: 'pages/LoginPage' })
+    } catch (e) {
+      logger.error('route failed: %{public}s', (e as Error).message)
+    }
   }
 
   private onProfileRefresh(): void {
@@ -636,15 +651,21 @@ struct MainPage {
 
   private async checkAuth(): Promise<void> {
     if (!appStore.auth.isAuthenticated) {
-      try { this.getUIContext().getRouter().replaceUrl({ url: 'pages/LoginPage' }) } catch (e) { logger.error('route failed: %{public}s', (e as Error).message) }
+      this.routeToLoginPage()
       return
     }
 
-    const valid = await verifyToken(appStore.auth.token)
-    if (!valid) {
-      appStore.clearAuth()
-      try { this.getUIContext().getRouter().replaceUrl({ url: 'pages/LoginPage' }) } catch (e) { logger.error('route failed: %{public}s', (e as Error).message) }
+    // 三态：只有服务端明确判失效才清态；UNKNOWN（离线/服务端异常）保留登录态继续加载，
+    // 否则一次网络抖动就会把用户踢回登录页。30s 内复用启动页刚做过的结论，避免重复请求。
+    const verdict: SessionVerdict = await appStore.sessionGuard.verifyIfStale(30 * 1000)
+    if (verdict === SessionVerdict.INVALID) {
+      await appStore.clearAuthAndFlush()
+      appStore.showToast('登录状态已失效，请重新登录')
+      this.routeToLoginPage()
       return
+    }
+    if (verdict === SessionVerdict.UNKNOWN) {
+      logger.warn('进入主页面时会话校验无法判定，保留登录态')
     }
 
     const cached = appStore.getCachedProfile(appStore.auth.uid)

@@ -28,6 +28,7 @@ import topicReadUnitTest from './TopicReadUnit.test';
 import historyReadLedgerUnitTest from './HistoryReadLedgerUnit.test';
 import imageAnalyzerSessionUnitTest from './ImageAnalyzerSession.test';
 import columnLayoutUnitTest from './ColumnLayoutUnit.test';
+import sessionUnitTest from './SessionUnit.test';
 
 /**
  * 注册全部本地单元测试。
@@ -63,4 +64,5 @@ export default function testsuite(): void {
   historyReadLedgerUnitTest();
   imageAnalyzerSessionUnitTest();
   columnLayoutUnitTest();
+  sessionUnitTest();
 }

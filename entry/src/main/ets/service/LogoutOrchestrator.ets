@@ -26,7 +26,9 @@ export class LogoutOrchestrator {
       }
     }
     // 2. 本地清理（AppStore.clearAuth 内部编排全部 Store reset）
-    appStore.clearAuth()
+    //    必须等待落盘：用户退出后立刻杀进程时，若清态还停在写队列里，
+    //    下次冷启动会从磁盘读回旧登录态，把"主动退出"回滚成已登录。
+    await appStore.clearAuthAndFlush()
     // 2.1 编辑器管理器也要清：`replyManager` 是进程级单例，持有服务端签发的临时凭证
     //     （post/check 的 auth/attach_url 与附件参数）与会话标题，`clearAuth` 碰不到它。
     //     不清的话，换账号后在同一个帖子打开编辑器可能命中上一个账号的凭证与标题；

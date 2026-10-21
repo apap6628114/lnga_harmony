@@ -21,6 +21,8 @@ import {
 } from '../common/media/DraftMediaStore'
 import { ReadingProgressStore } from './ReadingProgressStore'
 import { floatingLayerStore } from './FloatingLayerStore'
+import { SessionGuard, sessionGuard as globalSessionGuard } from './SessionGuard'
+import { setAuthFailureHandler } from '../service/NgaClient'
 import { ToastManager } from '../common/feedback/ToastManager'
 
 import type { AuthState } from './AuthStore'
@@ -147,6 +149,7 @@ class AppStoreClass {
     this.initialized = false
     this.initializationFinished = false
     this.stopAllPolling()
+    this.bindSessionGuard()
     try {
       this.context = context
       await this.store.init(context, 'nga_app_store')
@@ -267,6 +270,56 @@ class AppStoreClass {
     return this.initializationFinished
   }
 
+  /**
+   * 绑定会话守卫的依赖与信号通道。
+   *
+   * 幂等：`init` 可能被重入（账号切换/前后台路径），重复绑定覆盖同一组回调
+   * （闭包捕获 `this`，始终读取当前 auth 状态）。
+   */
+  private bindSessionGuard(): void {
+    globalSessionGuard.bindSessionResolver((): Session | null => this.getSession(this.auth.token))
+    globalSessionGuard.bindExpiredHandler((): boolean => this.onSessionExpired())
+    setAuthFailureHandler((message: string): void => {
+      // 网络层只上报；确认与处置都在 SessionGuard 内完成（60s 去抖 + 单飞 + iflogin 复核），
+      // 避免单个业务错误（如 code=1 的"未定义服务"）把用户踢下线。
+      globalSessionGuard.onUnauthorizedSignal(message).catch((): void => {})
+    })
+  }
+
+  /**
+   * 会话已确认失效：清本地登录态并提示；跳登录页由 MainPage 注入的 navigator 完成。
+   *
+   * @returns 是否真的处置了（未登录时返回 false，调用方据此决定是否导航）
+   */
+  private onSessionExpired(): boolean {
+    if (!this.auth.isAuthenticated) {
+      return false
+    }
+    this.clearAuth()
+    this.showToast('登录状态已失效，请重新登录')
+    // 清态写入是异步的：补一次 flush，缩小"清态后立刻杀进程 → 冷启动又变回已登录"的窗口
+    this.flushAll().catch((): void => {})
+    return true
+  }
+
+  /**
+   * 清登录态并**等待落盘完成**（退出登录等用户主动动作必须用它）。
+   *
+   * `clearAuth()` 是同步方法，内部只把清态写入排进队列；进程在写入前被杀，
+   * 磁盘上仍是旧的 auth/sessions，下次冷启动会把"用户主动退出"回滚成已登录。
+   *
+   * @returns 落盘完成时 resolve
+   */
+  async clearAuthAndFlush(): Promise<void> {
+    this.clearAuth()
+    await this.flushAll()
+  }
+
+  /** 会话守卫（启动页/主页面用于主动校验与前台恢复）。 */
+  get sessionGuard(): SessionGuard {
+    return globalSessionGuard
+  }
+
   private async loadUserData(): Promise<void> {
     await this.settingsStore.init(this.store, this.writeQueue, this.authStore.state, this.context)
     await this.profileStore.init(this.store, this.writeQueue, this.authStore.state)
@@ -298,6 +351,8 @@ class AppStoreClass {
       await this.loadUserData()
       this.settingsStore.applyCurrentTheme()
     }
+    // 新会话：复位"未登录信号"的去抖窗口，避免登录后立刻失效被上一轮窗口吞掉
+    globalSessionGuard.resetSignalThrottle()
     this.reconcilePolling()
   }
 

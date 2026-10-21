@@ -196,8 +196,10 @@ export async function fetchFollowedActivity(token: string, page: number): Promis
   try {
     const cookies: Cookies = { uid: session.uid, cid: session.cid }
     const params: Record<string, string> = { 'page': String(page) }
+    // 关注动态是前台轮询源：撞上"未登录"时不发全局失效信号（对齐官方 NOTIFY_LIST/DO_TASK 例外），
+    // 避免后台轮询失败把用户从正在看的页面踢回登录页。
     const raw: Record<string, Object> = await ngaClient.postSigned(
-      '/nuke.php', 'follow_v2', 'get_push_list', params, cookies, '', '12'
+      '/nuke.php', 'follow_v2', 'get_push_list', params, cookies, '', '12', false, 'utf-8', false
     ) as Record<string, Object>
     const code: number = Number(raw['code'] ?? 0)
     if (code !== 0) {

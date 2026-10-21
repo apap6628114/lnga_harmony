@@ -78,7 +78,7 @@ export async function getNotifications(token: string): Promise<NotificationsResu
       'get': '111',
     };
     const raw = await ngaClient.postSigned('/app_api.php', 'notify', 'list',
-      params, cookies, '', '14') as Record<string, Object>;
+      params, cookies, '', '14', false, 'utf-8', false) as Record<string, Object>;
     const error: string | null = extractAppMessageError(raw);
     if (error) {
       result.error = error;

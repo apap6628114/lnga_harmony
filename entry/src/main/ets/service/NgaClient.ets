@@ -1,5 +1,6 @@
 import { http } from '@kit.NetworkKit';
 import { preprocessJson, extractScriptStoreJson } from '../parser/NgaJsonSanitizer';
+import { classifyAuthFailure } from './api/AuthErrors';
 import { ngaThrottler } from '../common/concurrency/Throttler';
 import { Logger, DOMAIN_NETWORK, formatError } from '../common/utils/Logger';
 import {
@@ -239,6 +240,41 @@ async function executeWithRetry(
     if (!released) {
       ngaThrottler.release(hostname);
     }
+  }
+}
+
+// ============== 鉴权失效信号 ==============
+
+/**
+ * 鉴权失效信号回调（由 AppStore 在启动时注册）。
+ *
+ * 网络层只负责"识别并上报"，**不**清登录态、**不**跳页面：判断与处置属于
+ * `SessionGuard`（去抖 + iflogin 二次确认），避免单个业务错误直接把用户踢下线。
+ */
+let authFailureHandler: ((message: string) => void) | null = null
+
+/**
+ * 注册鉴权失效信号回调（幂等；重复注册覆盖）。
+ *
+ * @param handler - 收到"疑似未登录"信号时的回调；传 null 取消注册
+ */
+export function setAuthFailureHandler(handler: ((message: string) => void) | null): void {
+  authFailureHandler = handler
+}
+
+/**
+ * 若响应里出现"未登录/会话失效"信号，上报给已注册的回调。
+ *
+ * @param raw - 已解析的响应对象
+ */
+function emitAuthFailure(raw: object): void {
+  if (authFailureHandler === null) {
+    return;
+  }
+  const message: string | null = classifyAuthFailure(raw);
+  if (message !== null) {
+    logger.verbose('[NGA][AUTH] 响应含未登录信号: %{public}s', message);
+    authFailureHandler(message);
   }
 }
 
@@ -523,7 +559,7 @@ interface INgaClient {
   /** App 签名接口（POST form + access_uid/access_token/sign），__lib/__act 放 URL query。 */
   postSigned: (path: string, lib: string, act: string, params: Record<string, string>,
     cookies: Cookies | undefined, signParams: string, output: string,
-    includeClientChecksum?: boolean, inchst?: string) => Promise<object>;
+    includeClientChecksum?: boolean, inchst?: string, signalAuthFailure?: boolean) => Promise<object>;
   /** App 签名接口（POST form + access_uid/access_token/sign），无 __lib/__act（thread.php 官方通道）。 */
   postSignedPath: (path: string, params: Record<string, string>,
     cookies: Cookies | undefined, signParams: string, output: string) => Promise<object>;
@@ -542,8 +578,14 @@ const client: INgaClient = {
   async postSigned(path: string, lib: string, act: string,
     params: Record<string, string>, cookies: Cookies | undefined,
     signParams: string, output: string, includeClientChecksum: boolean = false,
-    inchst: string = 'utf-8'): Promise<object> {
-    return ngaPostSigned(path, lib, act, params, cookies, signParams, output, includeClientChecksum, inchst);
+    inchst: string = 'utf-8', signalAuthFailure: boolean = true): Promise<object> {
+    const raw: object = await ngaPostSigned(path, lib, act, params, cookies, signParams, output,
+      includeClientChecksum, inchst);
+    // 轮询类调用（通知/关注动态）显式传 false：后台轮询撞上未登录不应打断用户。
+    if (signalAuthFailure) {
+      emitAuthFailure(raw);
+    }
+    return raw;
   },
 
   async postSignedPath(path: string, params: Record<string, string>,
