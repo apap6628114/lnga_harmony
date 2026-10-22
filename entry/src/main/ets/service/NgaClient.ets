@@ -1,7 +1,14 @@
 import { http } from '@kit.NetworkKit';
 import { preprocessJson, extractScriptStoreJson } from '../parser/NgaJsonSanitizer';
 import { classifyAuthFailure } from './api/AuthErrors';
-import { ngaThrottler } from '../common/concurrency/Throttler';
+import { ngaThrottler, isThrottleCooldownMessage } from '../common/concurrency/Throttler';
+import {
+  DEFAULT_THROTTLE_COOLDOWN_MS,
+  hasThrottleSignal,
+  isWritableOperation,
+  looksLikeThrottle,
+  retryDelayMs
+} from './api/NgaThrottleSignals';
 import { Logger, DOMAIN_NETWORK, formatError } from '../common/utils/Logger';
 import {
   uint8ArrayToBase64,
@@ -158,6 +165,9 @@ interface HttpResponse {
  * @param baseUrl - 调用方传入的基础 URL；空串则首次/重试均用 DOMAINS 轮换
  * @param skipContentLength - 为 true 时跳过 POST 的 Content-Length 自动设置，供 multipart
  *   含非 ASCII body 的场景（如 loginPassword）让传输库按实际字节填充；默认 false
+ * @param allowRetry - 为 false 时关闭「失败后轮换域名重试」。**写操作必须为 false**：
+ *   请求可能已到达服务端，重试会造成重复发帖 / 重复回复（不可逆的数据事故）。
+ *   重试之间带指数退避（见 NgaThrottleSignals.retryDelayMs），不再是失败即连打。
  * @returns HTTP 响应（status + ArrayBuffer body）
  */
 async function executeWithRetry(
@@ -168,7 +178,8 @@ async function executeWithRetry(
   cookies: Cookies | undefined,
   extraHeaders: Record<string, string> | undefined,
   baseUrl: string,
-  skipContentLength: boolean = false
+  skipContentLength: boolean = false,
+  allowRetry: boolean = true
 ): Promise<HttpResponse> {
   const resolvedBaseUrl: string = baseUrl || DOMAINS[activeDomainIndex];
   const hostname: string = extractHostname(resolvedBaseUrl);
@@ -203,8 +214,11 @@ async function executeWithRetry(
   let response: HttpResponse = { status: 0, body: new ArrayBuffer(0) };
   let firstErrorMsg: string = '';
 
+  // 冷却期在 acquire 处直接 reject。acquire 必须放在 try/finally **之外**：
+  // reject 时尚未占用槽位，若进了 finally 的 release，会误释放别的请求的槽位。
+  await ngaThrottler.acquire(hostname);
+
   try {
-    await ngaThrottler.acquire(hostname);
     try {
       response = await httpReq(url, method, header, body);
     } catch (firstError) {
@@ -212,12 +226,20 @@ async function executeWithRetry(
       ngaThrottler.release(hostname);
       released = true;
 
+      // 写操作不自动重试：请求可能已经被服务端处理，重试等于重复提交。
+      // 明确告诉调用方「结果未知」，让它提示用户核对，而不是悄悄再发一次。
+      if (!allowRetry) {
+        throw new Error('请求未完成（写操作不自动重试，请确认操作是否已生效）: ' + firstErrorMsg);
+      }
+
       let retrySuccess = false;
       for (let i = 1; i < DOMAINS.length; i++) {
         const retryDomainIdx = (activeDomainIndex + i) % DOMAINS.length;
         const retryBaseUrl = baseUrl || DOMAINS[retryDomainIdx];
         const retryHostname = extractHostname(retryBaseUrl);
 
+        // 退避后才重试：失败即连打多个域名是最容易被判定为攻击的形态
+        await sleep(retryDelayMs(i));
         await ngaThrottler.acquire(retryHostname);
         try {
           const retryUrl = buildUrl(retryBaseUrl, path, params);
@@ -241,6 +263,55 @@ async function executeWithRetry(
       ngaThrottler.release(hostname);
     }
   }
+}
+
+/**
+ * 等待指定毫秒数。
+ *
+ * @param ms - 毫秒
+ * @returns 等待完成的 Promise
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(() => resolve(), ms);
+  });
+}
+
+/**
+ * 构造风控冷却期的标准失败响应。
+ *
+ * 复用项目既有的「通用业务错误码」协议（`error_code: 15` = 频率限制，见
+ * `parser/ErrorParser.ets` 文件头），而不是自造 `__throttled` 之类的新字段：
+ * 业务层与 ErrorParser 已经认这条通道，新字段只会变成一个没有消费者的标记。
+ *
+ * 形状与正常业务错误一致（`error['0']` 是可读文案），现有业务层无需任何改动即可展示。
+ *
+ * @param remainingMs - 剩余冷却时长
+ * @returns 失败响应对象
+ */
+function buildThrottledResponse(remainingMs: number): Record<string, Object> {
+  const seconds: number = Math.max(1, Math.ceil(remainingMs / 1000));
+  const message: string = 'NGA 接口触发频率限制，已暂停请求约 ' + seconds.toString() +
+    ' 秒（风控保护）。请稍后重试；如需继续浏览，可减少一次读取的页数与楼层数。';
+  const errorMap: Record<string, string> = {};
+  errorMap['0'] = message;
+  const result: Record<string, Object> = {};
+  result['error'] = errorMap as Object;
+  result['error_code'] = 15 as Object;
+  return result;
+}
+
+/**
+ * 标记一次风控命中：拉闸进入冷却，并返回标准失败响应。
+ *
+ * @param path - 命中的接口路径（仅用于日志）
+ * @returns 标准失败响应
+ */
+function throttledByMessage(path: string): Record<string, Object> {
+  ngaThrottler.enterCooldown(DEFAULT_THROTTLE_COOLDOWN_MS);
+  logger.warn('[NGA][THROTTLE] 风控文案命中，进入 %{public}d ms 冷却: %{public}s',
+    DEFAULT_THROTTLE_COOLDOWN_MS, path);
+  return buildThrottledResponse(DEFAULT_THROTTLE_COOLDOWN_MS);
 }
 
 // ============== 鉴权失效信号 ==============
@@ -357,14 +428,16 @@ function buildSignedHeaders(): Record<string, string> {
  *   App 签名通道的官方接口（__output=12/14/17）恒返回 UTF-8；但 `read.php __output=8`
  *   的服务端响应标注 `encode:"GBK"`，实测 `__inchst` 与 Content-Type charset 都改不动它，
  *   必须按 GB18030 解码，否则中文主题标题会整段变成替换字符（见 postSignedPathGb）。
+ * @param allowRetry - 是否允许失败后轮换域名重试（写操作必须为 false）
  * @returns NGA JSON 响应
  */
 async function ngaPostSignedCore(path: string, qparams: Record<string, string>,
   fields: Record<string, string>, cookies: Cookies | undefined,
-  utf8Response: boolean = true): Promise<object> {
+  utf8Response: boolean = true, allowRetry: boolean = true): Promise<object> {
   const extraHeaders: Record<string, string> = buildSignedHeaders();
   return ngaRequest(path, http.RequestMethod.POST, qparams,
-    buildEncodedBody(fields), cookies, 'https://ngabbs.com', extraHeaders, true, utf8Response);
+    buildEncodedBody(fields), cookies, 'https://ngabbs.com', extraHeaders, true, utf8Response,
+    allowRetry);
 }
 
 /**
@@ -406,7 +479,10 @@ async function ngaPostSigned(path: string, lib: string, act: string,
     params, cookies, signParams, output, includeClientChecksum, inchst
   );
   const qparams: Record<string, string> = { '__lib': lib, '__act': act };
-  return ngaPostSignedCore(path, qparams, fields, cookies);
+  // 写操作与带客户端校验和的提交一律不自动重试：它们已经在服务端产生副作用，
+  // 重试就是重复提交。判定集中在 NgaThrottleSignals.isWritableOperation。
+  const allowRetry: boolean = !includeClientChecksum && !isWritableOperation(lib, act);
+  return ngaPostSignedCore(path, qparams, fields, cookies, true, allowRetry);
 }
 
 /**
@@ -417,6 +493,9 @@ async function ngaPostSigned(path: string, lib: string, act: string,
  * 参数进 body，完整认证头，ngabbs.com），仅 URL 不拼 __lib/__act。
  * （版面主题列表/搜索已随迁移切换至 app_api.php subject/list|search，
  * 不再使用本通道。）
+ *
+ * 本通道固定是只读的 read.php，因此**允许失败重试**（不经 isWritableOperation 判定）；
+ * 若将来有写语义的接口复用本函数，必须显式传 allowRetry=false。
  *
  * read.php 帖子详情使用 `POST + sign + signParams='' + __output=17`，返回官方 Article 包装
  * `{code:521,htmlBaseUrl,htmlTitle,html,msg,template:"read"}`，html 是完整帖子页面，
@@ -469,24 +548,71 @@ export interface Cookies {
 }
 
 /**
- * NGA API 核心请求
+ * NGA API 核心请求。
+ *
+ * 在 {@link executeWithRetry} 之上统一负责三件事：
+ * 1. **风控前置**：冷却期内直接返回可读失败响应，不发请求、不排长队；
+ * 2. **风控识别**：HTTP 429 与「过于频繁 / 刷新太快」类文案都会拉闸进冷却，
+ *    因为 NGA 的限流大多是 200 + HTML 提示页，只看状态码会完全漏掉；
+ * 3. **响应解码与解析**：UTF-8 / GB18030、script store 提取、HTML 错误页归一化。
+ *
+ * @param path - API 路径
+ * @param method - HTTP 方法
+ * @param params - query 参数
+ * @param body - 请求体
+ * @param cookies - 会话 cookie
+ * @param baseUrl - 基础 URL（空串走 DOMAINS 轮换）
+ * @param extraHeaders - 额外 header
+ * @param skipInchst - 是否跳过自动注入 __inchst
+ * @param utf8Response - 是否按 UTF-8 解码（false 走 GB18030）
+ * @param allowRetry - 是否允许失败重试（写操作必须为 false）
+ * @returns NGA 响应对象
  */
 async function ngaRequest(path: string, method: http.RequestMethod,
   params: Record<string, string>, body: string,
   cookies: Cookies | undefined, baseUrl: string,
   extraHeaders: Record<string, string> | undefined,
-  skipInchst: boolean = false, utf8Response: boolean = false): Promise<object> {
+  skipInchst: boolean = false, utf8Response: boolean = false,
+  allowRetry: boolean = true): Promise<object> {
   if (!skipInchst && !params['__inchst']) {
     params['__inchst'] = 'UTF8';
   }
 
+  // 冷却期内不发请求：既省一次握手，也让调用方立刻拿到可读原因。
+  // 只做「读」的快速失败，避免在已被限流的状态下继续重试、把惩罚窗口拉长。
+  const cooldownBefore: number = ngaThrottler.cooldownRemainingMs();
+  if (cooldownBefore > 0) {
+    return buildThrottledResponse(cooldownBefore);
+  }
+
   // baseUrl 由调用方传入：常为空串，使 executeWithRetry 重试时遍历 DOMAINS 轮换。
-  const response: HttpResponse = await executeWithRetry(
-    path, params, method, body, cookies, extraHeaders, baseUrl
-  );
+  let response: HttpResponse;
+  try {
+    response = await executeWithRetry(
+      path, params, method, body, cookies, extraHeaders, baseUrl, false, allowRetry
+    );
+  } catch (netError) {
+    const message: string = (netError as Error).message;
+    // 重试途中撞上冷却：翻译成标准失败响应，而不是把带标记的内部错误抛给业务层
+    if (isThrottleCooldownMessage(message)) {
+      return buildThrottledResponse(ngaThrottler.cooldownRemainingMs());
+    }
+    // ArkTS 不允许 throw 任意类型（arkts-limited-throw），重新包一层 Error 保留原文案
+    throw new Error(message);
+  }
+
+  if (response.status === 429) {
+    ngaThrottler.enterCooldown(DEFAULT_THROTTLE_COOLDOWN_MS);
+    logger.warn('[NGA][THROTTLE] 429 from %{public}s', path);
+    return buildThrottledResponse(DEFAULT_THROTTLE_COOLDOWN_MS);
+  }
 
   const rawText: string = utf8Response ? decodeUtf8(response.body) : decodeGb18030(response.body);
   logChunks('[NGA][RES] body:', rawText);
+
+  // 注意：这里**不做全文风控匹配**。NGA 的帖子正文完全可能包含「过于频繁」这类词
+  // （技术讨论、反馈帖），对整段 200 响应全文匹配会让读到一个普通帖子就把全站拖进
+  // 60 秒冷却。风控只在「错误形态」上判定：HTML 错误页的提示文案、或 JSON 的 error 字段。
 
   // 部分接口（如 ucp/get）成功时也返回 HTML 包裹的
   // <script>window.script_muti_get_var_store={...}</script> 而非纯 JSON；
@@ -495,7 +621,11 @@ async function ngaRequest(path: string, method: http.RequestMethod,
   if (storeJson !== null) {
     const storeText = preprocessJson(storeJson);
     try {
-      return JSON.parse(storeText) as Record<string, Object>;
+      const storeParsed: Record<string, Object> = JSON.parse(storeText) as Record<string, Object>;
+      if (hasThrottleSignal(storeParsed)) {
+        return throttledByMessage(path);
+      }
+      return storeParsed;
     } catch (storeParseError) {
       // 提取成功但解析失败：落入后续 HTML/JSON 处理，保留原始错误信息
     }
@@ -511,6 +641,11 @@ async function ngaRequest(path: string, method: http.RequestMethod,
       : titleMatch ? titleMatch[1].trim()
       : '服务器返回了非预期的HTML页面';
 
+    // 只在错误页的提示文案上判定风控，覆盖面既够（真实限流就是错误页）又不误伤正文
+    if (looksLikeThrottle(htmlError)) {
+      return throttledByMessage(path);
+    }
+
     const errObj: Record<string, string> = { '0': htmlError };
     const result: Record<string, Object> = { 'error': errObj as Object };
     if (codeMatch) {
@@ -523,7 +658,11 @@ async function ngaRequest(path: string, method: http.RequestMethod,
   // JSON 处理
   const text = preprocessJson(rawText);
   try {
-    return JSON.parse(text) as Record<string, Object>;
+    const parsed: Record<string, Object> = JSON.parse(text) as Record<string, Object>;
+    if (hasThrottleSignal(parsed)) {
+      return throttledByMessage(path);
+    }
+    return parsed;
   } catch (parseError) {
     const errResult: Record<string, Object> = {
       '__parseError': true as Object,
@@ -633,7 +772,8 @@ const client: INgaClient = {
       'Accept': '*/*',
     };
 
-    // 走统一通道（executeWithRetry），获得 ngaThrottler 限流与同域名失败重试保护。
+    // 走统一通道（executeWithRetry），获得 ngaThrottler 限流保护；
+    // 但登录是写操作，**不自动重试**（重试会重复消耗验证码，也可能被判为暴力尝试）。
     // 关键参数：
     // - baseUrl 固定为 'https://bbs.nga.cn'，executeWithRetry 重试不轮换域名（保持原硬编码行为）；
     // - path='/nuke.php'，buildUrl(baseUrl, path, {}) 拼得 'https://bbs.nga.cn/nuke.php'，与原硬编码 URL 一致；
@@ -645,16 +785,32 @@ const client: INgaClient = {
     //   行为完全一致，ASCII/中文用户名均安全；
     // - cookies 传 undefined（登录前无会话），不会注入 Cookie 头；
     // - executeWithRetry 不注入 __inchst（那是 ngaRequest :337-338 做的），故登录请求体不会被改动。
-    const response: HttpResponse = await executeWithRetry(
-      '/nuke.php',
-      emptyStringRecord(),
-      http.RequestMethod.POST,
-      mp.body,
-      undefined,
-      extraHeaders,
-      'https://bbs.nga.cn',
-      true,
-    );
+    let response: HttpResponse;
+    try {
+      response = await executeWithRetry(
+        '/nuke.php',
+        emptyStringRecord(),
+        http.RequestMethod.POST,
+        mp.body,
+        undefined,
+        extraHeaders,
+        'https://bbs.nga.cn',
+        true,
+        // 登录是写操作：重试会重复消耗验证码，且可能让服务端判定为暴力尝试
+        false,
+      );
+    } catch (loginError) {
+      const message: string = (loginError as Error).message;
+      // 冷却闸门的错误带内部标记（[NGATHROTTLE]），不能原样渲染给用户
+      if (isThrottleCooldownMessage(message)) {
+        const throttledResult: LoginResultData = {
+          success: false, uid: '', cid: '',
+          error: '登录请求过于频繁，请稍后再试', setCookies: [],
+        };
+        return throttledResult;
+      }
+      throw new Error(message);
+    }
 
     const bodyText = decodeGb18030(response.body);
     const setCookieHeader = response.header
@@ -703,7 +859,9 @@ const client: INgaClient = {
       '__act': 'logout',
       '__output': '1',
     };
-    await ngaRequest('/nuke.php', http.RequestMethod.GET, params, '', cookies, '', undefined, true);
+    // 登出是写操作（服务端会话通知）：不自动重试，避免重复提交。
+    await ngaRequest('/nuke.php', http.RequestMethod.GET, params, '', cookies, '', undefined,
+      true, false, false);
   },
 
   getActiveDomain(): string {

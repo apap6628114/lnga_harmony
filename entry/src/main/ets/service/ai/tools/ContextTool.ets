@@ -19,6 +19,7 @@ import { AiToolAdapter, AiToolContext, AiToolResult } from './AiToolAdapter'
 import {
   AI_TOOL_CATALOG,
   AiToolMeta,
+  DEFAULT_MAX_TOOL_CALLS_PER_RUN,
   TOOL_REQUIRES_LOGIN,
   TOOL_REQUIRES_SEARCH,
   aiToolTitle,
@@ -177,7 +178,11 @@ function buildToolSection(context: AiToolContext, available: string[]): string {
   }
 
   const parts: string[] = []
-  parts.push('【可用工具】\n' + (readyLines.length > 0 ? readyLines.join('\n') : '（无）'))
+  // 预算必须让模型在**规划时**就知道，而不是等它撞上「该工具未执行」才发现。
+  // 这里能从常量单点派生，是 get_context 存在的意义：把客户端契约显式声明给模型。
+  parts.push('【可用工具】\n' + (readyLines.length > 0 ? readyLines.join('\n') : '（无）') +
+    '\n本次运行最多可调用工具 ' + DEFAULT_MAX_TOOL_CALLS_PER_RUN.toString() +
+    ' 次；请在取数上有所取舍，优先获取回答所必需的数据。')
   if (blockedLines.length > 0) {
     parts.push('【暂不可用的工具】\n' + blockedLines.join('\n') +
       '\n这些工具因登录态或配置缺失不可用：不要假装调用，也不要声称自己"没有这个能力"，' +

@@ -12,6 +12,28 @@
 
 import { AiProviderProfile, DEFAULT_AI_MAX_AGENT_STEPS, clampAgentSteps } from './AiConfig'
 
+/**
+ * 单次 Agent 运行允许执行的工具调用次数上限。
+ *
+ * 与 `maxAgentSteps`（模型请求轮数）是两个维度：一轮里模型可以一次返回多个
+ * tool_calls，只限轮数挡不住「一轮十个工具、每个工具内部再翻页」的请求放大。
+ * 这是抵御风控的最后一道闸，因此是硬上限，不放进用户设置——需要更多数据时
+ * 应该提示模型拆分任务，而不是提高这个值。
+ */
+export const DEFAULT_MAX_TOOL_CALLS_PER_RUN: number = 30
+
+/**
+ * 工具结果缓存的长 TTL（重接口：一次取数要解析整页 HTML 或聚合多个上游接口）。
+ *
+ * 放在 model 层而不是缓存实现里：TTL 是「这个工具取一次有多贵、多久内重取没意义」
+ * 的能力属性，属于工具元数据。缓存的读者（ToolResultCache）与元数据真源
+ * （AI_TOOL_CATALOG）必须共用同一个值，否则就是第二份工具清单。
+ */
+export const AI_TOOL_CACHE_TTL_LONG: number = 600000
+
+/** 工具结果缓存的短 TTL（列表 / 搜索类，变化快）。 */
+export const AI_TOOL_CACHE_TTL_SHORT: number = 45000
+
 /** 工具分类。 */
 export enum AiToolCategory {
   /** 对话上下文（页面标识、工具可用性），不发起网络请求 */
@@ -65,6 +87,14 @@ export interface AiToolMeta {
    * 是否开放世界（缺省 false）：结果依赖站外或实时数据，缓存价值低。
    */
   openWorld?: boolean
+  /**
+   * 缓存存活时长（毫秒；缺省按分类派生为短 TTL）。
+   *
+   * 只表达「多久内重取没意义」，**不表达「能不能缓存」**：能不能缓存仍由
+   * `readOnly` / `idempotent` / `openWorld` 三个字段决定。重接口在这里标
+   * {@link AI_TOOL_CACHE_TTL_LONG}，其余留空走短 TTL。
+   */
+  cacheTtlMs?: number
 }
 
 /**
@@ -102,7 +132,10 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',
-    defaultEnabled: true
+    defaultEnabled: true,
+    // 不叠加缓存：资料已经由 ProfileStore 的 LRU（5 分钟）缓存，工具层再包一层
+    // 会变成两个 TTL 两套失效，UI 刷新后 AI 还能读到更旧的快照
+    cacheTtlMs: 0
   },
   {
     name: 'nga_read_thread',
@@ -111,7 +144,8 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',
-    defaultEnabled: true
+    defaultEnabled: true,
+    cacheTtlMs: AI_TOOL_CACHE_TTL_LONG
   },
   {
     name: 'nga_list_topics',
@@ -138,7 +172,8 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',
-    defaultEnabled: true
+    defaultEnabled: true,
+    cacheTtlMs: AI_TOOL_CACHE_TTL_LONG
   },
   {
     name: 'nga_search_forum',
@@ -156,7 +191,9 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',
-    defaultEnabled: true
+    defaultEnabled: true,
+    // 同 nga_get_me：资料由 ProfileStore 缓存，工具层不叠加第二层
+    cacheTtlMs: 0
   },
   {
     name: 'nga_search_user',
@@ -174,7 +211,8 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',
-    defaultEnabled: true
+    defaultEnabled: true,
+    cacheTtlMs: AI_TOOL_CACHE_TTL_LONG
   },
   {
     name: 'nga_list_favorites',

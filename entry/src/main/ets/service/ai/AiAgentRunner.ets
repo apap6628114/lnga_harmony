@@ -6,12 +6,15 @@
  *
  * 约束：
  * - 工具轮数受全局工具设置 `tools.maxAgentSteps` 限制，超限后发一次不带工具的收尾请求；
+ * - 单次运行的**工具调用次数**受 `DEFAULT_MAX_TOOL_CALLS_PER_RUN` 硬限制（与轮数是两个维度：
+ *   一轮里模型可以一次返回多个 tool_calls）。超限时剩余调用不再执行，但**仍为每一条
+ *   补 tool 消息**——少一条会让对话结构与 tool_calls 不匹配，OpenAI 兼容服务端直接 400；
  * - 每轮都可取消，取消后立即中断且不再执行后续工具；
  * - 模型输出始终按不可信输入处理（工具参数解析失败不抛异常）。
  */
 
 import { AiProviderProfile } from '../../model/AiConfig'
-import { aiToolTitle } from '../../model/AiToolConfig'
+import { DEFAULT_MAX_TOOL_CALLS_PER_RUN, aiToolTitle } from '../../model/AiToolConfig'
 import {
   AiTokenUsage,
   ChatMessage,
@@ -29,7 +32,9 @@ import {
   AiToolContext,
   AiToolCard,
   AiToolResult,
-  AiToolSource
+  AiToolSource,
+  TOOL_ERROR_BUDGET_EXHAUSTED,
+  TOOL_ERROR_RATE_LIMITED
 } from './tools/AiToolAdapter'
 import { Logger, DOMAIN_SERVICE } from '../../common/utils/Logger'
 
@@ -77,6 +82,8 @@ export class AiAgentResult {
   truncated: boolean = false
   /** 是否因工具轮数上限被强制收尾 */
   hitStepLimit: boolean = false
+  /** 是否因单次运行的调用预算用尽而提前收尾 */
+  hitToolBudget: boolean = false
   /** 整个 Agent 循环累计的 token 用量（各轮之和） */
   usage: AiTokenUsage = new AiTokenUsage()
 }
@@ -106,6 +113,12 @@ export async function runAiAgent(
 
   let step: number = 0
   let hitLimit: boolean = false
+  /** 已执行的工具调用数（预算核算用） */
+  let executedCalls: number = 0
+  /** 调用预算是否已用尽 */
+  let budgetExhausted: boolean = false
+  /** 是否已触发风控（触发后本次运行不再发起任何新的取数） */
+  let throttled: boolean = false
   /** 回传给模型的所有工具输出总字符数（上下文预算核算用） */
   let toolChars: number = 0
 
@@ -114,7 +127,7 @@ export async function runAiAgent(
       throw new Error('请求已取消')
     }
 
-    const useTools: boolean = tools.length > 0 && step < maxSteps
+    const useTools: boolean = tools.length > 0 && step < maxSteps && !budgetExhausted && !throttled
     if (tools.length > 0 && step >= maxSteps) {
       hitLimit = true
     }
@@ -162,7 +175,21 @@ export async function runAiAgent(
         throw new Error('请求已取消')
       }
       const call: ToolCall = turn.toolCalls[i]
+
+      // 预算用尽或已触发风控：不再执行，但仍必须为这条 call 回一条 tool 消息。
+      // 少一条会让对话结构不完整，OpenAI 兼容服务端会直接 400
+      if (executedCalls >= DEFAULT_MAX_TOOL_CALLS_PER_RUN) {
+        budgetExhausted = true
+        appendSkippedCall(call, conversation, options, result, true)
+        continue
+      }
+      if (throttled) {
+        appendSkippedCall(call, conversation, options, result, false)
+        continue
+      }
+
       const execution: ToolExecution = await executeToolCall(call, toolContext, fallbackQuery, options)
+      executedCalls++
       const invocation: AiToolInvocation = execution.invocation
       const toolResult: AiToolResult = execution.result
       invocation.status = toolResult.success ? 'success' : 'failed'
@@ -170,6 +197,12 @@ export async function runAiAgent(
       invocation.errorMessage = toolResult.errorMessage
       invocation.errorCode = toolResult.errorCode
       invocation.contentChars = toolResult.content.length
+      invocation.fromCache = toolResult.fromCache
+      // 一旦触发风控就停止本次运行的所有后续取数：继续调用只会拿到更多 rate_limited，
+      // 而冷却期内无论换什么工具都发不出去，模型容易把它误读成「到处都没有数据」
+      if (toolResult.errorCode === TOOL_ERROR_RATE_LIMITED) {
+        throttled = true
+      }
       invocation.sources = toolResult.sources
       invocation.cards = toolResult.cards
       if (toolResult.summary.length > 0) {
@@ -192,9 +225,10 @@ export async function runAiAgent(
 
   result.steps = step
   result.hitStepLimit = hitLimit
-  logger.info('runAiAgent done: steps=%{public}d, tools=%{public}d, cards=%{public}d, text=%{public}d chars, toolChars=%{public}d, limit=%{public}s',
-    step, result.toolInvocations.length, result.cards.length, result.text.length, toolChars,
-    String(hitLimit))
+  result.hitToolBudget = budgetExhausted
+  logger.info('runAiAgent done: steps=%{public}d, calls=%{public}d, tools=%{public}d, cards=%{public}d, text=%{public}d chars, toolChars=%{public}d, limit=%{public}s, budget=%{public}s',
+    step, executedCalls, result.toolInvocations.length, result.cards.length, result.text.length,
+    toolChars, String(hitLimit), String(budgetExhausted))
   if (!result.usage.isEmpty()) {
     logger.info('runAiAgent usage: prompt=%{public}d, completion=%{public}d, cached=%{public}d, total=%{public}d',
       result.usage.promptTokens, result.usage.completionTokens, result.usage.cachedTokens,
@@ -209,6 +243,45 @@ class ToolExecution {
   invocation: AiToolInvocation = new AiToolInvocation()
   /** 工具结果 */
   result: AiToolResult = new AiToolResult()
+}
+
+/**
+ * 为「因预算用尽 / 触发风控而未执行」的工具调用补一条记录与 tool 消息。
+ *
+ * 为什么不直接跳过：Agent 循环的对话结构必须与模型返回的 tool_calls 一一对应，
+ * 缺一条工具消息会被 OpenAI 兼容服务端判定为非法请求（400），整轮回答直接丢失。
+ *
+ * @param call - 模型请求的工具调用
+ * @param conversation - 对话消息数组（原地追加）
+ * @param options - 运行选项
+ * @param result - Agent 结果（原地追加时间线）
+ * @param isBudget - true 表示预算用尽；false 表示已触发风控
+ */
+function appendSkippedCall(call: ToolCall, conversation: ChatMessage[],
+  options: AiAgentOptions, result: AiAgentResult, isBudget: boolean): void {
+  const invocation: AiToolInvocation = new AiToolInvocation()
+  invocation.id = call.id
+  invocation.name = call.function.name
+  invocation.displayName = aiToolTitle(call.function.name)
+  invocation.summary = call.function.arguments
+  invocation.status = 'failed'
+  invocation.errorCode = isBudget ? TOOL_ERROR_BUDGET_EXHAUSTED : TOOL_ERROR_RATE_LIMITED
+  invocation.errorMessage = isBudget ? '本次运行的工具调用次数已达上限，该调用未执行'
+    : '已触发 NGA 频率限制，该调用未执行'
+  invocation.contentChars = 0
+  options.onToolInvocation(invocation)
+  result.toolInvocations.push(invocation)
+
+  const reason: string = isBudget
+    ? '本次运行的工具调用次数已达上限（' + DEFAULT_MAX_TOOL_CALLS_PER_RUN.toString() + ' 次）'
+    : 'NGA 接口已触发频率限制，客户端已暂停本次运行的所有站内取数'
+  const toolMsg: ChatMessage = new ChatMessage('tool',
+    '该工具未执行：' + reason + '。' +
+    '请基于已经取得的信息给出结论，并明确说明还缺哪些数据；' +
+    '如果缺的是必需信息，请建议用户稍后再问或把问题拆小。不要编造未获取到的内容。')
+  toolMsg.toolCallId = call.id
+  toolMsg.name = call.function.name
+  conversation.push(toolMsg)
 }
 
 /**

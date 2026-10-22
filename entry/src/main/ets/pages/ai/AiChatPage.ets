@@ -476,6 +476,10 @@ struct AiChatPage {
       if (result.hitStepLimit) {
         finalText += '\n\n⚠️ 已达到工具调用轮数上限并强制收尾，可提高「Agent 轮数」或拆分问题后重试'
       }
+      if (result.hitToolBudget) {
+        finalText += '\n\n⚠️ 本次运行的取数次数已达上限并提前收尾（防止触发论坛频率限制），' +
+          '可把问题拆小后重试，或稍后再问'
+      }
       const aiBubble: ChatBubble = new ChatBubble('assistant', finalText, false)
       aiBubble.toolInvocations = result.toolInvocations
       aiBubble.sources = result.sources
@@ -1137,11 +1141,18 @@ struct AiChatPage {
                   .fontColor(AppColors.textTertiary)
                   .margin({ left: 4 })
               }
+              if (invocation.fromCache) {
+                Text('缓存')
+                  .fontSize(11)
+                  .fontColor(AppColors.textTertiary)
+                  .margin({ left: 4 })
+              }
             }
             .width('100%')
             .alignItems(VerticalAlign.Center)
             .margin({ bottom: 5 })
-          }, (invocation: AiToolInvocation): string => invocation.id + '_' + invocation.status)
+          }, (invocation: AiToolInvocation): string =>
+            invocation.id + '_' + invocation.status + (invocation.fromCache ? '_c' : ''))
         }
 
         // === 状态提示（无正文且无工具时显示） ===
@@ -1237,11 +1248,18 @@ struct AiChatPage {
                     .fontSize(11)
                     .fontColor(AppColors.textTertiary)
                 }
+                if (invocation.fromCache) {
+                  Text('缓存')
+                    .fontSize(11)
+                    .fontColor(AppColors.textTertiary)
+                    .margin({ left: 6 })
+                }
               }
               .width('100%')
               .alignItems(VerticalAlign.Center)
               .margin({ bottom: 5 })
-            }, (invocation: AiToolInvocation): string => invocation.id + '_' + invocation.status)
+            }, (invocation: AiToolInvocation): string =>
+              invocation.id + '_' + invocation.status + (invocation.fromCache ? '_c' : ''))
           }
 
           MdContentView({

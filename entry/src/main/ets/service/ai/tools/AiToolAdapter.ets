@@ -71,6 +71,8 @@ export const TOOL_ERROR_UPSTREAM: string = 'upstream_error'
 export const TOOL_ERROR_UNAVAILABLE: string = 'unavailable'
 /** 调用成功但结果为空 */
 export const TOOL_ERROR_EMPTY: string = 'empty_result'
+/** 本次运行的调用预算已用尽，该工具未执行 */
+export const TOOL_ERROR_BUDGET_EXHAUSTED: string = 'budget_exhausted'
 
 /** 工具结果中的引用来源。 */
 export class AiToolSource {
@@ -103,6 +105,13 @@ export class AiToolResult {
   sources: AiToolSource[] = []
   /** 可点击卡片（帖子 / 版块 / 用户） */
   cards: AiToolCard[] = []
+  /**
+   * 本次结果是否来自时效性缓存。
+   *
+   * 只影响 UI 展示（「缓存于 x 分钟前」）与诊断日志，不改写 content：
+   * 模型看不到这个标记，避免它把「缓存」当成数据不完整的借口。
+   */
+  fromCache: boolean = false
 }
 
 /**
@@ -179,4 +188,6 @@ export class AiToolInvocation {
   sources: AiToolSource[] = []
   /** 可点击卡片（帖子 / 版块 / 用户） */
   cards: AiToolCard[] = []
+  /** 本次结果是否来自时效性缓存（UI 展示「缓存」标记用） */
+  fromCache: boolean = false
 }

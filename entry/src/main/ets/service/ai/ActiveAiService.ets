@@ -62,6 +62,8 @@ export class AiChatResult {
   cards: AiToolCard[] = []
   /** 是否因工具轮数上限被强制收尾 */
   hitStepLimit: boolean = false
+  /** 是否因单次运行的调用预算用尽而提前收尾 */
+  hitToolBudget: boolean = false
   /** 本次提问（含工具轮）累计 token 用量 */
   usage: AiTokenUsage = new AiTokenUsage()
   /**
@@ -238,6 +240,7 @@ export async function chatCompleteWithActiveAiStream(
   result.sources = agentResult.sources
   result.cards = agentResult.cards
   result.hitStepLimit = agentResult.hitStepLimit
+  result.hitToolBudget = agentResult.hitToolBudget
   result.usage = agentResult.usage
 
   if (result.text.trim().length === 0) {
