@@ -66,14 +66,19 @@ export class NgaReadThreadTool implements AiToolAdapter {
     definition.name = TOOL_NAME
     definition.description =
       '读取 NGA 帖子的标题、版块、页码与楼层正文（已转纯文本）。' +
-        '当前页面有帖子时可省略 tid 直接读当前帖。想读更多楼层时传更大的 page 或 max_floors。'
+        '当前页面有帖子时可省略 tid 直接读当前帖。' +
+        '每次只读一页（约 20 楼）：想读更多楼层请翻页（传更大的 page），' +
+        'max_floors 只控制本次展示多少楼，不能跨页。' +
+        '单楼正文超过 1800 字会被截断，总正文受 max_chars 限制。'
 
     const properties: Record<string, Object> = {}
     properties['tid'] = stringProperty('帖子 ID；省略时使用当前打开的帖子')
-    properties['page'] = intProperty('页码，从 1 开始，默认 1')
-    properties['pid'] = stringProperty('楼层 pid；指定时直接定位到该楼层所在页')
-    properties['max_floors'] = intProperty('最多返回多少个楼层，1-50，默认 15')
-    properties['max_chars'] = intProperty('正文总字符上限，默认 6000')
+    properties['page'] = intProperty('页码，从 1 开始，默认 1；每次只读一页')
+    properties['pid'] = stringProperty('楼层 pid；用于定位到该楼层所在页。' +
+      '必须同时提供 tid，只给 pid 会失败')
+    properties['max_floors'] = intProperty('本次最多展示多少个楼层，1-50，默认 15；' +
+      '受单页楼层数（约 20）限制，不能跨页')
+    properties['max_chars'] = intProperty('本次返回正文总字符上限，500-20000，默认 6000')
 
     const required: string[] = []
     definition.parameters = buildToolParameters(properties, required)

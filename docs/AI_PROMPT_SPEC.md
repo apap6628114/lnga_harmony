@@ -167,8 +167,27 @@
 
 | 工具 | 参数 | 当前执行后端 | 返回给模型的内容 |
 |---|---|---|---|
-| `web_search` | `query`（必填）、`count`（1–10，默认 5） | `POST {搜索配置.endpoint}/v1/tools/search` | 编号列表：标题 + URL + 发布时间 + 摘要 |
+| `web_search` | `query`（必填，1–128 字符）、`count`（1–10，默认 5） | `POST {搜索配置.endpoint}/v1/tools/search` | 编号列表：标题 + URL + 发布时间 + 摘要 |
 | `web_fetch` | `url`（必填，http/https） | `POST {搜索配置.endpoint}/v1/tools/fetch` | 页面标题 + URL + Markdown 正文（超 12000 字截断并标注） |
+
+**工具输入长度约束**（服务端硬限制）：客户端在 `tools/ToolInputLimits.ets` 统一裁剪，
+并把上限写进参数 `description`（模型看不到常量，只能从描述里知道约束）：
+
+| 工具 | 约束 | 超限后的服务端行为 |
+|---|---|---|
+| `web_search` | `query` 1–128 个 Unicode 字符（按码点裁剪，不切坏 emoji） | 直接 4xx，不自动截断 |
+| `nga_search_topics` | `key` 的 GBK 编码长度 ≤ 149 字节（≈74 个汉字 / 149 个 ASCII） | `code=102`「关键字过短/长」 |
+| `nga_search_forum` | `key` 只接受英文版块名（如 `warcraft`） | 中文关键词返回 2048「关键字过短/长」 |
+| `nga_search_user` | `key` 为完整用户名或数字 UID，精确匹配 | 2048「找不到用户」（昵称片段不会命中） |
+| `nga_read_thread` | `max_chars` 500–20000（默认 6000）；单楼正文 1800 字截断；每次只读一页（约 20 楼） | 超出范围被客户端裁剪；跨页必须换 `page`，`max_floors` 不能跨页 |
+| `web_fetch` | 正文超 12000 字符截断 | 客户端截断并标注 |
+| `nga_list_topics` | 单页约 35 条；`sort=hot` 固定近 7 天且不分页 | `limit` 超过单页条数只能拿到本页；hot 下 `page` 无效 |
+
+**参数依赖与虚假能力**：`nga_read_thread` 的 `pid` 必须与 `tid` 同时提供（只给 pid 会失败）；
+`nga_search_user` 是精确匹配且最多返回 1 条，因此**不再声明 `limit` 参数**（声明了也无效）。
+
+`nga_search_forum` 对中文关键词在执行前直接拦下（不再发必然失败的请求），
+引导模型改用 `nga_list_forums`（`scope=all`）在版块目录中查找。
 
 **服务商可用性**：由适配器 `isAvailable(搜索配置)` 判断（DeepSeek 需要搜索密钥）。
 工具层先看对话侧开关，再看搜索配置凭据；任一不满足就不把工具声明给模型。

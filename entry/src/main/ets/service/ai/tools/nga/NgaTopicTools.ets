@@ -36,6 +36,11 @@ import {
   stringProperty,
   topicCard
 } from './NgaToolSupport'
+import {
+  NGA_SEARCH_KEY_MAX_GBK_BYTES,
+  LimitedText,
+  truncateToGbkBytes
+} from '../ToolInputLimits'
 
 /** 版块列表工具名。 */
 const TOOL_LIST: string = 'nga_list_topics'
@@ -66,15 +71,17 @@ export class NgaListTopicsTool implements AiToolAdapter {
     definition.name = TOOL_LIST
     definition.description =
       '按版块读取 NGA 主题列表（标题、作者、回复数、tid）。' +
-        '当前页面有版块时可省略 fid。排序方式：latest=最新回复，new=最新发帖，hot=近期热帖，digest=精华。'
+        '当前页面有版块时可省略 fid。排序方式：latest=最新回复，new=最新发帖，' +
+        'hot=近 7 天热帖（服务端固定 7 天，且不分页），digest=精华。' +
+        '服务端每页通常返回 35 条，要更多需翻页。'
 
     const properties: Record<string, Object> = {}
     properties['fid'] = stringProperty('版块 ID；省略时使用当前版块')
-    properties['page'] = intProperty('页码，从 1 开始，默认 1')
+    properties['page'] = intProperty('页码，从 1 开始，默认 1；sort=hot 时服务端不分页，page 无效')
     properties['sort'] = enumProperty(
-      '排序方式：latest=最新回复（默认），new=最新发帖，hot=近期热帖，digest=精华',
+      '排序方式：latest=最新回复（默认），new=最新发帖，hot=近 7 天热帖（固定 7 天、不分页），digest=精华',
       ['latest', 'new', 'hot', 'digest'])
-    properties['limit'] = intProperty('返回条数 1-50，默认 20')
+    properties['limit'] = intProperty('返回条数 1-50，默认 20；受服务端单页条数限制（通常 35 条）')
 
     const required: string[] = []
     definition.parameters = buildToolParameters(properties, required)
@@ -146,14 +153,16 @@ export class NgaSearchTopicsTool implements AiToolAdapter {
     definition.name = TOOL_SEARCH
     definition.description =
       '在 NGA 站内搜索主题。返回标题、作者、回复数、发帖时间与 tid。' +
-        '可只搜标题（默认）或同时搜正文（in_content=true），可用 fid 限定版块。'
+        '可只搜标题（默认）或同时搜正文（in_content=true），可用 fid 限定版块。' +
+        'key 必须简短（如 2~10 个字），NGA 上限约 74 个汉字，超长会被服务端拒绝并截断。'
 
     const properties: Record<string, Object> = {}
-    properties['key'] = stringProperty('搜索关键词，尽量具体，避免单个常见字')
+    properties['key'] = stringProperty('搜索关键词：2~10 个字的简短词组，不要整段粘贴；' +
+      'NGA 上限约 74 个汉字（GBK 149 字节），超出会被截断')
     properties['fid'] = stringProperty('限定版块 ID（可选）')
     properties['in_content'] = boolProperty('是否同时搜索正文，默认 false（只搜标题）')
     properties['page'] = intProperty('页码，从 1 开始，默认 1')
-    properties['limit'] = intProperty('返回条数 1-50，默认 20')
+    properties['limit'] = intProperty('返回条数 1-50，默认 20；受服务端单页条数限制（通常 35 条）')
 
     const required: string[] = []
     required.push('key')
@@ -192,6 +201,10 @@ export class NgaSearchTopicsTool implements AiToolAdapter {
     if (key.length === 0) {
       return failedResult('缺少搜索关键词', TOOL_ERROR_BAD_ARGS)
     }
+    // NGA 按 GBK 字节校验关键字长度（实测 149 字节内可用，150 起 code=102
+    // 「关键字过短/长」）；模型常把整段问题当 key，这里统一裁到上限。
+    const limited: LimitedText = truncateToGbkBytes(key, NGA_SEARCH_KEY_MAX_GBK_BYTES)
+    key = limited.text
     const params: TopicListParams = createTopicListParams()
     params.key = key
     params.fid = readStringArg(args, 'fid')
@@ -200,7 +213,13 @@ export class NgaSearchTopicsTool implements AiToolAdapter {
       params.content = '1'
     }
     const limit: number = readIntArg(args, 'limit', DEFAULT_LIST_LIMIT, 1, 50)
-    return fetchAndFormat(context.token, params, limit, '搜索「' + key + '」')
+    const toolResult: AiToolResult = await fetchAndFormat(context.token, params, limit,
+      '搜索「' + key + '」')
+    if (limited.truncated && toolResult.success) {
+      toolResult.content = '（关键词超过 NGA 上限，已截断为「' + key + '」后检索）\n' +
+        toolResult.content
+    }
+    return toolResult
   }
 }
 

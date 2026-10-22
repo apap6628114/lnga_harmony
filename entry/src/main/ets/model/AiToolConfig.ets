@@ -140,7 +140,7 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
   {
     name: 'nga_read_thread',
     title: '读帖',
-    description: '读取帖子标题、楼层、作者与正文纯文本，支持指定页码与楼层定位',
+    description: '读取帖子标题、楼层、作者与正文纯文本，支持指定页码与楼层定位（每次一页约 20 楼，正文按上限截断）',
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',
@@ -150,7 +150,7 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
   {
     name: 'nga_list_topics',
     title: '版块主题列表',
-    description: '按版块 ID 拉取主题列表，支持最新 / 热门 / 精华排序与翻页',
+    description: '按版块 ID 拉取主题列表，支持最新 / 热门 / 精华排序与翻页（hot 固定近 7 天、不分页）',
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',
@@ -159,7 +159,7 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
   {
     name: 'nga_search_topics',
     title: '站内搜索主题',
-    description: '在 NGA 搜索主题，可限定版块，返回标题、作者、回复数与链接',
+    description: '在 NGA 搜索主题，可限定版块，返回标题、作者、回复数与 tid（关键词需简短）',
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',
@@ -168,7 +168,7 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
   {
     name: 'nga_list_forums',
     title: '我的版块',
-    description: '列出账号已订阅的版块与收藏版面，用于拿到 fid 后再翻列表',
+    description: '列出收藏版面，或 scope=all 时列出全部分类版块（拿到 fid 后再翻列表）',
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',
@@ -178,7 +178,7 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
   {
     name: 'nga_search_forum',
     title: '搜索版块',
-    description: '按名称搜索 NGA 版块，返回 fid 与版块名',
+    description: '按英文版块名搜索 NGA 版块，返回 fid 与版块名（中文关键词会被服务端拒绝）',
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',
@@ -187,7 +187,7 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
   {
     name: 'nga_get_user',
     title: '用户资料',
-    description: '按 UID 或用户名读取用户资料卡（等级、发帖数、注册时间、签名等）',
+    description: '按 UID 或完整用户名读取用户资料卡（等级、发帖数、注册时间、签名等）',
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',
@@ -198,7 +198,7 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
   {
     name: 'nga_search_user',
     title: '搜索用户',
-    description: '按用户名搜索用户，返回 UID 列表',
+    description: '按完整用户名或 UID 精确查找用户，一次返回一个匹配结果（非模糊搜索）',
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',

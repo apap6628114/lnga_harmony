@@ -38,6 +38,7 @@ import {
   readStringArg,
   stringProperty
 } from './NgaToolSupport'
+import { containsNonAscii } from '../ToolInputLimits'
 
 /** 我的版块工具名。 */
 const TOOL_LIST: string = 'nga_list_forums'
@@ -76,7 +77,7 @@ export class NgaListForumsTool implements AiToolAdapter {
     properties['scope'] = enumProperty(
       '范围：favorites=用户收藏的版面（默认），all=全部分类的版块',
       ['favorites', 'all'])
-    properties['limit'] = intProperty('最多返回多少个版块，1-200，默认 40')
+    properties['limit'] = intProperty('最多返回多少个版块，1-200，默认 40（scope=all 时默认 60）')
 
     const required: string[] = []
     definition.parameters = buildToolParameters(properties, required)
@@ -127,7 +128,7 @@ export class NgaListForumsTool implements AiToolAdapter {
     const boards: FavBoardItem[] = fetched.data
     if (boards.length === 0) {
       return failedResult(fetched.error.length > 0 ? fetched.error :
-        '用户没有收藏任何版面。可以改用 nga_search_forum 按名称查找版块', TOOL_ERROR_EMPTY)
+        '用户没有收藏任何版面。可以改用 nga_search_forum（英文版块名）或 nga_list_forums scope=all 查找版块', TOOL_ERROR_EMPTY)
     }
     const count: number = Math.min(limit, boards.length)
     let content: string = '收藏版面（共 ' + boards.length.toString() + ' 个）：\n'
@@ -187,7 +188,7 @@ export class NgaListForumsTool implements AiToolAdapter {
     }
     if (total > shown) {
       content += '\n（共 ' + total.toString() + ' 个版块，已展示前 ' + shown.toString() +
-        ' 个；可增大 limit，或改用 nga_search_forum 精确查找）\n'
+        ' 个；可增大 limit，或改用 nga_search_forum 按英文版块名查找）\n'
     }
     const result: AiToolResult = new AiToolResult()
     result.success = true
@@ -221,10 +222,14 @@ export class NgaSearchForumTool implements AiToolAdapter {
   getDefinition(context: AiToolContext): AiToolDefinition {
     const definition: AiToolDefinition = new AiToolDefinition()
     definition.name = TOOL_SEARCH
-    definition.description = '按名称搜索 NGA 版块，返回版块名与 fid。适合"游戏区""水区"这类模糊叫法。'
+    definition.description =
+      '按版块名搜索 NGA 版块，返回版块名与 fid。' +
+        '注意：NGA 该接口只接受英文版块名（如 warcraft），中文关键词会被服务端拒绝；' +
+        '中文版块名请改用 nga_list_forums（scope=all）在版块目录中查找。'
 
     const properties: Record<string, Object> = {}
-    properties['key'] = stringProperty('版块名称关键词')
+    properties['key'] = stringProperty('版块英文名关键词（如 warcraft）；' +
+      '中文关键词会被服务端拒绝，中文版块请改用 nga_list_forums')
 
     const required: string[] = []
     required.push('key')
@@ -263,11 +268,24 @@ export class NgaSearchForumTool implements AiToolAdapter {
     if (key.length === 0) {
       return failedResult('缺少版块关键词', TOOL_ERROR_BAD_ARGS)
     }
+    // NGA 版块搜索接口只认英文版块名：实测中文关键词（2~11 字）全部返回
+    // 2048「关键字过短/长」。提前拦下，避免发一次必然失败的请求（还会消耗风控预算），
+    // 直接给模型可执行的替代路径。
+    if (containsNonAscii(key)) {
+      return failedResult('NGA 版块搜索接口只接受英文版块名（如 warcraft），中文关键词「' + key +
+        '」会被服务端拒绝。请改用 nga_list_forums 并传 scope=all 在版块目录中查找。',
+        TOOL_ERROR_BAD_ARGS)
+    }
     const fetched: SearchForumResult = await searchForum(context.token, key)
     const items: ForumSearchItem[] = fetched.data
     if (items.length === 0) {
-      return failedResult(fetched.error.length > 0 ? fetched.error : '没有找到匹配的版块',
-        TOOL_ERROR_NOT_FOUND)
+      const message: string = fetched.error.length > 0 ? fetched.error : '没有找到匹配的版块'
+      if (message.indexOf('关键字过短') >= 0) {
+        return failedResult('NGA 版块搜索要求英文版块名且长度合适（实测 8 个字符左右可用），' +
+          '当前关键词「' + key + '」被服务端拒绝。可改用 nga_list_forums 并传 scope=all 浏览版块目录。',
+          TOOL_ERROR_NOT_FOUND)
+      }
+      return failedResult(message, TOOL_ERROR_NOT_FOUND)
     }
     let content: string = '版块搜索「' + key + '」共 ' + items.length.toString() + ' 个结果：\n'
     const cards: AiToolCard[] = []

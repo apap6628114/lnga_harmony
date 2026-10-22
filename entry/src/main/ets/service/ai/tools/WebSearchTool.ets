@@ -19,6 +19,11 @@ import {
 } from './AiToolAdapter'
 import { aiSearchProviderRegistry } from '../search/SearchProviderRegistry'
 import { WebSearchItem, WebSearchResponse } from '../search/AiSearchTypes'
+import {
+  MAX_WEB_SEARCH_QUERY_CODE_POINTS,
+  LimitedText,
+  truncateToCodePoints
+} from './ToolInputLimits'
 
 /** 工具名称。 */
 const TOOL_NAME: string = 'web_search'
@@ -55,7 +60,8 @@ export class WebSearchTool implements AiToolAdapter {
 
     const queryProp: Record<string, Object> = {}
     queryProp['type'] = 'string'
-    queryProp['description'] = '搜索关键词或自然语言问题，尽量具体'
+    queryProp['description'] = '搜索关键词或自然语言问题，尽量具体；' +
+      '上限 128 个字符，超出会被截断（服务端超长直接报错，不会自动截断），不要粘整段长文'
 
     const countProp: Record<string, Object> = {}
     countProp['type'] = 'integer'
@@ -114,6 +120,10 @@ export class WebSearchTool implements AiToolAdapter {
     if (query.length === 0) {
       query = fallbackQuery.trim()
     }
+    // DeepSeek Search API 要求 query 为 1~128 个 Unicode 字符，超长直接 4xx
+    // 且服务端不截断；模型常把整段问题当 query 传，这里统一裁到上限。
+    const limited: LimitedText = truncateToCodePoints(query, MAX_WEB_SEARCH_QUERY_CODE_POINTS)
+    query = limited.text
     let count: number = DEFAULT_RESULT_COUNT
     const countRaw: Object | undefined = args['count']
     if (typeof countRaw === 'number') {
@@ -153,6 +163,9 @@ export class WebSearchTool implements AiToolAdapter {
     result.count = response.results.length
     result.sources = buildSources(response.results)
     result.content = buildSearchContent(query, response.results)
+    if (limited.truncated) {
+      result.content = '（搜索词超过 128 个字符，已截断后检索）\n' + result.content
+    }
     return result
   }
 }

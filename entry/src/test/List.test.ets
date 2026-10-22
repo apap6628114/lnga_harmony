@@ -31,6 +31,7 @@ import columnLayoutUnitTest from './ColumnLayoutUnit.test';
 import sessionUnitTest from './SessionUnit.test';
 import aiUnitTest from './AiUnit.test';
 import aiToolContractTest from './AiToolContract.test';
+import aiToolInputLimitsTest from './AiToolInputLimits.test';
 
 /**
  * 注册全部本地单元测试。
@@ -69,4 +70,5 @@ export default function testsuite(): void {
   sessionUnitTest();
   aiUnitTest();
   aiToolContractTest();
+  aiToolInputLimitsTest();
 }

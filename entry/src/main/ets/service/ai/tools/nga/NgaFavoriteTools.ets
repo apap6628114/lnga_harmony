@@ -60,9 +60,10 @@ export class NgaListFavoritesTool implements AiToolAdapter {
       '读取 NGA 收藏夹。不传 folder_id 时列出全部收藏夹；传 folder_id 时读取该收藏夹内的主题列表。'
 
     const properties: Record<string, Object> = {}
-    properties['folder_id'] = stringProperty('收藏夹 ID；省略时列出收藏夹')
-    properties['page'] = intProperty('收藏夹内主题的页码，默认 1')
-    properties['limit'] = intProperty('返回条数 1-50，默认 20')
+    properties['folder_id'] = stringProperty('收藏夹数字 ID（先用本工具不带参数列出，再传回这里）；' +
+      '省略时只列出收藏夹')
+    properties['page'] = intProperty('收藏夹内主题的页码，从 1 开始，默认 1')
+    properties['limit'] = intProperty('返回条数 1-50，默认 20；受服务端单页条数限制（通常 35 条）')
 
     const required: string[] = []
     definition.parameters = buildToolParameters(properties, required)

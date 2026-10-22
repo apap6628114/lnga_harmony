@@ -38,14 +38,12 @@ import type { ProfileData, SearchUserItem } from '../../../../model/User'
 import {
   buildToolParameters,
   failedResult,
-  intProperty,
   boolProperty,
   isNgaReady,
   loginRequiredResult,
   missingUserResult,
   parseToolArguments,
   readBoolArg,
-  readIntArg,
   readStringArg,
   resolveTargetUid,
   stringProperty,
@@ -154,7 +152,8 @@ export class NgaGetUserTool implements AiToolAdapter {
 
     const properties: Record<string, Object> = {}
     properties['uid'] = stringProperty('用户 UID；省略时使用当前页面用户或当前登录账号')
-    properties['username'] = stringProperty('用户名；与 uid 二选一，省略规则相同')
+    properties['username'] = stringProperty('完整用户名（精确匹配，片段不会命中）；与 uid 二选一，' +
+      '同时传时 username 优先')
 
     const required: string[] = []
     definition.parameters = buildToolParameters(properties, required)
@@ -224,11 +223,12 @@ export class NgaSearchUserTool implements AiToolAdapter {
   getDefinition(context: AiToolContext): AiToolDefinition {
     const definition: AiToolDefinition = new AiToolDefinition()
     definition.name = TOOL_SEARCH
-    definition.description = '按用户名搜索 NGA 用户，返回 uid 与用户名。适合只知道昵称、不知道 UID 的场景。'
+    definition.description = '按完整用户名或数字 UID 精确查找 NGA 用户，返回 uid 与用户名。' +
+      '注意是精确匹配而非模糊搜索：只知道昵称片段不会命中，需先向用户确认完整用户名。' +
+      '接口一次只返回一个匹配用户（没有分页、没有数量参数）。'
 
     const properties: Record<string, Object> = {}
-    properties['key'] = stringProperty('用户名关键词')
-    properties['limit'] = intProperty('返回条数 1-30，默认 10')
+    properties['key'] = stringProperty('完整用户名（精确匹配）或数字 UID；昵称片段不会命中')
 
     const required: string[] = []
     required.push('key')
@@ -267,14 +267,13 @@ export class NgaSearchUserTool implements AiToolAdapter {
     if (key.length === 0) {
       return failedResult('缺少用户名关键词', TOOL_ERROR_BAD_ARGS)
     }
-    const limit: number = readIntArg(args, 'limit', 10, 1, 30)
     const fetched: SearchUserResult = await searchUser(context.token, key)
     const items: SearchUserItem[] = fetched.data
     if (items.length === 0) {
-      return failedResult(fetched.error.length > 0 ? fetched.error : '没有找到匹配的用户',
-        TOOL_ERROR_NOT_FOUND)
+      return failedResult((fetched.error.length > 0 ? fetched.error : '没有找到匹配的用户') +
+        '（该接口按完整用户名或 UID 精确匹配，昵称片段不会命中）', TOOL_ERROR_NOT_FOUND)
     }
-    const count: number = Math.min(limit, items.length)
+    const count: number = items.length
     let content: string = '用户搜索「' + key + '」共 ' + items.length.toString() + ' 个结果：\n'
     const cards: AiToolCard[] = []
     for (let i: number = 0; i < count; i++) {
@@ -318,11 +317,13 @@ export class NgaUserActivityTool implements AiToolAdapter {
     definition.description =
       '读取 NGA 用户的活跃度分析：发帖/回复总数、版块分布、时段分布与近期帖子标题、回复片段。' +
         '参数可省略：不传 uid 时，依次使用当前页面用户、当前登录账号。' +
-        '用户说"我最近在哪些版块活跃"时直接调用本工具即可。'
+        '用户说"我最近在哪些版块活跃"时直接调用本工具即可。' +
+        'include_samples=false 可省略样本（样本较多时能显著减少上下文占用）。'
 
     const properties: Record<string, Object> = {}
     properties['uid'] = stringProperty('用户 UID；省略时使用当前页面用户或当前登录账号')
-    properties['include_samples'] = boolProperty('是否返回帖子标题与回复片段样本，默认 true')
+    properties['include_samples'] = boolProperty('是否返回帖子标题与回复片段样本，默认 true；' +
+      '样本可能较多，只要统计数字时传 false')
 
     const required: string[] = []
     definition.parameters = buildToolParameters(properties, required)

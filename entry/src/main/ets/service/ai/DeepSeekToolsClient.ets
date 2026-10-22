@@ -9,6 +9,7 @@ import { http } from '@kit.NetworkKit'
 import { AiSearchProfile } from '../../model/AiSearchConfig'
 import { buildToolsUrl, extractServerError } from './AiEndpoint'
 import { WebFetchResponse, WebSearchItem, WebSearchResponse } from './search/AiSearchTypes'
+import { MAX_WEB_SEARCH_QUERY_CODE_POINTS, truncateToCodePoints } from './tools/ToolInputLimits'
 import { Logger, DOMAIN_SERVICE } from '../../common/utils/Logger'
 
 const logger = new Logger(DOMAIN_SERVICE, 'DeepSeekToolsClient')
@@ -53,8 +54,8 @@ export async function searchWeb(
   bodyObj['need_content'] = false
   const question: string = oriQuestion.trim()
   if (question.length > 0) {
-    // 官方限制 ori_question 为 1~128 个字符
-    bodyObj['ori_question'] = question.length > 128 ? question.substring(0, 128) : question
+    // 官方限制 ori_question 为 1~128 个 Unicode 字符；按码点裁剪，避免切坏代理对
+    bodyObj['ori_question'] = truncateToCodePoints(question, MAX_WEB_SEARCH_QUERY_CODE_POINTS).text
   }
 
   const url: string = buildToolsUrl(profile.endpoint, 'search')

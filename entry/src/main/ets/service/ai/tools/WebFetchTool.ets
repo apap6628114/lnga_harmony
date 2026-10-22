@@ -49,11 +49,13 @@ export class WebFetchTool implements AiToolAdapter {
     definition.name = TOOL_NAME
     definition.description =
       '抓取指定网页并返回其 Markdown 正文。当搜索摘要不足以回答问题、' +
-        '或者用户直接给出链接时使用。一次只抓一个 URL。'
+        '或者用户直接给出链接时使用。一次只抓一个 URL。' +
+        '正文超过 12000 个字符会被截断（结果中带截断标记），长文请告诉用户只读了前半部分。'
 
     const urlProp: Record<string, Object> = {}
     urlProp['type'] = 'string'
-    urlProp['description'] = '要抓取的网页地址，必须是 http 或 https 开头'
+    urlProp['description'] = '要抓取的网页地址，必须是 http 或 https 开头；' +
+      '正文超过 12000 字符会被截断'
 
     const properties: Record<string, Object> = {}
     properties['url'] = urlProp
