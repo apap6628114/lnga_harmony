@@ -10,16 +10,46 @@
 
 import { AiProviderProfile } from '../../../model/AiConfig'
 import { AiSearchProfile } from '../../../model/AiSearchConfig'
+import { AiToolSettings } from '../../../model/AiToolConfig'
+import { AiAgentPreset, AiTaskContext } from '../../../model/AiAgentPreset'
 import { AiToolDefinition } from '../AiProtocolTypes'
 
 /**
  * 工具执行上下文。
  */
 export class AiToolContext {
-  /** 对话配置（提供工具开关 / Agent 参数） */
+  /** 对话配置（提供协议 / 端点等；工具本身不再受它限制） */
   chat: AiProviderProfile = new AiProviderProfile()
   /** 激活的搜索配置（未配置时为 null） */
   search: AiSearchProfile | null = null
+  /** 全局工具设置（所有 AI 配置共用） */
+  tools: AiToolSettings = new AiToolSettings()
+  /** 当前任务（决定工具白名单；自由对话时为 null） */
+  preset: AiAgentPreset | null = null
+  /** 当前页面上下文（帖子 / 用户 / 版块标识，供工具在缺参时回退） */
+  taskContext: AiTaskContext = new AiTaskContext()
+  /** 当前登录用户 UID（"读我自己"类工具的兜底参数） */
+  selfUid: string = ''
+  /** 当前登录用户昵称 */
+  selfUserName: string = ''
+  /** NGA 会话令牌（NGA 工具用，未登录为空串） */
+  token: string = ''
+  /** 是否已登录（由服务层统一判定） */
+  authenticated: boolean = false
+}
+
+/** 工具结果中的可点击卡片。 */
+export class AiToolCard {
+  /** 卡片类型：topic / forum / user */
+  kind: string = ''
+  /** 主标题 */
+  title: string = ''
+  /** 副标题（作者、回复数、版块等） */
+  subtitle: string = ''
+  /** 跳转目标（应用内路由标识） */
+  route: string = ''
+  /** 跳转参数（JSON 字符串） */
+  params: string = ''
 }
 
 /** 工具结果中的引用来源。 */
@@ -49,6 +79,8 @@ export class AiToolResult {
   errorMessage: string = ''
   /** 引用来源列表 */
   sources: AiToolSource[] = []
+  /** 可点击卡片（帖子 / 版块 / 用户） */
+  cards: AiToolCard[] = []
 }
 
 /**
@@ -119,4 +151,6 @@ export class AiToolInvocation {
   errorMessage: string = ''
   /** 引用来源 */
   sources: AiToolSource[] = []
+  /** 可点击卡片（帖子 / 版块 / 用户） */
+  cards: AiToolCard[] = []
 }

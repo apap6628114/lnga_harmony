@@ -330,6 +330,21 @@ export struct CommunityPanel {
               routerStore.navigateSearch()
             })
 
+            Row() {
+              Image($r('app.media.icon_ai')).width(14).height(14).fillColor(AppColors.primary)
+            }
+            .width('100%').height(28)
+            .justifyContent(FlexAlign.Center)
+            .backgroundColor(AppColors.bgSecondary).borderRadius(8)
+            .margin({ left: 12, right: 12, bottom: 6 })
+            .alignItems(VerticalAlign.Center)
+            .onClick(() => {
+              this.getUIContext().getRouter().pushUrl({
+                url: 'pages/ai/AiChatPage',
+                params: { title: 'AI 助手' }
+              })
+            })
+
             Divider().width('100%').color(AppColors.separator).margin({ top: 4, bottom: 4 })
 
             if (this.favoritesList.length > 0) {

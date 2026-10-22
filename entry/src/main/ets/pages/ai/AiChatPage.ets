@@ -2,19 +2,35 @@ import { ChatMessage, RequestCanceller } from '../../service/ai/AiProtocolTypes'
 import {
   chatCompleteWithActiveAiStream,
   formatAiCompletionError,
-  getToolAvailabilityHint,
+  getReadyToolNames,
   ToolInvocationCallback,
   AiChatResult
 } from '../../service/ai/ActiveAiService'
-import { AiToolInvocation, AiToolSource } from '../../service/ai/tools/AiToolAdapter'
+import { AiToolCard, AiToolInvocation, AiToolSource } from '../../service/ai/tools/AiToolAdapter'
+import {
+  AiAgentPreset,
+  AiTaskContext,
+  PRESET_ENTRY_GLOBAL,
+  presetAllowsTool,
+  presetToolNames
+} from '../../model/AiAgentPreset'
+import {
+  AI_TOOL_CATALOG,
+  AiToolMeta,
+  TOOL_REQUIRES_LOGIN,
+  aiToolTitle
+} from '../../model/AiToolConfig'
+import { aiSearchProviderRegistry } from '../../service/ai/search/SearchProviderRegistry'
+import { AiSearchProvider } from '../../service/ai/search/AiSearchProvider'
+import { AiSearchProfile } from '../../model/AiSearchConfig'
 import { MdContentView } from '../../common/components/MdContentView'
 import { MdStreamingContentView } from '../../common/components/MdStreamingContentView'
 import { PanelNavBar } from '../../common/components/PanelNavBar'
-import { AppColors } from '../../common/constants/Constants'
+import { AppColors, NAV_BAR_H } from '../../common/constants/Constants'
 import { appStore } from '../../store/AppStore'
+import { routerStore, Screen } from '../../store/RouterStore'
 import { PageScope } from '../../common/concurrency/PageScope'
 import { UIMaterialManager } from '../../common/managers/UIMaterialManager'
-import { TitleScrollEffect } from '../../common/utils/TitleScrollEffect'
 import { resolveKeyboardAppearance } from '../../common/utils/KeyboardAppearanceUtils'
 import { openSystemLink } from '../../common/utils/LinkUtils'
 import { pasteboard } from '@kit.BasicServicesKit'
@@ -36,6 +52,8 @@ const FLUSH_DECAY_RATE: number = 0.7
 const FLUSH_IDLE_INCREASE: number = 20
 /** 气泡内最多展示的引用来源条数。 */
 const MAX_VISIBLE_SOURCES: number = 4
+/** 气泡内最多展示的结果卡片数。 */
+const MAX_VISIBLE_CARDS: number = 6
 
 /**
  * 聊天气泡。
@@ -56,6 +74,8 @@ class ChatBubble {
   toolInvocations: AiToolInvocation[] = []
   /** 本轮引用来源 */
   sources: AiToolSource[] = []
+  /** 本轮可点击卡片（帖子 / 版块 / 用户） */
+  cards: AiToolCard[] = []
   /** 是否被用户主动停止 */
   stopped: boolean = false
   /** 是否调用失败（可重试） */
@@ -75,16 +95,39 @@ class ChatBubble {
   }
 }
 
+/** 从路由参数里读字符串。 */
+function readParam(params: Record<string, Object>, key: string): string {
+  const value: Object | undefined = params[key]
+  return typeof value === 'string' ? (value as string) : ''
+}
+
 /**
- * AI 对话页 — ChatGPT 式流式聊天界面。
+ * 工具可用性摘要（用于对话页的工具声明面板）。
+ */
+class AiToolSummary {
+  /** 工具名 */
+  name: string = ''
+  /** 展示名 */
+  title: string = ''
+  /** 当前是否可用 */
+  ready: boolean = false
+  /** 不可用原因 */
+  reason: string = ''
+}
+
+/**
+ * AI 对话页 — 任务化 Agent 聊天界面。
  *
- * 支持预填充初始问题、连续多轮对话、工具调用时间线、停止生成、
- * 重新生成与复制回答。
+ * 与改造前的差异：
+ * - 支持「任务」（AiAgentPreset）：任务决定 system prompt 与可用工具；
+ * - 不再由调用方拼死数据，改为把帖子 / 用户 / 版块标识放进上下文，模型调用工具按需读取；
+ * - AI 回答里的帖子 / 版块 / 用户卡片可直接点击跳转原生页面。
  *
  * 路由参数：
  * - initialPrompt: string — 预填充的第一条用户消息
  * - title: string — 导航栏标题
- * - scenario: string — 场景标识（注入对应 system prompt）
+ * - presetId / scenario: string — 任务标识（不传为自由对话）
+ * - tid / pid / threadTitle / uid / userName / fid / forumName — 页面上下文
  */
 @Entry
 @Component
@@ -102,7 +145,19 @@ struct AiChatPage {
   /** 当前轮工具调用时间线 */
   @State private toolInvocations: AiToolInvocation[] = []
   /** 导航栏标题 */
-  @State private title: string = 'AI 对话'
+  @State private title: string = 'AI 助手'
+  /** 当前任务名称（空表示自由对话） */
+  @State private taskName: string = ''
+  /** 当前任务可用工具说明 */
+  @State private taskToolsHint: string = ''
+  /** 当前任务描述 */
+  @State private taskDescription: string = ''
+  /** 可选任务列表（用于空状态与切换面板） */
+  @State private tasks: AiAgentPreset[] = []
+  /** 当前任务范围内可用的工具清单（用于声明面板）。 */
+  @State private toolSummaries: AiToolSummary[] = []
+  /** 是否展开任务选择面板 */
+  @State private showTaskPicker: boolean = false
   /** 状态栏高度。 */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   /**
@@ -114,14 +169,12 @@ struct AiChatPage {
   @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
   /** 标题栏渐变模糊与偏色的滚动联动进度。 */
   @State private titleScrollEffectProgress: number = 0
-  /** 滚动容器当前视口高度。 */
-  @State private scrollViewportHeight: number = 1
   /** 初始 prompt */
   private initialPrompt: string = ''
-  /** AI 场景标识（空字符串表示自由聊天，不注入 system prompt） */
-  private scenario: string = ''
-  /** 当前场景的 system prompt 文本 */
-  private systemPrompt: string = ''
+  /** 当前任务（空表示自由对话） */
+  private preset: AiAgentPreset | null = null
+  /** 页面上下文（帖子 / 用户 / 版块标识） */
+  private taskContext: AiTaskContext = new AiTaskContext()
   /** 流式输出完整缓冲，普通字段更新不会触发 ArkUI 重建。 */
   private streamBuffer: string = ''
   /** 流式输出刷新定时器句柄。 */
@@ -142,40 +195,41 @@ struct AiChatPage {
   /** 滚动控制器 */
   private scroller: Scroller = new Scroller()
 
-  /** 按滚动容器绝对偏移同步标题栏视觉效果。 */
-  private syncTitleScrollEffect(): void {
-    const progress: number = TitleScrollEffect.getProgress(
-      this.scroller.currentOffset().yOffset,
-      this.statusBarHeight
-    )
-    if (TitleScrollEffect.shouldUpdateProgress(this.titleScrollEffectProgress, progress)) {
-      this.titleScrollEffectProgress = progress
-    }
-  }
-
   aboutToAppear(): void {
     this.scope.begin()
     const params: Record<string, Object> = this.getUIContext().getRouter().getParams() as Record<string, Object>
     if (params) {
-      const prompt: string = (params['initialPrompt'] as string) ?? ''
-      const t: string = (params['title'] as string) ?? ''
-      const s: string = (params['scenario'] as string) ?? ''
-      this.initialPrompt = prompt
-      this.scenario = s
+      this.initialPrompt = readParam(params, 'initialPrompt')
+      const t: string = readParam(params, 'title')
       if (t.length > 0) {
         this.title = t
       }
-      // 获取场景 system prompt（有 scenario 时生效，自由聊天时不注入）
-      if (this.scenario.length > 0) {
-        this.systemPrompt = appStore.settingsStore.getScenarioPrompt(this.scenario)
+      // 任务标识：新参数 presetId 优先，兼容旧参数 scenario
+      let presetId: string = readParam(params, 'presetId')
+      if (presetId.length === 0) {
+        presetId = readParam(params, 'scenario')
       }
+      this.taskContext.tid = readParam(params, 'tid')
+      this.taskContext.pid = readParam(params, 'pid')
+      this.taskContext.threadTitle = readParam(params, 'threadTitle')
+      this.taskContext.uid = readParam(params, 'uid')
+      this.taskContext.userName = readParam(params, 'userName')
+      this.taskContext.fid = readParam(params, 'fid')
+      this.taskContext.forumName = readParam(params, 'forumName')
+      if (presetId.length > 0) {
+        this.applyPresetById(presetId, false)
+      }
+    }
+    this.tasks = appStore.settingsStore.listAiPresetsByEntry(PRESET_ENTRY_GLOBAL)
+    // 自由对话（无 presetId）时 applyPresetById 不会被调用，这里补一次工具声明
+    this.refreshToolSummaries()
+    // 未登录时站内工具全部不可用，必须显式告知；缺搜索服务等配置在工具声明面板里展示，
+    // 不在这里反复 toast，避免每次进入对话页都打扰。
+    if (!appStore.auth.isAuthenticated) {
+      appStore.showToast('未登录：站内工具不可用')
     }
     if (this.initialPrompt.length > 0) {
       this.sendMessage(this.initialPrompt)
-    }
-    const toolHint: string = getToolAvailabilityHint()
-    if (toolHint.length > 0) {
-      appStore.showToast(toolHint)
     }
   }
 
@@ -193,6 +247,138 @@ struct AiChatPage {
   onPageShow(): void {
     this.scrollToBottom()
   }
+
+  // ============================================================
+  // 任务
+  // ============================================================
+
+  /**
+   * 按 ID 应用任务。
+   *
+   * @param presetId - 任务 ID
+   * @param clearBubbles - 是否清空当前对话
+   */
+  private applyPresetById(presetId: string, clearBubbles: boolean): void {
+    const preset: AiAgentPreset | null = appStore.settingsStore.getAiPreset(presetId)
+    this.preset = preset
+    if (preset === null) {
+      this.taskName = ''
+      this.taskDescription = ''
+      this.taskToolsHint = ''
+      this.refreshToolSummaries()
+      return
+    }
+    this.taskName = preset.name
+    this.taskDescription = preset.description
+    this.taskToolsHint = this.describePresetTools(preset)
+    if (this.title.length === 0 || this.title === 'AI 助手') {
+      this.title = preset.name
+    }
+    if (clearBubbles) {
+      this.bubbles = []
+      this.toolInvocations = []
+    }
+    this.refreshToolSummaries()
+  }
+
+  /**
+   * 重新计算当前任务范围内的工具可用性。
+   *
+   * 这是「工具声明」在 UI 侧的可视化：用户能看到这一轮对话到底有哪些工具、
+   * 哪些因为未登录 / 未配置搜索服务而不可用。
+   */
+  private refreshToolSummaries(): void {
+    const ready: string[] = getReadyToolNames(this.preset, this.taskContext)
+    const list: AiToolSummary[] = []
+    for (let i: number = 0; i < AI_TOOL_CATALOG.length; i++) {
+      const meta: AiToolMeta = AI_TOOL_CATALOG[i]
+      if (!appStore.settingsStore.isAiToolEnabled(meta.name)) {
+        continue
+      }
+      if (!presetAllowsTool(this.preset, meta.name)) {
+        continue
+      }
+      const item: AiToolSummary = new AiToolSummary()
+      item.name = meta.name
+      item.title = meta.title
+      item.ready = ready.indexOf(meta.name) >= 0
+      item.reason = item.ready ? '' : this.toolUnavailableReason(meta)
+      list.push(item)
+    }
+    this.toolSummaries = list
+  }
+
+  /**
+   * 计算单个工具不可用的原因。
+   *
+   * @param meta - 工具元数据
+   * @returns 原因文案
+   */
+  private toolUnavailableReason(meta: AiToolMeta): string {
+    if (meta.requires === TOOL_REQUIRES_LOGIN) {
+      return '未登录'
+    }
+    const search: AiSearchProfile | null = appStore.settingsStore.getActiveAiSearchProfile()
+    if (search === null) {
+      return '未配置搜索服务'
+    }
+    const provider: AiSearchProvider = aiSearchProviderRegistry.get(search.providerKind)
+    return provider.isAvailable(search) ? '暂不可用' : '缺少搜索密钥'
+  }
+
+  /**
+   * 任务工具说明文案。
+   *
+   * @param preset - 任务
+   * @returns 说明
+   */
+  private describePresetTools(preset: AiAgentPreset): string {
+    const names: string[] = presetToolNames(preset)
+    if (preset.tools.length === 0) {
+      return '使用全部已启用工具'
+    }
+    if (names.length === 0) {
+      return '未指定有效工具'
+    }
+    const titles: string[] = []
+    for (let i: number = 0; i < preset.tools.length; i++) {
+      titles.push(aiToolTitle(preset.tools[i]))
+    }
+    return titles.join('、')
+  }
+
+  /**
+   * 切换任务。
+   *
+   * @param preset - 目标任务
+   */
+  private switchPreset(preset: AiAgentPreset): void {
+    this.showTaskPicker = false
+    if (this.preset !== null && this.preset.id === preset.id) {
+      return
+    }
+    this.applyPresetById(preset.id, true)
+    appStore.showToast('已切换到「' + preset.name + '」')
+  }
+
+  /**
+   * 切回自由对话（不使用任何任务）。
+   */
+  private switchToFreeChat(): void {
+    this.showTaskPicker = false
+    this.preset = null
+    this.taskName = ''
+    this.taskDescription = ''
+    this.taskToolsHint = ''
+    this.title = 'AI 助手'
+    this.bubbles = []
+    this.toolInvocations = []
+    this.refreshToolSummaries()
+  }
+
+  // ============================================================
+  // 对话
+  // ============================================================
 
   /**
    * 发送一条用户消息并获取 AI 回复。
@@ -273,7 +459,9 @@ struct AiChatPage {
           this.aiStatus = status
         },
         toolCallback,
-        this.requestCanceller
+        this.requestCanceller,
+        this.preset,
+        this.taskContext
       )
       if (!this.isActiveRequest(requestId)) {
         return
@@ -291,6 +479,7 @@ struct AiChatPage {
       const aiBubble: ChatBubble = new ChatBubble('assistant', finalText, false)
       aiBubble.toolInvocations = result.toolInvocations
       aiBubble.sources = result.sources
+      aiBubble.cards = result.cards
       aiBubble.localOnly = result.localFallback
       this.bubbles.push(aiBubble)
     } catch (err) {
@@ -455,15 +644,12 @@ struct AiChatPage {
   /**
    * 从已完成的对话气泡中构建 ChatMessage 数组。
    *
-   * 若有场景 system prompt，在消息数组开头插入 system role 消息。
+   * System Prompt 与上下文说明由服务层按任务统一注入，页面只回传对话本身。
    *
    * @returns API 调用的对话历史
    */
   private buildHistory(): ChatMessage[] {
     const messages: ChatMessage[] = []
-    if (this.systemPrompt.length > 0) {
-      messages.push(new ChatMessage('system', this.systemPrompt))
-    }
     for (let i: number = 0; i < this.bubbles.length; i++) {
       const b: ChatBubble = this.bubbles[i]
       if (b.role === 'user') {
@@ -516,6 +702,43 @@ struct AiChatPage {
   }
 
   /**
+   * 打开结果卡片对应的原生页面。
+   *
+   * 对话页是 router 页面，原生页面在 activity 栈里；先压栈再退出对话页，
+   * 用户返回时直接落在目标页面上。
+   *
+   * @param card - 卡片
+   */
+  private openCard(card: AiToolCard): void {
+    let screen: Screen | null = null
+    try {
+      const params: Record<string, string> = JSON.parse(card.params) as Record<string, string>
+      if (card.route === 'thread') {
+        const tid: string = params['tid'] ?? ''
+        if (tid.length > 0) {
+          screen = Screen.thread(tid)
+        }
+      } else if (card.route === 'profile') {
+        const uid: string = params['uid'] ?? ''
+        if (uid.length > 0) {
+          screen = Screen.profile(uid)
+        }
+      } else if (card.route === 'topicList') {
+        const name: string = params['name'] ?? ''
+        const fid: number = Number(params['fid'] ?? '0')
+        screen = Screen.topicList(name, fid)
+      }
+    } catch (e) {
+      return
+    }
+    if (screen === null) {
+      return
+    }
+    routerStore.navigateActivity(screen)
+    this.getUIContext().getRouter().back()
+  }
+
+  /**
    * 判断某条气泡是否需要展示「重试」。
    *
    * @param bubble - 气泡
@@ -537,8 +760,14 @@ struct AiChatPage {
   build() {
     Stack() {
       Column() {
+        this.RenderTaskBar()
+
         Scroll(this.scroller) {
           Column() {
+            if (this.bubbles.length === 0 && !this.isSending) {
+              this.RenderWelcome()
+            }
+
             ForEach(this.bubbles, (bubble: ChatBubble) => {
               this.RenderBubble(bubble)
             }, (bubble: ChatBubble) => bubble.id)
@@ -556,25 +785,6 @@ struct AiChatPage {
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.None)
         .align(Alignment.TopStart)
-        .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
-        .linearGradientBlur(
-          TitleScrollEffect.getBlurRadius(this.titleScrollEffectProgress),
-          {
-            fractionStops: TitleScrollEffect.getBlurStops(this.scrollViewportHeight, this.statusBarHeight),
-            direction: GradientDirection.Bottom
-          }
-        )
-        .onAreaChange((oldValue: Area, newValue: Area): void => {
-          if (typeof newValue.height === 'number' && newValue.height !== this.scrollViewportHeight) {
-            this.scrollViewportHeight = newValue.height
-          }
-        })
-        .onDidScroll((): void => {
-          this.syncTitleScrollEffect()
-        })
-        .onAppear((): void => {
-          this.syncTitleScrollEffect()
-        })
 
         this.RenderInputBar()
       }
@@ -585,14 +795,302 @@ struct AiChatPage {
       PanelNavBar({
         title: this.title,
         showBack: true,
+        rightIcon: $r('app.media.icon_ai_settings'),
+        rightIconAccessibilityText: '切换 AI 任务',
+        onRightClick: (): void => {
+          this.showTaskPicker = true
+        },
         scrollEffectProgress: this.titleScrollEffectProgress,
         onBack: (): void => { this.getUIContext().getRouter().back() }
       })
         .width('100%')
         .position({ x: 0, y: 0 })
+
+      if (this.showTaskPicker) {
+        this.RenderTaskPicker()
+      }
     }
     .width('100%')
     .height('100%')
+  }
+
+  // ============================================================
+  // 任务栏 / 任务选择 / 空状态
+  // ============================================================
+
+  /** 任务信息条（标题栏下方，固定不滚动）。 */
+  @Builder
+  RenderTaskBar() {
+    Row() {
+      Image(this.taskName.length > 0 ? this.presetIcon() : $r('app.media.icon_ai'))
+        .width(14)
+        .height(14)
+        .fillColor(AppColors.primary)
+      Text(this.taskName.length > 0 ? this.taskName : '自由对话')
+        .fontSize(12)
+        .fontColor(AppColors.textPrimary)
+        .fontWeight(FontWeight.Medium)
+        .margin({ left: 6 })
+      Text(this.taskName.length > 0 ? this.taskToolsHint : '全部已启用工具')
+        .fontSize(11)
+        .fontColor(AppColors.textTertiary)
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .margin({ left: 8 })
+      Text('切换')
+        .fontSize(11)
+        .fontColor(AppColors.primary)
+        .padding({ left: 8, right: 4, top: 4, bottom: 4 })
+        .onClick((): void => {
+          this.showTaskPicker = true
+        })
+    }
+    .width('100%')
+    .height(32)
+    .margin({ top: this.statusBarHeight + NAV_BAR_H })
+    .padding({ left: 16, right: 12 })
+    .alignItems(VerticalAlign.Center)
+    .backgroundColor(AppColors.bgSecondary)
+  }
+
+  /** 空状态：任务说明 + 快捷任务。 */
+  @Builder
+  RenderWelcome() {
+    Column() {
+      Image(this.preset !== null ? this.presetIcon() : $r('app.media.icon_ai'))
+        .width(40)
+        .height(40)
+        .fillColor(AppColors.primary)
+        .margin({ top: 24, bottom: 10 })
+
+      Text(this.taskName.length > 0 ? this.taskName : 'AI 助手')
+        .fontSize(17)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(AppColors.textPrimary)
+
+      Text(this.taskDescription.length > 0 ? this.taskDescription :
+        '可以自由提问，也可以选择下面的任务让 AI 按预设方式工作')
+        .fontSize(12)
+        .fontColor(AppColors.textTertiary)
+        .lineHeight(18)
+        .textAlign(TextAlign.Center)
+        .margin({ top: 6, left: 24, right: 24 })
+
+      if (this.taskContext.tid.length > 0 || this.taskContext.uid.length > 0 ||
+        this.taskContext.fid.length > 0) {
+        Text('已带入当前页面上下文')
+          .fontSize(11)
+          .fontColor(AppColors.primary)
+          .margin({ top: 8 })
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Center)
+    .padding({ bottom: 8 })
+  }
+
+  /** 任务选择面板。 */
+  @Builder
+  RenderTaskPicker() {
+    Column() {
+      Column()
+        .width('100%')
+        .layoutWeight(1)
+        .onClick((): void => {
+          this.showTaskPicker = false
+        })
+
+      Column() {
+        Row() {
+          Text('选择 AI 任务')
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(AppColors.textPrimary)
+            .layoutWeight(1)
+          Text('关闭')
+            .fontSize(13)
+            .fontColor(AppColors.textSecondary)
+            .padding({ left: 8, right: 4, top: 4, bottom: 4 })
+            .onClick((): void => {
+              this.showTaskPicker = false
+            })
+        }
+        .width('100%')
+        .padding({ left: 20, right: 16, top: 16, bottom: 8 })
+
+        Scroll() {
+          Column() {
+            Row() {
+              Column() {
+                Text('自由对话')
+                  .fontSize(14)
+                  .fontColor(this.preset === null ? AppColors.primary : AppColors.textPrimary)
+                  .fontWeight(this.preset === null ? FontWeight.Medium : FontWeight.Normal)
+                Text('不限定角色与工具，直接提问')
+                  .fontSize(11)
+                  .fontColor(AppColors.textTertiary)
+                  .margin({ top: 2 })
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+
+              if (this.preset === null) {
+                Text('✓')
+                  .fontSize(14)
+                  .fontColor(AppColors.primary)
+              }
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 12, bottom: 12 })
+            .borderRadius(10)
+            .backgroundColor(this.preset === null ? AppColors.bgTertiary : Color.Transparent)
+            .margin({ top: 4 })
+            .onClick((): void => {
+              this.switchToFreeChat()
+            })
+
+            ForEach(this.tasks, (preset: AiAgentPreset) => {
+              Row() {
+                Column() {
+                  Text(preset.name)
+                    .fontSize(14)
+                    .fontColor(this.isCurrentPreset(preset) ? AppColors.primary : AppColors.textPrimary)
+                    .fontWeight(this.isCurrentPreset(preset) ? FontWeight.Medium : FontWeight.Normal)
+                  if (preset.description.length > 0) {
+                    Text(preset.description)
+                      .fontSize(11)
+                      .fontColor(AppColors.textTertiary)
+                      .lineHeight(16)
+                      .maxLines(2)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                      .margin({ top: 2 })
+                  }
+                }
+                .layoutWeight(1)
+                .alignItems(HorizontalAlign.Start)
+
+                if (this.isCurrentPreset(preset)) {
+                  Text('✓')
+                    .fontSize(14)
+                    .fontColor(AppColors.primary)
+                }
+              }
+              .width('100%')
+              .padding({ left: 12, right: 12, top: 12, bottom: 12 })
+              .borderRadius(10)
+              .backgroundColor(this.isCurrentPreset(preset) ? AppColors.bgTertiary : Color.Transparent)
+              .margin({ top: 4 })
+              .onClick((): void => {
+                this.switchPreset(preset)
+              })
+            }, (preset: AiAgentPreset): string => preset.id + '|' +
+              (this.isCurrentPreset(preset) ? '1' : '0'))
+
+            // 工具声明：这一轮对话实际能用 / 不能用的工具
+            Column() {
+              Row() {
+                Text('本次可用工具（' + this.readyToolCount().toString() + '/' +
+                  this.toolSummaries.length.toString() + '）')
+                  .fontSize(13)
+                  .fontColor(AppColors.textSecondary)
+                  .layoutWeight(1)
+                Text('去配置')
+                  .fontSize(11)
+                  .fontColor(AppColors.primary)
+                  .padding({ left: 8, right: 4, top: 4, bottom: 4 })
+                  .onClick((): void => {
+                    this.showTaskPicker = false
+                    routerStore.navigateActivity(Screen.aiSettings())
+                  })
+              }
+              .width('100%')
+              .margin({ top: 16, bottom: 6 })
+
+              Flex({ wrap: FlexWrap.Wrap }) {
+                ForEach(this.toolSummaries, (tool: AiToolSummary) => {
+                  Row() {
+                    Text(tool.ready ? '✓ ' : '× ')
+                      .fontSize(11)
+                      .fontColor(tool.ready ? AppColors.success : AppColors.destructive)
+                    Text(tool.title)
+                      .fontSize(11)
+                      .fontColor(tool.ready ? AppColors.textPrimary : AppColors.textTertiary)
+                    if (tool.reason.length > 0) {
+                      Text(' · ' + tool.reason)
+                        .fontSize(10)
+                        .fontColor(AppColors.destructive)
+                    }
+                  }
+                  .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+                  .backgroundColor(AppColors.bgSecondary)
+                  .borderRadius(10)
+                  .margin({ right: 6, bottom: 6 })
+                }, (tool: AiToolSummary): string => tool.name + '_' + (tool.ready ? '1' : '0'))
+              }
+              .width('100%')
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+            .padding({ left: 12, right: 12 })
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, bottom: 16 })
+        }
+        .width('100%')
+        .constraintSize({ maxHeight: 420 })
+        .scrollBar(BarState.Off)
+      }
+      .width('100%')
+      .backgroundColor(AppColors.bgSecondary)
+      .borderRadius({ topLeft: 20, topRight: 20 })
+      .padding({ bottom: 12 })
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('#66000000')
+  }
+
+  /**
+   * 判断任务是否为当前任务。
+   *
+   * @param preset - 任务
+   * @returns true 表示当前任务
+   */
+  private isCurrentPreset(preset: AiAgentPreset): boolean {
+    return this.preset !== null && this.preset.id === preset.id
+  }
+
+  /**
+   * 统计当前可用的工具数量。
+   *
+   * @returns 可用工具数
+   */
+  private readyToolCount(): number {
+    let count: number = 0
+    for (let i: number = 0; i < this.toolSummaries.length; i++) {
+      if (this.toolSummaries[i].ready) {
+        count++
+      }
+    }
+    return count
+  }
+
+  /** 当前任务图标。 */
+  private presetIcon(): Resource {
+    if (this.preset === null) {
+      return $r('app.media.icon_ai')
+    }
+    if (this.preset.icon === 'summary') {
+      return $r('app.media.icon_ai_summary')
+    }
+    if (this.preset.icon === 'profile') {
+      return $r('app.media.icon_ai_profile')
+    }
+    if (this.preset.icon === 'settings') {
+      return $r('app.media.icon_ai_settings')
+    }
+    return $r('app.media.icon_ai')
   }
 
   // ============================================================
@@ -751,6 +1249,51 @@ struct AiChatPage {
             onLinkClick: (href: string): void => { this.openExternalLink(href) }
           })
 
+          // 可点击结果卡片：把 AI 的输出落回原生页面
+          if (bubble.cards.length > 0) {
+            Column() {
+              ForEach(bubble.cards.slice(0, MAX_VISIBLE_CARDS), (card: AiToolCard, index: number) => {
+                Row() {
+                  Image(this.cardIcon(card))
+                    .width(14)
+                    .height(14)
+                    .fillColor(AppColors.primary)
+                  Column() {
+                    Text(card.title)
+                      .fontSize(13)
+                      .fontColor(AppColors.textPrimary)
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    if (card.subtitle.length > 0) {
+                      Text(card.subtitle)
+                        .fontSize(11)
+                        .fontColor(AppColors.textTertiary)
+                        .maxLines(1)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
+                        .margin({ top: 1 })
+                    }
+                  }
+                  .layoutWeight(1)
+                  .alignItems(HorizontalAlign.Start)
+                  .margin({ left: 8 })
+                  Text('打开 ›')
+                    .fontSize(11)
+                    .fontColor(AppColors.primary)
+                }
+                .width('100%')
+                .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+                .margin({ top: index === 0 ? 0 : 4 })
+                .backgroundColor(AppColors.bgTertiary)
+                .borderRadius(8)
+                .onClick((): void => {
+                  this.openCard(card)
+                })
+              }, (card: AiToolCard): string => card.kind + '|' + card.title + '|' + card.params)
+            }
+            .width('100%')
+            .margin({ top: 8 })
+          }
+
           // 引用来源
           if (bubble.sources.length > 0) {
             Column() {
@@ -842,7 +1385,39 @@ struct AiChatPage {
     if (invocation.name === 'web_search') {
       return $r('app.media.icon_search')
     }
+    if (invocation.name === 'nga_read_thread') {
+      return $r('app.media.icon_chat_bubble')
+    }
+    if (invocation.name === 'nga_list_topics' || invocation.name === 'nga_search_topics') {
+      return $r('app.media.icon_category')
+    }
+    if (invocation.name === 'nga_get_user' || invocation.name === 'nga_search_user' ||
+      invocation.name === 'nga_user_activity') {
+      return $r('app.media.icon_person')
+    }
+    if (invocation.name === 'nga_list_forums' || invocation.name === 'nga_search_forum') {
+      return $r('app.media.icon_globe')
+    }
+    if (invocation.name === 'nga_list_favorites') {
+      return $r('app.media.icon_star')
+    }
     return $r('app.media.icon_ai_analyzing')
+  }
+
+  /**
+   * 卡片图标。
+   *
+   * @param card - 卡片
+   * @returns 图标资源
+   */
+  private cardIcon(card: AiToolCard): Resource {
+    if (card.kind === 'user') {
+      return $r('app.media.icon_person')
+    }
+    if (card.kind === 'forum') {
+      return $r('app.media.icon_category')
+    }
+    return $r('app.media.icon_chat_bubble')
   }
 
   /**
@@ -863,7 +1438,7 @@ struct AiChatPage {
   }
 
   /**
-   * 从 JSON 参数里提取 query / url 作为展示文案。
+   * 从 JSON 参数里提取 query / url / key / tid / uid 作为展示文案。
    *
    * @param argumentsText - 参数 JSON
    * @returns 展示文案
@@ -871,13 +1446,12 @@ struct AiChatPage {
   private extractArgumentPreview(argumentsText: string): string {
     try {
       const parsed: Record<string, Object> = JSON.parse(argumentsText) as Record<string, Object>
-      const query: Object | undefined = parsed['query']
-      if (typeof query === 'string') {
-        return query as string
-      }
-      const url: Object | undefined = parsed['url']
-      if (typeof url === 'string') {
-        return url as string
+      const candidateKeys: string[] = ['query', 'url', 'key', 'tid', 'uid', 'username', 'fid', 'folder_id']
+      for (let i: number = 0; i < candidateKeys.length; i++) {
+        const value: Object | undefined = parsed[candidateKeys[i]]
+        if (typeof value === 'string') {
+          return value as string
+        }
       }
     } catch (e) {
       return argumentsText
@@ -894,7 +1468,7 @@ struct AiChatPage {
   RenderInputBar() {
     Column() {
       Row() {
-        TextInput({ text: this.inputText, placeholder: this.isSending ? '正在生成，可点停止…' : '输入追问…' })
+        TextInput({ text: this.inputText, placeholder: this.isSending ? '正在生成，可点停止…' : '输入问题或追问…' })
           .layoutWeight(1)
           .fontSize(15)
           .fontColor(UIMaterialManager.inputForeground)

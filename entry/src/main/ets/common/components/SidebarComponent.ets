@@ -66,6 +66,23 @@ export struct SidebarComponent {
         routerStore.navigateSearch()
       })
 
+      Row() {
+        Image($r('app.media.icon_ai'))
+          .width(14).height(14).fillColor(AppColors.primary).margin({ right: 6 })
+        Text('AI 助手')
+          .fontSize(12).fontColor(AppColors.textPrimary)
+      }
+      .width('100%').height(36).padding({ left: 12, right: 12 })
+      .backgroundColor(AppColors.bgSecondary).borderRadius(8)
+      .margin({ left: 12, right: 12, top: 8 })
+      .alignItems(VerticalAlign.Center)
+      .onClick(() => {
+        this.getUIContext().getRouter().pushUrl({
+          url: 'pages/ai/AiChatPage',
+          params: { title: 'AI 助手' }
+        })
+      })
+
       Column() {
         // 侧边栏内 CommunityPanel 永不以 sm 渲染: 侧边栏仅在 md+ 可见, 且 sm 下渲染 MobileTwoPanelContent 是浪费
         CommunityPanel({ currentBreakpoint: this.currentBreakpoint === 'sm' ? 'md' : this.currentBreakpoint })

@@ -5,13 +5,13 @@
  * 本模块负责这个循环，并把每次工具调用以 AiToolInvocation 形式推给 UI。
  *
  * 约束：
- * - 工具轮数受 profile.maxAgentSteps 限制，超限后发一次不带工具的收尾请求；
+ * - 工具轮数受全局工具设置 `tools.maxAgentSteps` 限制，超限后发一次不带工具的收尾请求；
  * - 每轮都可取消，取消后立即中断且不再执行后续工具；
  * - 模型输出始终按不可信输入处理（工具参数解析失败不抛异常）。
  */
 
 import { AiProviderProfile } from '../../model/AiConfig'
-import { AiSearchProfile } from '../../model/AiSearchConfig'
+import { aiToolTitle } from '../../model/AiToolConfig'
 import {
   ChatMessage,
   ChatStreamChunkCallback,
@@ -23,7 +23,13 @@ import {
 } from './AiProtocolTypes'
 import { requestChatByProtocol } from './AiChatClient'
 import { aiToolRegistry } from './tools/ToolRegistry'
-import { AiToolInvocation, AiToolContext, AiToolResult, AiToolSource } from './tools/AiToolAdapter'
+import {
+  AiToolInvocation,
+  AiToolContext,
+  AiToolCard,
+  AiToolResult,
+  AiToolSource
+} from './tools/AiToolAdapter'
 import { Logger, DOMAIN_SERVICE } from '../../common/utils/Logger'
 
 const logger = new Logger(DOMAIN_SERVICE, 'AiAgentRunner')
@@ -64,6 +70,8 @@ export class AiAgentResult {
   toolInvocations: AiToolInvocation[] = []
   /** 去重后的引用来源 */
   sources: AiToolSource[] = []
+  /** 去重后的可点击卡片 */
+  cards: AiToolCard[] = []
   /** 是否被输出上限截断 */
   truncated: boolean = false
   /** 是否因工具轮数上限被强制收尾 */
@@ -74,26 +82,24 @@ export class AiAgentResult {
  * 运行 Agent 循环。
  *
  * @param profile - 对话配置
- * @param searchProfile - 激活的搜索配置（未配置时为 null）
+ * @param toolContext - 工具执行上下文（含全局工具设置、任务、登录态、页面上下文）
  * @param history - 对话历史（system / user / assistant）
  * @param options - 运行选项
  * @returns Agent 结果
  */
 export async function runAiAgent(
   profile: AiProviderProfile,
-  searchProfile: AiSearchProfile | null,
+  toolContext: AiToolContext,
   history: ChatMessage[],
   options: AiAgentOptions
 ): Promise<AiAgentResult> {
   const result: AiAgentResult = new AiAgentResult()
   const conversation: ChatMessage[] = copyMessages(history)
-  const context: AiToolContext = new AiToolContext()
-  context.chat = profile
-  context.search = searchProfile
-  const tools = aiToolRegistry.getDefinitions(context)
+  const tools = aiToolRegistry.getDefinitions(toolContext)
   const fallbackQuery: string = findLastUserMessage(conversation)
-  const maxSteps: number = Math.max(1, profile.maxAgentSteps)
+  const maxSteps: number = Math.max(1, toolContext.tools.maxAgentSteps)
   const sourceKeys: Record<string, boolean> = {}
+  const cardKeys: Record<string, boolean> = {}
 
   let step: number = 0
   let hitLimit: boolean = false
@@ -148,19 +154,21 @@ export async function runAiAgent(
         throw new Error('请求已取消')
       }
       const call: ToolCall = turn.toolCalls[i]
-      const execution: ToolExecution = await executeToolCall(call, context, fallbackQuery, options)
+      const execution: ToolExecution = await executeToolCall(call, toolContext, fallbackQuery, options)
       const invocation: AiToolInvocation = execution.invocation
       const toolResult: AiToolResult = execution.result
       invocation.status = toolResult.success ? 'success' : 'failed'
       invocation.count = toolResult.count
       invocation.errorMessage = toolResult.errorMessage
       invocation.sources = toolResult.sources
+      invocation.cards = toolResult.cards
       if (toolResult.summary.length > 0) {
         invocation.summary = toolResult.summary
       }
       options.onToolInvocation(invocation)
       result.toolInvocations.push(invocation)
       appendSources(result.sources, sourceKeys, toolResult.sources)
+      appendCards(result.cards, cardKeys, toolResult.cards)
 
       const toolMsg: ChatMessage = new ChatMessage('tool', toolResult.content)
       toolMsg.toolCallId = call.id
@@ -173,8 +181,8 @@ export async function runAiAgent(
 
   result.steps = step
   result.hitStepLimit = hitLimit
-  logger.info('runAiAgent done: steps=%d, tools=%d, text=%d chars, limit=%s',
-    step, result.toolInvocations.length, result.text.length, String(hitLimit))
+  logger.info('runAiAgent done: steps=%d, tools=%d, cards=%d, text=%d chars, limit=%s',
+    step, result.toolInvocations.length, result.cards.length, result.text.length, String(hitLimit))
   return result
 }
 
@@ -205,7 +213,7 @@ async function executeToolCall(
   const invocation: AiToolInvocation = execution.invocation
   invocation.id = call.id
   invocation.name = call.function.name
-  invocation.displayName = toolDisplayName(call.function.name)
+  invocation.displayName = aiToolTitle(call.function.name)
   invocation.summary = call.function.arguments
   invocation.status = 'running'
   options.onToolInvocation(invocation)
@@ -226,22 +234,6 @@ async function executeToolCall(
  */
 function isCancelled(canceller: RequestCanceller | null): boolean {
   return canceller !== null && canceller.isCancelled()
-}
-
-/**
- * 工具展示名。
- *
- * @param name - 工具名称
- * @returns 展示名
- */
-function toolDisplayName(name: string): string {
-  if (name === 'web_search') {
-    return '联网搜索'
-  }
-  if (name === 'web_fetch') {
-    return '网页抓取'
-  }
-  return name
 }
 
 /**
@@ -275,6 +267,25 @@ function appendSources(target: AiToolSource[], seen: Record<string, boolean>, so
     }
     seen[source.url] = true
     target.push(source)
+  }
+}
+
+/**
+ * 追加去重后的卡片（按 kind + title + params 去重）。
+ *
+ * @param target - 目标列表
+ * @param seen - 已见键集合
+ * @param cards - 新增卡片
+ */
+function appendCards(target: AiToolCard[], seen: Record<string, boolean>, cards: AiToolCard[]): void {
+  for (let i: number = 0; i < cards.length; i++) {
+    const card: AiToolCard = cards[i]
+    const key: string = card.kind + '|' + card.title + '|' + card.params
+    if (seen[key] === true) {
+      continue
+    }
+    seen[key] = true
+    target.push(card)
   }
 }
 

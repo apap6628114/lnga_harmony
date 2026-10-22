@@ -18,6 +18,8 @@ import { AiSettings } from './settings/domain/AiSettings'
 import type { AuthState } from './AuthStore'
 import type { AiProviderProfile } from '../model/AiConfig'
 import type { AiSearchProfile } from '../model/AiSearchConfig'
+import type { AiToolSettings } from '../model/AiToolConfig'
+import type { AiAgentPreset } from '../model/AiAgentPreset'
 import {
   KEY_SHOW_SIGNATURE,
   KEY_IMAGE_LOAD_STRATEGY,
@@ -156,8 +158,8 @@ export class SettingsStore extends BaseStore<SettingsState> {
     AppStorage.setOrCreate(KEY_CONTENT_FONT_SIZE, this.state.fontSize)
     AppStorage.setOrCreate(KEY_TOPIC_FONT_SIZE, this.state.topicFontSize)
     this.syncColumnLayoutStorage()
-    // 旧版本搜索配置迁移后回写一次，避免每次冷启动重新迁移、id 漂移
-    if (this.aiSettings.consumeSearchMigration()) {
+    // 旧版本搜索配置 / 工具设置 / 内置任务迁移后回写一次，避免每次冷启动重复迁移
+    if (this.aiSettings.consumeSearchMigration() || this.aiSettings.consumePresetMigration()) {
       this.persistSettings()
     }
   }
@@ -306,4 +308,24 @@ export class SettingsStore extends BaseStore<SettingsState> {
   getScenarioPrompt(scenario: string): string { return this.aiSettings.getScenarioPrompt(scenario) }
   setScenarioPrompt(scenario: string, prompt: string): void { this.aiSettings.setScenarioPrompt(scenario, prompt) }
   resetScenarioPrompt(scenario: string): void { this.aiSettings.resetScenarioPrompt(scenario) }
+
+  // --- AI Tools（全局，所有 AI 配置共用） ---
+  getAiToolSettings(): AiToolSettings { return this.aiSettings.getToolSettings() }
+  isAiToolEnabled(name: string): boolean { return this.aiSettings.isToolEnabled(name) }
+  setAiToolEnabled(name: string, enabled: boolean): void { this.aiSettings.setToolEnabled(name, enabled) }
+  getAiEnabledToolNames(): string[] { return this.aiSettings.getEnabledToolNames() }
+  setAiToolMaxSteps(steps: number): void { this.aiSettings.setToolMaxSteps(steps) }
+  getAiToolMaxSteps(): number { return this.aiSettings.getToolMaxSteps() }
+
+  // --- AI 任务（预设） ---
+  listAiPresets(): AiAgentPreset[] { return this.aiSettings.listPresets() }
+  listAiPresetsByEntry(entry: string): AiAgentPreset[] { return this.aiSettings.listPresetsByEntry(entry) }
+  getAiPreset(id: string): AiAgentPreset | null { return this.aiSettings.getPreset(id) }
+  addAiPreset(preset: AiAgentPreset): AiAgentPreset { return this.aiSettings.addPreset(preset) }
+  updateAiPreset(preset: AiAgentPreset): void { this.aiSettings.updatePreset(preset) }
+  deleteAiPreset(id: string): boolean { return this.aiSettings.deletePreset(id) }
+  duplicateAiPreset(id: string): AiAgentPreset | null { return this.aiSettings.duplicatePreset(id) }
+  getAiPresetPrompt(id: string): string { return this.aiSettings.getPresetPrompt(id) }
+  setAiPresetPrompt(id: string, prompt: string): void { this.aiSettings.setPresetPrompt(id, prompt) }
+  resetAiPresetPrompt(id: string): void { this.aiSettings.resetPresetPrompt(id) }
 }

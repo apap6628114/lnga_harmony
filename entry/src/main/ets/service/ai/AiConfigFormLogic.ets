@@ -9,7 +9,6 @@ import {
   AiApiProtocol,
   AiProviderKind,
   AiProviderProfile,
-  DEFAULT_AI_MAX_AGENT_STEPS,
   DEFAULT_AI_TEMPERATURE,
   DEFAULT_DEEPSEEK_ENDPOINT
 } from '../../model/AiConfig'
@@ -81,6 +80,8 @@ export function protocolDescription(protocol: AiApiProtocol): string {
 /**
  * 用预设初始化一个新建配置。
  *
+ * 工具与 Agent 轮数已全局化，不再写进配置。
+ *
  * @param preset - 服务商预设
  * @returns 预填后的配置
  */
@@ -92,10 +93,6 @@ export function createProfileFromPreset(preset: AiProviderPreset): AiProviderPro
   profile.modelName = preset.defaultModelName
   profile.protocol = preset.protocol
   profile.temperature = DEFAULT_AI_TEMPERATURE
-  profile.toolsEnabled = true
-  profile.enableWebSearch = true
-  profile.enableWebFetch = true
-  profile.maxAgentSteps = DEFAULT_AI_MAX_AGENT_STEPS
   return profile
 }
 

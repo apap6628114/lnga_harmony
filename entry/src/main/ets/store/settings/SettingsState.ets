@@ -6,6 +6,8 @@ import { FilterKeyword } from '../../model/FilterKeyword'
 import type { UserNoteEntry } from '../../model/NoteInfo'
 import type { AiProviderProfile } from '../../model/AiConfig'
 import type { AiSearchProfile } from '../../model/AiSearchConfig'
+import { AiToolSettings } from '../../model/AiToolConfig'
+import { AiAgentPreset } from '../../model/AiAgentPreset'
 
 
 /**
@@ -61,6 +63,15 @@ export class SettingsState {
   activeAiSearchProfileId: string = ''
   /** 各场景自定义 system prompt（key=场景ID, value=用户自定义文本） */
   scenarioSystemPrompts: Record<string, string> = {}
+  /**
+   * 全局 AI 工具设置。
+   *
+   * 工具是客户端能力，所有 AI 配置共用这一份开关与轮数；
+   * 不再有 `AiProviderProfile.toolsEnabled` 那类按模型区分的字段。
+   */
+  aiToolSettings: AiToolSettings = new AiToolSettings()
+  /** AI 任务（预设）列表，含内置任务（builtin=true） */
+  aiPresets: AiAgentPreset[] = []
   /**
    * md（两列）侧边栏宽度（vp）。默认 `SIDEBAR_DEFAULT_VP`，与改造前的固定 180 一致。
    *

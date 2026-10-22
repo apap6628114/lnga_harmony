@@ -10,11 +10,10 @@ import { NoteEditorContent } from '../dialogs/Dialogs'
 import { PageScope } from '../concurrency/PageScope'
 import { openImageViewer } from '../utils/LinkUtils'
 
-import { getUserActivityAnalysis } from '../../service/api/UserApi'
 import { followUser } from '../../service/api/FollowApi'
 import { ApiResult } from '../../model/NgaApiResults'
-import type { UserActivityAnalysis, ForumStat } from '../../model/NgaApiResults'
 import { getActiveAiValidationMessage } from '../../service/ai/ActiveAiService'
+import { AiAgentPreset, PRESET_ENTRY_USER } from '../../model/AiAgentPreset'
 import { normalizeMuteTimeDisplay } from '../../parser/MuteParser'
 import { UIMaterialManager } from '../managers/UIMaterialManager'
 
@@ -35,6 +34,10 @@ export struct ProfileCardPopup {
   /** 关注/取消关注请求是否进行中（防重复提交）。 */
   @State followLoading: boolean = false
   onClose: () => void = () => {}
+  /** 卡片入口可用的 AI 任务（用于选择弹窗）。 */
+  @State aiTasks: AiAgentPreset[] = []
+  /** AI 任务选择弹窗控制器。 */
+  aiTaskDialogController?: CustomDialogController
   noteDialogController?: CustomDialogController
   @State isAnalyzing: boolean = false
   /** 备注弹窗的备注输入（供 CustomContentDialog 内容构件双向绑定）。 */
@@ -54,79 +57,113 @@ export struct ProfileCardPopup {
 
   /** 组件消失时结束会话，使未完成的异步回调失效。 */
   aboutToDisappear(): void {
+    this.aiTaskDialogController = undefined
     this.scope.end()
   }
 
-  private async startAnalysis(): Promise<void> {
-    if (this.isAnalyzing) return
+  /**
+   * 打开 AI 任务选择（用户卡片入口）。
+   */
+  private startAnalysis(): void {
+    if (this.isAnalyzing) {
+      return
+    }
     const aiValidationMessage: string = getActiveAiValidationMessage()
     if (aiValidationMessage.length > 0) {
       appStore.showToast(aiValidationMessage)
       return
     }
-    this.isAnalyzing = true
-    const gen: number = this.scope.begin()
-    try {
-      const result: UserActivityAnalysis | null = await getUserActivityAnalysis(
-        appStore.auth.token,
-        this.targetUid
-      )
-      // 弹窗可能已关闭：不再执行路由跳转与提示
-      if (!this.scope.isActive(gen)) {
-        return
-      }
-      if (result && (result.topicCount > 0 || result.replyCount > 0)) {
-        const userName: string = this.profile?.userName ?? ''
-        let prompt: string = ''
-        prompt += userName + '(UID:' + this.targetUid + ') 的账号分析：\n'
-        prompt += '共 ' + result.topicCount.toString() + ' 个帖子，' +
-          result.replyCount.toString() + ' 条回复\n\n'
-        prompt += '活跃版面：\n'
-        for (let i: number = 0; i < result.forumList.length; i++) {
-          const f: ForumStat = result.forumList[i]
-          prompt += '  ' + f.name + ': ' + (f.topicCount + f.replyCount).toString() + ' 帖\n'
-        }
-        prompt += '\n发帖时段：\n'
-        const hd: number[] = result.hourDistribution
-        let dawnSum: number = 0
-        let morningSum: number = 0
-        let afternoonSum: number = 0
-        let nightSum: number = 0
-        for (let i: number = 0; i <= 5; i++) { dawnSum += (hd.length > i ? hd[i] : 0) || 0 }
-        for (let i: number = 6; i <= 11; i++) { morningSum += (hd.length > i ? hd[i] : 0) || 0 }
-        for (let i: number = 12; i <= 17; i++) { afternoonSum += (hd.length > i ? hd[i] : 0) || 0 }
-        for (let i: number = 18; i <= 23; i++) { nightSum += (hd.length > i ? hd[i] : 0) || 0 }
-        prompt += '  凌晨: ' + dawnSum.toString() + ' 帖\n'
-        prompt += '  上午: ' + morningSum.toString() + ' 帖\n'
-        prompt += '  下午: ' + afternoonSum.toString() + ' 帖\n'
-        prompt += '  晚上: ' + nightSum.toString() + ' 帖\n'
-        if (result.topicSubjects.length > 0) {
-          prompt += '\n发表的帖子：\n'
-          for (let i: number = 0; i < result.topicSubjects.length; i++) {
-            prompt += '  ' + (i + 1).toString() + '. ' + result.topicSubjects[i] + '\n'
-          }
-        }
-        if (result.replySnippets.length > 0) {
-          prompt += '\n回复内容：\n'
-          for (let i: number = 0; i < result.replySnippets.length; i++) {
-            prompt += '  ' + (i + 1).toString() + '. ' + result.replySnippets[i] + '\n'
-          }
-        }
-        this.getUIContext().getRouter().pushUrl({
-          url: 'pages/ai/AiChatPage',
-          params: {
-            initialPrompt: prompt,
-            title: 'AI 成分分析',
-            scenario: 'user_analysis'
-          }
-        })
-      } else {
-        appStore.showToast('该用户暂无公开记录')
-      }
-    } catch (e) {
-      appStore.showToast('分析请求失败')
+    const tasks: AiAgentPreset[] = appStore.settingsStore.listAiPresetsByEntry(PRESET_ENTRY_USER)
+    if (tasks.length === 0) {
+      this.launchAiTask(null, 'AI 助手')
+      return
     }
+    if (tasks.length === 1) {
+      this.launchAiTask(tasks[0], tasks[0].name)
+      return
+    }
+    const next: AiAgentPreset[] = []
+    for (let i: number = 0; i < tasks.length; i++) {
+      next.push(tasks[i])
+    }
+    this.aiTasks = next
+    this.aiTaskDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
+      systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.nestedScrim,
+      builder: CustomContentDialog({
+        primaryTitle: '选择 AI 任务',
+        contentBuilder: (): void => { this.aiTaskContent() },
+        buttons: [{ value: '取消' }]
+      }),
+      autoCancel: true
+    })
+    this.aiTaskDialogController.open()
     this.isAnalyzing = false
+  }
+
+  /**
+   * 启动一个 AI 任务。
+   *
+   * @param preset - 任务（null 表示自由对话）
+   * @param title - 导航栏标题
+   */
+  private launchAiTask(preset: AiAgentPreset | null, title: string): void {
+    const userName: string = this.profile !== null ? this.profile.userName : ''
+    let prompt: string = '请先读取当前用户（uid=' + this.targetUid + '）的资料与活跃数据，然后输出：\n'
+    prompt += '1. 用户画像：身份、兴趣领域、在论坛中的角色\n'
+    prompt += '2. 活跃规律：主要版块、发帖时段、讨论倾向\n'
+    prompt += '3. 一句话点评'
+    this.getUIContext().getRouter().pushUrl({
+      url: 'pages/ai/AiChatPage',
+      params: {
+        presetId: preset !== null ? preset.id : '',
+        title: title,
+        uid: this.targetUid,
+        userName: userName,
+        initialPrompt: prompt
+      }
+    })
+    this.isAnalyzing = false
+  }
+
+  /** AI 任务选择弹窗内容。 */
+  @Builder
+  aiTaskContent() {
+    Column() {
+      ForEach(this.aiTasks, (task: AiAgentPreset) => {
+        Row() {
+          Column() {
+            Text(task.name)
+              .fontSize(15)
+              .fontColor(AppColors.textPrimary)
+            if (task.description.length > 0) {
+              Text(task.description)
+                .fontSize(11)
+                .fontColor(AppColors.textTertiary)
+                .lineHeight(16)
+                .maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .margin({ top: 2 })
+            }
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+
+          Text('›')
+            .fontSize(18)
+            .fontColor(AppColors.chevron)
+        }
+        .width('100%')
+        .padding({ top: 10, bottom: 10 })
+        .alignItems(VerticalAlign.Center)
+        .onClick((): void => {
+          this.aiTaskDialogController?.close()
+          this.launchAiTask(task, task.name)
+        })
+      }, (task: AiAgentPreset): string => task.id)
+    }
+    .width('100%')
   }
 
   private showNoteDialog(): void {

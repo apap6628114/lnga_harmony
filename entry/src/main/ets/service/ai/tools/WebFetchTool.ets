@@ -5,7 +5,7 @@
  * 用于需要阅读具体页面而非仅看搜索摘要的场景。
  */
 
-import { hasToolSwitchesOn } from '../../../model/AiConfig'
+import { isAiToolEnabled } from '../../../model/AiToolConfig'
 import { AiSearchProfile } from '../../../model/AiSearchConfig'
 import { AiToolDefinition } from '../AiProtocolTypes'
 import { AiToolAdapter, AiToolContext, AiToolResult, AiToolSource } from './AiToolAdapter'
@@ -65,12 +65,13 @@ export class WebFetchTool implements AiToolAdapter {
   /**
    * 判断工具是否可用。
    *
+   * 只看两件事：全局工具开关（与模型无关）与搜索服务是否就绪。
+   *
    * @param context - 工具执行上下文
    * @returns true 表示可用
    */
   isAvailable(context: AiToolContext): boolean {
-    const chat = context.chat
-    if (!hasToolSwitchesOn(chat) || !chat.enableWebFetch) {
+    if (!isAiToolEnabled(context.tools, TOOL_NAME)) {
       return false
     }
     const search: AiSearchProfile | null = context.search

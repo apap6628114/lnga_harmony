@@ -22,11 +22,9 @@ import {
   DEFAULT_AI_TEMPERATURE,
   DEFAULT_AI_TOOLS_ENDPOINT,
   DEFAULT_DEEPSEEK_ENDPOINT,
-  MAX_AI_MAX_AGENT_STEPS,
   MAX_AI_TEMPERATURE,
   MIN_AI_TEMPERATURE,
   SEARCH_PROVIDER_DEEPSEEK,
-  clampAgentSteps,
   clampAiTemperature,
   normalizeAiProfile
 } from '../../model/AiConfig'
@@ -61,6 +59,24 @@ import {
   SCENARIO_INJECTED_FIELDS,
   type InjectedFieldInfo
 } from '../../model/AiScenarioConfig'
+import {
+  AI_TOOL_CATALOG,
+  AiToolMeta,
+  findAiToolMeta,
+  TOOL_REQUIRES_SEARCH,
+  isAiToolEnabled
+} from '../../model/AiToolConfig'
+import {
+  AiAgentPreset,
+  PRESET_CONTEXT_BOARD,
+  PRESET_CONTEXT_THREAD,
+  PRESET_CONTEXT_USER,
+  PRESET_ENTRY_BOARD,
+  PRESET_ENTRY_GLOBAL,
+  PRESET_ENTRY_THREAD,
+  PRESET_ENTRY_USER,
+  createEmptyPreset
+} from '../../model/AiAgentPreset'
 import { TitleScrollEffect } from '../../common/utils/TitleScrollEffect'
 import { resolveKeyboardAppearance } from '../../common/utils/KeyboardAppearanceUtils'
 
@@ -107,14 +123,30 @@ export struct AiSettingsPanel {
   @State editModelInput: string = ''
   /** 温度参数输入值。 */
   @State editTemperatureInput: number = DEFAULT_AI_TEMPERATURE
-  /** 是否启用客户端工具。 */
-  @State editToolsEnabled: boolean = true
-  /** 是否启用联网搜索。 */
-  @State editWebSearchEnabled: boolean = true
-  /** 是否启用网页抓取。 */
-  @State editWebFetchEnabled: boolean = true
-  /** Agent 最大工具轮数（输入框文本）。 */
-  @State editAgentStepsInput: string = DEFAULT_AI_MAX_AGENT_STEPS.toString()
+  /** 全局工具设置变更版本号（切换开关后强制刷新工具列表）。 */
+  @State toolSettingsVersion: number = 0
+  /** 全局 Agent 轮数输入框文本。 */
+  @State globalAgentStepsInput: string = DEFAULT_AI_MAX_AGENT_STEPS.toString()
+  /** 任务列表快照（内置在前）。 */
+  @State presets: AiAgentPreset[] = []
+  /** 当前编辑的任务 ID（空表示不在编辑态，'__new__' 表示新建）。 */
+  @State editingPresetId: string = ''
+  /** 任务编辑：名称。 */
+  @State editTaskName: string = ''
+  /** 任务编辑：说明。 */
+  @State editTaskDescription: string = ''
+  /** 任务编辑：图标 key。 */
+  @State editTaskIcon: string = 'ai'
+  /** 任务编辑：提示词。 */
+  @State editTaskPrompt: string = ''
+  /** 任务编辑：允许的工具。 */
+  @State editTaskTools: string[] = []
+  /** 任务编辑：上下文。 */
+  @State editTaskContexts: string[] = []
+  /** 任务编辑：入口。 */
+  @State editTaskEntries: string[] = []
+  /** 任务编辑：是否内置任务。 */
+  @State editTaskBuiltin: boolean = false
   /** 搜索服务配置列表快照。 */
   @State searchProfiles: AiSearchProfile[] = []
   /** 当前展开编辑的搜索配置 ID。 */
@@ -206,9 +238,14 @@ export struct AiSettingsPanel {
   aboutToAppear(): void {
     this.syncProfiles()
     this.syncSearchProfiles()
+    this.syncPresets()
     const entry = routerStore.topActivity
     if (entry) {
       entry.preBack = (): boolean => {
+        if (this.editingPresetId.length > 0) {
+          this.closePresetEditor()
+          return true
+        }
         if (this.hasUnsavedEdit() || this.hasSearchUnsavedEdit()) {
           this.showDiscardConfirm((): void => {
             this.doCollapse()
@@ -311,10 +348,6 @@ export struct AiSettingsPanel {
     this.editApiKeyInput = profile.apiKey
     this.editModelInput = profile.modelName
     this.editTemperatureInput = clampAiTemperature(profile.temperature)
-    this.editToolsEnabled = profile.toolsEnabled
-    this.editWebSearchEnabled = profile.enableWebSearch
-    this.editWebFetchEnabled = profile.enableWebFetch
-    this.editAgentStepsInput = clampAgentSteps(profile.maxAgentSteps).toString()
   }
 
   /**
@@ -415,11 +448,7 @@ export struct AiSettingsPanel {
         this.editEndpointInput !== baseline.endpoint ||
         this.editPresetId !== baseline.presetId ||
         this.editProtocol !== baseline.protocol ||
-        this.editTemperatureInput !== DEFAULT_AI_TEMPERATURE ||
-        this.resolveAgentSteps() !== DEFAULT_AI_MAX_AGENT_STEPS ||
-        !this.editToolsEnabled ||
-        !this.editWebSearchEnabled ||
-        !this.editWebFetchEnabled
+        this.editTemperatureInput !== DEFAULT_AI_TEMPERATURE
     }
     const profile: AiProviderProfile | null = this.findProfile(this.expandedProfileId)
     if (!profile) {
@@ -432,11 +461,7 @@ export struct AiSettingsPanel {
       this.editEndpointInput !== saved.endpoint ||
       this.editPresetId !== saved.presetId ||
       this.editProtocol !== saved.protocol ||
-      this.editTemperatureInput !== clampAiTemperature(saved.temperature) ||
-      this.resolveAgentSteps() !== clampAgentSteps(saved.maxAgentSteps) ||
-      this.editToolsEnabled !== saved.toolsEnabled ||
-      this.editWebSearchEnabled !== saved.enableWebSearch ||
-      this.editWebFetchEnabled !== saved.enableWebFetch
+      this.editTemperatureInput !== clampAiTemperature(saved.temperature)
   }
 
   /** 清空编辑表单缓存和异步结果。 */
@@ -448,10 +473,6 @@ export struct AiSettingsPanel {
     this.editApiKeyInput = ''
     this.editModelInput = ''
     this.editTemperatureInput = DEFAULT_AI_TEMPERATURE
-    this.editToolsEnabled = true
-    this.editWebSearchEnabled = true
-    this.editWebFetchEnabled = true
-    this.editAgentStepsInput = DEFAULT_AI_MAX_AGENT_STEPS.toString()
     this.showAdvancedParams = false
     this.testResultMessage = ''
     this.testSuccess = false
@@ -758,10 +779,6 @@ export struct AiSettingsPanel {
     profile.protocol = this.editProtocol
     profile.temperature = clampAiTemperature(this.editTemperatureInput)
     profile.apiKey = this.editApiKeyInput.trim()
-    profile.toolsEnabled = this.editToolsEnabled
-    profile.enableWebSearch = this.editWebSearchEnabled
-    profile.enableWebFetch = this.editWebFetchEnabled
-    profile.maxAgentSteps = this.resolveAgentSteps()
 
     if (this.expandedProfileId === NEW_ID) {
       appStore.settingsStore.addAiProfile(profile)
@@ -1004,26 +1021,7 @@ export struct AiSettingsPanel {
     profile.modelName = this.editModelInput.trim()
     profile.protocol = this.editProtocol
     profile.temperature = clampAiTemperature(this.editTemperatureInput)
-    profile.toolsEnabled = this.editToolsEnabled
-    profile.enableWebSearch = this.editWebSearchEnabled
-    profile.enableWebFetch = this.editWebFetchEnabled
-    profile.maxAgentSteps = this.resolveAgentSteps()
     return profile
-  }
-
-  /**
-   * 解析并裁剪 Agent 轮数输入。
-   *
-   * 输入框允许空串或非法输入，此处统一回退默认值并裁剪到 1–1000。
-   *
-   * @returns 合法的 Agent 轮数
-   */
-  private resolveAgentSteps(): number {
-    const parsed: number = parseInt(this.editAgentStepsInput)
-    if (isNaN(parsed)) {
-      return DEFAULT_AI_MAX_AGENT_STEPS
-    }
-    return clampAgentSteps(parsed)
   }
 
   /** 拉取当前端点的可用模型列表。 */
@@ -1200,7 +1198,7 @@ export struct AiSettingsPanel {
               .margin({ top: 8, bottom: 2 })
 
             Text('默认 DeepSeek 官方：填 Key 即可拉取模型；自定义服务商需自行填写端点与协议。' +
-              '联网工具在下方「搜索服务」中单独配置')
+              '工具是全局能力，在下方「工具」中统一开关，不随模型变化')
               .fontSize(11)
               .fontColor(AppColors.textTertiary)
               .lineHeight(16)
@@ -1221,7 +1219,8 @@ export struct AiSettingsPanel {
 
             this.AddButton()
             this.SearchSection()
-            this.ScenarioSection()
+            this.ToolSection()
+            this.PresetSection()
           }
           .width('100%')
           .alignItems(HorizontalAlign.Center)
@@ -1258,6 +1257,10 @@ export struct AiSettingsPanel {
         title: 'AI 配置',
         scrollEffectProgress: this.titleScrollEffectProgress,
         onBack: (): void => {
+          if (this.editingPresetId.length > 0) {
+            this.closePresetEditor()
+            return
+          }
           if (this.hasUnsavedEdit() || this.hasSearchUnsavedEdit()) {
             this.showDiscardConfirm((): void => {
               this.doCollapse()
@@ -1271,6 +1274,10 @@ export struct AiSettingsPanel {
       })
         .width('100%')
         .position({ x: 0, y: 0 })
+
+      if (this.editingPresetId.length > 0) {
+        this.PresetEditorOverlay()
+      }
     }
     .width('100%')
     .height('100%')
@@ -1675,7 +1682,11 @@ export struct AiSettingsPanel {
   }
 
   // ============================================================
-  // AI 场景 Prompt 模板
+  // 旧「Prompt 模板」区块（已由 AI 任务区块取代）
+  //
+  // 任务模型（AiAgentPreset）统一承载角色提示词、工具白名单与入口，
+  // 因此本区块不再出现在页面上；代码保留是为了让内置任务的默认提示词、
+  // 注入字段说明仍有单一出处，后续可整体删除。
   // ============================================================
 
   /** 构建场景 Prompt 模板区域。 */
@@ -2423,7 +2434,7 @@ export struct AiSettingsPanel {
             .fontSize(13)
             .fontColor(AppColors.textSecondary)
             .width('100%')
-          Text('温度、联网工具与 Agent 工具轮数')
+          Text('温度与采样参数')
             .fontSize(11)
             .fontColor(AppColors.textTertiary)
             .width('100%')
@@ -2489,108 +2500,6 @@ export struct AiSettingsPanel {
 
         Divider().color(AppColors.separator).margin({ left: 12, right: 12, top: 4, bottom: 4 })
 
-        // ---- 工具总开关 ----
-        Row() {
-          Column() {
-            Text('联网工具')
-              .fontSize(13)
-              .fontColor(AppColors.textPrimary)
-              .width('100%')
-            Text('web_search 搜索 + web_fetch 抓取网页')
-              .fontSize(11)
-              .fontColor(AppColors.textTertiary)
-              .width('100%')
-              .margin({ top: 2 })
-          }
-          .layoutWeight(1)
-          .alignItems(HorizontalAlign.Start)
-
-          Toggle({ type: ToggleType.Switch, isOn: this.editToolsEnabled })
-            .systemMaterial(UIMaterialManager.controlMaterial)
-            .onChange((isOn: boolean): void => {
-              this.editToolsEnabled = isOn
-            })
-        }
-        .width('100%')
-        .padding({ left: 12, right: 12, top: 10, bottom: 2 })
-        .alignItems(VerticalAlign.Center)
-
-        if (this.editToolsEnabled) {
-          Row() {
-            Text('联网搜索')
-              .fontSize(13)
-              .fontColor(AppColors.textPrimary)
-              .layoutWeight(1)
-            Toggle({ type: ToggleType.Switch, isOn: this.editWebSearchEnabled })
-              .systemMaterial(UIMaterialManager.controlMaterial)
-              .onChange((isOn: boolean): void => {
-                this.editWebSearchEnabled = isOn
-              })
-          }
-          .width('100%')
-          .height(40)
-          .padding({ left: 24, right: 12 })
-          .alignItems(VerticalAlign.Center)
-
-          Row() {
-            Text('网页抓取')
-              .fontSize(13)
-              .fontColor(AppColors.textPrimary)
-              .layoutWeight(1)
-            Toggle({ type: ToggleType.Switch, isOn: this.editWebFetchEnabled })
-              .systemMaterial(UIMaterialManager.controlMaterial)
-              .onChange((isOn: boolean): void => {
-                this.editWebFetchEnabled = isOn
-              })
-          }
-          .width('100%')
-          .height(40)
-          .padding({ left: 24, right: 12 })
-          .alignItems(VerticalAlign.Center)
-
-          // ---- Agent 工具轮数 ----
-          Row() {
-            Text('Agent 轮数')
-              .fontSize(13)
-              .fontColor(AppColors.textPrimary)
-              .width(80)
-            TextInput({
-              text: this.editAgentStepsInput,
-              placeholder: DEFAULT_AI_MAX_AGENT_STEPS.toString()
-            })
-              .type(InputType.Number)
-              .onChange((value: string): void => {
-                this.editAgentStepsInput = value
-              })
-              .layoutWeight(1)
-              .height(36)
-              .attributeModifier(UIMaterialManager.inputMaterial)
-              .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
-              .borderRadius(8)
-              .fontSize(13)
-              .fontColor(UIMaterialManager.inputForeground)
-              .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
-              .caretColor(UIMaterialManager.inputForeground)
-              .padding({ left: 10, right: 10 })
-            Text('轮')
-              .fontSize(13)
-              .fontColor(AppColors.textSecondary)
-              .width(24)
-              .textAlign(TextAlign.End)
-          }
-          .width('100%')
-          .height(46)
-          .padding({ left: 12, right: 12 })
-          .alignItems(VerticalAlign.Center)
-
-          Text('1–' + MAX_AI_MAX_AGENT_STEPS.toString() +
-            ' 轮。上限越高越适合长链路任务，注意调用费用与耗时；超出后强制收尾')
-            .fontSize(11)
-            .fontColor(AppColors.textTertiary)
-            .width('100%')
-            .padding({ left: 12, right: 12 })
-            .margin({ bottom: 4 })
-        }
       }
     }
     .width('100%')
@@ -2713,4 +2622,969 @@ export struct AiSettingsPanel {
     .alignItems(HorizontalAlign.Center)
   }
 
+
+  // ============================================================
+  // 全局工具
+  // ============================================================
+
+  /** 同步任务列表到页面状态。 */
+  private syncPresets(): void {
+    const src: AiAgentPreset[] = appStore.settingsStore.listAiPresets()
+    const next: AiAgentPreset[] = []
+    for (let i: number = 0; i < src.length; i++) {
+      next.push(src[i])
+    }
+    this.presets = next
+    this.globalAgentStepsInput = appStore.settingsStore.getAiToolMaxSteps().toString()
+  }
+
+  /**
+   * 判断工具是否全局启用。
+   *
+   * @param name - 工具名称
+   * @returns true 表示启用
+   */
+  private toolEnabled(name: string): boolean {
+    // 读取版本号以建立响应式依赖：切换开关后强制重算
+    const version: number = this.toolSettingsVersion
+    return version >= 0 && appStore.settingsStore.isAiToolEnabled(name)
+  }
+
+  /**
+   * 切换全局工具开关。
+   *
+   * @param name - 工具名称
+   * @param enabled - 是否启用
+   */
+  private toggleTool(name: string, enabled: boolean): void {
+    appStore.settingsStore.setAiToolEnabled(name, enabled)
+    this.toolSettingsVersion++
+  }
+
+  /**
+   * 工具依赖状态文案。
+   *
+   * @param meta - 工具元数据
+   * @returns 状态文案
+   */
+  private toolStatus(meta: AiToolMeta): string {
+    if (meta.requires === TOOL_REQUIRES_SEARCH) {
+      const search: AiSearchProfile | null = appStore.settingsStore.getActiveAiSearchProfile()
+      if (search === null) {
+        return '未配置搜索服务'
+      }
+      const provider: AiSearchProvider = aiSearchProviderRegistry.get(search.providerKind)
+      return provider.isAvailable(search) ? '就绪' : '缺少密钥'
+    }
+    return appStore.auth.isAuthenticated ? '就绪' : '未登录'
+  }
+
+  /**
+   * 工具依赖未就绪时是否应显示警告色。
+   *
+   * @param meta - 工具元数据
+   * @returns true 表示未就绪
+   */
+  private toolNotReady(meta: AiToolMeta): boolean {
+    return this.toolStatus(meta) !== '就绪'
+  }
+
+  /** 提交全局 Agent 轮数输入。 */
+  private commitGlobalAgentSteps(): void {
+    const parsed: number = parseInt(this.globalAgentStepsInput)
+    if (isNaN(parsed)) {
+      this.globalAgentStepsInput = appStore.settingsStore.getAiToolMaxSteps().toString()
+      return
+    }
+    appStore.settingsStore.setAiToolMaxSteps(parsed)
+    this.globalAgentStepsInput = appStore.settingsStore.getAiToolMaxSteps().toString()
+    appStore.showToast('已调整为 ' + this.globalAgentStepsInput + ' 轮')
+  }
+
+  // ============================================================
+  // AI 任务
+  // ============================================================
+
+  /**
+   * 打开任务编辑器。
+   *
+   * @param id - 任务 ID；'__new__' 表示新建
+   */
+  private openPresetEditor(id: string): void {
+    if (id === NEW_ID) {
+      const draft: AiAgentPreset = createEmptyPreset()
+      draft.entries = [PRESET_ENTRY_GLOBAL]
+      this.fillTaskForm(draft, '')
+      this.editingPresetId = NEW_ID
+      return
+    }
+    const preset: AiAgentPreset | null = appStore.settingsStore.getAiPreset(id)
+    if (preset === null) {
+      return
+    }
+    this.fillTaskForm(preset, appStore.settingsStore.getAiPresetPrompt(id))
+    this.editingPresetId = id
+  }
+
+  /**
+   * 用任务数据填充编辑表单。
+   *
+   * @param preset - 任务
+   * @param prompt - 实际生效的提示词
+   */
+  private fillTaskForm(preset: AiAgentPreset, prompt: string): void {
+    this.editTaskName = preset.name
+    this.editTaskDescription = preset.description
+    this.editTaskIcon = preset.icon
+    this.editTaskPrompt = prompt
+    this.editTaskTools = copyStringList(preset.tools)
+    this.editTaskContexts = copyStringList(preset.contexts)
+    this.editTaskEntries = copyStringList(preset.entries)
+    this.editTaskBuiltin = preset.builtin
+  }
+
+  /** 关闭任务编辑器。 */
+  private closePresetEditor(): void {
+    this.editingPresetId = ''
+    this.editTaskName = ''
+    this.editTaskDescription = ''
+    this.editTaskPrompt = ''
+    this.editTaskTools = []
+    this.editTaskContexts = []
+    this.editTaskEntries = []
+  }
+
+  /**
+   * 切换任务表单中的工具。
+   *
+   * @param name - 工具名称
+   */
+  private toggleTaskTool(name: string): void {
+    const next: string[] = []
+    let found: boolean = false
+    for (let i: number = 0; i < this.editTaskTools.length; i++) {
+      if (this.editTaskTools[i] === name) {
+        found = true
+      } else {
+        next.push(this.editTaskTools[i])
+      }
+    }
+    if (!found) {
+      next.push(name)
+    }
+    this.editTaskTools = next
+  }
+
+  /**
+   * 切换任务表单中的上下文。
+   *
+   * @param kind - 上下文标识
+   */
+  private toggleTaskContext(kind: string): void {
+    this.editTaskContexts = toggleInList(this.editTaskContexts, kind)
+  }
+
+  /**
+   * 切换任务表单中的入口。
+   *
+   * @param entry - 入口标识
+   */
+  private toggleTaskEntry(entry: string): void {
+    this.editTaskEntries = toggleInList(this.editTaskEntries, entry)
+  }
+
+  /** 保存任务。 */
+  private savePreset(): void {
+    const name: string = this.editTaskName.trim()
+    if (name.length === 0) {
+      appStore.showToast('请填写任务名称')
+      return
+    }
+    if (this.editTaskEntries.length === 0) {
+      appStore.showToast('至少选择一个入口')
+      return
+    }
+    if (this.editingPresetId === NEW_ID) {
+      const draft: AiAgentPreset = createEmptyPreset()
+      draft.name = name
+      draft.description = this.editTaskDescription.trim()
+      draft.icon = this.editTaskIcon
+      draft.systemPrompt = this.editTaskPrompt
+      draft.tools = copyStringList(this.editTaskTools)
+      draft.contexts = copyStringList(this.editTaskContexts)
+      draft.entries = copyStringList(this.editTaskEntries)
+      const created: AiAgentPreset = appStore.settingsStore.addAiPreset(draft)
+      appStore.settingsStore.setAiPresetPrompt(created.id, this.editTaskPrompt)
+      appStore.showToast('已创建任务「' + name + '」')
+    } else {
+      const existing: AiAgentPreset | null = appStore.settingsStore.getAiPreset(this.editingPresetId)
+      if (existing === null) {
+        this.closePresetEditor()
+        return
+      }
+      const next: AiAgentPreset = new AiAgentPreset()
+      next.id = existing.id
+      next.name = name
+      next.description = this.editTaskDescription.trim()
+      next.icon = this.editTaskIcon
+      next.systemPrompt = existing.systemPrompt
+      next.tools = copyStringList(this.editTaskTools)
+      next.contexts = copyStringList(this.editTaskContexts)
+      next.entries = copyStringList(this.editTaskEntries)
+      next.starters = existing.starters
+      next.builtin = existing.builtin
+      next.enabled = existing.enabled
+      appStore.settingsStore.updateAiPreset(next)
+      appStore.settingsStore.setAiPresetPrompt(next.id, this.editTaskPrompt)
+      appStore.showToast('任务已更新')
+    }
+    this.syncPresets()
+    this.closePresetEditor()
+  }
+
+  /**
+   * 删除自定义任务。
+   *
+   * @param id - 任务 ID
+   */
+  private deletePreset(id: string): void {
+    const preset: AiAgentPreset | null = appStore.settingsStore.getAiPreset(id)
+    if (preset === null) {
+      return
+    }
+    if (preset.builtin) {
+      appStore.showToast('内置任务不能删除，可以关闭它的开关')
+      return
+    }
+    appStore.settingsStore.deleteAiPreset(id)
+    this.syncPresets()
+    if (this.editingPresetId === id) {
+      this.closePresetEditor()
+    }
+    appStore.showToast('已删除任务')
+  }
+
+  /**
+   * 复制任务。
+   *
+   * @param id - 源任务 ID
+   */
+  private duplicatePreset(id: string): void {
+    const created: AiAgentPreset | null = appStore.settingsStore.duplicateAiPreset(id)
+    if (created === null) {
+      return
+    }
+    this.syncPresets()
+    appStore.showToast('已复制为「' + created.name + '」')
+  }
+
+  /**
+   * 切换任务启用状态。
+   *
+   * @param preset - 任务
+   */
+  private togglePresetEnabled(preset: AiAgentPreset): void {
+    const next: AiAgentPreset = new AiAgentPreset()
+    next.id = preset.id
+    next.name = preset.name
+    next.description = preset.description
+    next.icon = preset.icon
+    next.systemPrompt = preset.systemPrompt
+    next.tools = copyStringList(preset.tools)
+    next.contexts = copyStringList(preset.contexts)
+    next.entries = copyStringList(preset.entries)
+    next.starters = copyStringList(preset.starters)
+    next.builtin = preset.builtin
+    next.enabled = !preset.enabled
+    appStore.settingsStore.updateAiPreset(next)
+    this.syncPresets()
+  }
+
+  /**
+   * 任务允许的工具说明。
+   *
+   * @param preset - 任务
+   * @returns 说明文案
+   */
+  private taskToolSummary(preset: AiAgentPreset): string {
+    if (preset.tools.length === 0) {
+      return '全部已启用工具'
+    }
+    const titles: string[] = []
+    for (let i: number = 0; i < preset.tools.length; i++) {
+      const meta: AiToolMeta | null = findAiToolMeta(preset.tools[i])
+      titles.push(meta !== null ? meta.title : preset.tools[i])
+    }
+    return titles.join('、')
+  }
+
+  /**
+   * 任务入口说明。
+   *
+   * @param preset - 任务
+   * @returns 说明文案
+   */
+  private taskEntrySummary(preset: AiAgentPreset): string {
+    const labels: string[] = []
+    for (let i: number = 0; i < preset.entries.length; i++) {
+      labels.push(taskEntryLabel(preset.entries[i]))
+    }
+    return labels.join(' / ')
+  }
+
+  /**
+   * 任务图标资源。
+   *
+   * @param icon - 图标 key
+   * @returns 图标资源
+   */
+  private presetIconRes(icon: string): Resource {
+    if (icon === 'summary') {
+      return $r('app.media.icon_ai_summary')
+    }
+    if (icon === 'profile') {
+      return $r('app.media.icon_ai_profile')
+    }
+    if (icon === 'settings') {
+      return $r('app.media.icon_ai_settings')
+    }
+    return $r('app.media.icon_ai')
+  }
+
+  // ============================================================
+  // UI：全局工具区块
+  // ============================================================
+
+  /** 构建全局工具区块。 */
+  @Builder
+  ToolSection() {
+    Column() {
+      Text('工具')
+        .fontSize(14)
+        .fontColor(AppColors.textPrimary)
+        .fontWeight(FontWeight.Medium)
+        .width('92%')
+        .margin({ top: 20, bottom: 2 })
+
+      Text('工具是客户端能力，所有 AI 配置共用这一套开关：开发好、配置好即可用，' +
+        '不随"当前选中哪个模型"变化。')
+        .fontSize(11)
+        .fontColor(AppColors.textTertiary)
+        .lineHeight(16)
+        .width('92%')
+        .margin({ bottom: 8, top: 2 })
+
+      Column() {
+        ForEach(AI_TOOL_CATALOG, (meta: AiToolMeta) => {
+          Row() {
+            Column() {
+              Row() {
+                Text(meta.title)
+                  .fontSize(13)
+                  .fontColor(AppColors.textPrimary)
+                Text(this.toolStatus(meta))
+                  .fontSize(10)
+                  .fontColor(this.toolNotReady(meta) ? AppColors.destructive : AppColors.textTertiary)
+                  .margin({ left: 6 })
+                  .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+                  .border({
+                    width: 1,
+                    color: this.toolNotReady(meta) ? AppColors.destructive : AppColors.textTertiary,
+                    style: BorderStyle.Solid
+                  })
+                  .borderRadius(6)
+              }
+              .width('100%')
+              .alignItems(VerticalAlign.Center)
+
+              Text(meta.description)
+                .fontSize(11)
+                .fontColor(AppColors.textTertiary)
+                .lineHeight(15)
+                .width('100%')
+                .margin({ top: 2 })
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+
+            Toggle({ type: ToggleType.Switch, isOn: this.toolEnabled(meta.name) })
+              .systemMaterial(UIMaterialManager.controlMaterial)
+              .onChange((isOn: boolean): void => {
+                this.toggleTool(meta.name, isOn)
+              })
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+          .alignItems(VerticalAlign.Center)
+          .border({
+            width: { bottom: 0.5 },
+            color: { bottom: AppColors.separator },
+            style: { bottom: BorderStyle.Solid }
+          })
+        }, (meta: AiToolMeta): string => meta.name + (this.toolEnabled(meta.name) ? '_1' : '_0'))
+
+        Row() {
+          Column() {
+            Text('Agent 轮数')
+              .fontSize(13)
+              .fontColor(AppColors.textPrimary)
+              .width('100%')
+            Text('单次提问内允许的连续工具调用次数，全局生效')
+              .fontSize(11)
+              .fontColor(AppColors.textTertiary)
+              .width('100%')
+              .margin({ top: 2 })
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+
+          TextInput({ text: this.globalAgentStepsInput, placeholder: DEFAULT_AI_MAX_AGENT_STEPS.toString() })
+            .type(InputType.Number)
+            .onChange((value: string): void => {
+              this.globalAgentStepsInput = value
+            })
+            .onSubmit((): void => {
+              this.commitGlobalAgentSteps()
+            })
+            .width(64)
+            .height(34)
+            .attributeModifier(UIMaterialManager.inputMaterial)
+            .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
+            .borderRadius(8)
+            .fontSize(13)
+            .fontColor(UIMaterialManager.inputForeground)
+            .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+            .caretColor(UIMaterialManager.inputForeground)
+            .textAlign(TextAlign.Center)
+
+          Text('轮')
+            .fontSize(12)
+            .fontColor(AppColors.textSecondary)
+            .margin({ left: 6 })
+        }
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 10, bottom: 12 })
+        .alignItems(VerticalAlign.Center)
+        .onClick((): void => {
+          this.commitGlobalAgentSteps()
+        })
+      }
+      .width('92%')
+      .backgroundColor(AppColors.bgTertiary)
+      .borderRadius(12)
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Center)
+  }
+
+  // ============================================================
+  // UI：AI 任务区块
+  // ============================================================
+
+  /** 构建 AI 任务区块。 */
+  @Builder
+  PresetSection() {
+    Column() {
+      Text('AI 任务')
+        .fontSize(14)
+        .fontColor(AppColors.textPrimary)
+        .fontWeight(FontWeight.Medium)
+        .width('92%')
+        .margin({ top: 20, bottom: 2 })
+
+      Text('任务 = 角色提示词 + 可用工具 + 入口。内置任务可改提示词，' +
+        '也可以新建自己的任务，让 AI 按你的方式读帖、查用户、整理内容。')
+        .fontSize(11)
+        .fontColor(AppColors.textTertiary)
+        .lineHeight(16)
+        .width('92%')
+        .margin({ bottom: 8, top: 2 })
+
+      ForEach(this.presets, (preset: AiAgentPreset) => {
+        Column() {
+          Row() {
+            Image(this.presetIconRes(preset.icon))
+              .width(20)
+              .height(20)
+              .fillColor(AppColors.textSecondary)
+              .margin({ right: 10 })
+
+            Column() {
+              Row() {
+                Text(preset.name)
+                  .fontSize(15)
+                  .fontColor(preset.enabled ? AppColors.textPrimary : AppColors.textTertiary)
+                  .fontWeight(FontWeight.Medium)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                if (preset.builtin) {
+                  Text('内置')
+                    .fontSize(10)
+                    .fontColor(AppColors.textTertiary)
+                    .margin({ left: 6 })
+                    .padding({ left: 5, right: 5, top: 1, bottom: 1 })
+                    .border({ width: 1, color: AppColors.textTertiary, style: BorderStyle.Solid })
+                    .borderRadius(6)
+                }
+              }
+              .alignItems(VerticalAlign.Center)
+
+              Text(preset.description.length > 0 ? preset.description : '（未填写说明）')
+                .fontSize(11)
+                .fontColor(AppColors.textTertiary)
+                .lineHeight(16)
+                .maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .margin({ top: 2 })
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+
+            Toggle({ type: ToggleType.Switch, isOn: preset.enabled })
+              .systemMaterial(UIMaterialManager.controlMaterial)
+              .onChange((isOn: boolean): void => {
+                this.togglePresetEnabled(preset)
+              })
+          }
+          .width('100%')
+          .padding({ left: 14, right: 14, top: 12, bottom: 8 })
+          .alignItems(VerticalAlign.Center)
+
+          Row() {
+            Text('工具：' + this.taskToolSummary(preset))
+              .fontSize(11)
+              .fontColor(AppColors.textTertiary)
+              .layoutWeight(1)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+            Text('入口：' + this.taskEntrySummary(preset))
+              .fontSize(11)
+              .fontColor(AppColors.textTertiary)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+          .width('100%')
+          .padding({ left: 14, right: 14, bottom: 8 })
+
+          Row() {
+            Text('编辑')
+              .fontSize(12)
+              .fontColor(AppColors.primary)
+              .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+              .onClick((): void => {
+                this.openPresetEditor(preset.id)
+              })
+
+            Text('复制')
+              .fontSize(12)
+              .fontColor(AppColors.textSecondary)
+              .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+              .onClick((): void => {
+                this.duplicatePreset(preset.id)
+              })
+
+            Blank()
+
+            if (!preset.builtin) {
+              Text('删除')
+                .fontSize(12)
+                .fontColor(AppColors.destructive)
+                .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+                .onClick((): void => {
+                  this.deletePreset(preset.id)
+                })
+            }
+          }
+          .width('100%')
+          .padding({ left: 4, right: 8, bottom: 6 })
+          .alignItems(VerticalAlign.Center)
+        }
+        .width('92%')
+        .alignItems(HorizontalAlign.Start)
+        .backgroundColor(AppColors.bgTertiary)
+        .borderRadius(12)
+        .margin({ top: 8 })
+      }, (preset: AiAgentPreset): string => preset.id + '|' + preset.name + '|' +
+        preset.description + '|' + preset.icon + '|' + (preset.enabled ? '1' : '0') + '|' +
+        preset.entries.join(',') + '|' + preset.tools.join(','))
+
+      Row() {
+        Text('+ 新建 AI 任务')
+          .fontSize(15)
+          .fontColor(AppColors.primary)
+          .fontWeight(FontWeight.Medium)
+      }
+      .width('92%')
+      .height(44)
+      .justifyContent(FlexAlign.Center)
+      .backgroundColor(AppColors.bgTertiary)
+      .borderRadius(12)
+      .margin({ top: 8 })
+      .onClick((): void => {
+        this.openPresetEditor(NEW_ID)
+      })
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Center)
+  }
+
+  // ============================================================
+  // UI：任务编辑器（全屏覆盖层）
+  // ============================================================
+
+  /** 任务编辑器覆盖层。 */
+  @Builder
+  PresetEditorOverlay() {
+    Column() {
+      Row().width('100%').height(this.statusBarHeight)
+
+      Row() {
+        Text('取消')
+          .fontSize(14)
+          .fontColor(AppColors.textSecondary)
+          .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+          .onClick((): void => {
+            this.closePresetEditor()
+          })
+
+        Text(this.editingPresetId === NEW_ID ? '新建 AI 任务' : '编辑 AI 任务')
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(AppColors.textPrimary)
+          .layoutWeight(1)
+          .textAlign(TextAlign.Center)
+
+        Text('保存')
+          .fontSize(14)
+          .fontColor(AppColors.primary)
+          .fontWeight(FontWeight.Medium)
+          .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+          .onClick((): void => {
+            this.savePreset()
+          })
+      }
+      .width('100%')
+      .height(48)
+      .alignItems(VerticalAlign.Center)
+
+      Scroll() {
+        Column() {
+          // 名称
+          Text('任务名称')
+            .fontSize(13)
+            .fontColor(AppColors.textSecondary)
+            .width('100%')
+            .margin({ bottom: 4 })
+
+          TextInput({ placeholder: '例如：每日热帖速览', text: this.editTaskName })
+            .onChange((v: string): void => {
+              this.editTaskName = v
+            })
+            .width('100%')
+            .height(40)
+            .attributeModifier(UIMaterialManager.inputMaterial)
+            .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
+            .borderRadius(8)
+            .fontSize(14)
+            .fontColor(UIMaterialManager.inputForeground)
+            .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+            .caretColor(UIMaterialManager.inputForeground)
+            .padding({ left: 12, right: 12 })
+            .margin({ bottom: 12 })
+
+          // 图标
+          Text('图标')
+            .fontSize(13)
+            .fontColor(AppColors.textSecondary)
+            .width('100%')
+            .margin({ bottom: 6 })
+
+          Row() {
+            ForEach(PRESET_ICON_KEYS, (key: string) => {
+              Column() {
+                Image(this.presetIconRes(key))
+                  .width(20)
+                  .height(20)
+                  .fillColor(this.editTaskIcon === key ? AppColors.white : AppColors.textSecondary)
+              }
+              .width(44)
+              .height(44)
+              .justifyContent(FlexAlign.Center)
+              .alignItems(HorizontalAlign.Center)
+              .backgroundColor(this.editTaskIcon === key ? AppColors.primary : AppColors.bgSecondary)
+              .borderRadius(10)
+              .margin({ right: 10 })
+              .onClick((): void => {
+                this.editTaskIcon = key
+              })
+            }, (key: string): string => key)
+            Blank()
+          }
+          .width('100%')
+          .margin({ bottom: 12 })
+
+          // 说明
+          Text('说明')
+            .fontSize(13)
+            .fontColor(AppColors.textSecondary)
+            .width('100%')
+            .margin({ bottom: 4 })
+
+          TextInput({ placeholder: '一句话说明这个任务做什么', text: this.editTaskDescription })
+            .onChange((v: string): void => {
+              this.editTaskDescription = v
+            })
+            .width('100%')
+            .height(40)
+            .attributeModifier(UIMaterialManager.inputMaterial)
+            .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
+            .borderRadius(8)
+            .fontSize(14)
+            .fontColor(UIMaterialManager.inputForeground)
+            .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+            .caretColor(UIMaterialManager.inputForeground)
+            .padding({ left: 12, right: 12 })
+            .margin({ bottom: 12 })
+
+          // 提示词
+          Row() {
+            Text('系统提示词')
+              .fontSize(13)
+              .fontColor(AppColors.textSecondary)
+              .layoutWeight(1)
+            if (!this.editTaskBuiltin && this.editTaskPrompt.length > 0) {
+              Text('清空')
+                .fontSize(12)
+                .fontColor(AppColors.textTertiary)
+                .onClick((): void => {
+                  this.editTaskPrompt = ''
+                })
+            }
+          }
+          .width('100%')
+          .margin({ bottom: 4 })
+
+          TextArea({ text: this.editTaskPrompt, placeholder: '描述 AI 的角色、输出结构与注意事项…' })
+            .onChange((value: string): void => {
+              this.editTaskPrompt = value
+            })
+            .width('100%')
+            .height(150)
+            .attributeModifier(UIMaterialManager.inputMaterial)
+            .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
+            .borderRadius(8)
+            .fontSize(14)
+            .fontColor(UIMaterialManager.inputForeground)
+            .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+            .caretColor(UIMaterialManager.inputForeground)
+            .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+            .margin({ bottom: 6 })
+
+          Text(this.editTaskPrompt.length.toString() + ' 字 · 留空则使用通用助手行为')
+            .fontSize(11)
+            .fontColor(AppColors.textTertiary)
+            .width('100%')
+            .margin({ bottom: 12 })
+
+          // 工具
+          Text('可用工具')
+            .fontSize(13)
+            .fontColor(AppColors.textSecondary)
+            .width('100%')
+            .margin({ bottom: 4 })
+
+          Text(this.editTaskTools.length === 0 ? '未选择 = 使用全部已启用工具' :
+            '已选 ' + this.editTaskTools.length.toString() + ' 个工具')
+            .fontSize(11)
+            .fontColor(AppColors.textTertiary)
+            .width('100%')
+            .margin({ bottom: 6 })
+
+          Flex({ wrap: FlexWrap.Wrap }) {
+            ForEach(AI_TOOL_CATALOG, (meta: AiToolMeta) => {
+              Text(meta.title)
+                .fontSize(12)
+                .fontColor(this.taskToolSelected(meta.name) ? AppColors.white : AppColors.textPrimary)
+                .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+                .backgroundColor(this.taskToolSelected(meta.name) ? AppColors.primary : AppColors.bgSecondary)
+                .borderRadius(14)
+                .margin({ right: 8, bottom: 8 })
+                .onClick((): void => {
+                  this.toggleTaskTool(meta.name)
+                })
+            }, (meta: AiToolMeta): string => meta.name)
+          }
+          .width('100%')
+          .margin({ bottom: 8 })
+
+          // 上下文
+          Text('运行上下文')
+            .fontSize(13)
+            .fontColor(AppColors.textSecondary)
+            .width('100%')
+            .margin({ bottom: 4 })
+
+          Text('声明后，从对应页面进入时会自动带上帖子 / 用户 / 版块标识')
+            .fontSize(11)
+            .fontColor(AppColors.textTertiary)
+            .width('100%')
+            .margin({ bottom: 6 })
+
+          Flex({ wrap: FlexWrap.Wrap }) {
+            ForEach(PRESET_CONTEXT_OPTIONS, (option: string) => {
+              Text(taskContextLabel(option))
+                .fontSize(12)
+                .fontColor(this.editTaskContexts.indexOf(option) >= 0 ? AppColors.white : AppColors.textPrimary)
+                .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+                .backgroundColor(this.editTaskContexts.indexOf(option) >= 0 ? AppColors.primary : AppColors.bgSecondary)
+                .borderRadius(14)
+                .margin({ right: 8, bottom: 8 })
+                .onClick((): void => {
+                  this.toggleTaskContext(option)
+                })
+            }, (option: string): string => option)
+          }
+          .width('100%')
+          .margin({ bottom: 8 })
+
+          // 入口
+          Text('出现位置')
+            .fontSize(13)
+            .fontColor(AppColors.textSecondary)
+            .width('100%')
+            .margin({ bottom: 4 })
+
+          Flex({ wrap: FlexWrap.Wrap }) {
+            ForEach(PRESET_ENTRY_OPTIONS, (option: string) => {
+              Text(taskEntryLabel(option))
+                .fontSize(12)
+                .fontColor(this.editTaskEntries.indexOf(option) >= 0 ? AppColors.white : AppColors.textPrimary)
+                .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+                .backgroundColor(this.editTaskEntries.indexOf(option) >= 0 ? AppColors.primary : AppColors.bgSecondary)
+                .borderRadius(14)
+                .margin({ right: 8, bottom: 8 })
+                .onClick((): void => {
+                  this.toggleTaskEntry(option)
+                })
+            }, (option: string): string => option)
+          }
+          .width('100%')
+          .margin({ bottom: 16 })
+        }
+        .width('92%')
+        .alignItems(HorizontalAlign.Start)
+        .padding({ bottom: 32 })
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .align(Alignment.Top)
+      .scrollBar(BarState.Off)
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(AppColors.bg)
+  }
+
+  /**
+   * 判断任务表单是否选中某工具。
+   *
+   * @param name - 工具名称
+   * @returns true 表示选中
+   */
+  private taskToolSelected(name: string): boolean {
+    return this.editTaskTools.indexOf(name) >= 0
+  }
+
+}
+
+/** 复制字符串数组。 */
+function copyStringList(src: string[]): string[] {
+  const dest: string[] = []
+  for (let i: number = 0; i < src.length; i++) {
+    dest.push(src[i])
+  }
+  return dest
+}
+
+/**
+ * 切换数组中的某个成员（存在则移除，不存在则追加）。
+ *
+ * @param src - 原数组
+ * @param value - 成员值
+ * @returns 新数组
+ */
+function toggleInList(src: string[], value: string): string[] {
+  const dest: string[] = []
+  let found: boolean = false
+  for (let i: number = 0; i < src.length; i++) {
+    if (src[i] === value) {
+      found = true
+    } else {
+      dest.push(src[i])
+    }
+  }
+  if (!found) {
+    dest.push(value)
+  }
+  return dest
+}
+
+/** 任务图标可选值。 */
+const PRESET_ICON_KEYS: string[] = ['ai', 'summary', 'profile', 'settings']
+
+/** 任务上下文可选项。 */
+const PRESET_CONTEXT_OPTIONS: string[] = [
+  PRESET_CONTEXT_THREAD,
+  PRESET_CONTEXT_USER,
+  PRESET_CONTEXT_BOARD
+]
+
+/** 任务入口可选项。 */
+const PRESET_ENTRY_OPTIONS: string[] = [
+  PRESET_ENTRY_GLOBAL,
+  PRESET_ENTRY_THREAD,
+  PRESET_ENTRY_USER,
+  PRESET_ENTRY_BOARD
+]
+
+/**
+ * 上下文展示名。
+ *
+ * @param kind - 上下文标识
+ * @returns 展示名
+ */
+function taskContextLabel(kind: string): string {
+  if (kind === PRESET_CONTEXT_THREAD) {
+    return '帖子'
+  }
+  if (kind === PRESET_CONTEXT_USER) {
+    return '用户'
+  }
+  if (kind === PRESET_CONTEXT_BOARD) {
+    return '版块'
+  }
+  return kind
+}
+
+/**
+ * 入口展示名。
+ *
+ * @param entry - 入口标识
+ * @returns 展示名
+ */
+function taskEntryLabel(entry: string): string {
+  if (entry === PRESET_ENTRY_GLOBAL) {
+    return 'AI 对话页'
+  }
+  if (entry === PRESET_ENTRY_THREAD) {
+    return '帖子菜单'
+  }
+  if (entry === PRESET_ENTRY_USER) {
+    return '用户卡片'
+  }
+  if (entry === PRESET_ENTRY_BOARD) {
+    return '版块页'
+  }
+  return entry
 }

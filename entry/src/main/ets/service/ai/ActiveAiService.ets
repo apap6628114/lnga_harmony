@@ -1,20 +1,34 @@
 /**
  * 当前激活 AI 配置的调用门面。
  *
- * 页面只依赖这里：配置校验、Agent 循环、工具时间线、错误文案全部收敛在本层。
- * 协议差异在 AiChatClient 里分流，页面不感知 Responses / Chat Completions。
+ * 页面只依赖这里：配置校验、任务提示词、工具上下文装配、Agent 循环、
+ * 工具时间线、错误文案全部收敛在本层。协议差异在 AiChatClient 里分流，
+ * 页面不感知 Responses / Chat Completions。
  */
 
 import { appStore } from '../../store/AppStore'
-import {
-  AiProviderProfile,
-  hasToolSwitchesOn
-} from '../../model/AiConfig'
+import { AiProviderProfile } from '../../model/AiConfig'
 import { AiSearchProfile } from '../../model/AiSearchConfig'
+import {
+  AI_TOOL_CATALOG,
+  AiToolMeta,
+  TOOL_REQUIRES_LOGIN,
+  TOOL_REQUIRES_SEARCH,
+  isAiToolEnabled
+} from '../../model/AiToolConfig'
+import {
+  AiAgentPreset,
+  AiTaskContext,
+  buildContextPreamble,
+  presetAllowsTool,
+  resolvePresetPrompt
+} from '../../model/AiAgentPreset'
 import { ChatMessage, RequestCanceller } from './AiProtocolTypes'
 import { runAiAgent, AiAgentOptions, AiAgentResult } from './AiAgentRunner'
-import { AiToolInvocation, AiToolSource } from './tools/AiToolAdapter'
+import { AiToolCard, AiToolContext, AiToolInvocation, AiToolSource } from './tools/AiToolAdapter'
+import { aiToolRegistry } from './tools/ToolRegistry'
 import { aiSearchProviderRegistry } from './search/SearchProviderRegistry'
+import { AiSearchProvider } from './search/AiSearchProvider'
 import { translateError } from './AiErrorTranslator'
 import { Logger, DOMAIN_SERVICE } from '../../common/utils/Logger'
 
@@ -45,6 +59,8 @@ export class AiChatResult {
   toolInvocations: AiToolInvocation[] = []
   /** 引用来源（搜索 / 抓取结果） */
   sources: AiToolSource[] = []
+  /** 可点击卡片（帖子 / 版块 / 用户） */
+  cards: AiToolCard[] = []
   /** 是否因工具轮数上限被强制收尾 */
   hitStepLimit: boolean = false
   /**
@@ -90,30 +106,77 @@ export function getActiveAiValidationMessage(): string {
 }
 
 /**
- * 获取当前配置的工具可用性提示（不阻断对话，仅用于 UI 提示）。
+ * 装配一次工具执行上下文。
  *
- * @returns 空字符串表示工具可用；否则为提示文案
+ * 工具是全局能力：这里只读全局开关、登录态与激活的搜索服务，
+ * 不再看任何按模型区分的工具字段。
+ *
+ * @param preset - 当前任务（可为 null）
+ * @param taskContext - 页面上下文（帖子 / 用户 / 版块标识）
+ * @returns 工具执行上下文
+ */
+export function buildToolContext(preset: AiAgentPreset | null,
+  taskContext: AiTaskContext): AiToolContext {
+  const context: AiToolContext = new AiToolContext()
+  const profile: AiProviderProfile | null = getActiveAiProfile()
+  if (profile !== null) {
+    context.chat = profile
+  }
+  context.search = appStore.settingsStore.getActiveAiSearchProfile()
+  context.tools = appStore.settingsStore.getAiToolSettings()
+  context.preset = preset
+  context.taskContext = taskContext
+  context.token = appStore.auth.token
+  context.authenticated = appStore.auth.isAuthenticated
+  // "读我自己"类工具的兜底身份：没有页面上下文时也能查当前登录账号
+  context.selfUid = appStore.auth.uid
+  context.selfUserName = appStore.auth.nickName
+  return context
+}
+
+/**
+ * 当前上下文下已就绪的工具名。
+ *
+ * @param preset - 当前任务（可为 null）
+ * @param taskContext - 页面上下文
+ * @returns 工具名数组
+ */
+export function getReadyToolNames(preset: AiAgentPreset | null,
+  taskContext: AiTaskContext): string[] {
+  return aiToolRegistry.getAvailableNames(buildToolContext(preset, taskContext))
+}
+
+/**
+ * 获取工具可用性提示（不阻断对话，仅用于 UI 提示）。
+ *
+ * @returns 空字符串表示全部依赖就绪；否则为提示文案
  */
 export function getToolAvailabilityHint(): string {
-  const profile: AiProviderProfile | null = getActiveAiProfile()
-  if (!profile || !hasToolSwitchesOn(profile)) {
-    return ''
+  const problems: string[] = []
+  if (!appStore.auth.isAuthenticated) {
+    problems.push('未登录，站内工具不可用')
   }
-  const search: AiSearchProfile | null = appStore.settingsStore.getActiveAiSearchProfile()
-  if (search === null) {
-    return '请先在「搜索服务」中添加并激活一套配置'
+  const settings = appStore.settingsStore.getAiToolSettings()
+  const needsSearch: boolean = isAiToolEnabled(settings, 'web_search') ||
+    isAiToolEnabled(settings, 'web_fetch')
+  if (needsSearch) {
+    const search: AiSearchProfile | null = appStore.settingsStore.getActiveAiSearchProfile()
+    if (search === null) {
+      problems.push('未配置搜索服务，联网工具暂不可用')
+    } else {
+      const provider: AiSearchProvider = aiSearchProviderRegistry.get(search.providerKind)
+      if (!provider.isAvailable(search)) {
+        problems.push(provider.getUnavailableHint())
+      }
+    }
   }
-  const provider = aiSearchProviderRegistry.get(search.providerKind)
-  if (provider.isAvailable(search)) {
-    return ''
-  }
-  return provider.getUnavailableHint()
+  return problems.join('；')
 }
 
 /**
  * 使用当前激活配置发起带工具能力的对话。
  *
- * 模型可以多轮请求 web_search / web_fetch，客户端执行后回传，
+ * 模型可以多轮请求工具（NGA 站内 + 联网），客户端执行后回传，
  * 直到产出最终回答或用完工具轮数。
  *
  * @param messages - 对话消息列表
@@ -121,6 +184,8 @@ export function getToolAvailabilityHint(): string {
  * @param onStatus - 可选的状态更新回调
  * @param onToolCall - 可选的工具时间线回调
  * @param canceller - 可选的请求取消令牌
+ * @param preset - 可选的任务（决定提示词与工具白名单）
+ * @param taskContext - 可选的页面上下文
  * @returns 对话结果
  */
 export async function chatCompleteWithActiveAiStream(
@@ -128,13 +193,24 @@ export async function chatCompleteWithActiveAiStream(
   onDelta: (chunk: string) => void,
   onStatus?: ChatStatusCallback,
   onToolCall?: ToolInvocationCallback,
-  canceller?: RequestCanceller
+  canceller?: RequestCanceller,
+  preset?: AiAgentPreset | null,
+  taskContext?: AiTaskContext
 ): Promise<AiChatResult> {
   const profile: AiProviderProfile | null = getActiveAiProfile()
   const validationMessage: string = getActiveAiValidationMessage()
   if (!profile || validationMessage.length > 0) {
     throw new Error(validationMessage.length > 0 ? validationMessage : '请先在设置中选择 AI 配置')
   }
+
+  const effectivePreset: AiAgentPreset | null = preset ?? null
+  const effectiveContext: AiTaskContext = taskContext ?? new AiTaskContext()
+  const toolContext: AiToolContext = buildToolContext(effectivePreset, effectiveContext)
+
+  // 任务提示词 + 上下文说明 + 工具可用性：放在 system 消息里，
+  // 正文数据仍由模型调用工具读取
+  const conversation: ChatMessage[] = buildConversation(
+    messages, effectivePreset, effectiveContext, toolContext)
 
   const invocations: AiToolInvocation[] = []
   const options: AiAgentOptions = new AiAgentOptions()
@@ -148,8 +224,7 @@ export async function chatCompleteWithActiveAiStream(
   }
   options.canceller = canceller ?? null
 
-  const agentResult: AiAgentResult = await runAiAgent(
-    profile, appStore.settingsStore.getActiveAiSearchProfile(), messages, options)
+  const agentResult: AiAgentResult = await runAiAgent(profile, toolContext, conversation, options)
 
   const result: AiChatResult = new AiChatResult()
   result.text = agentResult.text
@@ -160,6 +235,7 @@ export async function chatCompleteWithActiveAiStream(
   result.truncated = agentResult.truncated
   result.toolInvocations = agentResult.toolInvocations
   result.sources = agentResult.sources
+  result.cards = agentResult.cards
   result.hitStepLimit = agentResult.hitStepLimit
 
   if (result.text.trim().length === 0) {
@@ -168,9 +244,113 @@ export async function chatCompleteWithActiveAiStream(
     result.localFallback = true
     onDelta(failureText)
   }
-  logger.info('chatComplete done: text=%d chars, tools=%d, truncated=%s',
-    result.text.length, result.toolInvocations.length, String(result.truncated))
+  logger.info('chatComplete done: text=%d chars, tools=%d, cards=%d, truncated=%s',
+    result.text.length, result.toolInvocations.length, result.cards.length, String(result.truncated))
   return result
+}
+
+/**
+ * 组装最终发给模型的对话：system（任务提示词 + 上下文说明 + 工具可用性）+ 历史。
+ *
+ * 已有 system 消息时把内容合并进去，避免部分服务商只接受单条 system。
+ *
+ * @param messages - 页面历史
+ * @param preset - 任务（可为 null）
+ * @param context - 页面上下文
+ * @param toolContext - 工具执行上下文（用于计算工具可用性）
+ * @returns 组装后的消息
+ */
+function buildConversation(messages: ChatMessage[], preset: AiAgentPreset | null,
+  context: AiTaskContext, toolContext: AiToolContext): ChatMessage[] {
+  const systemParts: string[] = []
+  if (preset !== null) {
+    const prompt: string = resolvePresetPrompt(preset, appStore.settings.scenarioSystemPrompts)
+    if (prompt.trim().length > 0) {
+      systemParts.push(prompt.trim())
+    }
+  }
+  const preamble: string = buildContextPreamble(context, preset)
+  if (preamble.length > 0) {
+    systemParts.push(preamble)
+  }
+  // 工具声明：可用工具由 tools 参数声明；这里补上"存在但当前不可用"的工具，
+  // 避免模型把能力缺失误判成"没有这个功能"。
+  const unavailableHint: string = buildUnavailableToolsHint(toolContext)
+  if (unavailableHint.length > 0) {
+    systemParts.push(unavailableHint)
+  }
+
+  const result: ChatMessage[] = []
+  let systemMerged: boolean = false
+  for (let i: number = 0; i < messages.length; i++) {
+    const src: ChatMessage = messages[i]
+    if (src.role === 'system' && !systemMerged && systemParts.length > 0) {
+      const merged: string = systemParts.join('\n\n') + '\n\n' + src.content
+      result.push(new ChatMessage('system', merged))
+      systemMerged = true
+      continue
+    }
+    result.push(src)
+  }
+  if (!systemMerged && systemParts.length > 0) {
+    result.unshift(new ChatMessage('system', systemParts.join('\n\n')))
+  }
+  return result
+}
+
+/**
+ * 生成「存在但当前不可用」的工具说明。
+ *
+ * 这是把工具能力显式声明给模型的关键一环：可用工具在 tools 参数里，
+ * 而被依赖挡住的工具如果完全不提，模型会以为客户端没有这个能力。
+ *
+ * @param context - 工具执行上下文
+ * @returns 说明文本，无不可用工具时为空串
+ */
+function buildUnavailableToolsHint(context: AiToolContext): string {
+  const available: string[] = aiToolRegistry.getAvailableNames(context)
+  const lines: string[] = []
+  for (let i: number = 0; i < AI_TOOL_CATALOG.length; i++) {
+    const meta: AiToolMeta = AI_TOOL_CATALOG[i]
+    if (!isAiToolEnabled(context.tools, meta.name)) {
+      continue
+    }
+    if (!presetAllowsTool(context.preset, meta.name)) {
+      continue
+    }
+    if (available.indexOf(meta.name) >= 0) {
+      continue
+    }
+    lines.push('- ' + meta.title + '（' + meta.name + '）：' + unavailableToolReason(meta, context))
+  }
+  if (lines.length === 0) {
+    return ''
+  }
+  return '【暂不可用的工具】\n' + lines.join('\n') + '\n' +
+    '这些工具因登录态或配置缺失不可用：不要假装调用，也不要声称自己"没有这个能力"，' +
+    '可以告诉用户缺什么（例如先登录、去「AI 配置 → 搜索服务」填密钥）。'
+}
+
+/**
+ * 计算单个工具不可用的原因。
+ *
+ * @param meta - 工具元数据
+ * @param context - 工具执行上下文
+ * @returns 原因文案
+ */
+function unavailableToolReason(meta: AiToolMeta, context: AiToolContext): string {
+  if (meta.requires === TOOL_REQUIRES_LOGIN) {
+    return '需要登录 NGA 账号'
+  }
+  if (meta.requires === TOOL_REQUIRES_SEARCH) {
+    const search: AiSearchProfile | null = context.search
+    if (search === null) {
+      return '未配置搜索服务'
+    }
+    const provider: AiSearchProvider = aiSearchProviderRegistry.get(search.providerKind)
+    return provider.isAvailable(search) ? '暂不可用' : provider.getUnavailableHint()
+  }
+  return '暂不可用'
 }
 
 /**

@@ -3,6 +3,11 @@ import { common, Context } from '@kit.AbilityKit'
 import { taskpool } from '@kit.ArkTS'
 
 import { appStore } from '../store/AppStore'
+import {
+  AiAgentPreset,
+  PRESET_ENTRY_THREAD,
+  PRESET_ID_POST_SUMMARY
+} from '../model/AiAgentPreset'
 import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
 import { getThread } from '../service/api/ThreadApi'
 import { votePost } from '../service/api/FavoriteApi'
@@ -203,6 +208,12 @@ export struct ThreadPanel {
   @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
   @State showPagePicker: boolean = false
   /** 保存帖子对话框控制器（更多菜单「保存帖子」入口）。 */
+  /** 帖子入口可用的 AI 任务（用于选择弹窗）。 */
+  @State aiTasks: AiAgentPreset[] = []
+  /** AI 任务选择弹窗控制器。 */
+  private aiTaskDialogController?: CustomDialogController
+  /** 待处理的楼层（弹窗选择任务后使用）。 */
+  private aiTaskPost: PostInfo | null = null
   private saveDialogController?: CustomDialogController
   /** 跟踪帖子更新对话框控制器（更多菜单「跟踪帖子更新」入口）。 */
   private trackDialogController?: CustomDialogController
@@ -2092,6 +2103,126 @@ export struct ThreadPanel {
     this.trackDialogController?.open()
   }
 
+  /**
+   * 打开 AI 任务选择（帖子入口）。
+   *
+   * 只有一个候选任务时直接启动，多个时弹窗选择；没有候选任务时按自由对话处理。
+   *
+   * @param p - 楼层
+   */
+  private beginAiSummarize(p: PostInfo): void {
+    const aiValidationMessage: string = getActiveAiValidationMessage()
+    if (aiValidationMessage.length > 0) {
+      appStore.showToast(aiValidationMessage)
+      return
+    }
+    const plainText: string = bbNodesToPlainText(getCachedBBNodes(p.content))
+    if (plainText.trim().length === 0) {
+      appStore.showToast('该楼层没有可处理的内容')
+      return
+    }
+    const tasks: AiAgentPreset[] = appStore.settingsStore.listAiPresetsByEntry(PRESET_ENTRY_THREAD)
+    this.aiTaskPost = p
+    if (tasks.length === 0) {
+      this.launchAiTask(null, p, 'AI 助手')
+      return
+    }
+    if (tasks.length === 1) {
+      this.launchAiTask(tasks[0], p, tasks[0].name)
+      return
+    }
+    const next: AiAgentPreset[] = []
+    for (let i: number = 0; i < tasks.length; i++) {
+      next.push(tasks[i])
+    }
+    this.aiTasks = next
+    this.aiTaskDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
+      systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
+      builder: CustomContentDialog({
+        primaryTitle: '选择 AI 任务',
+        contentBuilder: (): void => { this.aiTaskContent() },
+        buttons: [{ value: '取消' }]
+      }),
+      autoCancel: true
+    })
+    this.aiTaskDialogController.open()
+  }
+
+  /**
+   * 启动一个 AI 任务。
+   *
+   * @param preset - 任务（null 表示自由对话）
+   * @param p - 楼层
+   * @param title - 导航栏标题
+   */
+  private launchAiTask(preset: AiAgentPreset | null, p: PostInfo, title: string): void {
+    TtsPlayer.stop()
+    const presetId: string = preset !== null ? preset.id : ''
+    let prompt: string = ''
+    if (presetId === PRESET_ID_POST_SUMMARY) {
+      prompt = '请调用读帖工具读取当前帖子第 ' + p.lou.toString() + ' 楼（作者 ' + p.author + '）的内容并总结：\n'
+      prompt += '1. 核心观点\n2. 关键信息\n3. 逻辑脉络\n4. 一句话总结'
+    } else {
+      prompt = '请基于当前帖子第 ' + p.lou.toString() + ' 楼（作者 ' + p.author + '）完成任务。'
+      prompt += '需要正文或其它楼层时，调用读帖工具读取。'
+    }
+    this.getUIContext().getRouter().pushUrl({
+      url: 'pages/ai/AiChatPage',
+      params: {
+        presetId: presetId,
+        title: title,
+        tid: this.threadTid,
+        pid: p.pid.toString(),
+        threadTitle: this.threadSubject,
+        initialPrompt: prompt
+      }
+    })
+  }
+
+  /** AI 任务选择弹窗内容。 */
+  @Builder
+  aiTaskContent() {
+    Column() {
+      ForEach(this.aiTasks, (task: AiAgentPreset) => {
+        Row() {
+          Column() {
+            Text(task.name)
+              .fontSize(15)
+              .fontColor(AppColors.textPrimary)
+            if (task.description.length > 0) {
+              Text(task.description)
+                .fontSize(11)
+                .fontColor(AppColors.textTertiary)
+                .lineHeight(16)
+                .maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .margin({ top: 2 })
+            }
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+
+          Text('›')
+            .fontSize(18)
+            .fontColor(AppColors.chevron)
+        }
+        .width('100%')
+        .padding({ top: 10, bottom: 10 })
+        .alignItems(VerticalAlign.Center)
+        .onClick((): void => {
+          this.aiTaskDialogController?.close()
+          const post: PostInfo | null = this.aiTaskPost
+          if (post !== null) {
+            this.launchAiTask(task, post, task.name)
+          }
+        })
+      }, (task: AiAgentPreset): string => task.id)
+    }
+    .width('100%')
+  }
+
   /** 跟踪对话框的自定义内容（官方 CustomContentDialog 的 contentBuilder）。 */
   @Builder
   trackContent() {
@@ -2299,31 +2430,7 @@ export struct ThreadPanel {
                   }
                 },
                 onSummarize: (p: PostInfo): void => {
-                  const aiValidationMessage: string = getActiveAiValidationMessage()
-                  if (aiValidationMessage.length > 0) {
-                    appStore.showToast(aiValidationMessage)
-                    return
-                  }
-                  const plainText: string = bbNodesToPlainText(getCachedBBNodes(p.content))
-                  if (plainText.trim().length === 0) {
-                    appStore.showToast('该楼层没有可总结的内容')
-                    return
-                  }
-                  let prompt: string = ''
-                  prompt += '【帖子信息】\n'
-                  prompt += '标题：' + this.threadSubject + '\n'
-                  prompt += '楼层：#' + p.lou.toString() + '  作者：' + p.author + '\n\n'
-                  prompt += '【正文内容】\n'
-                  prompt += plainText
-                  TtsPlayer.stop()
-                  this.getUIContext().getRouter().pushUrl({
-                    url: 'pages/ai/AiChatPage',
-                    params: {
-                      initialPrompt: prompt,
-                      title: 'AI 帖子总结',
-                      scenario: 'post_summary'
-                    }
-                  })
+                  this.beginAiSummarize(p)
                 },
                 onReadAloud: (p: PostInfo): void => {
                   const plainText: string = bbNodesToPlainText(getCachedBBNodes(p.content))

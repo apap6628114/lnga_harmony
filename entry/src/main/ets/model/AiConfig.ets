@@ -73,11 +73,11 @@ export class AiProviderProfile {
   protocol: AiApiProtocol = AiApiProtocol.RESPONSES
   /** 温度参数（0.0 - 2.0，默认 0.7） */
   temperature: number = DEFAULT_AI_TEMPERATURE
-  /** 是否启用客户端工具（web_search / web_fetch） */
+  /** 是否启用客户端工具（**已废弃**：工具开关已全局化，见 AiToolConfig） */
   toolsEnabled: boolean = true
-  /** 是否启用联网搜索工具 */
+  /** 是否启用联网搜索工具（**已废弃**：仅用于迁移到全局工具设置） */
   enableWebSearch: boolean = true
-  /** 是否启用网页抓取工具 */
+  /** 是否启用网页抓取工具（**已废弃**：仅用于迁移到全局工具设置） */
   enableWebFetch: boolean = true
   /**
    * 旧版搜索服务商标识（仅用于迁移到独立搜索配置）。
@@ -85,7 +85,7 @@ export class AiProviderProfile {
    * 新配置不再写入；执行期使用激活的 AiSearchProfile。
    */
   searchProvider: string = SEARCH_PROVIDER_DEEPSEEK
-  /** Agent 单轮对话内最大工具轮数 */
+  /** Agent 单轮对话内最大工具轮数（**已废弃**：已全局化，仅用于迁移） */
   maxAgentSteps: number = DEFAULT_AI_MAX_AGENT_STEPS
   /** 旧版工具端点（仅用于迁移） */
   toolsEndpoint: string = DEFAULT_AI_TOOLS_ENDPOINT
@@ -232,8 +232,7 @@ export function clampAgentSteps(value: number): number {
 /**
  * 判断配置是否打开了工具开关（不判断服务商密钥是否就绪）。
  *
- * 密钥就绪判断交给搜索服务商适配器：不同服务商需要的凭据不同。
- *
+ * @deprecated 工具开关已全局化（`AiToolSettings`），本函数仅为兼容旧调用保留。
  * @param profile - AI 配置
  * @returns true 表示至少启用了一个工具
  */
