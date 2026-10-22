@@ -64,14 +64,80 @@ export class ChatMessage {
   }
 }
 
-/** 工具定义（协议无关）。 */
+/**
+ * 工具行为注解（对齐 MCP `Tool.annotations`）。
+ *
+ * 只作为客户端元数据使用，**不参与请求体序列化**：OpenAI 的 function 定义
+ * 只认 name / description / parameters / strict，多塞字段会被部分服务商以
+ * 400 拒绝。这些标记供 Agent 循环与 UI 判定「能否并行、能否缓存、要不要确认」。
+ */
+export class AiToolAnnotations {
+  /** 只读：不改变任何远端状态 */
+  readOnly: boolean = true
+  /** 破坏性：可能造成不可逆变更（写操作） */
+  destructive: boolean = false
+  /** 幂等：同参数重复调用结果一致，可安全重试 */
+  idempotent: boolean = true
+  /** 开放世界：结果依赖站外 / 实时数据，缓存价值低 */
+  openWorld: boolean = false
+}
+
+/**
+ * 工具定义（协议无关）。
+ *
+ * `title` 与 `annotations` 是客户端侧字段：前者用于 UI 展示（对齐 MCP `Tool.title`），
+ * 后者用于行为判定。序列化请求体时只发送协议认识的字段。
+ */
 export class AiToolDefinition {
   /** 工具名称 */
   name: string = ''
+  /** 人类可读展示名（客户端用，不下发） */
+  title: string = ''
   /** 工具说明 */
   description: string = ''
   /** 参数 JSON Schema */
   parameters: Record<string, Object> = {}
+  /** 行为注解（客户端用，不下发） */
+  annotations: AiToolAnnotations = new AiToolAnnotations()
+}
+
+/**
+ * 一次模型请求的 token 用量。
+ *
+ * 服务端返回 usage 时才有值；`cachedTokens` 是前缀缓存命中的输入 token 数，
+ * 是判断「上下文前缀是否稳定」的唯一量化依据。
+ */
+export class AiTokenUsage {
+  /** 输入 token 数 */
+  promptTokens: number = 0
+  /** 输出 token 数 */
+  completionTokens: number = 0
+  /** 总 token 数 */
+  totalTokens: number = 0
+  /** 命中前缀缓存的输入 token 数（不计费或按折扣计费） */
+  cachedTokens: number = 0
+
+  /**
+   * 判断是否拿到任何用量信息。
+   *
+   * @returns true 表示至少有一个字段非零
+   */
+  isEmpty(): boolean {
+    return this.promptTokens === 0 && this.completionTokens === 0 &&
+      this.totalTokens === 0 && this.cachedTokens === 0
+  }
+
+  /**
+   * 累加另一份额度。
+   *
+   * @param other - 待累加的用量
+   */
+  add(other: AiTokenUsage): void {
+    this.promptTokens += other.promptTokens
+    this.completionTokens += other.completionTokens
+    this.totalTokens += other.totalTokens
+    this.cachedTokens += other.cachedTokens
+  }
 }
 
 /** 单轮请求结果。 */
@@ -88,6 +154,8 @@ export class ChatTurnResult {
   status: string = ''
   /** 是否因输出上限被截断 */
   truncated: boolean = false
+  /** 本轮 token 用量（服务端未返回时为空用量） */
+  usage: AiTokenUsage = new AiTokenUsage()
 }
 
 /** 单轮请求选项。 */

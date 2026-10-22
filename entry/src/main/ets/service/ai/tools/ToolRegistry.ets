@@ -8,7 +8,14 @@
 
 import { AiToolDefinition } from '../AiProtocolTypes'
 import { presetAllowsTool } from '../../../model/AiAgentPreset'
-import { AiToolAdapter, AiToolContext, AiToolResult } from './AiToolAdapter'
+import { AiToolMeta, findAiToolMeta } from '../../../model/AiToolConfig'
+import {
+  AiToolAdapter,
+  AiToolContext,
+  AiToolResult,
+  TOOL_ERROR_UNAVAILABLE
+} from './AiToolAdapter'
+import { GetContextTool } from './ContextTool'
 import { WebSearchTool } from './WebSearchTool'
 import { WebFetchTool } from './WebFetchTool'
 import { NgaReadThreadTool } from './nga/NgaThreadTools'
@@ -27,10 +34,34 @@ export class AiToolRegistry {
   /**
    * 注册工具。
    *
+   * 幂等：同名工具再次注册时替换原有适配器，而不是追加一份。
+   * 追加会让同一 function 名在 `tools` 声明里出现两次（部分服务商因此 400），
+   * 也会让 `getAdapter` 的返回值取决于注册顺序。
+   *
    * @param adapter - 工具适配器
    */
   register(adapter: AiToolAdapter): void {
+    const name: string = adapter.getName()
+    for (let i: number = 0; i < this.adapters.length; i++) {
+      if (this.adapters[i].getName() === name) {
+        this.adapters[i] = adapter
+        return
+      }
+    }
     this.adapters.push(adapter)
+  }
+
+  /**
+   * 获取全部已注册工具的名字（不含可用性过滤，供契约测试与诊断使用）。
+   *
+   * @returns 工具名数组（注册顺序）
+   */
+  getRegisteredNames(): string[] {
+    const names: string[] = []
+    for (let i: number = 0; i < this.adapters.length; i++) {
+      names.push(this.adapters[i].getName())
+    }
+    return names
   }
 
   /**
@@ -58,6 +89,9 @@ export class AiToolRegistry {
   /**
    * 获取当前上下文下可用的工具定义。
    *
+   * `title` 与 `annotations` 从工具目录派生（单一真源）：适配器只声明名称、
+   * 说明与参数 Schema，展示名与行为注解不重复写第二遍，也不会与目录漂移。
+   *
    * @param context - 工具执行上下文
    * @returns 工具定义列表
    */
@@ -65,7 +99,9 @@ export class AiToolRegistry {
     const definitions: AiToolDefinition[] = []
     const available: AiToolAdapter[] = this.getAvailableAdapters(context)
     for (let i: number = 0; i < available.length; i++) {
-      definitions.push(available[i].getDefinition(context))
+      const definition: AiToolDefinition = available[i].getDefinition(context)
+      applyCatalogMeta(definition)
+      definitions.push(definition)
     }
     return definitions
   }
@@ -121,6 +157,7 @@ export class AiToolRegistry {
     if (adapter === null) {
       const result: AiToolResult = new AiToolResult()
       result.success = false
+      result.errorCode = TOOL_ERROR_UNAVAILABLE
       result.errorMessage = '工具不可用：' + name
       result.content = '工具「' + name + '」当前不可用（未启用、未登录或不在本任务的工具范围内）。' +
         '请换用其它工具或直接基于已有信息回答。'
@@ -131,12 +168,39 @@ export class AiToolRegistry {
 }
 
 /**
+ * 用工具目录补齐定义里的展示名与行为注解。
+ *
+ * 目录是元数据的唯一真源：新增工具只改目录 + 适配器，不必在两处维护
+ * title / 只读标记 / 幂等标记。
+ *
+ * @param definition - 工具定义（原地修改）
+ */
+function applyCatalogMeta(definition: AiToolDefinition): void {
+  const meta: AiToolMeta | null = findAiToolMeta(definition.name)
+  if (definition.title.length === 0) {
+    definition.title = meta !== null ? meta.title : definition.name
+  }
+  if (meta === null) {
+    return
+  }
+  const readOnly: boolean = meta.readOnly !== false
+  definition.annotations.readOnly = readOnly
+  // 写操作一律视为破坏性：真正的"可恢复写"在开放出来时应显式区分
+  definition.annotations.destructive = !readOnly
+  definition.annotations.idempotent = meta.idempotent !== false
+  definition.annotations.openWorld = meta.openWorld === true
+}
+
+/**
  * 创建并初始化工具注册表。
  *
  * @returns 已注册全部内置工具的注册表
  */
 function createAiToolRegistry(): AiToolRegistry {
   const registry: AiToolRegistry = new AiToolRegistry()
+  // 对话上下文：零参数、不发起网络请求，可用性清单由注册表回调注入
+  registry.register(new GetContextTool((context: AiToolContext): string[] =>
+    registry.getAvailableNames(context)))
   // NGA 站内只读工具（登录后即可用）
   registry.register(new NgaGetMeTool())
   registry.register(new NgaReadThreadTool())

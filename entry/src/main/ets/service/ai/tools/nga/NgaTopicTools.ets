@@ -6,7 +6,14 @@
  */
 
 import { AiToolDefinition } from '../../AiProtocolTypes'
-import { AiToolAdapter, AiToolCard, AiToolContext, AiToolResult } from '../AiToolAdapter'
+import {
+  AiToolAdapter,
+  AiToolCard,
+  AiToolContext,
+  AiToolResult,
+  TOOL_ERROR_BAD_ARGS,
+  TOOL_ERROR_EMPTY
+} from '../AiToolAdapter'
 import { isAiToolEnabled } from '../../../../model/AiToolConfig'
 import { createTopicListParams, getTopicList } from '../../../api/ForumApi'
 import type { TopicListParams } from '../../../api/ForumApi'
@@ -103,7 +110,8 @@ export class NgaListTopicsTool implements AiToolAdapter {
       fid = context.taskContext.fid
     }
     if (fid.length === 0) {
-      return failedResult('缺少版块 ID：请传入 fid，或调用 nga_search_forum 先查到 fid')
+      return failedResult('缺少版块 ID：请传入 fid，或调用 nga_search_forum 先查到 fid',
+        TOOL_ERROR_BAD_ARGS)
     }
     const params: TopicListParams = createTopicListParams()
     params.fid = fid
@@ -182,7 +190,7 @@ export class NgaSearchTopicsTool implements AiToolAdapter {
       key = fallbackQuery.trim()
     }
     if (key.length === 0) {
-      return failedResult('缺少搜索关键词')
+      return failedResult('缺少搜索关键词', TOOL_ERROR_BAD_ARGS)
     }
     const params: TopicListParams = createTopicListParams()
     params.key = key
@@ -228,10 +236,11 @@ function applySort(params: TopicListParams, sort: string): void {
  * @returns 工具结果
  */
 export async function fetchAndFormat(token: string, params: TopicListParams, limit: number,
-  label: string): Promise<AiToolResult> {  const result: TopicListResult = await getTopicList(token, params)
+  label: string): Promise<AiToolResult> {
+  const result: TopicListResult = await getTopicList(token, params)
   const info: TopicListInfo | null = result.data
   if (info === null || info.threadPageList.length === 0) {
-    return failedResult(result.error.length > 0 ? result.error : '没有取到主题列表')
+    return failedResult(result.error.length > 0 ? result.error : '没有取到主题列表', TOOL_ERROR_EMPTY)
   }
 
   const total: number = info.threadPageList.length

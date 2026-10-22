@@ -13,6 +13,7 @@ import { util } from '@kit.ArkTS'
 import { AiApiProtocol, AiProviderProfile } from '../../model/AiConfig'
 import { buildChatUrl, extractServerError } from './AiEndpoint'
 import {
+  AiTokenUsage,
   AiToolDefinition,
   ChatMessage,
   ChatStreamChunkCallback,
@@ -31,6 +32,41 @@ const logger = new Logger(DOMAIN_SERVICE, 'OpenAiChatClient')
 const REQUEST_TIMEOUT: number = 90000
 /** 连接超时毫秒数。 */
 const CONNECT_TIMEOUT: number = 15000
+
+/**
+ * 已知不接受 `stream_options` 的服务商端点（协议 + 端点 + 模型）。
+ *
+ * 部分第三方兼容服务商 / 自建网关会把未知请求字段直接 400。首次按标准带上
+ * 用量统计，若被拒绝则记入本表，后续请求不再携带，避免每次多一次失败往返。
+ * 只活在本进程内，重启后重新探测一次。
+ */
+const usageUnsupportedEndpoints: Set<string> = new Set<string>()
+
+/**
+ * 构造用量探测的端点键。
+ *
+ * @param profile - AI 配置
+ * @returns 端点键
+ */
+function usageProbeKey(profile: AiProviderProfile): string {
+  return profile.endpoint.trim().toLowerCase() + '|' + profile.modelName.trim().toLowerCase()
+}
+
+/**
+ * 判断服务端拒绝是否由 `stream_options` 字段引起。
+ *
+ * 错误消息形如 `<状态码>\n<服务端详情>`；只在 400/422 且详情回显字段名时判定，
+ * 避免把真正的参数错误误判成本地降级。
+ *
+ * @param message - 错误消息
+ * @returns true 表示应去掉该字段重试
+ */
+function isUsageFieldRejected(message: string): boolean {
+  if (message.indexOf('stream_options') < 0) {
+    return false
+  }
+  return message.startsWith('400') || message.startsWith('422')
+}
 
 /** 流式工具调用累积项。 */
 class PendingToolCall {
@@ -60,6 +96,8 @@ class ChatCompletionsStreamParser {
   private finishReason: string = ''
   /** 是否已收到 [DONE]。 */
   private done: boolean = false
+  /** 服务端返回的 token 用量（部分服务商在最后一个 chunk 给出）。 */
+  private usage: AiTokenUsage = new AiTokenUsage()
 
   /**
    * 追加一段响应文本并解析其中完整的事件块。
@@ -148,6 +186,13 @@ class ChatCompletionsStreamParser {
       const messageRaw: Object | undefined = errRecord['message']
       const message: string = typeof messageRaw === 'string' ? messageRaw as string : 'AI 响应错误'
       throw new Error(message)
+    }
+
+    // 用量信息可能出现在任意 chunk（`stream_options.include_usage` 时是最后一个
+    // choices 为空的 chunk），因此先于 choices 判定处理
+    const usageRaw: Object | undefined = json['usage']
+    if (usageRaw !== undefined && usageRaw !== null) {
+      this.usage = parseChatUsage(usageRaw as Record<string, Object>)
     }
 
     const choicesRaw: Object | undefined = json['choices']
@@ -291,6 +336,15 @@ class ChatCompletionsStreamParser {
   }
 
   /**
+   * 获取 token 用量。
+   *
+   * @returns 用量（服务端未返回时为空用量）
+   */
+  getUsage(): AiTokenUsage {
+    return this.usage
+  }
+
+  /**
    * 判断是否已收到 [DONE]。
    *
    * @returns true 表示流已正常结束
@@ -316,11 +370,29 @@ export async function requestChatCompletions(
   canceller?: RequestCanceller
 ): Promise<ChatTurnResult> {
   const url: string = buildChatUrl(profile.endpoint, AiApiProtocol.CHAT_COMPLETIONS)
-  const body: string = buildChatBody(profile, messages, options)
-  if (options.stream) {
-    return streamChatCompletions(url, profile.apiKey, body, options, canceller)
+  const probeKey: string = usageProbeKey(profile)
+  const wantUsage: boolean = !usageUnsupportedEndpoints.has(probeKey)
+  const body: string = buildChatBody(profile, messages, options, wantUsage)
+  try {
+    if (options.stream) {
+      return await streamChatCompletions(url, profile.apiKey, body, options, canceller)
+    }
+    return await requestChatCompletionsOnce(url, profile.apiKey, body, options)
+  } catch (err) {
+    const e: Error = err as Error
+    if (!wantUsage || !isUsageFieldRejected(e.message)) {
+      throw e
+    }
+    // 服务商不接受 stream_options：记住并去掉该字段重试一次（此时不可能有正文
+    // 增量被推给 UI——错误响应体在 dataReceive 里只进 errorBody）
+    usageUnsupportedEndpoints.add(probeKey)
+    logger.warn('服务商不接受 stream_options，本次起停用用量统计: %{public}s', profile.endpoint)
+    const retryBody: string = buildChatBody(profile, messages, options, false)
+    if (options.stream) {
+      return streamChatCompletions(url, profile.apiKey, retryBody, options, canceller)
+    }
+    return requestChatCompletionsOnce(url, profile.apiKey, retryBody, options)
   }
-  return requestChatCompletionsOnce(url, profile.apiKey, body, options)
 }
 
 /**
@@ -477,6 +549,7 @@ function streamChatCompletions(
           result.toolCalls = toolCalls
           result.status = parser.getFinishReason()
           result.truncated = parser.getFinishReason() === 'length'
+          result.usage = parser.getUsage()
           resolveOnce(result)
         } catch (err) {
           const e: Error = err as Error
@@ -537,6 +610,11 @@ function parseChatResponse(responseText: string): ChatTurnResult {
   const finishRaw: Object | undefined = choice['finish_reason']
   result.status = typeof finishRaw === 'string' ? finishRaw as string : ''
   result.truncated = result.status === 'length'
+
+  const usageRaw: Object | undefined = json['usage']
+  if (usageRaw !== undefined && usageRaw !== null) {
+    result.usage = parseChatUsage(usageRaw as Record<string, Object>)
+  }
 
   const messageRaw: Object | undefined = choice['message']
   if (messageRaw === undefined || messageRaw === null) {
@@ -609,19 +687,77 @@ function buildHeaders(apiKey: string, stream: boolean): Record<string, string> {
  * @param profile - AI 配置
  * @param messages - 对话消息
  * @param options - 请求选项
+ * @param includeUsage - 是否请求服务端回传 token 用量（流式时需要 stream_options）
  * @returns 请求体 JSON 文本
  */
-function buildChatBody(profile: AiProviderProfile, messages: ChatMessage[], options: ChatTurnOptions): string {
+function buildChatBody(profile: AiProviderProfile, messages: ChatMessage[], options: ChatTurnOptions,
+  includeUsage: boolean): string {
   const body: Record<string, Object | null> = {}
   body['model'] = profile.modelName
   body['stream'] = options.stream
   body['temperature'] = profile.temperature
   body['messages'] = serializeMessages(messages)
+  if (options.stream && includeUsage) {
+    // OpenAI 兼容方言：流式响应默认不带 usage，需显式开启；最后一个 chunk 的
+    // choices 为空数组，只带 usage
+    const streamOptions: Record<string, boolean> = {}
+    streamOptions['include_usage'] = true
+    body['stream_options'] = streamOptions
+  }
   if (options.tools.length > 0) {
     body['tools'] = serializeTools(options.tools)
     body['tool_choice'] = 'auto'
   }
   return JSON.stringify(body)
+}
+
+/**
+ * 解析 Chat Completions 的 usage 对象。
+ *
+ * 兼容两种缓存命中字段：OpenAI 的 `prompt_tokens_details.cached_tokens`
+ * 与 DeepSeek 的 `prompt_cache_hit_tokens`。
+ *
+ * @param raw - usage 对象
+ * @returns 用量
+ */
+function parseChatUsage(raw: Record<string, Object>): AiTokenUsage {
+  const usage: AiTokenUsage = new AiTokenUsage()
+  usage.promptTokens = readUsageNumber(raw, 'prompt_tokens')
+  usage.completionTokens = readUsageNumber(raw, 'completion_tokens')
+  usage.totalTokens = readUsageNumber(raw, 'total_tokens')
+  usage.cachedTokens = readUsageNumber(raw, 'prompt_cache_hit_tokens')
+  const detailsRaw: Object | undefined = raw['prompt_tokens_details']
+  if (detailsRaw !== undefined && detailsRaw !== null) {
+    const details: Record<string, Object> = detailsRaw as Record<string, Object>
+    const cached: number = readUsageNumber(details, 'cached_tokens')
+    if (cached > usage.cachedTokens) {
+      usage.cachedTokens = cached
+    }
+  }
+  if (usage.totalTokens === 0) {
+    usage.totalTokens = usage.promptTokens + usage.completionTokens
+  }
+  return usage
+}
+
+/**
+ * 安全读取 usage 中的数字字段（服务端可能给整数、浮点或字符串）。
+ *
+ * @param record - usage 对象
+ * @param key - 字段名
+ * @returns 非负数，缺失或非法时为 0
+ */
+function readUsageNumber(record: Record<string, Object>, key: string): number {
+  const value: Object | undefined = record[key]
+  if (typeof value === 'number') {
+    const num: number = value as number
+    return isNaN(num) || num < 0 ? 0 : Math.round(num)
+  }
+  if (typeof value === 'string') {
+    const parsed: number = Number(value as string)
+    return isNaN(parsed) || parsed < 0 ? 0 : Math.round(parsed)
+  }
+  return 0
 }
 
 /**

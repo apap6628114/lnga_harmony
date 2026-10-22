@@ -63,6 +63,7 @@ import {
   AI_TOOL_CATALOG,
   AiToolMeta,
   findAiToolMeta,
+  TOOL_REQUIRES_NONE,
   TOOL_REQUIRES_SEARCH,
   isAiToolEnabled
 } from '../../model/AiToolConfig'
@@ -2668,6 +2669,10 @@ export struct AiSettingsPanel {
    * @returns 状态文案
    */
   private toolStatus(meta: AiToolMeta): string {
+    // 无依赖的工具（如 get_context）与登录态无关，始终就绪
+    if (meta.requires === TOOL_REQUIRES_NONE) {
+      return '就绪'
+    }
     if (meta.requires === TOOL_REQUIRES_SEARCH) {
       const search: AiSearchProfile | null = appStore.settingsStore.getActiveAiSearchProfile()
       if (search === null) {

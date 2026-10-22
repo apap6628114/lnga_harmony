@@ -8,7 +8,15 @@
 import { isAiToolEnabled } from '../../../model/AiToolConfig'
 import { AiSearchProfile } from '../../../model/AiSearchConfig'
 import { AiToolDefinition } from '../AiProtocolTypes'
-import { AiToolAdapter, AiToolContext, AiToolResult, AiToolSource } from './AiToolAdapter'
+import {
+  AiToolAdapter,
+  AiToolContext,
+  AiToolResult,
+  AiToolSource,
+  TOOL_ERROR_BAD_ARGS,
+  TOOL_ERROR_UNAVAILABLE,
+  TOOL_ERROR_UPSTREAM
+} from './AiToolAdapter'
 import { aiSearchProviderRegistry } from '../search/SearchProviderRegistry'
 import { truncateFetchedContent } from '../DeepSeekToolsClient'
 import { WebFetchResponse } from '../search/AiSearchTypes'
@@ -102,6 +110,7 @@ export class WebFetchTool implements AiToolAdapter {
     result.summary = url
     if (url.length === 0) {
       result.success = false
+      result.errorCode = TOOL_ERROR_BAD_ARGS
       result.errorMessage = '网页地址为空'
       result.content = '抓取失败：没有提供网页地址。'
       return result
@@ -110,6 +119,7 @@ export class WebFetchTool implements AiToolAdapter {
     const search: AiSearchProfile | null = context.search
     if (search === null) {
       result.success = false
+      result.errorCode = TOOL_ERROR_UNAVAILABLE
       result.errorMessage = '未配置搜索服务'
       result.content = '抓取失败：未配置搜索服务，请先在 AI 配置中添加并激活搜索服务。'
       return result
@@ -120,6 +130,7 @@ export class WebFetchTool implements AiToolAdapter {
       .fetchPage(search, url)
     if (!response.success) {
       result.success = false
+      result.errorCode = TOOL_ERROR_UPSTREAM
       result.errorMessage = response.errorMessage
       result.content = '抓取「' + url + '」失败：' + response.errorMessage
       return result

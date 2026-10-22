@@ -30,6 +30,7 @@ import imageAnalyzerSessionUnitTest from './ImageAnalyzerSession.test';
 import columnLayoutUnitTest from './ColumnLayoutUnit.test';
 import sessionUnitTest from './SessionUnit.test';
 import aiUnitTest from './AiUnit.test';
+import aiToolContractTest from './AiToolContract.test';
 
 /**
  * 注册全部本地单元测试。
@@ -67,4 +68,5 @@ export default function testsuite(): void {
   columnLayoutUnitTest();
   sessionUnitTest();
   aiUnitTest();
+  aiToolContractTest();
 }

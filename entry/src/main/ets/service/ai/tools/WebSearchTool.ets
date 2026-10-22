@@ -8,7 +8,15 @@
 import { isAiToolEnabled } from '../../../model/AiToolConfig'
 import { AiSearchProfile } from '../../../model/AiSearchConfig'
 import { AiToolDefinition } from '../AiProtocolTypes'
-import { AiToolAdapter, AiToolContext, AiToolResult, AiToolSource } from './AiToolAdapter'
+import {
+  AiToolAdapter,
+  AiToolContext,
+  AiToolResult,
+  AiToolSource,
+  TOOL_ERROR_BAD_ARGS,
+  TOOL_ERROR_UNAVAILABLE,
+  TOOL_ERROR_UPSTREAM
+} from './AiToolAdapter'
 import { aiSearchProviderRegistry } from '../search/SearchProviderRegistry'
 import { WebSearchItem, WebSearchResponse } from '../search/AiSearchTypes'
 
@@ -116,6 +124,7 @@ export class WebSearchTool implements AiToolAdapter {
     result.summary = query
     if (query.length === 0) {
       result.success = false
+      result.errorCode = TOOL_ERROR_BAD_ARGS
       result.errorMessage = '搜索词为空'
       result.content = '搜索失败：没有可用的搜索关键词。'
       return result
@@ -124,6 +133,7 @@ export class WebSearchTool implements AiToolAdapter {
     const search: AiSearchProfile | null = context.search
     if (search === null) {
       result.success = false
+      result.errorCode = TOOL_ERROR_UNAVAILABLE
       result.errorMessage = '未配置搜索服务'
       result.content = '搜索失败：未配置搜索服务，请先在 AI 配置中添加并激活搜索服务。'
       return result
@@ -134,6 +144,7 @@ export class WebSearchTool implements AiToolAdapter {
       .search(search, query, count, fallbackQuery)
     if (!response.success) {
       result.success = false
+      result.errorCode = TOOL_ERROR_UPSTREAM
       result.errorMessage = response.errorMessage
       result.content = '搜索失败：' + response.errorMessage
       return result

@@ -10,8 +10,18 @@
  */
 
 import { AiToolDefinition } from '../../AiProtocolTypes'
-import { AiToolAdapter, AiToolCard, AiToolContext, AiToolResult } from '../AiToolAdapter'
+import {
+  AiToolAdapter,
+  AiToolCard,
+  AiToolContext,
+  AiToolResult,
+  TOOL_ERROR_BAD_ARGS,
+  TOOL_ERROR_EMPTY,
+  TOOL_ERROR_LOGIN_REQUIRED,
+  TOOL_ERROR_NOT_FOUND
+} from '../AiToolAdapter'
 import { isAiToolEnabled } from '../../../../model/AiToolConfig'
+import { appStore } from '../../../../store/AppStore'
 import {
   getUserActivityAnalysis,
   getUserProfile,
@@ -110,7 +120,7 @@ export class NgaGetMeTool implements AiToolAdapter {
       return loginRequiredResult()
     }
     if (context.selfUid.length === 0) {
-      return failedResult('拿不到当前登录账号的 UID，请提示用户重新登录后再试')
+      return failedResult('拿不到当前登录账号的 UID，请提示用户重新登录后再试', TOOL_ERROR_LOGIN_REQUIRED)
     }
     return fetchProfileResult(context.token, context.selfUid, true)
   }
@@ -179,7 +189,8 @@ export class NgaGetUserTool implements AiToolAdapter {
     if (username.length > 0 && readStringArg(args, 'uid').length === 0) {
       const resolved: string = await resolveUidByUsername(context.token, username)
       if (resolved.length === 0) {
-        return failedResult('没有找到用户「' + username + '」，可以先用 nga_search_user 搜索')
+        return failedResult('没有找到用户「' + username + '」，可以先用 nga_search_user 搜索',
+          TOOL_ERROR_NOT_FOUND)
       }
       return fetchProfileResult(context.token, resolved, false)
     }
@@ -254,13 +265,14 @@ export class NgaSearchUserTool implements AiToolAdapter {
       key = fallbackQuery.trim()
     }
     if (key.length === 0) {
-      return failedResult('缺少用户名关键词')
+      return failedResult('缺少用户名关键词', TOOL_ERROR_BAD_ARGS)
     }
     const limit: number = readIntArg(args, 'limit', 10, 1, 30)
     const fetched: SearchUserResult = await searchUser(context.token, key)
     const items: SearchUserItem[] = fetched.data
     if (items.length === 0) {
-      return failedResult(fetched.error.length > 0 ? fetched.error : '没有找到匹配的用户')
+      return failedResult(fetched.error.length > 0 ? fetched.error : '没有找到匹配的用户',
+        TOOL_ERROR_NOT_FOUND)
     }
     const count: number = Math.min(limit, items.length)
     let content: string = '用户搜索「' + key + '」共 ' + items.length.toString() + ' 个结果：\n'
@@ -352,7 +364,7 @@ export class NgaUserActivityTool implements AiToolAdapter {
       // 接口失败时底层会返回"空统计"而不是 null，直接说"0 帖"会误导，
       // 这里统一按"没读到记录"处理，并给出可重试/换目标的方向。
       return failedResult('没有读到该用户的活跃记录：可能是官方接口返回为空、该账号没有公开记录，或数据量太少。' +
-        '可以稍后重试，或确认 UID 是否正确。')
+        '可以稍后重试，或确认 UID 是否正确。', TOOL_ERROR_EMPTY)
     }
 
     let content: string = '用户 uid=' + uid
@@ -423,16 +435,28 @@ export class NgaUserActivityTool implements AiToolAdapter {
 /**
  * 拉取用户资料并整理为工具结果。
  *
+ * 优先走 `ProfileStore` 的 5 分钟 LRU（UI 侧资料卡用的是同一份缓存）：
+ * 用户刚看过的资料不会再向 NGA 请求一次，既省流量也降低风控压力。
+ * 缓存层取不到时（未登录 / 刷新失败）再回退到直连接口。
+ *
  * @param token - 会话令牌
  * @param uid - 用户 UID
  * @param isSelf - 是否当前登录账号
  * @returns 工具结果
  */
 async function fetchProfileResult(token: string, uid: string, isSelf: boolean): Promise<AiToolResult> {
-  const fetched: UserProfileResult = await getUserProfile(token, uid)
-  const profile: ProfileData | null = fetched.data
+  let profile: ProfileData | null = null
+  try {
+    profile = await appStore.profileStore.loadProfileForTool(uid)
+  } catch (e) {
+    profile = null
+  }
   if (profile === null) {
-    return failedResult(fetched.error.length > 0 ? fetched.error : '没有取到用户资料')
+    const fetched: UserProfileResult = await getUserProfile(token, uid)
+    profile = fetched.data
+    if (profile === null) {
+      return failedResult(fetched.error.length > 0 ? fetched.error : '没有取到用户资料')
+    }
   }
 
   let content: string = '用户「' + profile.userName + '」（uid=' + profile.uid + '）'

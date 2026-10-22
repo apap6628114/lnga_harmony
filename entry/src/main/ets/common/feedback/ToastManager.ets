@@ -272,7 +272,7 @@ export class ToastManager {
     this.content = null
     this.isOpen = false
     this.releaseUnopenedContent(failed)
-    logger.warn('打开 Toast 浮层失败%s: %{public}s', isRetry ? '（不再重试）' : '', formatError(err))
+    logger.warn('打开 Toast 浮层失败%{public}s: %{public}s', isRetry ? '（不再重试）' : '', formatError(err))
 
     if (isRetry) {
       // 重试用尽：本次展示彻底失败，状态不能留在"正在显示"上

@@ -52,6 +52,26 @@ export class AiToolCard {
   params: string = ''
 }
 
+/**
+ * 工具失败原因分类（对齐 MCP `isError` 的语义：能区分"重试有用"与"重试无用"）。
+ *
+ * 仅供客户端与后续 Agent 策略使用；模型侧仍以 `content` 里的可读文本为准，
+ * 因此这里填错不会改变模型行为，只会让统计与重试策略变形。
+ */
+export const TOOL_ERROR_BAD_ARGS: string = 'bad_args'
+/** 缺少登录态 */
+export const TOOL_ERROR_LOGIN_REQUIRED: string = 'login_required'
+/** 目标不存在（用户 / 帖子 / 版块查不到） */
+export const TOOL_ERROR_NOT_FOUND: string = 'not_found'
+/** 被服务端限流（可退避后重试） */
+export const TOOL_ERROR_RATE_LIMITED: string = 'rate_limited'
+/** 上游接口失败（网络 / 5xx / 解析异常） */
+export const TOOL_ERROR_UPSTREAM: string = 'upstream_error'
+/** 工具本身在当前上下文不可用（未启用 / 依赖缺失） */
+export const TOOL_ERROR_UNAVAILABLE: string = 'unavailable'
+/** 调用成功但结果为空 */
+export const TOOL_ERROR_EMPTY: string = 'empty_result'
+
 /** 工具结果中的引用来源。 */
 export class AiToolSource {
   /** 来源标题 */
@@ -77,6 +97,8 @@ export class AiToolResult {
   count: number = 0
   /** 错误信息 */
   errorMessage: string = ''
+  /** 失败分类（TOOL_ERROR_*；成功时为空串） */
+  errorCode: string = ''
   /** 引用来源列表 */
   sources: AiToolSource[] = []
   /** 可点击卡片（帖子 / 版块 / 用户） */
@@ -147,8 +169,12 @@ export class AiToolInvocation {
   count: number = 0
   /** 耗时（毫秒） */
   durationMs: number = 0
+  /** 回传给模型的正文长度（字符数，用于上下文预算核算） */
+  contentChars: number = 0
   /** 错误信息 */
   errorMessage: string = ''
+  /** 失败分类（TOOL_ERROR_*；成功时为空串） */
+  errorCode: string = ''
   /** 引用来源 */
   sources: AiToolSource[] = []
   /** 可点击卡片（帖子 / 版块 / 用户） */

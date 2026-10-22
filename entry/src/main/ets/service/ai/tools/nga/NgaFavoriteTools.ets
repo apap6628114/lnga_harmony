@@ -5,7 +5,12 @@
  */
 
 import { AiToolDefinition } from '../../AiProtocolTypes'
-import { AiToolAdapter, AiToolContext, AiToolResult } from '../AiToolAdapter'
+import {
+  AiToolAdapter,
+  AiToolContext,
+  AiToolResult,
+  TOOL_ERROR_EMPTY
+} from '../AiToolAdapter'
 import { isAiToolEnabled } from '../../../../model/AiToolConfig'
 import { createTopicListParams } from '../../../api/ForumApi'
 import type { TopicListParams } from '../../../api/ForumApi'
@@ -110,7 +115,7 @@ export class NgaListFavoritesTool implements AiToolAdapter {
     const fetched: FavoriteFolderListResult = await fetchFavoriteTopicFolders(token)
     const folders: FavoriteTopicFolder[] = fetched.data
     if (folders.length === 0) {
-      return failedResult(fetched.error.length > 0 ? fetched.error : '没有收藏夹')
+      return failedResult(fetched.error.length > 0 ? fetched.error : '没有收藏夹', TOOL_ERROR_EMPTY)
     }
     let content: string = '收藏夹（共 ' + folders.length.toString() + ' 个）：\n'
     for (let i: number = 0; i < folders.length; i++) {

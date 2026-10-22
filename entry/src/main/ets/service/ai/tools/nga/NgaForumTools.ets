@@ -6,7 +6,15 @@
  */
 
 import { AiToolDefinition } from '../../AiProtocolTypes'
-import { AiToolAdapter, AiToolCard, AiToolContext, AiToolResult } from '../AiToolAdapter'
+import {
+  AiToolAdapter,
+  AiToolCard,
+  AiToolContext,
+  AiToolResult,
+  TOOL_ERROR_BAD_ARGS,
+  TOOL_ERROR_EMPTY,
+  TOOL_ERROR_NOT_FOUND
+} from '../AiToolAdapter'
 import { isAiToolEnabled } from '../../../../model/AiToolConfig'
 import { getForumCategories, searchForum } from '../../../api/ForumApi'
 import { fetchForumFavorites } from '../../../api/FavoriteApi'
@@ -119,7 +127,7 @@ export class NgaListForumsTool implements AiToolAdapter {
     const boards: FavBoardItem[] = fetched.data
     if (boards.length === 0) {
       return failedResult(fetched.error.length > 0 ? fetched.error :
-        '用户没有收藏任何版面。可以改用 nga_search_forum 按名称查找版块')
+        '用户没有收藏任何版面。可以改用 nga_search_forum 按名称查找版块', TOOL_ERROR_EMPTY)
     }
     const count: number = Math.min(limit, boards.length)
     let content: string = '收藏版面（共 ' + boards.length.toString() + ' 个）：\n'
@@ -150,7 +158,8 @@ export class NgaListForumsTool implements AiToolAdapter {
     const fetched: CategoriesResult = await getForumCategories(token)
     const categories: Category[] = fetched.data
     if (categories.length === 0) {
-      return failedResult(fetched.error.length > 0 ? fetched.error : '没有取到版块分类')
+      return failedResult(fetched.error.length > 0 ? fetched.error : '没有取到版块分类',
+        TOOL_ERROR_EMPTY)
     }
     let content: string = '版块分类：\n'
     const cards: AiToolCard[] = []
@@ -252,12 +261,13 @@ export class NgaSearchForumTool implements AiToolAdapter {
       key = fallbackQuery.trim()
     }
     if (key.length === 0) {
-      return failedResult('缺少版块关键词')
+      return failedResult('缺少版块关键词', TOOL_ERROR_BAD_ARGS)
     }
     const fetched: SearchForumResult = await searchForum(context.token, key)
     const items: ForumSearchItem[] = fetched.data
     if (items.length === 0) {
-      return failedResult(fetched.error.length > 0 ? fetched.error : '没有找到匹配的版块')
+      return failedResult(fetched.error.length > 0 ? fetched.error : '没有找到匹配的版块',
+        TOOL_ERROR_NOT_FOUND)
     }
     let content: string = '版块搜索「' + key + '」共 ' + items.length.toString() + ' 个结果：\n'
     const cards: AiToolCard[] = []

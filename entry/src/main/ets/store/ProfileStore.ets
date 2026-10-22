@@ -109,6 +109,28 @@ export class ProfileStore extends BaseStore<Object> {
     }, hasFreshCache && hasLikeCount ? ProfileStore.REFRESH_DELAY : 0)
   }
 
+  /**
+   * 按需读取用户资料（供非 UI 调用方使用，例如 AI 工具）。
+   *
+   * 与 `getCachedProfile` 的差别：这里是 `await` 语义——新鲜缓存直接返回；
+   * 过期或缺失时**同步等待一次刷新**，刷新失败则回退到过期值。
+   * 目的是让"刚在资料卡看过的用户"不再被 AI 工具重复请求一次接口。
+   *
+   * @param uid - 目标用户 ID
+   * @returns 资料；取不到时返回 null
+   */
+  async loadProfileForTool(uid: string): Promise<ProfileData | null> {
+    if (uid.length === 0) return null
+    if (this.cache.isFresh(uid)) {
+      const fresh: ProfileData | undefined = this.cache.get(uid)
+      if (fresh !== undefined) return fresh
+    }
+    const stale: ProfileData | undefined = this.cache.getWithStale(uid).value
+    const refreshed: ProfileData | null = await this.doRefreshProfile(uid)
+    if (refreshed !== null) return refreshed
+    return stale !== undefined ? stale : null
+  }
+
   private async doRefreshProfile(uid: string): Promise<ProfileData | null> {
     if (!this.auth.isAuthenticated) return null
     const scope: AuthScope = AuthScope.capture(this.auth, this.generationGuard.current())

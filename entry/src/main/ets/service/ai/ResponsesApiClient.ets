@@ -15,6 +15,7 @@ import { util } from '@kit.ArkTS'
 import { AiProviderProfile } from '../../model/AiConfig'
 import { buildChatUrl, extractServerError } from './AiEndpoint'
 import {
+  AiTokenUsage,
   AiToolDefinition,
   ChatMessage,
   ChatStreamChunkCallback,
@@ -68,6 +69,8 @@ class ResponsesEventParser {
   private status: string = ''
   /** 未完成的 function_call 累积表。 */
   private pendingCalls: PendingFunctionCall[] = []
+  /** 服务端返回的 token 用量。 */
+  private usage: AiTokenUsage = new AiTokenUsage()
 
   /**
    * 追加响应文本并解析完整事件块。
@@ -300,6 +303,10 @@ class ResponsesEventParser {
     if (status.length > 0) {
       this.status = status
     }
+    const usageRaw: Object | undefined = response['usage']
+    if (usageRaw !== undefined && usageRaw !== null) {
+      this.usage = parseResponsesUsage(usageRaw as Record<string, Object>)
+    }
     // 兜底：delta 丢失时从完整 output 提取正文
     const fullText: string = extractOutputText(this.outputItems)
     if (fullText.length > this.text.length) {
@@ -379,6 +386,15 @@ class ResponsesEventParser {
    */
   getText(): string {
     return this.text
+  }
+
+  /**
+   * 获取 token 用量。
+   *
+   * @returns 用量（服务端未返回时为空用量）
+   */
+  getUsage(): AiTokenUsage {
+    return this.usage
   }
 
   /**
@@ -628,6 +644,7 @@ function streamResponses(
           result.outputItems = parser.getOutputItems()
           result.status = parser.getStatus()
           result.truncated = parser.getStatus() === 'incomplete'
+          result.usage = parser.getUsage()
           resolveOnce(result)
         } catch (err) {
           const e: Error = err as Error
@@ -817,7 +834,55 @@ function parseResponsesJson(responseText: string): ChatTurnResult {
   result.toolCalls = extractToolCalls(result.outputItems)
   result.status = readString(json, 'status')
   result.truncated = result.status === 'incomplete'
+  const usageRaw: Object | undefined = json['usage']
+  if (usageRaw !== undefined && usageRaw !== null) {
+    result.usage = parseResponsesUsage(usageRaw as Record<string, Object>)
+  }
   return result
+}
+
+/**
+ * 解析 Responses 的 usage 对象。
+ *
+ * 字段名与 Chat Completions 不同：`input_tokens` / `output_tokens`，
+ * 缓存命中在 `input_tokens_details.cached_tokens`。
+ *
+ * @param raw - usage 对象
+ * @returns 用量
+ */
+function parseResponsesUsage(raw: Record<string, Object>): AiTokenUsage {
+  const usage: AiTokenUsage = new AiTokenUsage()
+  usage.promptTokens = readUsageNumber(raw, 'input_tokens')
+  usage.completionTokens = readUsageNumber(raw, 'output_tokens')
+  usage.totalTokens = readUsageNumber(raw, 'total_tokens')
+  const detailsRaw: Object | undefined = raw['input_tokens_details']
+  if (detailsRaw !== undefined && detailsRaw !== null) {
+    usage.cachedTokens = readUsageNumber(detailsRaw as Record<string, Object>, 'cached_tokens')
+  }
+  if (usage.totalTokens === 0) {
+    usage.totalTokens = usage.promptTokens + usage.completionTokens
+  }
+  return usage
+}
+
+/**
+ * 安全读取 usage 中的数字字段（服务端可能给整数、浮点或字符串）。
+ *
+ * @param record - usage 对象
+ * @param key - 字段名
+ * @returns 非负数，缺失或非法时为 0
+ */
+function readUsageNumber(record: Record<string, Object>, key: string): number {
+  const value: Object | undefined = record[key]
+  if (typeof value === 'number') {
+    const num: number = value as number
+    return isNaN(num) || num < 0 ? 0 : Math.round(num)
+  }
+  if (typeof value === 'string') {
+    const parsed: number = Number(value as string)
+    return isNaN(parsed) || parsed < 0 ? 0 : Math.round(parsed)
+  }
+  return 0
 }
 
 /**

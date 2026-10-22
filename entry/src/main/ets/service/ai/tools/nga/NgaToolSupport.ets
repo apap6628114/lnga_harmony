@@ -5,7 +5,13 @@
  * 不包含任何具体业务逻辑；每个工具各自负责取数与裁剪。
  */
 
-import { AiToolCard, AiToolContext, AiToolResult } from '../AiToolAdapter'
+import {
+  AiToolCard,
+  AiToolContext,
+  AiToolResult,
+  TOOL_ERROR_BAD_ARGS,
+  TOOL_ERROR_LOGIN_REQUIRED
+} from '../AiToolAdapter'
 import { getCachedBBNodes } from '../../../../parser/bbcode/BBCodeCache'
 import { bbNodesToPlainText, formatTimestampCST } from '../../../../common/utils/Utils'
 
@@ -149,6 +155,7 @@ export function formatToolTime(timestamp: number): string {
 export function loginRequiredResult(): AiToolResult {
   const result: AiToolResult = new AiToolResult()
   result.success = false
+  result.errorCode = TOOL_ERROR_LOGIN_REQUIRED
   result.errorMessage = '未登录'
   result.content = '无法读取 NGA 数据：当前未登录。请提示用户先登录后重试，不要臆测内容。'
   return result
@@ -158,11 +165,13 @@ export function loginRequiredResult(): AiToolResult {
  * 构造失败结果。
  *
  * @param message - 给模型看的失败原因
+ * @param code - 失败分类（TOOL_ERROR_*），缺省按上游接口失败处理
  * @returns 失败结果
  */
-export function failedResult(message: string): AiToolResult {
+export function failedResult(message: string, code: string = ''): AiToolResult {
   const result: AiToolResult = new AiToolResult()
   result.success = false
+  result.errorCode = code
   result.errorMessage = message
   result.content = '工具执行失败：' + message
   return result
@@ -372,6 +381,7 @@ export function resolveTargetUid(context: AiToolContext, args: Record<string, Ob
 export function missingUserResult(): AiToolResult {
   const result: AiToolResult = new AiToolResult()
   result.success = false
+  result.errorCode = TOOL_ERROR_BAD_ARGS
   result.errorMessage = '缺少用户标识'
   result.content = '缺少用户标识。可以：\n' +
     '1. 传 uid；\n' +

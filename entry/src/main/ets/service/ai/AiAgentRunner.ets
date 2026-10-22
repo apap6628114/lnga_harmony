@@ -13,6 +13,7 @@
 import { AiProviderProfile } from '../../model/AiConfig'
 import { aiToolTitle } from '../../model/AiToolConfig'
 import {
+  AiTokenUsage,
   ChatMessage,
   ChatStreamChunkCallback,
   ChatTurnOptions,
@@ -76,6 +77,8 @@ export class AiAgentResult {
   truncated: boolean = false
   /** 是否因工具轮数上限被强制收尾 */
   hitStepLimit: boolean = false
+  /** 整个 Agent 循环累计的 token 用量（各轮之和） */
+  usage: AiTokenUsage = new AiTokenUsage()
 }
 
 /**
@@ -103,6 +106,8 @@ export async function runAiAgent(
 
   let step: number = 0
   let hitLimit: boolean = false
+  /** 回传给模型的所有工具输出总字符数（上下文预算核算用） */
+  let toolChars: number = 0
 
   while (true) {
     if (isCancelled(options.canceller)) {
@@ -126,6 +131,9 @@ export async function runAiAgent(
 
     if (turn.truncated) {
       result.truncated = true
+    }
+    if (!turn.usage.isEmpty()) {
+      result.usage.add(turn.usage)
     }
     if (turn.text.length > 0) {
       result.text += turn.text
@@ -160,6 +168,8 @@ export async function runAiAgent(
       invocation.status = toolResult.success ? 'success' : 'failed'
       invocation.count = toolResult.count
       invocation.errorMessage = toolResult.errorMessage
+      invocation.errorCode = toolResult.errorCode
+      invocation.contentChars = toolResult.content.length
       invocation.sources = toolResult.sources
       invocation.cards = toolResult.cards
       if (toolResult.summary.length > 0) {
@@ -167,6 +177,7 @@ export async function runAiAgent(
       }
       options.onToolInvocation(invocation)
       result.toolInvocations.push(invocation)
+      toolChars += invocation.contentChars
       appendSources(result.sources, sourceKeys, toolResult.sources)
       appendCards(result.cards, cardKeys, toolResult.cards)
 
@@ -181,8 +192,14 @@ export async function runAiAgent(
 
   result.steps = step
   result.hitStepLimit = hitLimit
-  logger.info('runAiAgent done: steps=%d, tools=%d, cards=%d, text=%d chars, limit=%s',
-    step, result.toolInvocations.length, result.cards.length, result.text.length, String(hitLimit))
+  logger.info('runAiAgent done: steps=%{public}d, tools=%{public}d, cards=%{public}d, text=%{public}d chars, toolChars=%{public}d, limit=%{public}s',
+    step, result.toolInvocations.length, result.cards.length, result.text.length, toolChars,
+    String(hitLimit))
+  if (!result.usage.isEmpty()) {
+    logger.info('runAiAgent usage: prompt=%{public}d, completion=%{public}d, cached=%{public}d, total=%{public}d',
+      result.usage.promptTokens, result.usage.completionTokens, result.usage.cachedTokens,
+      result.usage.totalTokens)
+  }
   return result
 }
 

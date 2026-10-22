@@ -14,6 +14,8 @@ import { AiProviderProfile, DEFAULT_AI_MAX_AGENT_STEPS, clampAgentSteps } from '
 
 /** 工具分类。 */
 export enum AiToolCategory {
+  /** 对话上下文（页面标识、工具可用性），不发起网络请求 */
+  CONTEXT = 'context',
   /** NGA 站内能力（读帖、翻版块、查用户等） */
   NGA = 'nga',
   /** 联网能力（搜索 / 抓取） */
@@ -36,7 +38,7 @@ export const TOOL_REQUIRES_SEARCH: string = 'search'
 export interface AiToolMeta {
   /** 工具名称（function.name） */
   name: string
-  /** UI 展示名 */
+  /** UI 展示名（同时作为工具定义的 title） */
   title: string
   /** UI 说明 */
   description: string
@@ -48,6 +50,21 @@ export interface AiToolMeta {
   requirementHint: string
   /** 首次运行时的默认开关 */
   defaultEnabled: boolean
+  /**
+   * 是否只读（缺省 true）。
+   *
+   * 写操作工具必须显式写 false：Agent 层据此决定是否需要用户确认，
+   * 也是"AI 不开放写操作"这条约束在元数据上的落点。
+   */
+  readOnly?: boolean
+  /**
+   * 是否幂等（缺省 true）：同参数重复调用无副作用，可安全重试 / 合并请求。
+   */
+  idempotent?: boolean
+  /**
+   * 是否开放世界（缺省 false）：结果依赖站外或实时数据，缓存价值低。
+   */
+  openWorld?: boolean
 }
 
 /**
@@ -69,6 +86,15 @@ export class AiToolSettings {
 
 /** 工具目录：全部内置工具的元数据（顺序即 UI 展示顺序）。 */
 export const AI_TOOL_CATALOG: AiToolMeta[] = [
+  {
+    name: 'get_context',
+    title: '当前上下文',
+    description: '读取本次对话所在的帖子 / 用户 / 版块标识，以及当前可用与不可用的工具清单（零参数）',
+    category: AiToolCategory.CONTEXT,
+    requires: TOOL_REQUIRES_NONE,
+    requirementHint: '',
+    defaultEnabled: true
+  },
   {
     name: 'nga_get_me',
     title: '我的账号',
@@ -166,7 +192,8 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
     category: AiToolCategory.WEB,
     requires: TOOL_REQUIRES_SEARCH,
     requirementHint: '需要先在「搜索服务」中配置密钥',
-    defaultEnabled: true
+    defaultEnabled: true,
+    openWorld: true
   },
   {
     name: 'web_fetch',
@@ -175,7 +202,8 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
     category: AiToolCategory.WEB,
     requires: TOOL_REQUIRES_SEARCH,
     requirementHint: '需要先在「搜索服务」中配置密钥',
-    defaultEnabled: true
+    defaultEnabled: true,
+    openWorld: true
   }
 ]
 
