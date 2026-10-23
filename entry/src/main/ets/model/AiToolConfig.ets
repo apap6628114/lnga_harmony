@@ -114,12 +114,57 @@ export class AiToolSettings {
   maxAgentSteps: number = DEFAULT_AI_MAX_AGENT_STEPS
 }
 
+/**
+ * 元工具：由客户端在 Agent 循环内部消费、不取站外数据、不需要任务白名单。
+ *
+ * 目前只有 `expand_tool_result`：它是「工具结果被上下文预算截断」时的续读入口，
+ * 必须始终可用，否则截断就退化成永久丢信息。是否暴露仍受全局工具开关约束。
+ */
+const META_TOOL_NAMES: string[] = ['expand_tool_result']
+
+/**
+ * 判断是否为元工具。
+ *
+ * @param name - 工具名
+ * @returns true 表示元工具
+ */
+export function isMetaTool(name: string): boolean {
+  return META_TOOL_NAMES.indexOf(name) >= 0
+}
+
+/**
+ * 可由任务白名单挑选的工具（排除元工具）。
+ *
+ * 元工具始终可用，不应出现在「任务可用工具」多选里——让用户以为能关掉它，
+ * 比不展示更糟。
+ *
+ * @returns 工具目录副本
+ */
+export function listTaskToolCatalog(): AiToolMeta[] {
+  const result: AiToolMeta[] = []
+  for (let i: number = 0; i < AI_TOOL_CATALOG.length; i++) {
+    if (!isMetaTool(AI_TOOL_CATALOG[i].name)) {
+      result.push(AI_TOOL_CATALOG[i])
+    }
+  }
+  return result
+}
+
 /** 工具目录：全部内置工具的元数据（顺序即 UI 展示顺序）。 */
 export const AI_TOOL_CATALOG: AiToolMeta[] = [
   {
     name: 'get_context',
     title: '当前上下文',
     description: '读取本次对话所在的帖子 / 用户 / 版块标识，以及当前可用与不可用的工具清单（零参数）',
+    category: AiToolCategory.CONTEXT,
+    requires: TOOL_REQUIRES_NONE,
+    requirementHint: '',
+    defaultEnabled: true
+  },
+  {
+    name: 'expand_tool_result',
+    title: '续读工具结果',
+    description: '按 result_id 续读一条因上下文预算被截断的工具结果（大结果外置，需要时再取，不丢信息）',
     category: AiToolCategory.CONTEXT,
     requires: TOOL_REQUIRES_NONE,
     requirementHint: '',

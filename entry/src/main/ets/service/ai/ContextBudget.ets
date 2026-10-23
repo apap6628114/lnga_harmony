@@ -28,7 +28,7 @@
  * 窗口按三级取值：用户配置 > 已知模型表 > 假设 128K（见 `model/AiModelContextWindows.ets`）。
  */
 
-import { ChatMessage } from './AiProtocolTypes'
+import { AiToolDefinition, ChatMessage } from './AiProtocolTypes'
 import {
   TOKEN_CALIBRATION_MAX,
   TOKEN_CALIBRATION_MIN,
@@ -59,7 +59,7 @@ export const HISTORY_TRIGGER_RATIO: number = 0.95
 export const KEEP_RECENT_TURNS: number = 4
 
 /** 折叠说明里最多列出多少条旧问题。 */
-export const MAX_FOLDED_QUESTIONS: number = 6
+export const MAX_FOLDED_QUESTIONS: number = 12
 
 /** 折叠说明里单条问题的最大长度。 */
 const FOLDED_QUESTION_MAX: number = 60
@@ -91,7 +91,7 @@ const OUTPUT_RESERVE_RATIO: number = 0.12
 const MAX_RESERVE_RATIO: number = 0.5
 
 /** 单条工具结果压缩后至少保留的 token 数（不能让模型拿到空内容）。 */
-export const MIN_TOOL_RESULT_TOKENS: number = 200
+export const MIN_TOOL_RESULT_TOKENS: number = 128
 
 /** 校准的指数移动平均系数：0.3 表示新样本占三成，收敛快但不被单次异常带偏。 */
 const CALIBRATION_ALPHA: number = 0.3
@@ -188,12 +188,43 @@ export class ContextUsage {
   historyTokens: number = 0
   /** 工具结果估算（token） */
   toolTokens: number = 0
+  /**
+   * 工具声明（tools schema）估算（token）。
+   *
+   * 它不随对话变化，但确实占输入窗口；漏掉它会让"离压缩还有多远"偏乐观。
+   */
+  toolSchemaTokens: number = 0
   /** 被折叠/压缩的轮数 */
   foldedTurns: number = 0
   /** 是否发生了历史裁剪 */
   historyTruncated: boolean = false
   /** 是否有工具结果被压缩 */
   toolCompressed: boolean = false
+  /** 本轮服务端返回的输入 token（真实值；未返回时为 0） */
+  promptTokens: number = 0
+  /** 本轮命中前缀缓存的输入 token */
+  cachedTokens: number = 0
+  /** 服务端是否真的报告了缓存字段（决定能不能展示 0%） */
+  cacheReported: boolean = false
+
+  /**
+   * 前缀缓存命中率（0..1）。
+   *
+   * 这是"上下文前缀是否稳定"的唯一量化依据：命中率高说明历史只追加、
+   * system / tools 没有逐轮变化；掉下来通常意味着压缩、任务切换或动态内容混进了前缀。
+   *
+   * @returns 命中率；服务端没有报告缓存字段或没有真实用量时返回 -1（表示未知）
+   */
+  cacheHitRatio(): number {
+    if (!this.cacheReported || this.promptTokens <= 0) {
+      return -1
+    }
+    const ratio: number = this.cachedTokens / this.promptTokens
+    if (ratio < 0) {
+      return 0
+    }
+    return ratio > 1 ? 1 : ratio
+  }
 
   /**
    * 已占用的总 token。
@@ -201,7 +232,7 @@ export class ContextUsage {
    * @returns system + 历史 + 工具结果
    */
   usedTokens(): number {
-    return this.systemTokens + this.historyTokens + this.toolTokens
+    return this.systemTokens + this.historyTokens + this.toolTokens + this.toolSchemaTokens
   }
 
   /**
@@ -271,7 +302,21 @@ export function estimateMessageTokens(message: ChatMessage): number {
   if (message.name !== undefined && message.name.length > 0) {
     tokens += estimateTextTokens(message.name)
   }
-  if (message.reasoning !== undefined && message.reasoning.length > 0) {
+  if (message.toolCalls !== undefined && message.toolCalls.length > 0) {
+    for (let i: number = 0; i < message.toolCalls.length; i++) {
+      tokens += estimateTextTokens(message.toolCalls[i].function.name)
+      tokens += estimateTextTokens(message.toolCalls[i].function.arguments)
+    }
+  }
+  /*
+   * reasoning 的处理按协议区分：
+   * - Chat Completions 不回传 reasoning（`serializeMessages` 只发 role/content/tool_calls），
+   *   算进去会让水位虚高、压缩提前；
+   * - Responses 会把 assistant 的 outputItems 原样回传，reasoning 确实占输入。
+   * `outputItems` 非空就是 Responses 消息，此时才计入。
+   */
+  if (message.reasoning !== undefined && message.reasoning.length > 0 &&
+    message.outputItems !== undefined && message.outputItems.length > 0) {
     tokens += estimateTextTokens(message.reasoning)
   }
   return tokens
@@ -289,6 +334,66 @@ export function estimateConversationTokens(messages: ChatMessage[]): number {
     total += estimateMessageTokens(messages[i])
   }
   return total
+}
+
+/**
+ * 估算工具声明（tools schema）占用的 token。
+ *
+ * 旧实现只统计消息，工具 schema（十几个工具的 name / description / parameters）
+ * 约 2–4K token，全部被漏掉；预算因此偏乐观，工具结果把总量推过窗口时才发现。
+ * 序列化口径与 `OpenAiChatClient.serializeTools` 对齐，避免"算的和发的不是一个东西"。
+ *
+ * @param tools - 工具定义
+ * @returns 估算 token 数（无工具时为 0）
+ */
+export function estimateToolDefinitionsTokens(tools: AiToolDefinition[]): number {
+  if (tools.length === 0) {
+    return 0
+  }
+  let total: number = 0
+  for (let i: number = 0; i < tools.length; i++) {
+    const tool: AiToolDefinition = tools[i]
+    total += MESSAGE_TOKEN_OVERHEAD
+    total += estimateTextTokens(tool.name)
+    total += estimateTextTokens(tool.description)
+    total += estimateTextTokens(JSON.stringify(tool.parameters))
+  }
+  return total
+}
+
+/**
+ * 判断异常是否为「输入超出模型上下文窗口」。
+ *
+ * 为什么必须单独识别：这是唯一一种**客户端可以自愈**的失败——本地估算偏乐观、
+ * 工具 schema 或服务端模板比预估更大时，真实请求会超窗。旧实现直接把它当普通
+ * 400 抛给用户，整轮对话丢失；识别出来后可以强制压缩再重试一次。
+ *
+ * 只匹配服务商的明确措辞，避免把普通的参数错误（同样 400）误判成超窗、
+ * 触发一次没有意义的压缩重试。
+ *
+ * @param message - 异常消息（格式 `<状态码>\n<服务端详情>`）
+ * @returns true 表示是上下文超窗
+ */
+export function isContextOverflowError(message: string): boolean {
+  const text: string = message.toLowerCase()
+  const patterns: string[] = [
+    'context_length_exceeded',
+    'maximum context length',
+    'too many tokens',
+    'prompt is too long',
+    'input is too long',
+    'reduce the length',
+    '上下文长度',
+    '超出上下文',
+    '上下文超出',
+    'tokens 超过'
+  ]
+  for (let i: number = 0; i < patterns.length; i++) {
+    if (text.indexOf(patterns[i]) >= 0) {
+      return true
+    }
+  }
+  return false
 }
 
 /**
@@ -388,25 +493,85 @@ export function resolveToolResultBudget(historyBudget: number): number {
 }
 
 /**
+ * 由模型窗口与校准系数推导历史预算。
+ *
+ * 校准系数是 `真实 promptTokens / 本地估算`：<1 表示我们高估，可以放宽预算；
+ * >1 表示低估，要收紧。**但放宽不能突破窗口安全线**——旧实现直接
+ * `rawBudget / 0.7`，1M 窗口会算出 1.25M 的预算，主动制造超窗。
+ *
+ * 安全上限只扣最小输出预留（4096 或窗口一半），而不是完整 12% 预留：
+ * 这样校准仍能带来有限的放宽收益（最多从 88% 放宽到约 99.6%），又不会过窗。
+ *
+ * @param contextWindow - 模型窗口（0 表示未知）
+ * @param calibration - 校准系数（非法值按 1 处理）
+ * @returns 历史可用预算 token 数
+ */
+export function resolveCalibratedBudget(contextWindow: number, calibration: number): number {
+  const window: number = contextWindow > 0 ? contextWindow : ASSUMED_CONTEXT_WINDOW
+  const rawBudget: number = resolveHistoryBudget(contextWindow)
+  const factor: number = calibration > 0 && isFinite(calibration) ? calibration : 1
+  const widened: number = Math.floor(rawBudget / factor)
+  const minReserve: number = Math.min(MIN_OUTPUT_TOKEN_RESERVE, Math.floor(window * 0.5))
+  const hardMax: number = Math.max(1, window - minReserve)
+  const capped: number = widened < hardMax ? widened : hardMax
+  /* 下限也不能超过窗口本身：小窗口（<8K）下 4096 的绝对下限会直接超窗 */
+  const floorBudget: number = Math.min(MIN_OUTPUT_TOKEN_RESERVE, Math.floor(window * 0.5))
+  return Math.max(floorBudget, capped)
+}
+
+/**
  * 按 token 上限压缩一条工具结果。
  *
- * 超限时截断并追加"可再读"提示：客户端有 `ToolResultCache`，模型用同样的参数
- * 重新调用不会重复请求，因此截断是可恢复的信息损失，而不是永久丢失。
+ * 超限时截断并追加"如何取回剩余部分"的说明。两种模式：
+ * - 传了 `archiveId`：完整结果已由调用方存入 `ToolResultArchive`，尾注给出
+ *   result_id 与续读偏移，模型调用 `expand_tool_result` 就能拿到后半段；
+ * - 没传：退回旧文案（同参数重调），仅作为没有归档能力时的兜底。
+ *
+ * 尾注本身会占用预算，因此先预留一小段再截断正文——否则"截断 + 说明"会超出
+ * 本轮剩余额度，让本来就已经吃紧的请求直接超窗。
  *
  * @param content - 工具结果原文
  * @param maxTokens - 允许的最大 token 数（<=0 表示不限）
+ * @param archiveId - 完整结果的归档 ID（空串表示未归档）
  * @returns 压缩结果
  */
-export function fitToolResultContent(content: string, maxTokens: number): ToolContentFit {
+export function fitToolResultContent(content: string, maxTokens: number,
+  archiveId?: string): ToolContentFit {
   const fit: ToolContentFit = new ToolContentFit()
   fit.text = content
   fit.originalTokens = estimateTextTokens(content)
   if (maxTokens <= 0 || fit.originalTokens <= maxTokens) {
     return fit
   }
-  const limited: string = sliceByTokens(content, Math.max(MIN_TOOL_RESULT_TOKENS, maxTokens))
-  fit.text = limited + '\n\n（以上内容已按本轮上下文预算压缩。需要剩余部分时，' +
-    '请用相同参数再次调用该工具——客户端有缓存，不会重复请求。）'
+  const archived: boolean = archiveId !== undefined && archiveId.length > 0
+  // 预留尾注：归档模式约 160 token（含 result_id 与续读指引），兜底模式约 70 token
+  const hintReserve: number = archived ? 160 : 70
+  /*
+   * 剩余额度连「最小正文 + 尾注」都放不下时，不再塞正文：整条结果只放
+   * 一句外置说明。否则 128 正文 + 160 尾注反而把已经贴窗口的请求推过上限，
+   * 与「防超窗」的目的相反。
+   */
+  if (archived && maxTokens <= hintReserve + MIN_TOOL_RESULT_TOKENS) {
+    const shortId: string = archiveId !== undefined ? archiveId : ''
+    fit.text = '（结果较大，已完整外置：result_id=' + shortId + '，共 ' +
+      content.length.toString() + ' 字符。用 expand_tool_result(result_id="' +
+      shortId + '") 读取。）'
+    fit.truncated = true
+    return fit
+  }
+  const contentBudget: number = Math.max(MIN_TOOL_RESULT_TOKENS, maxTokens - hintReserve)
+  const limited: string = sliceByTokens(content, contentBudget)
+  if (archived) {
+    const id: string = archiveId !== undefined ? archiveId : ''
+    fit.text = limited + '\n\n（完整结果共 ' + content.length.toString() + ' 字符，已保存为 result_id=' +
+      id + '。上面只展示了前 ' + limited.length.toString() + ' 字符；' +
+      '需要后续内容时调用 expand_tool_result(result_id="' + id + '", offset=' +
+      limited.length.toString() + ')，不要用相同参数重复调用原工具——那只会拿回同样被截断的开头。' +
+      '若该 result_id 已失效，再重新调用原工具。）'
+  } else {
+    fit.text = limited + '\n\n（以上内容已按本轮上下文预算压缩。需要剩余部分时，' +
+      '请用相同参数再次调用该工具——客户端有缓存，不会重复请求。）'
+  }
   fit.truncated = true
   return fit
 }

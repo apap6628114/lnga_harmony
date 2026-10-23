@@ -30,6 +30,8 @@ export default function aiToolContractTest(): void {
       for (let i: number = 0; i < AI_TOOL_CATALOG.length; i++) {
         const name: string = AI_TOOL_CATALOG[i].name
         expect(registered.indexOf(name) >= 0).assertTrue()
+        /* 顺序也要一致：tools 声明逐轮稳定是前缀缓存的前提 */
+        expect(registered[i]).assertEqual(name)
       }
       for (let i: number = 0; i < registered.length; i++) {
         const meta: AiToolMeta | null = findAiToolMeta(registered[i])
@@ -118,10 +120,12 @@ export default function aiToolContractTest(): void {
       }
     })
 
-    it('loggedOutExposesOnlyContextTool', 0, (): void => {
+    it('loggedOutExposesOnlyMetaTools', 0, (): void => {
       const names: string[] = aiToolRegistry.getAvailableNames(makeContext(false))
-      expect(names.length).assertEqual(1)
-      expect(names[0]).assertEqual('get_context')
+      /* 未登录时只剩零网络请求的元工具：上下文读取 + 大结果续读 */
+      expect(names.length).assertEqual(2)
+      expect(names.indexOf('get_context') >= 0).assertTrue()
+      expect(names.indexOf('expand_tool_result') >= 0).assertTrue()
     })
 
     it('loggedInWithoutSearchExposesNgaToolsOnly', 0, (): void => {

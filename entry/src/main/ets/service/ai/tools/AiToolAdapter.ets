@@ -13,6 +13,7 @@ import { AiSearchProfile } from '../../../model/AiSearchConfig'
 import { AiToolSettings } from '../../../model/AiToolConfig'
 import { AiAgentPreset, AiTaskContext } from '../../../model/AiAgentPreset'
 import { AiToolDefinition } from '../AiProtocolTypes'
+import { ToolResultArchive } from './ToolResultArchive'
 
 /**
  * 工具执行上下文。
@@ -36,6 +37,14 @@ export class AiToolContext {
   token: string = ''
   /** 是否已登录（由服务层统一判定） */
   authenticated: boolean = false
+  /**
+   * 本次 Agent 运行的工具结果归档（大结果外置 + 续读）。
+   *
+   * 由 `AiAgentRunner` 在每次运行开始时创建并注入：归档只服务本次运行，
+   * 跨运行引用没有意义（历史不回传 tool 消息）。默认空实例，
+   * 让工具在单测里不必显式构造。
+   */
+  archive: ToolResultArchive = new ToolResultArchive()
 }
 
 /** 工具结果中的可点击卡片。 */

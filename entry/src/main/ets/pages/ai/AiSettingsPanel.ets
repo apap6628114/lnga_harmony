@@ -73,6 +73,7 @@ import {
   AI_TOOL_CATALOG,
   AiToolMeta,
   findAiToolMeta,
+  listTaskToolCatalog,
   TOOL_REQUIRES_NONE,
   TOOL_REQUIRES_SEARCH,
   isAiToolEnabled
@@ -3586,7 +3587,7 @@ export struct AiSettingsPanel {
             .margin({ bottom: 6 })
 
           Flex({ wrap: FlexWrap.Wrap }) {
-            ForEach(AI_TOOL_CATALOG, (meta: AiToolMeta) => {
+            ForEach(listTaskToolCatalog(), (meta: AiToolMeta) => {
               Text(meta.title)
                 .fontSize(12)
                 .fontColor(this.taskToolSelected(meta.name) ? AppColors.white : AppColors.textPrimary)

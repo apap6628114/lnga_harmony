@@ -496,16 +496,16 @@ export default function aiSessionUnitTest(): void {
 
   describe('aiMemoryMode', (): void => {
     it('mapsModeToKeepRatio', 0, (): void => {
-      expect(memoryKeepRatio(AI_MEMORY_MODE_COMPACT)).assertEqual(0.4)
-      expect(memoryKeepRatio(AI_MEMORY_MODE_BALANCED)).assertEqual(0.55)
-      expect(memoryKeepRatio(AI_MEMORY_MODE_LONG)).assertEqual(0.7)
+      expect(memoryKeepRatio(AI_MEMORY_MODE_COMPACT)).assertEqual(0.45)
+      expect(memoryKeepRatio(AI_MEMORY_MODE_BALANCED)).assertEqual(0.6)
+      expect(memoryKeepRatio(AI_MEMORY_MODE_LONG)).assertEqual(0.8)
       /* 触发阈值：长记忆最晚压缩（先把窗口用满） */
       expect(memoryTriggerRatio(AI_MEMORY_MODE_COMPACT)).assertEqual(0.8)
       expect(memoryTriggerRatio(AI_MEMORY_MODE_BALANCED)).assertEqual(0.9)
       expect(memoryTriggerRatio(AI_MEMORY_MODE_LONG)).assertEqual(0.95)
       /* 未知档位回落长记忆：默认档永远可解析，持久化脏值不能让预算失效 */
       expect(memoryTriggerRatio('bogus')).assertEqual(0.95)
-      expect(memoryKeepRatio('bogus')).assertEqual(0.7)
+      expect(memoryKeepRatio('bogus')).assertEqual(0.8)
       expect(DEFAULT_AI_MEMORY_MODE).assertEqual(AI_MEMORY_MODE_LONG)
     })
 

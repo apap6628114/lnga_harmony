@@ -47,6 +47,14 @@ export class AiSessionStore extends BaseStore<Object> {
   /** 当前账号的会话列表（按最后更新倒序）。 */
   private sessions: AiSession[] = []
 
+  /**
+   * 当前会话列表所属账号。
+   *
+   * 用于挡住「账号 A 的页面在切到 B 之后继续 persist」：页面生命周期可能
+   * 长于认证切换，不校验归属会把 A 的对话写进 B 的历史。
+   */
+  private ownerUid: string = ''
+
   /** 按账号隔离的信封工具（校验 / 加载 / 落盘统一封装）。 */
   private envelope: CacheEnvelopeStore<AiSession> = new CacheEnvelopeStore<AiSession>(
     AI_SESSION_SCHEMA_VERSION,
@@ -64,9 +72,23 @@ export class AiSessionStore extends BaseStore<Object> {
   async init(store: PreferencesStore, queue: SerialQueue, auth: AuthState): Promise<void> {
     this.setDeps(store, queue, auth)
     this.sessions = []
-    if (auth.uid) {
-      await this.load(auth.uid)
+    this.ownerUid = ''
+    const uid: string = auth.uid
+    if (!uid) {
+      return
     }
+    const generation: number = this.generationGuard.current()
+    await this.load(uid)
+    /*
+     * 加载期间账号可能已经切换 / 登出：把上一个账号的会话带进当前账号是
+     * 最严重的串数据形态（用户会看到别人的对话）。代际与 uid 任一不一致
+     * 都整体丢弃。
+     */
+    if (!this.isCurrent(generation) || this.auth.uid !== uid) {
+      this.sessions = []
+      return
+    }
+    this.ownerUid = uid
   }
 
   /**
@@ -77,6 +99,7 @@ export class AiSessionStore extends BaseStore<Object> {
    */
   reset(): void {
     this.sessions = []
+    this.ownerUid = ''
     super.reset()
   }
 
@@ -116,7 +139,9 @@ export class AiSessionStore extends BaseStore<Object> {
    * @returns 新会话
    */
   createSession(presetId: string, presetName: string): AiSession {
-    return createAiSession(presetId, presetName)
+    const session: AiSession = createAiSession(presetId, presetName)
+    session.ownerUid = this.ownerUid
+    return session
   }
 
   /**
@@ -131,9 +156,40 @@ export class AiSessionStore extends BaseStore<Object> {
     if (session.id.length === 0 || session.messages.length === 0) {
       return
     }
+    /*
+     * 归属校验：页面生命周期可能长于认证切换（A 的对话页在切到 B 之后才
+     * 返回/切换任务），不校验就会把 A 的会话写进 B 的历史。
+     */
+    const uid: string = this.auth ? this.auth.uid : ''
+    if (uid.length === 0 || uid !== this.ownerUid) {
+      return
+    }
+    if (session.ownerUid.length === 0) {
+      /* 旧版本会话没有归属字段：首次保存时补上当前账号 */
+      session.ownerUid = uid
+    } else if (session.ownerUid !== uid) {
+      /* 这个会话属于上一个账号：页面还没销毁也不能写进当前账号 */
+      return
+    }
+    const beforeCount: number = session.messages.length
     session.messages = trimAiSessionMessages(session.messages)
     if (session.messages.length === 0) {
       return
+    }
+    /*
+     * 摘要游标必须跟着物理裁剪一起前移。
+     *
+     * `digestCoveredCount` 指的是「压缩记忆覆盖到历史的前多少条」。消息被
+     * `MAX_AI_SESSION_MESSAGES` 从头部裁掉 k 条后，前缀整体前移，如果游标不跟着减，
+     * 下一次压缩就会把"覆盖条数"算多，指纹校验必然失败 → 旧摘要被丢弃重压，
+     * 而重压时被裁掉的那部分原文已经不在磁盘上——一次裁剪变成二次失忆。
+     */
+    const dropped: number = beforeCount - session.messages.length
+    if (dropped > 0 && session.digestCoveredCount > 0) {
+      session.digestCoveredCount = Math.max(0, session.digestCoveredCount - dropped)
+    }
+    if (session.digestCoveredCount > session.messages.length) {
+      session.digestCoveredCount = session.messages.length
     }
     if (session.title.length === 0) {
       session.title = firstUserQuestion(session)
@@ -197,7 +253,12 @@ export class AiSessionStore extends BaseStore<Object> {
    */
   private async load(uid: string): Promise<void> {
     try {
-      const items: AiSession[] | null = await this.envelope.load(this.store, uid)
+      /*
+       * 宽容加载：一条坏会话不应该让其余 19 条一起消失（严格信封会让
+       * 整封判非法，下一次 persist 再把空列表写回，数据永久丢失）。
+       * 信封级非法（版本/账号/items 非数组）仍返回 null。
+       */
+      const items: AiSession[] | null = await this.envelope.loadTolerant(this.store, uid)
       if (items === null) {
         this.sessions = []
         return
@@ -207,6 +268,9 @@ export class AiSessionStore extends BaseStore<Object> {
         const session: AiSession = normalizeAiSession(items[i])
         /* 空 ID 的会话无法被打开也无法被删除，读到即丢弃 */
         if (session.id.length > 0) {
+          if (session.digestCoveredCount > session.messages.length) {
+            session.digestCoveredCount = session.messages.length
+          }
           normalized.push(session)
         }
       }
@@ -221,11 +285,11 @@ export class AiSessionStore extends BaseStore<Object> {
     }
   }
 
-  /** 落盘当前会话列表（未登录时跳过：会话按账号隔离，没有账号就没有归属）。 */
+  /** 落盘当前会话列表（未登录 / 账号不匹配时跳过：会话按账号隔离）。 */
   private persist(): void {
     const uid: string = this.auth ? this.auth.uid : ''
-    if (uid.length === 0) {
-      logger.verbose('skip persist ai sessions: no uid')
+    if (uid.length === 0 || uid !== this.ownerUid) {
+      logger.verbose('skip persist ai sessions: no uid or owner mismatch')
       return
     }
     this.envelope.persist(uid, this.sessions, this.store, this.writeQueue)

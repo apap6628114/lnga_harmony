@@ -116,6 +116,14 @@ export class AiTokenUsage {
   totalTokens: number = 0
   /** 命中前缀缓存的输入 token 数（不计费或按折扣计费） */
   cachedTokens: number = 0
+  /**
+   * 服务端是否真的报告了缓存字段。
+   *
+   * 不能只看 `cachedTokens > 0`：有的服务商返回了缓存字段但本次恰好 0 命中，
+   * 这与"根本不返回缓存统计"是两件事。只有 `cacheReported=true` 时，页面
+   * 展示的 0% 才是可信的"未命中"，否则应显示"未知"。
+   */
+  cacheReported: boolean = false
 
   /**
    * 判断是否拿到任何用量信息。
@@ -137,6 +145,7 @@ export class AiTokenUsage {
     this.completionTokens += other.completionTokens
     this.totalTokens += other.totalTokens
     this.cachedTokens += other.cachedTokens
+    this.cacheReported = this.cacheReported || other.cacheReported
   }
 }
 

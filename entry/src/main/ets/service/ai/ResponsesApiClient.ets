@@ -857,7 +857,11 @@ function parseResponsesUsage(raw: Record<string, Object>): AiTokenUsage {
   usage.totalTokens = readUsageNumber(raw, 'total_tokens')
   const detailsRaw: Object | undefined = raw['input_tokens_details']
   if (detailsRaw !== undefined && detailsRaw !== null) {
-    usage.cachedTokens = readUsageNumber(detailsRaw as Record<string, Object>, 'cached_tokens')
+    const details: Record<string, Object> = detailsRaw as Record<string, Object>
+    if (details['cached_tokens'] !== undefined && details['cached_tokens'] !== null) {
+      usage.cacheReported = true
+      usage.cachedTokens = readUsageNumber(details, 'cached_tokens')
+    }
   }
   if (usage.totalTokens === 0) {
     usage.totalTokens = usage.promptTokens + usage.completionTokens

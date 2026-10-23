@@ -31,6 +31,7 @@ import {
 import { ngaThrottler } from '../../../common/concurrency/Throttler'
 import { Logger, DOMAIN_SERVICE } from '../../../common/utils/Logger'
 import { GetContextTool } from './ContextTool'
+import { ExpandToolResultTool } from './ExpandToolResultTool'
 import { WebSearchTool } from './WebSearchTool'
 import { WebFetchTool } from './WebFetchTool'
 import { NgaReadThreadTool } from './nga/NgaThreadTools'
@@ -51,6 +52,18 @@ const NGA_CATEGORY: string = AiToolCategory.NGA
  * 帖子 / 资料当成当前账号的数据返回。这里在每次执行入口比对，逻辑最简且不会漏。
  */
 let lastCacheUid: string = ''
+
+/**
+ * 绑定缓存所属账号（持久化层恢复缓存后调用）。
+ *
+ * 如果不绑定，`execute` 第一次看到 `lastCacheUid` 与当前 uid 不同，
+ * 会把刚从磁盘恢复的缓存整体清掉——持久化就白做了。
+ *
+ * @param uid - 当前账号（未登录传空串）
+ */
+export function bindToolCacheAccount(uid: string): void {
+  lastCacheUid = uid
+}
 
 /**
  * 判断是否为 NGA 站内工具。
@@ -377,6 +390,8 @@ function createAiToolRegistry(): AiToolRegistry {
   // 对话上下文：零参数、不发起网络请求，可用性清单由注册表回调注入
   registry.register(new GetContextTool((context: AiToolContext): string[] =>
     registry.getAvailableNames(context)))
+  // 大结果续读：零网络请求，只读本次运行的内存归档
+  registry.register(new ExpandToolResultTool())
   // NGA 站内只读工具（登录后即可用）
   registry.register(new NgaGetMeTool())
   registry.register(new NgaReadThreadTool())

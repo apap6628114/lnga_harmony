@@ -21,6 +21,7 @@ import {
 } from '../common/media/DraftMediaStore'
 import { ReadingProgressStore } from './ReadingProgressStore'
 import { AiSessionStore } from './AiSessionStore'
+import { AiToolCacheStore } from './AiToolCacheStore'
 import { floatingLayerStore } from './FloatingLayerStore'
 import { SessionGuard, sessionGuard as globalSessionGuard } from './SessionGuard'
 import { setAuthFailureHandler } from '../service/NgaClient'
@@ -145,6 +146,8 @@ class AppStoreClass {
   readonly readingProgressStore: ReadingProgressStore = new ReadingProgressStore()
   /** AI 对话会话（按账号隔离，提供跨页面/跨启动的对话记忆）。 */
   readonly aiSessionStore: AiSessionStore = new AiSessionStore()
+  /** AI 工具结果缓存（按账号隔离，跨启动复用读帖 / 资料 / 搜索结果）。 */
+  readonly aiToolCacheStore: AiToolCacheStore = new AiToolCacheStore()
   readonly toastManager: ToastManager = new ToastManager()
 
   // ============== Init & Lifecycle ==============
@@ -332,6 +335,7 @@ class AppStoreClass {
     await this.favoriteStore.init(this.store, this.writeQueue, this.authStore.state)
     await this.trackedThreadStore.init(this.store, this.writeQueue, this.authStore.state)
     await this.aiSessionStore.init(this.store, this.writeQueue, this.authStore.state)
+    await this.aiToolCacheStore.init(this.store, this.writeQueue, this.authStore.state)
     /* 浏览历史兼作主题列表的已读台账（看过 / 有更新标记的数据源），随用户数据一并预载：
        它是懒加载的，不在这里拉起的话列表会先按"全部没看过"渲染一遍再刷新（见 HistoryStore.preload） */
     await this.historyStore.preload(this.authStore.state.uid)
@@ -339,6 +343,8 @@ class AppStoreClass {
 
   /** 后台时刷盘 */
   async flushAll(): Promise<void> {
+    /* 工具缓存是节流写的：后台/退出前补一次，避免进程被杀丢掉最近 800ms 的命中结果 */
+    this.aiToolCacheStore.flush()
     await this.writeQueue.enqueue(async (): Promise<void> => {})
     await this.store.flush()
   }
@@ -381,6 +387,7 @@ class AppStoreClass {
     this.favoriteStore.reset()
     this.trackedThreadStore.reset()
     this.aiSessionStore.reset()
+    this.aiToolCacheStore.reset()
     floatingLayerStore.clear()
     routerStore.reset()
     // 与 setAuth 对称：退出后统一协调轮询状态（此时未认证 → 停止轮询，幂等无害）

@@ -3,6 +3,8 @@
 > 状态：**L1（会话持久化）+ L0（上下文预算）已实施**；L0 的立场是「**先把窗口用满，
 > 接近上限才压缩，压缩要彻底且高保真**」——预算由模型窗口推导（未知时假设 128K）、
 > 工具结果共享同一份预算、压缩走生成式四段记忆且最近 4 轮原文不动。
+> **现行参数与新增机制（大结果续读 / 超窗自愈 / 增量摘要 / 工具缓存持久化）见
+> `docs/AI_CONTEXT_SYSTEM.md`；本文与它冲突时以新文档为准。**
 > 产品化路线见 `docs/AI_MEMORY_PRODUCT_PLAN.md`。L2（跨会话长期记忆）、L3（任务级记忆）为预留设计。
 > 涉及代码：`model/AiSession.ets`、`store/AiSessionStore.ets`、`service/ai/ContextBudget.ets`、
 > `service/ai/ActiveAiService.ets`、`model/AiAgentPreset.ets`、`service/ai/tools/ContextTool.ets`、
@@ -117,13 +119,15 @@ class AiSession {
 token 固定开销。估值刻意**偏保守**（宁多算），精确分词只有服务端知道，客户端不值得为此引入词表。
 
 **已知偏差与在线校准**：主流 BPE 对中文约 0.6–0.9 token/字，所以中文会被高估 1.1–1.6 倍；
-工具 schema（约 2–3K）未计入，方向相反。净效果是"提前压缩"，不会超窗。
+工具 schema 已计入（`estimateToolDefinitionsTokens`），不再漏算。净效果是"提前压缩"，不会超窗。
 
 校准机制（`nextCalibrationFactor`）：
 
 - 每次请求记录「发出前的本地估算」与「服务端返回的 `usage.promptTokens`」，算比值；
 - 用 **EMA（α=0.3）** 收敛，夹在 `[0.5, 2.0]`——单次跳变不能带偏，极端样本不能把预算调爆；
-- 预算按 `预算 / 系数` 调整：系数 0.7（我们高估）→ 预算放宽 1.43 倍；系数 1.5 → 收紧；
+- 预算按 `预算 / 系数` 调整，但**夹在窗口安全线内**（`resolveCalibratedBudget`）：
+  系数 0.7（我们高估）最多放宽到「窗口 − 最小输出预留」，不会像旧实现那样把 1M 窗口
+  算成 1.25M；系数 1.5 收紧；
 - 偏差超过 0.02 才写盘，避免每轮持久化；
 - 系数存 `AiMemorySettings.tokenCalibration`，跨会话生效。
 
@@ -135,7 +139,7 @@ token 固定开销。估值刻意**偏保守**（宁多算），精确分词只�
 | --- | --- | --- |
 | 预算 | `窗口 - min(窗口×50%, max(4096, 窗口×12%))`，剩余**全部**给历史；窗口未知时假设 **128K** | 旧版乘 0.75 是白白扔掉 25% 窗口；旧版 24K 兜底对 1M 模型是砍掉 97% |
 | 触发 | 占用达到预算的 **95%**（长记忆档） | 压缩应该是低频事件：一年压几次，每次 miss 摊得很薄 |
-| 保留 | 触发后保留预算的 **70%** | 一次压缩多留一些，别让"裁了又裁"把历史切碎 |
+| 保留 | 触发后保留预算的 **80%** | 一次压缩多留一些，别让"裁了又裁"把历史切碎 |
 | 必留 | 最后一条 + **最近 4 轮原文** | 当前话题永远原样可得，这是"压缩不伤效果"的关键 |
 | 对齐 | 窗口从用户消息开始 | 以 AI 答复开头的历史语义断裂 |
 
@@ -143,9 +147,9 @@ token 固定开销。估值刻意**偏保守**（宁多算），精确分词只�
 
 | 档位 | 触发 | 保留 | 适用 |
 | --- | --- | --- | --- |
-| 精简 | 80% | 40% | 成本敏感、随手一问 |
-| 平衡 | 90% | 55% | 折中 |
-| **长记忆（默认）** | **95%** | **70%** | 先把窗口用满，最不容易失忆 |
+| 精简 | 80% | 45% | 窗口很小 / 流量受限 |
+| 平衡 | 90% | 60% | 折中 |
+| **长记忆（默认）** | **95%** | **80%** | 先把窗口用满，最不容易失忆 |
 
 **窗口从哪来（三级取值）**：
 
@@ -186,8 +190,9 @@ token 固定开销。估值刻意**偏保守**（宁多算），精确分词只�
 | 约束 | 做法 |
 | --- | --- |
 | 不阻断主流程 | 失败（网络 / 取消 / 空输出）返回空串，回落抽取式折叠清单 |
-| 摘要请求自己不能超窗 | 输入按 token 封顶：`max(12000, 窗口×50%)`，超长时**保留尾部** |
-| 输出保真 | 单条消息最多 4000 字进摘要；输出最多 3000 字（四段结构）；只清 markdown 装饰，不压缩语义 |
+| 摘要请求自己不能超窗 | 输入按 token 封顶：`min(窗口×75%, max(24000, 窗口×50%))`，超长时**保留尾部**（至少保留最近一条） |
+| 输出保真 | 单条消息最多 8000 字进摘要；输出最多 6000 字（四段结构）；只清 markdown 装饰，不压缩语义 |
+| 增量 | 旧记忆覆盖的前缀不重送，只送 `dropped.slice(coveredCount)` |
 
 **降级路径**：生成式摘要为空时，用抽取式清单（「你问 + 我答（首句）」）兜底——
 它是兜底，不是主路径。
@@ -219,11 +224,14 @@ token 固定开销。估值刻意**偏保守**（宁多算），精确分词只�
 `AiAgentRunner` 维护 `contextTokens`（system + 历史 + 已回传工具结果），工具结果与历史**共享
 同一份预算**（不再单独打六折），只在真的会把总量推过预算时才处理：
 
-- 单条结果超余量 → 按余量截断，尾部追加「可再次调用取剩余部分（客户端有缓存）」；
+- 单条结果超余量 → 完整正文写进 `ToolResultArchive`，上下文只放头部 + `result_id` +
+  总字符数；模型用 `expand_tool_result(result_id, offset, limit)` 分段续读；
 - 余量耗尽 → 不再执行新工具，走 `appendSkippedCall` 补一条 tool 消息收尾
   （对话结构必须与 `tool_calls` 一一对应，少一条服务端直接 400）。
 
-截断是可恢复的：`ToolResultCache` 保证模型用同样参数重新调用时不会重复请求。
+**旧实现说"同参数重调可恢复"是错的**：预算耗尽时重调会命中缓存、拿回同一份完整结果，
+再被同一份额度截断，后半段永远看不到。归档 + 续读才是可恢复的；详见
+`docs/AI_CONTEXT_SYSTEM.md` §1.1 / §3.4。
 
 ### 4.4 与前缀缓存的关系（重要）
 
@@ -232,7 +240,7 @@ token 固定开销。估值刻意**偏保守**（宁多算），精确分词只�
 
 - 常态下历史**只追加**，system 不变 → 缓存持续命中；
 - 只有触发压缩时才改写前缀，而那一次请求本来就因为丢掉旧消息而 miss；
-- 触发阈值 95% + 一次压到 70%，让 miss 变成**低频事件**（一年几次），而不是每几轮一次。
+- 触发阈值 95% + 一次压到 80%，让 miss 变成**低频事件**（一年几次），而不是每几轮一次。
 
 **绝不能**把"每轮都变"的内容放进 system（页面上下文、登录账号、工具可用性、最近的工具调用），
 它们要么走 `get_context`，要么走 L2 的检索工具。
@@ -306,25 +314,31 @@ class AiMemoryEntry {
 | `model/AiConfig.ets` | `AiProviderProfile.contextWindow`（记忆预算真源）+ 归一化 |
 | `service/ai/ContextSummarizer.ets` | 生成式摘要：被裁对话压成结论要点（失败回落抽取式） |
 | `model/AiModelContextWindows.ets` | 已知模型窗口表（官方价目表，含来源与快照日期） |
-| `model/AiMemoryConfig.ets` | 记忆档位（精简 30% / 平衡 50% / 长记忆 75%，默认长记忆） |
+| `model/AiMemoryConfig.ets` | 记忆档位（精简 45% / 平衡 60% / 长记忆 80%，默认长记忆） |
 | `store/SettingsStore.ets` + `SettingsState` + `AiSettings` | 记忆档位读写 |
 | `test/AiContextSummary.test.ets` | 已知窗口表 / 摘要输入输出边界 11 例 |
 | `service/ai/AiAgentRunner.ets` | 工具结果计入上下文水位（`toolResultTokenBudget`）、超余量压缩、体积耗尽收尾 |
 | `service/ai/AiConfigFormLogic.ets` | `parseContextWindowInput`（窗口输入框解析与归一化） |
 | `model/AiAgentPreset.ets` | `AiTaskContext.recentReads` + `buildContextDetail` 追加"最近读过的资料" |
-| `service/ai/ActiveAiService.ets` | `buildConversation` 接收入参改为裁剪结果，折叠段进 system |
-| `pages/ai/AiChatPage.ets` | 会话恢复 / 每轮落盘 / 历史面板 / 工具证据展示 |
-| `store/AppStore.ets` | 初始化、登出清理、Facade 方法 |
-| `test/AiSessionUnit.test.ets` | 19 个用例（模型 / 校验 / 裁剪 / 折叠），已注册进 `List.test.ets` |
+| `service/ai/ActiveAiService.ets` | `buildConversation` 接收入参改为裁剪结果，折叠段进 system；超窗强制压缩并重试 |
+| `service/ai/tools/ToolResultArchive.ets` | 新增：单次运行的大结果归档（LRU，条数 + 字符双上限） |
+| `service/ai/tools/ExpandToolResultTool.ets` | 新增：`expand_tool_result` 续读工具（按 offset/limit 取归档切片） |
+| `store/AiToolCacheStore.ets` | 新增：工具结果缓存跨启动持久化（按 uid、80 条 / 1.2M 字符） |
+| `pages/ai/AiChatPage.ets` | 会话恢复 / 每轮落盘 / 历史面板 / 工具证据展示 / 缓存命中率回执 |
+| `store/AppStore.ets` | 初始化、登出清理、Facade 方法、后台刷盘 |
+| `test/AiSessionUnit.test.ets` | 32 个用例（模型 / 校验 / 裁剪 / 折叠 / 档位 / 校准），已注册进 `List.test.ets` |
+| `test/AiContextArchive.test.ets` | 新增 18 例：归档 / 续读 / 超窗识别 / schema 计数 / 缓存快照恢复 / 字符预算 / 预算与摘要夹紧 / 元工具白名单 |
 
 ## 8. 验收
 
 - `hvigorw assembleHap`：`BUILD SUCCESSFUL`；
-- Hypium Local Test：全部通过（含 `aiSessionModel` 12 例 + `aiContextBudget` 12 例 +
-  `aiMemoryMode` 3 例 + `knownModelContextWindows` / 摘要链路 11 例）；
+- Hypium Local Test：**568 用例全部通过（Failure 0 / Error 0）**，含
+  `aiSessionModel` / `aiContextBudget` / `aiMemoryMode` / 摘要链路 11 例 /
+  `toolResultArchive` / `contextOverflowDetection` / `expandToolResult`；
 - 手工验收要点（真机）：
   1. 对话三轮后返回再进「历史对话」→ 内容完整，工具证据行可见；
   2. 杀掉应用冷启动 → 历史仍在；
   3. 切换任务 → 旧会话进历史、新会话为空；
   4. 删除 / 清空 → 列表与屏幕状态一致；
-  5. 长会话（数百轮）不出现"上下文超长"报错，且模型知道更早聊过什么。
+  5. 长会话（数百轮）不出现"上下文超长"报错，且模型知道更早聊过什么；
+  6. 重复问同一帖子时工具时间线出现「缓存」（工具缓存已跨启动持久化）。

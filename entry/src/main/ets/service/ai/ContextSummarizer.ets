@@ -31,18 +31,18 @@ const logger = new Logger(DOMAIN_SERVICE, 'ContextSummarizer')
 /**
  * 摘要输出的最大字符数。
  *
- * 3000 字（约 1500–2500 token）：足够装下结论、用户要求、关键数据、待办四段，
- * 而不是挤成 800 字的提纲。
+ * 6000 字（约 3000–4500 token）：1M 窗口时代的摘要不该再挤成 800 字提纲。
+ * 它要装下结论、用户要求、关键数据、待办四段，且允许每条结论带理由。
  */
-export const SUMMARY_MAX_CHARS: number = 3000
+export const SUMMARY_MAX_CHARS: number = 6000
 
 /**
  * 送进摘要请求的输入 token 下限。
  *
- * 与"按窗口一半"取较大值：小窗口模型也至少给 12K token 的对话量，
- * 避免因为窗口小就把摘要做薄。
+ * 与"按窗口一半"取较大值：小窗口模型也至少给 24K token 的对话量。
+ * 压缩是低频事件，一次多读一些比压薄更划算。
  */
-export const SUMMARY_INPUT_MIN_TOKENS: number = 12000
+export const SUMMARY_INPUT_MIN_TOKENS: number = 24000
 
 /** 摘要输入可占模型窗口的比例（给系统提示与输出留出余量）。 */
 export const SUMMARY_INPUT_WINDOW_RATIO: number = 0.5
@@ -50,10 +50,10 @@ export const SUMMARY_INPUT_WINDOW_RATIO: number = 0.5
 /**
  * 单条消息送进摘要时的最大字符数。
  *
- * 4000 字：长帖正文也能保留住关键段落。旧值 600 会把一楼几百字的正文
+ * 8000 字：长帖正文也能保留住关键段落。旧值 600 会把一楼几百字的正文
  * 切成一句半，摘要自然就只剩"用户读了帖子"这种空话。
  */
-export const SUMMARY_MESSAGE_MAX_CHARS: number = 4000
+export const SUMMARY_MESSAGE_MAX_CHARS: number = 8000
 
 /** 摘要系统提示词（逐字节稳定，不拼运行时数据）。 */
 const SUMMARY_SYSTEM_PROMPT: string = '你是一个对话记忆压缩器。' +
@@ -74,6 +74,11 @@ export function buildSummaryPrompt(dropped: ChatMessage[], maxInputTokens?: numb
   previousDigest?: string): string {
   const limit: number = maxInputTokens !== undefined && maxInputTokens > 0
     ? maxInputTokens : SUMMARY_INPUT_MIN_TOKENS
+  /*
+   * 任务说明 + 四段格式说明本身约 600–800 字，必须从输入预算里扣掉；
+   * 否则「对话行 + 旧记忆」用满 limit 后，整段 prompt 会超出摘要请求预算。
+   */
+  const contentLimit: number = Math.max(1024, limit - 800)
   const lines: string[] = []
   let used: number = 0
   const previous: string = previousDigest !== undefined ? previousDigest.trim() : ''
@@ -87,7 +92,15 @@ export function buildSummaryPrompt(dropped: ChatMessage[], maxInputTokens?: numb
       continue
     }
     const cost: number = estimateTextTokens(line)
-    if (used + cost > limit) {
+    if (used + cost > contentLimit) {
+      /*
+       * 至少保留最近的一条：如果连它都放不进去，摘要请求会退化成
+       * "只有任务说明、没有对话"，模型只能编一段空话。单条上限 8000 字，
+       * 即使略微超出输入预算，也比"摘要无素材"更安全。
+       */
+      if (lines.length === 0) {
+        lines.push(line)
+      }
       break
     }
     lines.push(line)
@@ -116,7 +129,7 @@ export function buildSummaryPrompt(dropped: ChatMessage[], maxInputTokens?: numb
     '寒暄、试错过程、工具调用的参数细节、已被推翻的中间结论。')
   parts.push('【输出格式】\n' +
     '严格按下面四段输出；没有内容的段落写「无」；每段可有多条，用分号分隔；' +
-    '总长度控制在 2000 字以内；不要输出解释、前言或标题以外的任何内容。\n' +
+    '总长度控制在 5000 字以内；不要输出解释、前言或标题以外的任何内容。\n' +
     '结论：\n用户要求：\n关键数据：\n待办：')
   if (lines.length > 0) {
     parts.push('【对话】\n' + lines.join('\n'))
@@ -186,6 +199,28 @@ export function cleanSummaryText(raw: string): string {
 }
 
 /**
+ * 计算一次摘要请求允许的输入 token 上限。
+ *
+ * 旧实现直接 `max(24000, 窗口×50%)`：对 8K 窗口会算出 24000，摘要请求自己就超窗，
+ * 必然失败并回落抽取式。这里把上限同时夹在「窗口的 75%」以内，给输出与 system
+ * 留出 25%；未知窗口仍按 24000（假设 128K，安全）。
+ *
+ * @param contextWindow - 模型窗口（0 表示未知）
+ * @returns 输入 token 上限
+ */
+export function resolveSummaryInputLimit(contextWindow: number): number {
+  if (contextWindow <= 0) {
+    return SUMMARY_INPUT_MIN_TOKENS
+  }
+  const windowBased: number = Math.floor(contextWindow * SUMMARY_INPUT_WINDOW_RATIO)
+  const roomBased: number = Math.floor(contextWindow * 0.75)
+  const preferred: number = windowBased > SUMMARY_INPUT_MIN_TOKENS
+    ? windowBased : SUMMARY_INPUT_MIN_TOKENS
+  const capped: number = preferred < roomBased ? preferred : roomBased
+  return Math.max(512, capped)
+}
+
+/**
  * 生成式压缩一段被裁掉的历史。
  *
  * 失败一律返回空串（调用方回落抽取式），**绝不抛异常**：
@@ -201,10 +236,14 @@ export function cleanSummaryText(raw: string): string {
 export async function summarizeFoldedHistory(profile: AiProviderProfile,
   dropped: ChatMessage[], contextWindow: number,
   canceller: RequestCanceller | null, previousDigest?: string): Promise<string> {
-  const windowBased: number = contextWindow > 0
-    ? Math.floor(contextWindow * SUMMARY_INPUT_WINDOW_RATIO)
-    : 0
-  const inputLimit: number = Math.max(SUMMARY_INPUT_MIN_TOKENS, windowBased)
+  const inputLimit: number = resolveSummaryInputLimit(contextWindow)
+  /*
+   * 没有新对话可压时直接返回旧记忆：调用摘要模型去"重写旧记忆"只会多花一次
+   * 请求，而且模型可能把已有结论改薄。增量路径正常不会走到这里，这是兜底。
+   */
+  if (dropped.length === 0) {
+    return previousDigest !== undefined ? previousDigest.trim() : ''
+  }
   const prompt: string = buildSummaryPrompt(dropped, inputLimit, previousDigest)
   if (prompt.length === 0) {
     return ''

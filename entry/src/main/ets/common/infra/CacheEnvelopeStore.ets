@@ -86,6 +86,43 @@ export class CacheEnvelopeStore<T> {
   }
 
   /**
+   * 宽容加载：信封级校验（版本 / 账号 / items 数组）通过后，逐条校验并
+   * **跳过坏条目**，而不是让一条坏数据把整封缓存判死。
+   *
+   * 用于「可重建、但丢失代价高」的数据（如 AI 会话）：一条字段缺失的记录
+   * 不应该让其余 19 条会话一起消失。严格语义仍由 {@link load} 保留。
+   *
+   * @param store - 偏好存储
+   * @param uid - 缓存所属用户 ID
+   * @returns 通过校验的 items；信封级非法时返回 null
+   */
+  async loadTolerant(store: PreferencesStore, uid: string): Promise<T[] | null> {
+    const saved: Object | null = await store.getJSON<Object>(this.key(uid))
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
+      return null
+    }
+    const record: Record<string, Object> = saved as Record<string, Object>
+    if (Number(record['schemaVersion'] ?? 0) !== this.schemaVersion) {
+      return null
+    }
+    if (String(record['uid'] ?? '') !== uid) {
+      return null
+    }
+    const rawItems: Object | undefined = record['items']
+    if (!Array.isArray(rawItems)) {
+      return null
+    }
+    const items: Object[] = rawItems as Object[]
+    const valid: T[] = []
+    for (let index: number = 0; index < items.length; index++) {
+      if (this.validateItem(items[index])) {
+        valid.push(items[index] as T)
+      }
+    }
+    return valid
+  }
+
+  /**
    * 从已通过校验的信封中取出 items 数组副本。
    *
    * @param saved - 已通过 isValidEnvelope 的信封对象

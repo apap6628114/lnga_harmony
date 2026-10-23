@@ -725,13 +725,20 @@ function parseChatUsage(raw: Record<string, Object>): AiTokenUsage {
   usage.promptTokens = readUsageNumber(raw, 'prompt_tokens')
   usage.completionTokens = readUsageNumber(raw, 'completion_tokens')
   usage.totalTokens = readUsageNumber(raw, 'total_tokens')
-  usage.cachedTokens = readUsageNumber(raw, 'prompt_cache_hit_tokens')
+  const deepSeekCached: Object | undefined = raw['prompt_cache_hit_tokens']
+  if (deepSeekCached !== undefined && deepSeekCached !== null) {
+    usage.cacheReported = true
+    usage.cachedTokens = readUsageNumber(raw, 'prompt_cache_hit_tokens')
+  }
   const detailsRaw: Object | undefined = raw['prompt_tokens_details']
   if (detailsRaw !== undefined && detailsRaw !== null) {
     const details: Record<string, Object> = detailsRaw as Record<string, Object>
-    const cached: number = readUsageNumber(details, 'cached_tokens')
-    if (cached > usage.cachedTokens) {
-      usage.cachedTokens = cached
+    if (details['cached_tokens'] !== undefined && details['cached_tokens'] !== null) {
+      usage.cacheReported = true
+      const cached: number = readUsageNumber(details, 'cached_tokens')
+      if (cached > usage.cachedTokens) {
+        usage.cachedTokens = cached
+      }
     }
   }
   if (usage.totalTokens === 0) {

@@ -358,6 +358,8 @@ parameters / strict，多塞字段会被部分服务商 400。
 
 ## 9. 记忆体系（已实施 L1 + L0）
 
+> 现行上下文/缓存/持久化设计见 `docs/AI_CONTEXT_SYSTEM.md`；本节是当时的落地摘要。
+
 对话记忆与上下文预算的完整设计见 `docs/AI_MEMORY_DESIGN.md`。要点：
 
 - **L1 情节记忆**：会话落盘（`AiSessionStore`，键 `ai_sessions_<uid>`，信封校验 + 账号隔离），

@@ -106,6 +106,14 @@ class ChatBubble {
    * "这轮依据什么"。两者都不会进请求体。
    */
   evidence: string[] = []
+  /**
+   * 客户端追加在回答末尾的提示（截断 / 轮数 / 预算 / 超窗重试）。
+   *
+   * 与 `content` 分开存放：这些提示不是模型说的话，不能写进会话、也不能作为
+   * assistant 历史回传给下一轮（否则模型会看到自己"说过"客户端文案）。
+   * 只用于当轮渲染。
+   */
+  notice: string = ''
 
   constructor(role: string, content: string, isStreaming: boolean) {
     this.id = 'cb_' + Date.now() + '_' + Math.floor(Math.random() * 100000)
@@ -785,19 +793,32 @@ struct AiChatPage {
       }
       // 流式完成 — 强制同步缓冲到状态，避免添加气泡前闪现「思考中」帧
       this.flushStreamingText()
-      let finalText: string = result.text
-      // 部分内容被截断时追加弱提示，避免用户误以为回答已完整结束
+      const finalText: string = result.text
+      /*
+       * 客户端提示与模型正文分离：提示只用于当轮渲染，不写入 content，
+       * 因此不会进入会话持久化、也不会在下一轮作为 assistant 历史回传。
+       */
+      let notice: string = ''
       if (result.truncated) {
-        finalText += '\n\n⚠️ 回答已达模型输出上限被截断，可精简对话上下文或更换支持更长输出的模型后重试'
+        notice += '\n\n⚠️ 回答已达模型输出上限被截断，可精简对话上下文或更换支持更长输出的模型后重试'
       }
       if (result.hitStepLimit) {
-        finalText += '\n\n⚠️ 已达到工具调用轮数上限并强制收尾，可提高「Agent 轮数」或拆分问题后重试'
+        notice += '\n\n⚠️ 已达到工具调用轮数上限并强制收尾，可提高「Agent 轮数」或拆分问题后重试'
       }
       if (result.hitToolBudget) {
-        finalText += '\n\n⚠️ 本次运行的取数次数已达上限并提前收尾（防止触发论坛频率限制），' +
+        notice += '\n\n⚠️ 本次运行的取数次数已达上限并提前收尾（防止触发论坛频率限制），' +
           '可把问题拆小后重试，或稍后再问'
       }
+      if (result.hitContextBudget) {
+        notice += '\n\n⚠️ 本轮上下文预算已满，部分取数未执行；' +
+          '已读到的内容仍在回答依据里，需要更完整的数据时请把问题拆小后重试'
+      }
+      if (result.recoveredFromOverflow) {
+        notice += '\n\nℹ️ 本次输入超出模型窗口，客户端已压缩较早对话后重试成功；' +
+          '个别早期细节可能不在上下文里，需要时可重新提问'
+      }
       const aiBubble: ChatBubble = new ChatBubble('assistant', finalText, false)
+      aiBubble.notice = notice
       aiBubble.toolInvocations = result.toolInvocations
       aiBubble.sources = result.sources
       aiBubble.cards = result.cards
@@ -811,6 +832,9 @@ struct AiChatPage {
       /* 压缩记忆写回会话：下一轮与下次进页面都能直接复用，不必重新摘要 */
       this.applyConversationMemory(result.memory)
     } catch (err) {
+      /* 失败 / 停止的轮次没有有效占用：清掉上一轮的百分比，避免被误读成本轮 */
+      this.memoryText = ''
+      this.memoryRatio = 0
       if (!this.isActiveRequest(requestId)) {
         return
       }
@@ -902,6 +926,14 @@ struct AiChatPage {
     }
     if (usage.toolCompressed) {
       parts.push('部分资料已压缩')
+    }
+    /*
+     * 前缀缓存命中率：这是"历史是否只追加、system / tools 是否稳定"的体温计。
+     * 只在服务端真的返回用量时展示——没有数据时显示 0% 会误导。
+     */
+    const cacheRatio: number = usage.cacheHitRatio()
+    if (cacheRatio >= 0) {
+      parts.push('缓存 ' + Math.round(cacheRatio * 100).toString() + '%')
     }
     this.memoryRatio = ratio
     this.memoryText = parts.join(' · ')
@@ -1835,6 +1867,16 @@ struct AiChatPage {
             text: bubble.content,
             onLinkClick: (href: string): void => { this.openExternalLink(href) }
           })
+
+          /* 客户端提示只渲染、不写回 content；因此不会污染下一轮历史 */
+          if (bubble.notice.length > 0) {
+            Text(bubble.notice)
+              .fontSize(12)
+              .fontColor(AppColors.textTertiary)
+              .lineHeight(18)
+              .width('100%')
+              .margin({ top: 8 })
+          }
 
           // 可点击结果卡片：把 AI 的输出落回原生页面
           if (bubble.cards.length > 0) {

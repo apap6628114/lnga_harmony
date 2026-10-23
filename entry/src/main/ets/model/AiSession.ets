@@ -65,6 +65,12 @@ export class AiSessionMessage {
 export class AiSession {
   /** 唯一标识 */
   id: string = ''
+  /**
+   * 会话所属账号（空串表示旧版本数据）。
+   *
+   * 页面生命周期可能长于认证切换：保存时用它挡住「A 的会话被写进 B」。
+   */
+  ownerUid: string = ''
   /** 所属任务 ID（空表示自由对话） */
   presetId: string = ''
   /** 任务名称快照（任务被删除后仍能显示当时的任务名） */
@@ -133,7 +139,15 @@ export function sessionTitleFrom(text: string): string {
 export function appendAiSessionMessage(session: AiSession, message: AiSessionMessage): void {
   session.messages.push(message)
   if (session.messages.length > MAX_AI_SESSION_MESSAGES) {
+    const dropped: number = session.messages.length - MAX_AI_SESSION_MESSAGES
     session.messages = session.messages.slice(session.messages.length - MAX_AI_SESSION_MESSAGES)
+    /*
+     * 与 AiSessionStore.saveSession 同一语义：物理裁剪必须同步前移摘要游标，
+     * 否则游标指向已删除的消息，下一次压缩会误判覆盖范围。
+     */
+    if (session.digestCoveredCount > 0) {
+      session.digestCoveredCount = Math.max(0, session.digestCoveredCount - dropped)
+    }
   }
   session.updatedAt = message.createdAt > 0 ? message.createdAt : Date.now()
   if (session.title.length === 0 && message.role === AI_SESSION_ROLE_USER) {
@@ -193,6 +207,7 @@ export function cloneAiSessionMessage(src: AiSessionMessage): AiSessionMessage {
 export function cloneAiSession(src: AiSession): AiSession {
   const dest: AiSession = new AiSession()
   dest.id = src.id
+  dest.ownerUid = src.ownerUid
   dest.presetId = src.presetId
   dest.presetName = src.presetName
   dest.title = src.title
@@ -222,6 +237,7 @@ export function normalizeAiSession(raw: AiSession): AiSession {
     return session
   }
   session.id = readString(raw.id)
+  session.ownerUid = readString(raw.ownerUid)
   session.presetId = readString(raw.presetId)
   session.presetName = readString(raw.presetName)
   session.title = readString(raw.title)

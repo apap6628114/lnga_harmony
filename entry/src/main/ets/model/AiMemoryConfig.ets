@@ -10,9 +10,9 @@
  *
  * | 档位 | 触发阈值 | 压缩后保留 | 含义 |
  * | --- | --- | --- | --- |
- * | 精简 | 窗口预算的 80% | 40% | 更早压缩、裁得更狠（成本敏感场景） |
- * | 平衡 | 90% | 55% | 折中 |
- * | 长记忆（默认） | 95% | 70% | **先把窗口用满**，压缩更晚、留得更多 |
+ * | 精简 | 窗口预算的 80% | 45% | 更早压缩、裁得更狠（仅小窗口 / 流量受限） |
+ * | 平衡 | 90% | 60% | 折中 |
+ * | 长记忆（默认） | 95% | 80% | **先把窗口用满**，压缩更晚、留得更多 |
  *
  * 关键差别：触发阈值决定"什么时候才愿意动刀"。95% 意味着绝大多数会话根本不会被压缩——
  * 这是对的，因为现代模型的窗口本来就足够装下几十轮完整对话。
@@ -44,14 +44,19 @@ const TRIGGER_BALANCED: number = 0.9
 /** 长记忆档：达到预算 95% 才压缩（先把窗口用满）。 */
 const TRIGGER_LONG: number = 0.95
 
-/** 精简档：压缩后保留 40%。 */
-const KEEP_COMPACT: number = 0.4
+/** 精简档：压缩后保留 45%。 */
+const KEEP_COMPACT: number = 0.45
 
-/** 平衡档：压缩后保留 55%。 */
-const KEEP_BALANCED: number = 0.55
+/** 平衡档：压缩后保留 60%。 */
+const KEEP_BALANCED: number = 0.6
 
-/** 长记忆档：压缩后保留 70%。 */
-const KEEP_LONG: number = 0.7
+/**
+ * 长记忆档：压缩后保留 80%。
+ *
+ * 从 70% 提到 80%：压缩是低频事件，一次多留一成，下一轮就不必那么快再压；
+ * "压到 70%" 在 1M 窗口上省下的 token 不值钱，而被切掉的那 10% 信息很贵。
+ */
+const KEEP_LONG: number = 0.8
 
 /**
  * 对话记忆设置。
@@ -154,12 +159,12 @@ export function memoryModeTitle(mode: string): string {
  */
 export function memoryModeDescription(mode: string): string {
   if (mode === AI_MEMORY_MODE_COMPACT) {
-    return '用到 80% 就压缩，压缩后留 40%；最省费用，也最容易丢细节'
+    return '用到 80% 就压缩，压缩后留 45%；仅在窗口很小、或流量受限时选它'
   }
   if (mode === AI_MEMORY_MODE_BALANCED) {
-    return '用到 90% 才压缩，压缩后留 55%'
+    return '用到 90% 才压缩，压缩后留 60%'
   }
-  return '先把窗口用满（95%），压缩后仍保留七成；最不容易失忆'
+  return '先把窗口用满（95%），压缩后仍保留八成；最不容易失忆'
 }
 
 /**

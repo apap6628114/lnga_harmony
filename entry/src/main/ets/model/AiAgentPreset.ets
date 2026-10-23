@@ -8,7 +8,7 @@
  */
 
 import { DEFAULT_SYSTEM_PROMPTS } from './AiScenarioConfig'
-import { AI_TOOL_CATALOG, findAiToolMeta } from './AiToolConfig'
+import { AI_TOOL_CATALOG, findAiToolMeta, isMetaTool } from './AiToolConfig'
 
 /** 运行上下文：帖子。 */
 export const PRESET_CONTEXT_THREAD: string = 'thread'
@@ -302,6 +302,13 @@ export function resolvePresetPrompt(preset: AiAgentPreset,
  * @returns true 表示允许
  */
 export function presetAllowsTool(preset: AiAgentPreset | null, toolName: string): boolean {
+  /*
+   * 元工具（大结果续读）不受任务白名单限制：它是上下文预算截断后的恢复通道，
+   * 白名单一旦不含它，模型就永远拿不到被截断的后半段。全局工具开关仍然管得住。
+   */
+  if (isMetaTool(toolName)) {
+    return true
+  }
   if (preset === null) {
     return true
   }
@@ -321,6 +328,10 @@ export function presetToolNames(preset: AiAgentPreset | null): string[] {
   const names: string[] = []
   for (let i: number = 0; i < AI_TOOL_CATALOG.length; i++) {
     const name: string = AI_TOOL_CATALOG[i].name
+    /* 元工具不参与任务工具展示/选择：它们始终可用，列进来只会让用户误以为能关掉 */
+    if (isMetaTool(name)) {
+      continue
+    }
     if (presetAllowsTool(preset, name)) {
       names.push(name)
     }

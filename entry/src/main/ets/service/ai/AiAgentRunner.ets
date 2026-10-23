@@ -31,9 +31,16 @@ import {
   estimateConversationTokens,
   estimateMessageTokens,
   estimateTextTokens,
+  estimateToolDefinitionsTokens,
   fitToolResultContent
 } from './ContextBudget'
 import { aiToolRegistry } from './tools/ToolRegistry'
+import { ToolResultArchive } from './tools/ToolResultArchive'
+import {
+  FRESHNESS_AUTO,
+  normalizeToolArguments,
+  readFreshnessFromText
+} from './tools/ToolResultCache'
 import {
   AiToolInvocation,
   AiToolContext,
@@ -76,6 +83,14 @@ export class AiAgentOptions {
   /** 工具调用记录回调 */
   onToolInvocation: AiToolInvocationCallback = (_invocation: AiToolInvocation): void => {
   }
+  /**
+   * 每轮用量回调。
+   *
+   * 用途：超窗重试时第一次运行的用量会随异常丢失，调用方可以在这里先累计，
+   * 重试成功后再合并进最终结果（否则计费统计与校准样本都少一轮）。
+   */
+  onUsage: (usage: AiTokenUsage) => void = (_usage: AiTokenUsage): void => {
+  }
   /** 取消令牌 */
   canceller: RequestCanceller | null = null
   /**
@@ -116,6 +131,8 @@ export class AiAgentResult {
   contextTokens: number = 0
   /** 回传给模型的工具结果估算 token 总量 */
   toolTokens: number = 0
+  /** 工具声明（tools schema）估算 token 量 */
+  toolSchemaTokens: number = 0
   /** 是否有工具结果被压缩 */
   toolCompressed: boolean = false
   /**
@@ -146,10 +163,18 @@ export async function runAiAgent(
   const result: AiAgentResult = new AiAgentResult()
   const conversation: ChatMessage[] = copyMessages(history)
   const tools = aiToolRegistry.getDefinitions(toolContext)
+  /*
+   * 大结果外置：归档只服务本次运行。工具结果超出预算时，完整正文留在这里，
+   * 上下文只放头部 + result_id，模型可用 expand_tool_result 续读。
+   */
+  const archive: ToolResultArchive = new ToolResultArchive()
+  toolContext.archive = archive
   const fallbackQuery: string = findLastUserMessage(conversation)
   const maxSteps: number = Math.max(1, toolContext.tools.maxAgentSteps)
   const sourceKeys: Record<string, boolean> = {}
   const cardKeys: Record<string, boolean> = {}
+  /** 已成功执行过的调用签名（避免模型同参数反复取数） */
+  const executedSignatures: Record<string, boolean> = {}
 
   let step: number = 0
   let hitLimit: boolean = false
@@ -161,8 +186,9 @@ export async function runAiAgent(
   let volumeExhausted: boolean = false
   /** 是否已触发风控（触发后本次运行不再发起任何新的取数） */
   let throttled: boolean = false
-  /** 当前对话的估算 token 总量（初始 = system + 历史） */
-  let contextTokens: number = estimateConversationTokens(conversation)
+  /** 当前对话的估算 token 总量（初始 = 工具声明 + system + 历史） */
+  let contextTokens: number = estimateConversationTokens(conversation) +
+    estimateToolDefinitionsTokens(tools)
   /** 回传给模型的工具结果估算 token 总量 */
   let toolTokens: number = 0
   /** 是否有工具结果被压缩 */
@@ -202,6 +228,7 @@ export async function runAiAgent(
     }
     if (!turn.usage.isEmpty()) {
       result.usage.add(turn.usage)
+      options.onUsage(turn.usage)
       lastEstimatedPrompt = estimatedBeforeTurn
       lastActualPrompt = turn.usage.promptTokens
     }
@@ -226,6 +253,8 @@ export async function runAiAgent(
     assistantMsg.outputItems = turn.outputItems
     assistantMsg.reasoning = turn.reasoning
     conversation.push(assistantMsg)
+    /* 工具调用轮的 assistant 消息（含 tool_calls 参数）也占输入，必须计入水位 */
+    contextTokens += estimateMessageTokens(assistantMsg)
 
     for (let i: number = 0; i < turn.toolCalls.length; i++) {
       if (isCancelled(options.canceller)) {
@@ -237,17 +266,33 @@ export async function runAiAgent(
       // 少一条会让对话结构不完整，OpenAI 兼容服务端会直接 400
       if (executedCalls >= DEFAULT_MAX_TOOL_CALLS_PER_RUN) {
         budgetExhausted = true
-        appendSkippedCall(call, conversation, options, result, SKIP_REASON_CALLS)
+        contextTokens += appendSkippedCall(call, conversation, options, result, SKIP_REASON_CALLS)
         continue
       }
       // 体积预算用尽：继续执行只会把请求推过窗口，模型反而拿不到结果
       if (toolBudget > 0 && contextTokens >= toolBudget) {
         volumeExhausted = true
-        appendSkippedCall(call, conversation, options, result, SKIP_REASON_VOLUME)
+        contextTokens += appendSkippedCall(call, conversation, options, result, SKIP_REASON_VOLUME)
         continue
       }
       if (throttled) {
-        appendSkippedCall(call, conversation, options, result, SKIP_REASON_THROTTLE)
+        contextTokens += appendSkippedCall(call, conversation, options, result, SKIP_REASON_THROTTLE)
+        continue
+      }
+
+      /*
+       * 重复调用熔断：模型在长循环里经常用完全相同的参数再读一次同一页。
+       * 缓存能挡住网络请求，但挡不住上下文里再塞一份同样的正文。
+       * 只有 freshness=auto 的调用参与去重；模型明确要 fresh 时允许重取。
+       */
+      const callSignature: string = buildCallSignature(call)
+      if (callSignature.length > 0 && executedSignatures[callSignature] === true) {
+        contextTokens += appendDuplicateCall(call, conversation, options, result)
+        /*
+         * 不计入 executedCalls：这次没有真正取数，占用 30 次调用预算会让
+         * 后续真正需要的工具被 budgetExhausted 提前跳过。循环本身仍受
+         * maxSteps 约束，重复调用不会无限。
+         */
         continue
       }
 
@@ -255,13 +300,20 @@ export async function runAiAgent(
       executedCalls++
       const invocation: AiToolInvocation = execution.invocation
       const toolResult: AiToolResult = execution.result
+      if (toolResult.success && toolResult.content.length > 0 && callSignature.length > 0) {
+        executedSignatures[callSignature] = true
+      }
       /*
-       * 工具结果入队前先过体积预算：剩余额度不足时压缩，而不是原样塞进去。
-       * 压缩带"可再读"尾注——客户端有结果缓存，重新调用不会重复请求，
-       * 因此这是可恢复的损失，不是永久丢失。
+       * 工具结果入队前先过体积预算：剩余额度不足时把完整结果归档，
+       * 上下文只放头部 + result_id。旧实现直接截断并让模型"同参数重调"，
+       * 但重调会命中缓存、拿回同样被截断的开头，等于永久丢信息。
        */
-      const fit: ToolContentFit = fitToolResultContent(toolResult.content,
-        toolBudget > 0 ? toolBudget - contextTokens : 0)
+      const remainingTokens: number = toolBudget > 0 ? toolBudget - contextTokens : 0
+      let archiveId: string = ''
+      if (remainingTokens > 0 && estimateTextTokens(toolResult.content) > remainingTokens) {
+        archiveId = archive.put(call.function.name, toolResult.content)
+      }
+      const fit: ToolContentFit = fitToolResultContent(toolResult.content, remainingTokens, archiveId)
       if (fit.truncated) {
         toolCompressed = true
       }
@@ -304,12 +356,13 @@ export async function runAiAgent(
   result.hitContextBudget = volumeExhausted
   result.contextTokens = contextTokens
   result.toolTokens = toolTokens
+  result.toolSchemaTokens = estimateToolDefinitionsTokens(tools)
   result.toolCompressed = toolCompressed
   result.lastEstimatedPromptTokens = lastEstimatedPrompt
   result.lastActualPromptTokens = lastActualPrompt
-  logger.info('runAiAgent done: steps=%{public}d, calls=%{public}d, tools=%{public}d, cards=%{public}d, text=%{public}d chars, contextTokens=%{public}d (tool=%{public}d, budget=%{public}d, compressed=%{public}s), limit=%{public}s, calls=%{public}s, volume=%{public}s',
+  logger.info('runAiAgent done: steps=%{public}d, calls=%{public}d, tools=%{public}d, cards=%{public}d, text=%{public}d chars, contextTokens=%{public}d (tool=%{public}d, schema=%{public}d, budget=%{public}d, compressed=%{public}s), limit=%{public}s, calls=%{public}s, volume=%{public}s',
     step, executedCalls, result.toolInvocations.length, result.cards.length, result.text.length,
-    contextTokens, toolTokens, toolBudget, String(toolCompressed),
+    contextTokens, toolTokens, result.toolSchemaTokens, toolBudget, String(toolCompressed),
     String(hitLimit), String(budgetExhausted), String(volumeExhausted))
   if (!result.usage.isEmpty()) {
     logger.info('runAiAgent usage: prompt=%{public}d, completion=%{public}d, cached=%{public}d, total=%{public}d',
@@ -338,9 +391,10 @@ class ToolExecution {
  * @param options - 运行选项
  * @param result - Agent 结果（原地追加时间线）
  * @param reason - 跳过原因（SKIP_REASON_*）
+ * @returns 追加的 tool 消息估算 token 数
  */
 function appendSkippedCall(call: ToolCall, conversation: ChatMessage[],
-  options: AiAgentOptions, result: AiAgentResult, reason: string): void {
+  options: AiAgentOptions, result: AiAgentResult, reason: string): number {
   const invocation: AiToolInvocation = new AiToolInvocation()
   invocation.id = call.id
   invocation.name = call.function.name
@@ -373,6 +427,70 @@ function appendSkippedCall(call: ToolCall, conversation: ChatMessage[],
   toolMsg.toolCallId = call.id
   toolMsg.name = call.function.name
   conversation.push(toolMsg)
+  return estimateMessageTokens(toolMsg)
+}
+
+/**
+ * 为「已用相同参数成功调用过」的重复调用补一条短说明。
+ *
+ * 不执行、不产生网络请求，也不把同一份大正文再塞回上下文；
+ * 但必须仍然补一条 tool 消息——否则 tool_calls 与 tool 消息数量不匹配，服务端 400。
+ *
+ * @param call - 模型请求的工具调用
+ * @param conversation - 对话消息数组（原地追加）
+ * @param options - 运行选项
+ * @param result - Agent 结果（原地追加时间线）
+ * @returns 追加消息的估算 token 数
+ */
+function appendDuplicateCall(call: ToolCall, conversation: ChatMessage[],
+  options: AiAgentOptions, result: AiAgentResult): number {
+  const displayName: string = aiToolTitle(call.function.name)
+  const invocation: AiToolInvocation = new AiToolInvocation()
+  invocation.id = call.id
+  invocation.name = call.function.name
+  invocation.displayName = displayName
+  invocation.summary = '相同参数已调用过'
+  invocation.status = 'success'
+  /* 不是缓存命中：是本次运行内已经执行过。UI 不要打「缓存」标签，避免误导 */
+  invocation.fromCache = false
+  invocation.contentChars = 0
+  options.onToolInvocation(invocation)
+  result.toolInvocations.push(invocation)
+
+  const toolMsg: ChatMessage = new ChatMessage('tool',
+    '本次运行已经用完全相同的参数成功调用过「' + displayName + '」，结果就是上文那条工具结果。' +
+    '请直接使用已有结果；如果上文结果里带 result_id，说明它被截断过，' +
+    '请用 expand_tool_result(result_id="…", offset=…) 续读，而不是重新调用原工具。' +
+    '只有确实需要最新数据时，才显式传 freshness="fresh" 再调用一次。')
+  toolMsg.toolCallId = call.id
+  toolMsg.name = call.function.name
+  conversation.push(toolMsg)
+  return estimateMessageTokens(toolMsg)
+}
+
+/**
+ * 构造一次工具调用的去重签名。
+ *
+ * 返回空串表示「不参与去重」：
+ * - `get_context` 每次都可能反映最新的上下文 / 工具可用性，不能复用旧输出；
+ * - 模型显式要求 fresh / no_cache 时，重复调用是合理意图；
+ * - 参数为空且不是已知零参工具时，宁可执行也不要误判成重复。
+ *
+ * @param call - 工具调用
+ * @returns 签名（空串表示不去重）
+ */
+function buildCallSignature(call: ToolCall): string {
+  if (call.function.name === 'get_context') {
+    return ''
+  }
+  if (readFreshnessFromText(call.function.arguments) !== FRESHNESS_AUTO) {
+    return ''
+  }
+  const normalized: string = normalizeToolArguments(call.function.arguments)
+  if (normalized.length === 0 && call.function.arguments.trim().length === 0) {
+    return ''
+  }
+  return call.function.name + '|' + normalized
 }
 
 /**

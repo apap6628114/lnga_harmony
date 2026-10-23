@@ -50,6 +50,9 @@ export const FRESHNESS_NO_CACHE: string = 'no_cache'
 /** 未登录时的缓存桶名。 */
 const ANON_BUCKET: string = 'anon'
 
+/** 内存缓存默认总字符上限：约 8M 字符（UTF-16 下约 16MB）。 */
+export const DEFAULT_MAX_TOTAL_CHARS: number = 8000000
+
 /**
  * 按工具名派生缓存 TTL。
  *
@@ -320,6 +323,21 @@ class ToolCacheEntry {
 }
 
 /**
+ * 可持久化的缓存快照条目。
+ *
+ * 只包含「键 + 过期时间 + 结果」，不含 LRU 顺序：恢复顺序无关紧要，
+ * 过期时间才是唯一有意义的跨进程信息。
+ */
+export class ToolCacheSnapshot {
+  /** 缓存键（已含工具名 / uid 桶 / 上下文指纹 / 规范化参数） */
+  key: string = ''
+  /** 过期时间戳（毫秒） */
+  expiresAt: number = 0
+  /** 缓存的工具结果 */
+  result: AiToolResult = new AiToolResult()
+}
+
+/**
  * 工具结果 LRU 缓存。
  *
  * 容量与时钟都可注入：单测用假时钟验证过期，不依赖真实 sleep。
@@ -331,22 +349,43 @@ export class ToolResultCache {
   private order: string[] = []
   /** 容量上限 */
   private maxSize: number
+  /** 总字符上限（防止 200 条长帖正文把内存撑爆） */
+  private maxTotalChars: number
+  /** 当前总字符数 */
+  private totalChars: number = 0
   /** 时间源（可注入，单测用） */
   private clock: () => number
   /** 命中次数（诊断用） */
   private hits: number = 0
   /** 未命中次数（诊断用） */
   private misses: number = 0
+  /** 内容变化回调（持久化层据此标脏；null 表示不持久化） */
+  private changeListener: (() => void) | null = null
+
+  /**
+   * 注册内容变化回调（由持久化层注入）。
+   *
+   * 缓存实现不直接依赖 Preferences / Store：它是纯内存结构，单测可以用假时钟
+   * 直接构造；持久化只是可选的旁路。
+   *
+   * @param listener - 变化回调；传 null 取消注册
+   */
+  setChangeListener(listener: (() => void) | null): void {
+    this.changeListener = listener
+  }
 
   /**
    * 构造缓存。
    *
    * @param maxSize - 条目上限（超出时淘汰最久未使用）
    * @param clock - 时间源；缺省用 Date.now
+   * @param maxTotalChars - 总字符上限（缺省 8M；防止长帖正文把内存撑爆）
    */
-  constructor(maxSize: number = 200, clock?: () => number) {
+  constructor(maxSize: number = 200, clock?: () => number,
+    maxTotalChars: number = DEFAULT_MAX_TOTAL_CHARS) {
     this.maxSize = maxSize
     this.clock = clock !== undefined ? clock : defaultClock
+    this.maxTotalChars = maxTotalChars > 0 ? maxTotalChars : DEFAULT_MAX_TOTAL_CHARS
   }
 
   /**
@@ -363,6 +402,10 @@ export class ToolResultCache {
     }
     if (this.clock() >= entry.expiresAt) {
       this.map.delete(key)
+      this.totalChars -= entry.result.content.length
+      if (this.totalChars < 0) {
+        this.totalChars = 0
+      }
       this.removeFromOrder(key)
       this.misses++
       return null
@@ -391,18 +434,87 @@ export class ToolResultCache {
     entry.result = cloneToolResult(result)
     entry.result.fromCache = false
     entry.expiresAt = this.clock() + ttlMs
+    const existing: ToolCacheEntry | undefined = this.map.get(key)
+    if (existing !== undefined) {
+      this.totalChars -= existing.result.content.length
+    }
     if (!this.map.has(key)) {
-      if (this.order.length >= this.maxSize) {
-        const oldest: string | undefined = this.order.shift()
-        if (oldest !== undefined) {
-          this.map.delete(oldest)
-        }
-      }
       this.order.push(key)
     } else {
       this.touch(key)
     }
     this.map.set(key, entry)
+    this.totalChars += entry.result.content.length
+    if (this.totalChars < 0) {
+      this.totalChars = 0
+    }
+    this.evictIfNeeded()
+    this.notifyChanged()
+  }
+
+  /**
+   * 导出未过期条目的快照（供持久化）。
+   *
+   * 不导出已过期条目：它们对下一次启动没有价值，只会让文件变大。
+   *
+   * @returns 快照数组
+   */
+  snapshot(): ToolCacheSnapshot[] {
+    const now: number = this.clock()
+    const result: ToolCacheSnapshot[] = []
+    for (let i: number = 0; i < this.order.length; i++) {
+      const key: string = this.order[i]
+      const entry: ToolCacheEntry | undefined = this.map.get(key)
+      if (entry === undefined || entry.expiresAt <= now) {
+        continue
+      }
+      const item: ToolCacheSnapshot = new ToolCacheSnapshot()
+      item.key = key
+      item.expiresAt = entry.expiresAt
+      item.result = cloneToolResult(entry.result)
+      result.push(item)
+    }
+    return result
+  }
+
+  /**
+   * 从持久化快照恢复缓存。
+   *
+   * 只恢复未过期且内容非空的条目；已过期的直接丢弃（同一份 TTL 语义，
+   * 不因为"刚启动"就延长生命周期）。
+   *
+   * @param snapshots - 快照数组
+   * @returns 实际恢复的条目数
+   */
+  hydrate(snapshots: ToolCacheSnapshot[]): number {
+    /*
+     * 合并而不是清空：`init` 会先 invalidateAll 再 load，但 load 期间工具可能
+     * 已经写入了新结果；直接 clear 会把刚取到的数据丢掉。已存在的键保留内存
+     * 里的新值，只补缺失的条目。
+     */
+    let restored: number = 0
+    const now: number = this.clock()
+    for (let i: number = 0; i < snapshots.length; i++) {
+      const item: ToolCacheSnapshot = snapshots[i]
+      if (item.key.length === 0 || !isFinite(item.expiresAt) || item.expiresAt <= now ||
+        item.result.content.length === 0 || !item.result.success) {
+        continue
+      }
+      if (this.map.has(item.key)) {
+        continue
+      }
+      const entry: ToolCacheEntry = new ToolCacheEntry()
+      entry.result = cloneToolResult(item.result)
+      entry.result.fromCache = false
+      entry.expiresAt = item.expiresAt
+      this.map.set(item.key, entry)
+      this.order.push(item.key)
+      this.totalChars += entry.result.content.length
+      restored++
+    }
+    // 恢复后仍按容量上限收敛，避免旧文件把内存撑大
+    this.evictIfNeeded()
+    return restored
   }
 
   /**
@@ -411,6 +523,8 @@ export class ToolResultCache {
   invalidateAll(): void {
     this.map.clear()
     this.order = []
+    this.totalChars = 0
+    this.notifyChanged()
   }
 
   /**
@@ -425,12 +539,20 @@ export class ToolResultCache {
     for (let i: number = 0; i < this.order.length; i++) {
       const key: string = this.order[i]
       if (key.indexOf(marker) >= 0) {
+        const entry: ToolCacheEntry | undefined = this.map.get(key)
+        if (entry !== undefined) {
+          this.totalChars -= entry.result.content.length
+        }
         this.map.delete(key)
         continue
       }
       remaining.push(key)
     }
+    if (this.totalChars < 0) {
+      this.totalChars = 0
+    }
     this.order = remaining
+    this.notifyChanged()
   }
 
   /**
@@ -449,6 +571,42 @@ export class ToolResultCache {
    */
   getStats(): number[] {
     return [this.hits, this.misses]
+  }
+
+  /**
+   * 按容量上限淘汰最久未使用的条目。
+   */
+  private evictIfNeeded(): void {
+    while (this.order.length > this.maxSize || this.totalChars > this.maxTotalChars) {
+      /*
+       * 至少保留最新一条：单条结果本身超过字符上限时（超大读帖 / 网页），
+       * 继续淘汰会把刚写入的条目立刻删掉，缓存等于没有。
+       */
+      if (this.order.length <= 1) {
+        break
+      }
+      const oldest: string | undefined = this.order.shift()
+      if (oldest === undefined) {
+        break
+      }
+      const entry: ToolCacheEntry | undefined = this.map.get(oldest)
+      if (entry !== undefined) {
+        this.totalChars -= entry.result.content.length
+      }
+      this.map.delete(oldest)
+    }
+    if (this.totalChars < 0) {
+      this.totalChars = 0
+    }
+  }
+
+  /**
+   * 通知持久化层内容已变化。
+   */
+  private notifyChanged(): void {
+    if (this.changeListener !== null) {
+      this.changeListener()
+    }
   }
 
   /**
