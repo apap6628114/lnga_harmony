@@ -77,6 +77,17 @@ export class AiSession {
   createdAt: number = 0
   /** 最后更新时间（会话列表排序依据） */
   updatedAt: number = 0
+  /**
+   * 早期对话的**压缩记忆**（生成式摘要）。
+   *
+   * 压缩一次、长期复用：只要历史前缀没变，后续轮次直接拿这份记忆进 system，
+   * 不必每轮重新摘要。存盘后，重进会话也能恢复"聊过什么"。
+   */
+  digest: string = ''
+  /** `digest` 覆盖的历史消息条数（0 表示尚无记忆） */
+  digestCoveredCount: number = 0
+  /** `digest` 覆盖范围的前缀指纹（历史被改动时作废） */
+  digestFingerprint: string = ''
 }
 
 /**
@@ -187,6 +198,9 @@ export function cloneAiSession(src: AiSession): AiSession {
   dest.title = src.title
   dest.createdAt = src.createdAt
   dest.updatedAt = src.updatedAt
+  dest.digest = src.digest
+  dest.digestCoveredCount = src.digestCoveredCount
+  dest.digestFingerprint = src.digestFingerprint
   for (let i: number = 0; i < src.messages.length; i++) {
     dest.messages.push(cloneAiSessionMessage(src.messages[i]))
   }
@@ -213,6 +227,9 @@ export function normalizeAiSession(raw: AiSession): AiSession {
   session.title = readString(raw.title)
   session.createdAt = readNumber(raw.createdAt)
   session.updatedAt = readNumber(raw.updatedAt)
+  session.digest = readString(raw.digest)
+  session.digestCoveredCount = readNumber(raw.digestCoveredCount)
+  session.digestFingerprint = readString(raw.digestFingerprint)
   session.messages = []
   const rawMessages: AiSessionMessage[] = raw.messages
   if (rawMessages !== null && rawMessages !== undefined && Array.isArray(rawMessages)) {

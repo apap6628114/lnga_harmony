@@ -4,9 +4,11 @@ import {
   formatAiCompletionError,
   getReadyToolNames,
   ToolInvocationCallback,
-  AiChatResult
+  AiChatResult,
+  AiConversationMemory
 } from '../../service/ai/ActiveAiService'
 import { AiToolCard, AiToolInvocation, AiToolSource } from '../../service/ai/tools/AiToolAdapter'
+import { ContextUsage } from '../../service/ai/ContextBudget'
 import {
   AiAgentPreset,
   AiTaskContext,
@@ -162,6 +164,15 @@ struct AiChatPage {
   @State private aiStatus: string = ''
   /** 当前轮工具调用时间线 */
   @State private toolInvocations: AiToolInvocation[] = []
+  /**
+   * 最近一轮的上下文占用比例（0..1，用于输入栏上方的记忆条）。
+   *
+   * 拆成 number 而不是直接持有 `ContextUsage` 对象：V1 状态对类实例的属性变化
+   * 观测不可靠，数字整体赋值才稳定触发刷新。
+   */
+  @State private memoryRatio: number = 0
+  /** 记忆条文案（空串表示尚未计算，不显示）。 */
+  @State private memoryText: string = ''
   /** 导航栏标题 */
   @State private title: string = 'AI 助手'
   /** 当前任务名称（空表示自由对话） */
@@ -728,6 +739,11 @@ struct AiChatPage {
     this.requestCanceller = new RequestCanceller()
 
     const history: ChatMessage[] = this.buildHistory()
+    /*
+     * 会话级压缩记忆：把上一次压缩的成果带上，服务层能直接复用就不必重新调模型。
+     * 记忆失效（历史前缀变了）时服务层会自动重算，这里只负责搬运。
+     */
+    const memory: AiConversationMemory = this.currentMemory()
 
     // 延迟到下一帧渲染完成后滚动，避免在旧内容上滚动
     setTimeout((): void => {
@@ -761,7 +777,8 @@ struct AiChatPage {
         toolCallback,
         this.requestCanceller,
         this.preset,
-        this.taskContext
+        this.taskContext,
+        memory
       )
       if (!this.isActiveRequest(requestId)) {
         return
@@ -789,6 +806,10 @@ struct AiChatPage {
       this.bubbles.push(aiBubble)
       /* 供 get_context 展示"本会话最近读过什么"：用户追问细节时模型据此重新取原文 */
       this.syncRecentReads(result.toolInvocations)
+      /* 记忆用量回执：让"它怎么忘了"从黑箱变成可解释的产品行为 */
+      this.applyContextUsage(result.contextUsage)
+      /* 压缩记忆写回会话：下一轮与下次进页面都能直接复用，不必重新摘要 */
+      this.applyConversationMemory(result.memory)
     } catch (err) {
       if (!this.isActiveRequest(requestId)) {
         return
@@ -823,6 +844,67 @@ struct AiChatPage {
         }, 0)
       }
     }
+  }
+
+  /**
+   * 取当前会话的压缩记忆。
+   *
+   * @returns 记忆快照（无会话时为空记忆）
+   */
+  private currentMemory(): AiConversationMemory {
+    const memory: AiConversationMemory = new AiConversationMemory()
+    if (this.session !== null) {
+      memory.digest = this.session.digest
+      memory.coveredCount = this.session.digestCoveredCount
+      memory.fingerprint = this.session.digestFingerprint
+    }
+    return memory
+  }
+
+  /**
+   * 把服务层返回的压缩记忆写回会话。
+   *
+   * 空摘要不写：那是一次失败压缩的回执，写回会把已有记忆覆盖成空。
+   *
+   * @param memory - 服务层更新后的记忆
+   */
+  private applyConversationMemory(memory: AiConversationMemory): void {
+    if (this.session === null || memory.digest.length === 0) {
+      return
+    }
+    this.session.digest = memory.digest
+    this.session.digestCoveredCount = memory.coveredCount
+    this.session.digestFingerprint = memory.fingerprint
+  }
+
+  /**
+   * 更新输入栏上方的「记忆用量」提示。
+   *
+   * 用产品语言而不是 token 数字：普通用户关心的是"还剩多少记忆、有没有被压缩"，
+   * 而不是精确的 token 数（估算值本身也不精确，报出来反而招致质疑）。
+   *
+   * @param usage - 本次请求的上下文占用
+   */
+  private applyContextUsage(usage: ContextUsage): void {
+    if (usage.triggerTokens <= 0) {
+      this.memoryRatio = 0
+      this.memoryText = ''
+      return
+    }
+    const ratio: number = usage.ratio()
+    const percent: number = Math.round(ratio * 100)
+    /* 分母是「压缩触发阈值」：38% 表示"离压缩还有 62%"，而不是"用了窗口的 38%" */
+    const parts: string[] = ['上下文 ' + percent.toString() + '%']
+    if (usage.historyTruncated && usage.foldedTurns > 0) {
+      parts.push('较早 ' + usage.foldedTurns.toString() + ' 轮已压缩')
+    } else if (ratio >= 0.85) {
+      parts.push('接近上限，下次会压缩较早对话')
+    }
+    if (usage.toolCompressed) {
+      parts.push('部分资料已压缩')
+    }
+    this.memoryRatio = ratio
+    this.memoryText = parts.join(' · ')
   }
 
   /**
@@ -1972,6 +2054,36 @@ struct AiChatPage {
   @Builder
   RenderInputBar() {
     Column() {
+      /*
+       * 记忆用量条：让「上下文还剩多少、有没有被压缩」对用户可见。
+       * 只在有数据后出现（memoryText 为空表示尚未产生一次请求）。
+       */
+      if (this.memoryText.length > 0) {
+        Column() {
+          Row() {
+            Row()
+              .width(Math.round(this.memoryRatio * 100).toString() + '%')
+              .height(3)
+              .borderRadius(2)
+              .backgroundColor(this.memoryRatio >= 0.8 ? AppColors.warning : AppColors.primary)
+          }
+          .width('100%')
+          .height(3)
+          .borderRadius(2)
+          .backgroundColor(AppColors.separator)
+
+          Text(this.memoryText)
+            .fontSize(11)
+            .fontColor(AppColors.textSecondary)
+            .width('100%')
+            .textAlign(TextAlign.Center)
+            .margin({ top: 6 })
+        }
+        .width('100%')
+        .constraintSize({ maxWidth: 720 })
+        .padding({ left: 16, right: 16, bottom: 8 })
+      }
+
       Row() {
         TextInput({ text: this.inputText, placeholder: this.isSending ? '正在生成，可点停止…' : '输入问题或追问…' })
           .layoutWeight(1)

@@ -28,6 +28,12 @@ import {
   normalizeAiAgentPreset,
   resolvePresetPrompt
 } from '../../../model/AiAgentPreset'
+import {
+  AiMemorySettings,
+  clampTokenCalibration,
+  memoryKeepRatio,
+  normalizeAiMemorySettings
+} from '../../../model/AiMemoryConfig'
 import { KEY_AI_CONFIG_VERSION } from '../../../common/constants/AppStorageKeys'
 import { bumpAppStorageVersion } from '../../../common/utils/AppStorageVersion'
 
@@ -270,7 +276,20 @@ export class AiSettings {
     }
     // 工具与任务依赖已加载的 aiProfiles（迁移要读激活配置），必须放在最后
     this.loadTools(saved)
+    this.loadMemory(saved)
     this.loadPresets(saved)
+  }
+
+  /**
+   * 加载对话记忆档位。
+   *
+   * 老版本没有该字段，`normalizeAiMemorySettings` 会回落到默认档（长记忆），
+   * 因此不需要迁移标记：未设置 == 默认，语义一致。
+   *
+   * @param saved - 持久化状态
+   */
+  private loadMemory(saved: SettingsState): void {
+    this.ctx.state.aiMemorySettings = normalizeAiMemorySettings(saved.aiMemorySettings)
   }
 
   /**
@@ -444,6 +463,67 @@ export class AiSettings {
    */
   getToolMaxSteps(): number {
     return this.ctx.state.aiToolSettings.maxAgentSteps
+  }
+
+  // ============== 对话记忆 ==============
+
+  /**
+   * 获取对话记忆档位。
+   *
+   * @returns 档位标识（AI_MEMORY_MODE_*）
+   */
+  getMemoryMode(): string {
+    return this.ctx.state.aiMemorySettings.mode
+  }
+
+  /**
+   * 设置对话记忆档位。
+   *
+   * 未知值由 `normalizeAiMemorySettings` 归一为默认档（长记忆），
+   * 保证持久化里出现脏值也不会让预算失效。
+   *
+   * @param mode - 档位标识
+   */
+  setMemoryMode(mode: string): void {
+    const probe: AiMemorySettings = new AiMemorySettings()
+    probe.mode = mode
+    this.ctx.state.aiMemorySettings = normalizeAiMemorySettings(probe)
+    this.ctx.persist()
+    this.notifyAiConfigChanged()
+  }
+
+  /**
+   * 获取当前档位对应的保留比例（裁剪时保留多少历史）。
+   *
+   * @returns 保留比例（0..1）
+   */
+  getMemoryKeepRatio(): number {
+    return memoryKeepRatio(this.ctx.state.aiMemorySettings.mode)
+  }
+
+  /**
+   * 获取 token 估算的校准系数。
+   *
+   * @returns 校准系数（默认 1）
+   */
+  getTokenCalibration(): number {
+    return this.ctx.state.aiMemorySettings.tokenCalibration
+  }
+
+  /**
+   * 更新 token 估算校准系数。
+   *
+   * 刻意**不触发** `notifyAiConfigChanged`：校准每轮都可能微调，
+   * 通知设置页会让整个面板反复重建。它只影响预算计算，不影响配置展示。
+   *
+   * @param factor - 新系数（内部会夹到合法区间）
+   */
+  setTokenCalibration(factor: number): void {
+    const next: AiMemorySettings = new AiMemorySettings()
+    next.mode = this.ctx.state.aiMemorySettings.mode
+    next.tokenCalibration = clampTokenCalibration(factor)
+    this.ctx.state.aiMemorySettings = next
+    this.ctx.persist()
   }
 
   // ============== AI 任务 ==============

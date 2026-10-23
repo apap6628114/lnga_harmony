@@ -29,6 +29,15 @@ import {
   normalizeAiProfile
 } from '../../model/AiConfig'
 import { AiModelInfo } from '../../model/AiModelInfo'
+import { resolveModelContextWindow } from '../../model/AiModelContextWindows'
+import {
+  AI_MEMORY_MODE_BALANCED,
+  AI_MEMORY_MODE_COMPACT,
+  AI_MEMORY_MODE_LONG,
+  DEFAULT_AI_MEMORY_MODE,
+  memoryModeDescription,
+  memoryModeTitle
+} from '../../model/AiMemoryConfig'
 import {
   AiSearchProfile,
   createDefaultAiSearchProfile,
@@ -45,6 +54,7 @@ import {
   getPresetById,
   isDeepSeekProfile,
   isHttpEndpoint,
+  parseContextWindowInput,
   protocolDescription,
   protocolLabel,
   validateProfileInputs
@@ -124,10 +134,24 @@ export struct AiSettingsPanel {
   @State editModelInput: string = ''
   /** 温度参数输入值。 */
   @State editTemperatureInput: number = DEFAULT_AI_TEMPERATURE
+  /**
+   * 上下文窗口输入值（空串 = 未知，按默认预算）。
+   *
+   * 它不是"高级参数"而是工作记忆预算的真源：填了窗口，记忆预算就按窗口推导；
+   * 不填，长对话一律按 24000 token 保守裁剪。`/models` 返回该字段时自动预填。
+   */
+  @State editContextWindowInput: string = ''
   /** 全局工具设置变更版本号（切换开关后强制刷新工具列表）。 */
   @State toolSettingsVersion: number = 0
   /** 全局 Agent 轮数输入框文本。 */
   @State globalAgentStepsInput: string = DEFAULT_AI_MAX_AGENT_STEPS.toString()
+  /**
+   * 对话记忆档位（页面镜像）。
+   *
+   * 用字符串 @State 而不是直接读 store：切换后需要立刻重绘选中态，
+   * V1 状态下只有整体赋值的标量才会稳定触发刷新。
+   */
+  @State memoryModeState: string = DEFAULT_AI_MEMORY_MODE
   /** 任务列表快照（内置在前）。 */
   @State presets: AiAgentPreset[] = []
   /** 当前编辑的任务 ID（空表示不在编辑态，'__new__' 表示新建）。 */
@@ -349,6 +373,7 @@ export struct AiSettingsPanel {
     this.editApiKeyInput = profile.apiKey
     this.editModelInput = profile.modelName
     this.editTemperatureInput = clampAiTemperature(profile.temperature)
+    this.editContextWindowInput = profile.contextWindow > 0 ? profile.contextWindow.toString() : ''
   }
 
   /**
@@ -449,7 +474,8 @@ export struct AiSettingsPanel {
         this.editEndpointInput !== baseline.endpoint ||
         this.editPresetId !== baseline.presetId ||
         this.editProtocol !== baseline.protocol ||
-        this.editTemperatureInput !== DEFAULT_AI_TEMPERATURE
+        this.editTemperatureInput !== DEFAULT_AI_TEMPERATURE ||
+        this.editContextWindowInput.length > 0
     }
     const profile: AiProviderProfile | null = this.findProfile(this.expandedProfileId)
     if (!profile) {
@@ -462,7 +488,8 @@ export struct AiSettingsPanel {
       this.editEndpointInput !== saved.endpoint ||
       this.editPresetId !== saved.presetId ||
       this.editProtocol !== saved.protocol ||
-      this.editTemperatureInput !== clampAiTemperature(saved.temperature)
+      this.editTemperatureInput !== clampAiTemperature(saved.temperature) ||
+      this.editContextWindowInput !== (saved.contextWindow > 0 ? saved.contextWindow.toString() : '')
   }
 
   /** 清空编辑表单缓存和异步结果。 */
@@ -474,6 +501,7 @@ export struct AiSettingsPanel {
     this.editApiKeyInput = ''
     this.editModelInput = ''
     this.editTemperatureInput = DEFAULT_AI_TEMPERATURE
+    this.editContextWindowInput = ''
     this.showAdvancedParams = false
     this.testResultMessage = ''
     this.testSuccess = false
@@ -779,6 +807,7 @@ export struct AiSettingsPanel {
     profile.modelName = this.editModelInput.trim()
     profile.protocol = this.editProtocol
     profile.temperature = clampAiTemperature(this.editTemperatureInput)
+    profile.contextWindow = parseContextWindowInput(this.editContextWindowInput)
     profile.apiKey = this.editApiKeyInput.trim()
 
     if (this.expandedProfileId === NEW_ID) {
@@ -1022,6 +1051,7 @@ export struct AiSettingsPanel {
     profile.modelName = this.editModelInput.trim()
     profile.protocol = this.editProtocol
     profile.temperature = clampAiTemperature(this.editTemperatureInput)
+    profile.contextWindow = parseContextWindowInput(this.editContextWindowInput)
     return profile
   }
 
@@ -1084,6 +1114,18 @@ export struct AiSettingsPanel {
   private selectModel(modelId: string): void {
     this.editModelInput = modelId
     this.showModelList = false
+    /*
+     * 服务商在 `/models` 里返回了窗口就顺手预填：这是记忆预算的真源，
+     * 让用户自己去查文档再手填，等于让这个能力默认不生效。
+     * 不返回时保留用户已填的值，不要清空。
+     */
+    for (let i: number = 0; i < this.modelOptions.length; i++) {
+      const model: AiModelInfo = this.modelOptions[i]
+      if (model.id === modelId && model.contextWindow > 0) {
+        this.editContextWindowInput = model.contextWindow.toString()
+        break
+      }
+    }
   }
 
   /**
@@ -1102,6 +1144,30 @@ export struct AiSettingsPanel {
       parts.push('支持图片')
     }
     return parts.join(' · ')
+  }
+
+  /**
+   * 「上下文窗口」输入框右侧的即时反馈。
+   *
+   * 填了合法值就回显格式化后的窗口（让用户确认自己填对了）；
+   * 留空则明确告知走默认预算，避免"我明明填了却没生效"的困惑。
+   *
+   * @returns 提示文案
+   */
+  private contextWindowHint(): string {
+    const window: number = parseContextWindowInput(this.editContextWindowInput)
+    if (window > 0) {
+      return formatContextWindow(window)
+    }
+    /*
+     * 留空时按已知模型表推断：当前 DeepSeek 官方模型是 1M 窗口，
+     * 若显示"默认预算（24K）"会让用户误以为只能记这么点。
+     */
+    const known: number = resolveModelContextWindow(this.editModelInput)
+    if (known > 0) {
+      return '已按已知模型 ' + formatContextWindow(known)
+    }
+    return '未填 · 默认预算'
   }
 
   /** 测试当前表单中的 AI 连接配置。 */
@@ -2367,6 +2433,49 @@ export struct AiSettingsPanel {
     .width('100%')
     .margin({ bottom: 10 })
 
+    // ---- 上下文窗口（工作记忆预算的真源）----
+    Column() {
+      Row() {
+        Text('上下文窗口')
+          .fontSize(13)
+          .fontColor(AppColors.textSecondary)
+          .layoutWeight(1)
+
+        Text(this.contextWindowHint())
+          .fontSize(11)
+          .fontColor(AppColors.textTertiary)
+      }
+      .width('100%')
+      .margin({ bottom: 4 })
+
+      TextInput({ placeholder: '如 128000，留空按默认预算', text: this.editContextWindowInput })
+        .onChange((v: string) => {
+          this.editContextWindowInput = v
+        })
+        .type(InputType.Number)
+        .width('100%')
+        .height(40)
+        .attributeModifier(UIMaterialManager.inputMaterial)
+        .keyboardAppearance(resolveKeyboardAppearance(this.effectiveColorMode))
+        .borderRadius(8)
+        .fontSize(14)
+        .fontColor(UIMaterialManager.inputForeground)
+        .placeholderColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .caretColor(UIMaterialManager.inputForeground)
+        .padding({ left: 12, right: 12 })
+
+      Text('决定长对话能记住多少：填了窗口就按窗口分配记忆预算（留出输出余量），' +
+        '留空按 24000 token 保守裁剪。拉取模型时若服务商返回窗口会自动填入。')
+        .fontSize(11)
+        .fontColor(AppColors.textTertiary)
+        .width('100%')
+        .margin({ top: 4 })
+        .lineHeight(16)
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .margin({ bottom: 10 })
+
     this.AdvancedParameterFields()
 
     Row() {
@@ -2637,6 +2746,46 @@ export struct AiSettingsPanel {
     }
     this.presets = next
     this.globalAgentStepsInput = appStore.settingsStore.getAiToolMaxSteps().toString()
+    this.memoryModeState = appStore.settingsStore.getMemoryMode()
+  }
+
+  /**
+   * 切换对话记忆档位。
+   *
+   * @param mode - 档位标识（AI_MEMORY_MODE_*）
+   */
+  private setMemoryMode(mode: string): void {
+    if (this.memoryModeState === mode) {
+      return
+    }
+    appStore.settingsStore.setMemoryMode(mode)
+    this.memoryModeState = appStore.settingsStore.getMemoryMode()
+  }
+
+  /**
+   * 记忆档位选项按钮。
+   *
+   * 选中态经 `this.memoryModeState` 读取（而不是参数）：@Builder 按值传参
+   * 不建立响应式依赖，切档后会固化为首次渲染的样式。
+   *
+   * @param mode - 档位标识（调用处一律传静态常量，见 ArkUI V1 约束）
+   */
+  @Builder
+  MemoryModeChip(mode: string) {
+    Text(memoryModeTitle(mode))
+      .fontSize(12)
+      .fontColor(this.memoryModeState === mode ? AppColors.white : AppColors.textSecondary)
+      .backgroundColor(this.memoryModeState === mode ? AppColors.primary : Color.Transparent)
+      .padding({ left: 12, right: 12, top: 5, bottom: 5 })
+      .borderRadius(14)
+      .border({
+        width: 1,
+        color: this.memoryModeState === mode ? AppColors.primary : AppColors.separator,
+        style: BorderStyle.Solid
+      })
+      .onClick((): void => {
+        this.setMemoryMode(mode)
+      })
   }
 
   /**
@@ -3072,6 +3221,36 @@ export struct AiSettingsPanel {
         .alignItems(VerticalAlign.Center)
         .onClick((): void => {
           this.commitGlobalAgentSteps()
+        })
+
+        // ---- 对话记忆档位 ----
+        Column() {
+          Text('对话记忆')
+            .fontSize(13)
+            .fontColor(AppColors.textPrimary)
+            .width('100%')
+          Text(memoryModeDescription(this.memoryModeState))
+            .fontSize(11)
+            .fontColor(AppColors.textTertiary)
+            .width('100%')
+            .margin({ top: 2 })
+
+          Row({ space: 8 }) {
+            this.MemoryModeChip(AI_MEMORY_MODE_COMPACT)
+            this.MemoryModeChip(AI_MEMORY_MODE_BALANCED)
+            this.MemoryModeChip(AI_MEMORY_MODE_LONG)
+          }
+          .width('100%')
+          .margin({ top: 8 })
+          .justifyContent(FlexAlign.Start)
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+        .padding({ left: 12, right: 12, top: 10, bottom: 12 })
+        .border({
+          width: { top: 0.5 },
+          color: { top: AppColors.separator },
+          style: { top: BorderStyle.Solid }
         })
       }
       .width('92%')

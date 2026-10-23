@@ -10,7 +10,8 @@ import {
   AiProviderKind,
   AiProviderProfile,
   DEFAULT_AI_TEMPERATURE,
-  DEFAULT_DEEPSEEK_ENDPOINT
+  DEFAULT_DEEPSEEK_ENDPOINT,
+  clampContextWindow
 } from '../../model/AiConfig'
 import { AiProviderPreset, findProviderPreset, PROVIDER_PRESETS } from './AiModelPresets'
 
@@ -156,6 +157,27 @@ export function formatContextWindow(tokens: number): string {
     return Math.round(tokens / 1000) + 'K 上下文'
   }
   return tokens.toString() + ' 上下文'
+}
+
+/**
+ * 解析「上下文窗口」输入框。
+ *
+ * 空串 / 非法 / 过小的值都归一为 0（表示未知），此时记忆预算回落默认值——
+ * 宁可保守裁剪，也不要按一个猜错的窗口把请求推到超窗。
+ *
+ * @param text - 输入框文本
+ * @returns 规范化后的窗口 token 数（0 表示未知）
+ */
+export function parseContextWindowInput(text: string): number {
+  const trimmed: string = text.trim()
+  if (trimmed.length === 0) {
+    return 0
+  }
+  const value: number = parseInt(trimmed)
+  if (isNaN(value)) {
+    return 0
+  }
+  return clampContextWindow(value)
 }
 
 /**

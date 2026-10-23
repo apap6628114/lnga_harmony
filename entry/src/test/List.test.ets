@@ -33,6 +33,7 @@ import aiUnitTest from './AiUnit.test';
 import aiToolContractTest from './AiToolContract.test';
 import aiToolInputLimitsTest from './AiToolInputLimits.test';
 import aiSessionUnitTest from './AiSessionUnit.test';
+import aiContextSummaryTest from './AiContextSummary.test';
 
 /**
  * 注册全部本地单元测试。
@@ -73,4 +74,5 @@ export default function testsuite(): void {
   aiToolContractTest();
   aiToolInputLimitsTest();
   aiSessionUnitTest();
+  aiContextSummaryTest();
 }

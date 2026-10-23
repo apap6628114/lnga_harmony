@@ -25,6 +25,10 @@ export const SEARCH_PROVIDER_DEEPSEEK: string = 'deepseek'
 export const DEFAULT_AI_MAX_AGENT_STEPS: number = 6
 /** Agent 工具轮数下限（至少允许一次工具调用）。 */
 export const MIN_AI_MAX_AGENT_STEPS: number = 1
+/** 上下文窗口下限（小于该值视为非法输入，按"未知"处理）。 */
+export const MIN_AI_CONTEXT_WINDOW: number = 1024
+/** 上下文窗口上限（防御异常输入；当前主流模型远低于该值）。 */
+export const MAX_AI_CONTEXT_WINDOW: number = 2000000
 /** Agent 工具轮数上限（长链路任务允许极高上限，实际调用仍受取消与超时约束）。 */
 export const MAX_AI_MAX_AGENT_STEPS: number = 1000
 
@@ -73,6 +77,14 @@ export class AiProviderProfile {
   protocol: AiApiProtocol = AiApiProtocol.RESPONSES
   /** 温度参数（0.0 - 2.0，默认 0.7） */
   temperature: number = DEFAULT_AI_TEMPERATURE
+  /**
+   * 模型上下文窗口（token 数，0 表示未知）。
+   *
+   * 是「工作记忆预算」的真源：预算 = 窗口 - 输出/system 预留（见 `ContextBudget.resolveHistoryBudget`）。
+   * 由 `/models` 返回的 context_window 预填（服务商不返回时保持 0），并**允许用户手改**——
+   * 客户端不内置厂商对照表，猜错比不猜更糟。
+   */
+  contextWindow: number = 0
   /** 是否启用客户端工具（**已废弃**：工具开关已全局化，见 AiToolConfig） */
   toolsEnabled: boolean = true
   /** 是否启用联网搜索工具（**已废弃**：仅用于迁移到全局工具设置） */
@@ -173,6 +185,9 @@ export function normalizeAiProfile(raw: AiProviderProfile): AiProviderProfile {
   const temperature: number = typeof raw.temperature === 'number' ? raw.temperature : DEFAULT_AI_TEMPERATURE
   profile.temperature = clampAiTemperature(temperature)
 
+  const contextWindow: number = typeof raw.contextWindow === 'number' ? raw.contextWindow : 0
+  profile.contextWindow = clampContextWindow(contextWindow)
+
   profile.toolsEnabled = raw.toolsEnabled !== false
   profile.enableWebSearch = raw.enableWebSearch !== false
   profile.enableWebFetch = raw.enableWebFetch !== false
@@ -227,6 +242,26 @@ export function clampAgentSteps(value: number): number {
     return DEFAULT_AI_MAX_AGENT_STEPS
   }
   return Math.max(MIN_AI_MAX_AGENT_STEPS, Math.min(MAX_AI_MAX_AGENT_STEPS, Math.round(value)))
+}
+
+/**
+ * 将上下文窗口限制到合法范围。
+ *
+ * 0 表示"未知"是合法值（此时预算回落默认值）；非 0 时夹到
+ * `[MIN_AI_CONTEXT_WINDOW, MAX_AI_CONTEXT_WINDOW]`。
+ *
+ * @param value - 原始窗口值
+ * @returns 规范化后的窗口值
+ */
+export function clampContextWindow(value: number): number {
+  if (typeof value !== 'number' || isNaN(value) || value <= 0) {
+    return 0
+  }
+  const rounded: number = Math.round(value)
+  if (rounded < MIN_AI_CONTEXT_WINDOW) {
+    return 0
+  }
+  return Math.min(rounded, MAX_AI_CONTEXT_WINDOW)
 }
 
 /**

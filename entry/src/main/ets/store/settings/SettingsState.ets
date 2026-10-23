@@ -7,6 +7,7 @@ import type { UserNoteEntry } from '../../model/NoteInfo'
 import type { AiProviderProfile } from '../../model/AiConfig'
 import type { AiSearchProfile } from '../../model/AiSearchConfig'
 import { AiToolSettings } from '../../model/AiToolConfig'
+import { AiMemorySettings } from '../../model/AiMemoryConfig'
 import { AiAgentPreset } from '../../model/AiAgentPreset'
 
 
@@ -70,6 +71,13 @@ export class SettingsState {
    * 不再有 `AiProviderProfile.toolsEnabled` 那类按模型区分的字段。
    */
   aiToolSettings: AiToolSettings = new AiToolSettings()
+  /**
+   * 对话框记忆档位（裁剪时保留多少历史）。
+   *
+   * 与 `aiToolSettings` 分开：工具设置管"能用什么、跑几轮"，
+   * 这里管"记得住多少"。默认长记忆。
+   */
+  aiMemorySettings: AiMemorySettings = new AiMemorySettings()
   /** AI 任务（预设）列表，含内置任务（builtin=true） */
   aiPresets: AiAgentPreset[] = []
   /**

@@ -317,6 +317,13 @@ export class SettingsStore extends BaseStore<SettingsState> {
   setAiToolMaxSteps(steps: number): void { this.aiSettings.setToolMaxSteps(steps) }
   getAiToolMaxSteps(): number { return this.aiSettings.getToolMaxSteps() }
 
+  // --- AI 对话记忆（档位决定裁剪时保留多少历史） ---
+  getMemoryMode(): string { return this.aiSettings.getMemoryMode() }
+  setMemoryMode(mode: string): void { this.aiSettings.setMemoryMode(mode) }
+  getMemoryKeepRatio(): number { return this.aiSettings.getMemoryKeepRatio() }
+  getTokenCalibration(): number { return this.aiSettings.getTokenCalibration() }
+  setTokenCalibration(factor: number): void { this.aiSettings.setTokenCalibration(factor) }
+
   // --- AI 任务（预设） ---
   listAiPresets(): AiAgentPreset[] { return this.aiSettings.listPresets() }
   listAiPresetsByEntry(entry: string): AiAgentPreset[] { return this.aiSettings.listPresetsByEntry(entry) }

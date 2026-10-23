@@ -24,12 +24,23 @@ import {
 } from '../../model/AiAgentPreset'
 import { ChatMessage, AiTokenUsage, RequestCanceller } from './AiProtocolTypes'
 import {
-  DEFAULT_HISTORY_TOKEN_BUDGET,
+  ContextUsage,
   HistoryFitResult,
-  buildFoldedHistorySection,
-  fitHistoryToBudget
+  KEEP_RECENT_TURNS,
+  buildFoldedTurnsSection,
+  estimateConversationTokens,
+  estimateMessageTokens,
+  fitHistoryToBudget,
+  historyFingerprint,
+  nextCalibrationFactor,
+  resolveHistoryBudget,
+  resolveToolResultBudget,
+  resolveTriggerTokens
 } from './ContextBudget'
+import { memoryKeepRatio, memoryTriggerRatio } from '../../model/AiMemoryConfig'
 import { runAiAgent, AiAgentOptions, AiAgentResult } from './AiAgentRunner'
+import { resolveModelContextWindow } from '../../model/AiModelContextWindows'
+import { buildSummarySection, summarizeFoldedHistory } from './ContextSummarizer'
 import { AiToolCard, AiToolContext, AiToolInvocation, AiToolSource } from './tools/AiToolAdapter'
 import { aiToolRegistry } from './tools/ToolRegistry'
 import { aiSearchProviderRegistry } from './search/SearchProviderRegistry'
@@ -49,6 +60,29 @@ export type ChatStatusCallback = (status: string) => void
  * 页面直接整体替换即可（避免局部合并导致的状态漏更新）。
  */
 export type ToolInvocationCallback = (invocations: AiToolInvocation[]) => void
+
+/**
+ * 会话级压缩记忆（跨轮复用）。
+ *
+ * 压缩一次、长期复用：只要历史前缀没变，后续轮次直接用这份记忆拼 system，
+ * 不必每轮重新调模型摘要。存盘后重进会话也能恢复"聊过什么"。
+ */
+export class AiConversationMemory {
+  /** 压缩后的记忆文本（空串表示还没有） */
+  digest: string = ''
+  /** 覆盖的历史消息条数 */
+  coveredCount: number = 0
+  /** 覆盖范围的前缀指纹 */
+  fingerprint: string = ''
+}
+
+/** 一次折叠计算的产物（system 段落 + 更新后的记忆）。 */
+class FoldedResult {
+  /** 拼进 system 的段落 */
+  section: string = ''
+  /** 更新后的记忆 */
+  memory: AiConversationMemory = new AiConversationMemory()
+}
 
 /** 对话调用结果。 */
 export class AiChatResult {
@@ -72,6 +106,10 @@ export class AiChatResult {
   hitToolBudget: boolean = false
   /** 本次提问（含工具轮）累计 token 用量 */
   usage: AiTokenUsage = new AiTokenUsage()
+  /** 本次请求的上下文占用（供页面展示"记忆用量"） */
+  contextUsage: ContextUsage = new ContextUsage()
+  /** 更新后的压缩记忆（页面据此写回会话） */
+  memory: AiConversationMemory = new AiConversationMemory()
   /**
    * 本次文本是否为本机生成的兜底文案（模型没有产出内容时）。
    *
@@ -195,6 +233,7 @@ export function getToolAvailabilityHint(): string {
  * @param canceller - 可选的请求取消令牌
  * @param preset - 可选的任务（决定提示词与工具白名单）
  * @param taskContext - 可选的页面上下文
+ * @param memory - 可选的会话压缩记忆（跨轮复用；为空时本轮重新压缩）
  * @returns 对话结果
  */
 export async function chatCompleteWithActiveAiStream(
@@ -204,7 +243,8 @@ export async function chatCompleteWithActiveAiStream(
   onToolCall?: ToolInvocationCallback,
   canceller?: RequestCanceller,
   preset?: AiAgentPreset | null,
-  taskContext?: AiTaskContext
+  taskContext?: AiTaskContext,
+  memory?: AiConversationMemory
 ): Promise<AiChatResult> {
   const profile: AiProviderProfile | null = getActiveAiProfile()
   const validationMessage: string = getActiveAiValidationMessage()
@@ -219,15 +259,44 @@ export async function chatCompleteWithActiveAiStream(
   // 任务提示词 + 上下文说明 + 工具可用性：放在 system 消息里，
   // 正文数据仍由模型调用工具读取。
   /*
-   * 历史先按 token 预算裁剪：超窗轮次移出上下文并折成"问过什么"的清单。
-   * 不裁剪的话长会话会先撞服务端窗口、再撞账单。
+   * 上下文策略：**先把窗口用满，接近上限才压缩**。
+   *
+   * 窗口按三级取值：
+   * 1. 用户手填 / `/models` 预填（`profile.contextWindow`）；
+   * 2. 已知模型窗口表（官方价目表，见 `model/AiModelContextWindows.ets`）；
+   * 3. 都没有 → 假设 128K（现代模型保守下限），而不是 24K。
+   *
+   * 触发阈值由档位决定（长记忆 95%）：绝大多数会话根本不会走到压缩这一步。
    */
-  const fit: HistoryFitResult = fitHistoryToBudget(messages, DEFAULT_HISTORY_TOKEN_BUDGET)
+  const contextWindow: number = profile.contextWindow > 0
+    ? profile.contextWindow
+    : resolveModelContextWindow(profile.modelName)
+  /*
+   * 校准：本地估算按字符启发式，中文通常被高估 1.1–1.6 倍。
+   * 用服务端返回的真实 `promptTokens` 反推系数，预算按 `预算 / 系数` 放宽或收紧，
+   * 让"上下文 N%"和"是否超窗"都贴近真实。系数未观测到样本时为 1。
+   */
+  const calibration: number = appStore.settingsStore.getTokenCalibration()
+  const rawBudget: number = resolveHistoryBudget(contextWindow)
+  const historyBudget: number = Math.max(4096, Math.floor(rawBudget / calibration))
+  const memoryMode: string = appStore.settingsStore.getMemoryMode()
+  const triggerTokens: number = resolveTriggerTokens(historyBudget, memoryTriggerRatio(memoryMode))
+  const fit: HistoryFitResult = fitHistoryToBudget(messages, triggerTokens,
+    memoryKeepRatio(memoryMode), KEEP_RECENT_TURNS)
+  /*
+   * 折叠段：优先复用会话里已有的压缩记忆（不调模型）；记忆失效或不存在时才重新压缩。
+   * 失败会回落到抽取式清单，所以这一步不会阻断对话。
+   */
+  const folded: FoldedResult = await resolveFoldedSection(
+    profile, messages, fit, contextWindow, canceller, onStatus, memory)
+  const foldedSection: string = folded.section
   const conversation: ChatMessage[] = buildConversation(
-    fit, effectivePreset, toolContext)
+    fit, effectivePreset, toolContext, foldedSection)
   if (fit.truncated) {
-    logger.info('history trimmed: kept=%{public}d, dropped=%{public}d, folded=%{public}d, estimated=%{public}d tokens',
-      fit.messages.length, fit.droppedMessages, fit.foldedQuestions.length, fit.estimatedTokens)
+    logger.info('history trimmed: budget=%{public}d, trigger=%{public}d, kept=%{public}d, dropped=%{public}d, summarized=%{public}s, reuse=%{public}s, estimated=%{public}d tokens',
+      historyBudget, triggerTokens, fit.messages.length, fit.droppedMessages,
+      String(foldedSection.indexOf('【较早对话的记忆】') >= 0),
+      String(folded.memory.fingerprint.length > 0 && folded.memory.digest.length > 0), fit.estimatedTokens)
   }
 
   const invocations: AiToolInvocation[] = []
@@ -241,6 +310,9 @@ export async function chatCompleteWithActiveAiStream(
     onToolCall?.(copyInvocations(invocations))
   }
   options.canceller = canceller ?? null
+  // 工具结果纳入同一份上下文预算：长会话的真实超窗风险来自被读进来的正文，
+  // 而不是历史文本（见 ContextBudget 文件头）
+  options.toolResultTokenBudget = resolveToolResultBudget(historyBudget)
 
   const agentResult: AiAgentResult = await runAiAgent(profile, toolContext, conversation, options)
 
@@ -257,6 +329,14 @@ export async function chatCompleteWithActiveAiStream(
   result.hitStepLimit = agentResult.hitStepLimit
   result.hitToolBudget = agentResult.hitToolBudget
   result.usage = agentResult.usage
+  result.contextUsage = buildContextUsage(conversation, fit, historyBudget, triggerTokens, agentResult)
+  result.memory = folded.memory
+  /* 用本轮真实输入 token 更新校准系数；偏差太小就不写盘，避免每轮都持久化 */
+  const nextCalibration: number = nextCalibrationFactor(calibration,
+    agentResult.lastEstimatedPromptTokens, agentResult.lastActualPromptTokens)
+  if (Math.abs(nextCalibration - calibration) > 0.02) {
+    appStore.settingsStore.setTokenCalibration(nextCalibration)
+  }
 
   if (result.text.trim().length === 0) {
     const failureText: string = buildEmptyAnswerText(agentResult)
@@ -264,10 +344,127 @@ export async function chatCompleteWithActiveAiStream(
     result.localFallback = true
     onDelta(failureText)
   }
-  logger.info('chatComplete done: text=%{public}d chars, tools=%{public}d, cards=%{public}d, truncated=%{public}s, tokens=%{public}d (cached %{public}d)',
+  logger.info('chatComplete done: text=%{public}d chars, tools=%{public}d, cards=%{public}d, truncated=%{public}s, tokens=%{public}d (cached %{public}d), context=%{public}d/%{public}d (tool=%{public}d, folded=%{public}d, calib=%{public}s)',
     result.text.length, result.toolInvocations.length, result.cards.length, String(result.truncated),
-    result.usage.totalTokens, result.usage.cachedTokens)
+    result.usage.totalTokens, result.usage.cachedTokens,
+    result.contextUsage.usedTokens(), result.contextUsage.triggerTokens,
+    result.contextUsage.toolTokens, result.contextUsage.foldedTurns,
+    appStore.settingsStore.getTokenCalibration().toFixed(2))
   return result
+}
+
+/**
+ * 汇总一次请求的上下文占用。
+ *
+ * 分项口径：
+ * - `systemTokens` = 组装后对话总量 - 历史保留量 - 工具结果量；
+ * - `historyTokens` = 裁剪后实际发送的历史；
+ * - `toolTokens` = 回传给模型的工具结果（Agent 循环内累计）。
+ *
+ * 三者相加才是模型真正看到的输入，页面据此画「记忆占用」。
+ *
+ * @param conversation - 实际发送的消息（含 system）
+ * @param fit - 历史裁剪结果
+ * @param historyBudget - 本次历史可用预算
+ * @param triggerTokens - 本次压缩触发阈值（UI 进度以它为分母）
+ * @param agentResult - Agent 运行结果
+ * @returns 上下文占用
+ */
+function buildContextUsage(conversation: ChatMessage[], fit: HistoryFitResult,
+  historyBudget: number, triggerTokens: number, agentResult: AiAgentResult): ContextUsage {
+  const usage: ContextUsage = new ContextUsage()
+  usage.budgetTokens = historyBudget
+  usage.triggerTokens = triggerTokens
+  usage.foldedTurns = fit.foldedTurns.length + fit.foldedOmitted
+  usage.historyTruncated = fit.truncated
+  usage.toolTokens = agentResult.toolTokens
+  usage.toolCompressed = agentResult.toolCompressed
+  let historyTokens: number = 0
+  for (let i: number = 0; i < fit.messages.length; i++) {
+    historyTokens += estimateMessageTokens(fit.messages[i])
+  }
+  usage.historyTokens = historyTokens
+  const total: number = estimateConversationTokens(conversation) + agentResult.toolTokens
+  const systemTokens: number = total - historyTokens - agentResult.toolTokens
+  usage.systemTokens = systemTokens > 0 ? systemTokens : 0
+  return usage
+}
+
+/**
+ * 生成「较早对话」的 system 段落。
+ *
+ * 优先用**生成式摘要**（调一次模型，压成结论要点）；摘要失败或模型无产出时，
+ * 回落到抽取式折叠清单（问题 + 回答首句）。后者信息密度低，但永不为空——
+ * 这让"压缩"这件事既不会失败，也不会因为失败而退化成完全失忆。
+ *
+ * @param profile - AI 配置（摘要复用当前模型）
+ * @param messages - 完整历史（裁剪前）
+ * @param fit - 裁剪结果
+ * @param canceller - 取消令牌
+ * @param onStatus - 状态回调（摘要期间显示"正在整理"）
+ * @returns system 段落；未裁剪时为空串
+ */
+async function resolveFoldedSection(profile: AiProviderProfile, messages: ChatMessage[],
+  fit: HistoryFitResult, contextWindow: number, canceller: RequestCanceller | undefined,
+  onStatus: ChatStatusCallback | undefined,
+  memory: AiConversationMemory | undefined): Promise<FoldedResult> {
+  const result: FoldedResult = new FoldedResult()
+  const previous: AiConversationMemory = memory ?? new AiConversationMemory()
+  result.memory = copyMemory(previous)
+  if (!fit.truncated) {
+    return result
+  }
+  const dropped: ChatMessage[] = []
+  for (let i: number = 0; i < fit.droppedMessages && i < messages.length; i++) {
+    dropped.push(messages[i])
+  }
+  if (dropped.length === 0) {
+    return result
+  }
+  const fingerprint: string = historyFingerprint(messages, fit.droppedMessages)
+
+  // 1) 完全命中：覆盖范围与指纹都一致 → 直接复用，零模型调用
+  if (previous.digest.length > 0 && previous.coveredCount === fit.droppedMessages &&
+    previous.fingerprint === fingerprint) {
+    result.section = buildSummarySection(previous.digest, fit.foldedOmitted)
+    return result
+  }
+
+  // 2) 旧记忆覆盖的是前缀（历史只追加）→ 增量更新，在旧记忆上补充
+  let incrementalBase: string = ''
+  if (previous.digest.length > 0 && previous.coveredCount > 0 &&
+    previous.coveredCount <= fit.droppedMessages &&
+    previous.fingerprint === historyFingerprint(messages, previous.coveredCount)) {
+    incrementalBase = previous.digest
+  }
+
+  onStatus?.('正在整理较早的对话...')
+  const summary: string = await summarizeFoldedHistory(
+    profile, dropped, contextWindow, canceller === undefined ? null : canceller, incrementalBase)
+  if (summary.length > 0) {
+    result.section = buildSummarySection(summary, fit.foldedOmitted)
+    result.memory.digest = summary
+    result.memory.coveredCount = fit.droppedMessages
+    result.memory.fingerprint = fingerprint
+    return result
+  }
+  // 3) 压缩失败 → 抽取式兜底；**不写入记忆**，避免把劣质摘要固化下来
+  result.section = buildFoldedTurnsSection(fit.foldedTurns, fit.foldedOmitted)
+  return result
+}
+
+/**
+ * 复制一份记忆（避免页面状态与服务层共享引用）。
+ *
+ * @param src - 源记忆
+ * @returns 新记忆
+ */
+function copyMemory(src: AiConversationMemory): AiConversationMemory {
+  const dest: AiConversationMemory = new AiConversationMemory()
+  dest.digest = src.digest
+  dest.coveredCount = src.coveredCount
+  dest.fingerprint = src.fingerprint
+  return dest
 }
 
 /**
@@ -286,10 +483,11 @@ export async function chatCompleteWithActiveAiStream(
  * @param fit - 已按预算裁剪的历史
  * @param preset - 任务（可为 null）
  * @param toolContext - 工具执行上下文（用于判断上下文工具是否可用）
+ * @param foldedSection - 较早对话的说明段（生成式摘要或抽取式折叠清单，空串表示无裁剪）
  * @returns 组装后的消息
  */
 function buildConversation(fit: HistoryFitResult, preset: AiAgentPreset | null,
-  toolContext: AiToolContext): ChatMessage[] {
+  toolContext: AiToolContext, foldedSection: string): ChatMessage[] {
   const systemParts: string[] = []
   if (preset !== null) {
     const prompt: string = resolvePresetPrompt(preset, appStore.settings.scenarioSystemPrompts)
@@ -297,7 +495,6 @@ function buildConversation(fit: HistoryFitResult, preset: AiAgentPreset | null,
       systemParts.push(prompt.trim())
     }
   }
-  const foldedSection: string = buildFoldedHistorySection(fit.foldedQuestions, fit.foldedOmitted)
   if (foldedSection.length > 0) {
     systemParts.push(foldedSection)
   }
