@@ -20,6 +20,7 @@ import {
   DraftMediaCleanupResult
 } from '../common/media/DraftMediaStore'
 import { ReadingProgressStore } from './ReadingProgressStore'
+import { AiSessionStore } from './AiSessionStore'
 import { floatingLayerStore } from './FloatingLayerStore'
 import { SessionGuard, sessionGuard as globalSessionGuard } from './SessionGuard'
 import { setAuthFailureHandler } from '../service/NgaClient'
@@ -34,6 +35,7 @@ import type { ReadingProgressEntry } from './ReadingProgressStore'
 import type { ToastState } from '../common/feedback/ToastManager'
 import type { ProfileData } from '../model/User'
 import type { ThreadResult } from '../model/ThreadResult'
+import type { AiSession } from '../model/AiSession'
 import type { NgaNotification } from '../model/Notification'
 import type { FollowedActivity } from '../model/Follow'
 import type { TrackedThread, TrackStopNotice } from '../model/TrackedThread'
@@ -141,6 +143,8 @@ class AppStoreClass {
   readonly trackedThreadStore: TrackedThreadStore = new TrackedThreadStore()
   /** 帖子阅读进度（按账号隔离，用于下次进入时恢复阅读位置）。 */
   readonly readingProgressStore: ReadingProgressStore = new ReadingProgressStore()
+  /** AI 对话会话（按账号隔离，提供跨页面/跨启动的对话记忆）。 */
+  readonly aiSessionStore: AiSessionStore = new AiSessionStore()
   readonly toastManager: ToastManager = new ToastManager()
 
   // ============== Init & Lifecycle ==============
@@ -327,6 +331,7 @@ class AppStoreClass {
     await this.followActivityStore.init(this.store, this.writeQueue, this.authStore.state)
     await this.favoriteStore.init(this.store, this.writeQueue, this.authStore.state)
     await this.trackedThreadStore.init(this.store, this.writeQueue, this.authStore.state)
+    await this.aiSessionStore.init(this.store, this.writeQueue, this.authStore.state)
     /* 浏览历史兼作主题列表的已读台账（看过 / 有更新标记的数据源），随用户数据一并预载：
        它是懒加载的，不在这里拉起的话列表会先按"全部没看过"渲染一遍再刷新（见 HistoryStore.preload） */
     await this.historyStore.preload(this.authStore.state.uid)
@@ -375,6 +380,7 @@ class AppStoreClass {
     this.readingProgressStore.reset()
     this.favoriteStore.reset()
     this.trackedThreadStore.reset()
+    this.aiSessionStore.reset()
     floatingLayerStore.clear()
     routerStore.reset()
     // 与 setAuth 对称：退出后统一协调轮询状态（此时未认证 → 停止轮询，幂等无害）
@@ -631,6 +637,23 @@ class AppStoreClass {
   saveReadingProgress(uid: string, entry: ReadingProgressEntry): Promise<void> {
     return this.readingProgressStore.setProgress(uid, entry)
   }
+
+  // ---------- Facade: AI Sessions（对话记忆） ----------
+
+  /** 全部 AI 会话（按最后更新倒序）。 */
+  listAiSessions(): AiSession[] { return this.aiSessionStore.listSessions() }
+  /** 按 ID 读取 AI 会话副本。 */
+  getAiSession(id: string): AiSession | null { return this.aiSessionStore.getSession(id) }
+  /** 创建一条新的 AI 会话（首次保存时才落盘）。 */
+  createAiSession(presetId: string, presetName: string): AiSession {
+    return this.aiSessionStore.createSession(presetId, presetName)
+  }
+  /** 保存（覆盖）AI 会话。 */
+  saveAiSession(session: AiSession): void { this.aiSessionStore.saveSession(session) }
+  /** 删除指定 AI 会话。 */
+  deleteAiSession(id: string): void { this.aiSessionStore.deleteSession(id) }
+  /** 清空当前账号的全部 AI 会话。 */
+  clearAiSessions(): void { this.aiSessionStore.clearAllSessions() }
 
   // ---------- Facade: Toast ----------
 

@@ -23,6 +23,15 @@ import {
 import { aiSearchProviderRegistry } from '../../service/ai/search/SearchProviderRegistry'
 import { AiSearchProvider } from '../../service/ai/search/AiSearchProvider'
 import { AiSearchProfile } from '../../model/AiSearchConfig'
+import {
+  AI_SESSION_ROLE_ASSISTANT,
+  AI_SESSION_ROLE_USER,
+  AiSession,
+  AiSessionMessage,
+  MAX_AI_SESSION_TOOL_NOTES,
+  formatAiSessionTime,
+  sessionSubtitle
+} from '../../model/AiSession'
 import { MdContentView } from '../../common/components/MdContentView'
 import { MdStreamingContentView } from '../../common/components/MdStreamingContentView'
 import { PanelNavBar } from '../../common/components/PanelNavBar'
@@ -35,6 +44,7 @@ import { resolveKeyboardAppearance } from '../../common/utils/KeyboardAppearance
 import { openSystemLink } from '../../common/utils/LinkUtils'
 import { pasteboard } from '@kit.BasicServicesKit'
 import { common } from '@kit.AbilityKit'
+import { AlertDialog } from '@kit.ArkUI'
 
 /** 流式输出默认刷新间隔毫秒数 */
 const DEFAULT_FLUSH_INTERVAL_MS: number = 80
@@ -86,6 +96,14 @@ class ChatBubble {
    * 这类内容不属于模型回复，不能作为 assistant 历史回传给下一轮。
    */
   localOnly: boolean = false
+  /**
+   * 工具证据行（这一轮读过什么）。
+   *
+   * 与 `toolInvocations` 的分工：后者是**本轮实时时间线**（含状态 / 耗时 / 缓存标记），
+   * 只在页面生命周期内存在；本字段是**可持久化的短摘要**，恢复历史会话后靠它展示
+   * "这轮依据什么"。两者都不会进请求体。
+   */
+  evidence: string[] = []
 
   constructor(role: string, content: string, isStreaming: boolean) {
     this.id = 'cb_' + Date.now() + '_' + Math.floor(Math.random() * 100000)
@@ -158,6 +176,10 @@ struct AiChatPage {
   @State private toolSummaries: AiToolSummary[] = []
   /** 是否展开任务选择面板 */
   @State private showTaskPicker: boolean = false
+  /** 历史会话列表（打开历史面板时刷新） */
+  @State private historySessions: AiSession[] = []
+  /** 是否展开历史会话面板 */
+  @State private showHistory: boolean = false
   /** 状态栏高度。 */
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   /**
@@ -173,6 +195,8 @@ struct AiChatPage {
   private initialPrompt: string = ''
   /** 当前任务（空表示自由对话） */
   private preset: AiAgentPreset | null = null
+  /** 当前会话（对话记忆的载体；首次产生消息后才落盘） */
+  private session: AiSession | null = null
   /** 页面上下文（帖子 / 用户 / 版块标识） */
   private taskContext: AiTaskContext = new AiTaskContext()
   /** 流式输出完整缓冲，普通字段更新不会触发 ArkUI 重建。 */
@@ -195,9 +219,38 @@ struct AiChatPage {
   /** 滚动控制器 */
   private scroller: Scroller = new Scroller()
 
+  /**
+   * 清空全部对话记录确认框。
+   *
+   * 与浏览历史面板同一套写法：官方 `AlertDialog` + 系统沉浸材质 + 统一遮罩资源
+   * （`UIMaterialManager.scrim`），不再用页面内手搓的 0x66000000 蒙层。
+   */
+  private clearHistoryDialogController: CustomDialogController = new CustomDialogController({
+    backgroundColor: Color.Transparent,
+    systemMaterial: UIMaterialManager.dialogMaterial,
+    maskColor: UIMaterialManager.scrim,
+    builder: AlertDialog({
+      primaryTitle: '清空对话记录',
+      content: '删除本机保存的全部 AI 对话？此操作不可撤销。',
+      primaryButton: {
+        value: '清空',
+        fontColor: AppColors.white,
+        background: AppColors.destructive,
+        action: () => {
+          this.clearAllHistory()
+        }
+      },
+      secondaryButton: {
+        value: '取消'
+      }
+    }),
+    autoCancel: true
+  })
+
   aboutToAppear(): void {
     this.scope.begin()
     const params: Record<string, Object> = this.getUIContext().getRouter().getParams() as Record<string, Object>
+    const sessionId: string = params ? readParam(params, 'sessionId') : ''
     if (params) {
       this.initialPrompt = readParam(params, 'initialPrompt')
       const t: string = readParam(params, 'title')
@@ -223,6 +276,15 @@ struct AiChatPage {
     this.tasks = appStore.settingsStore.listAiPresetsByEntry(PRESET_ENTRY_GLOBAL)
     // 自由对话（无 presetId）时 applyPresetById 不会被调用，这里补一次工具声明
     this.refreshToolSummaries()
+    /*
+     * 会话记忆：路由带 sessionId 说明是从「历史对话」进来的，恢复原会话；
+     * 否则按当前任务新开一条（从帖子 / 用户页进入 AI 就是一次新对话，与改造前心智一致）。
+     */
+    if (sessionId.length > 0) {
+      this.restoreSession(sessionId)
+    } else {
+      this.beginNewSession()
+    }
     // 未登录时站内工具全部不可用，必须显式告知；缺搜索服务等配置在工具声明面板里展示，
     // 不在这里反复 toast，避免每次进入对话页都打扰。
     if (!appStore.auth.isAuthenticated) {
@@ -234,6 +296,11 @@ struct AiChatPage {
   }
 
   aboutToDisappear(): void {
+    /*
+     * 先落盘再作废页面作用域：scope.end() 之后正在跑的请求会被判为过期，
+     * 其 finally 分支不再写会话，所以这一行是"离开页面必存"的最后一道。
+     */
+    this.persistSession()
     this.scope.end()
     // 中断仍在进行中的 AI 流式请求，避免网络与解析资源空耗
     this.requestCanceller.cancel()
@@ -246,6 +313,234 @@ struct AiChatPage {
    */
   onPageShow(): void {
     this.scrollToBottom()
+  }
+
+  // ============================================================
+  // 会话记忆
+  // ============================================================
+
+  /**
+   * 开启一条新会话（不落盘；首次产生消息时由 {@link persistSession} 保存）。
+   *
+   * 会话归属由当前任务决定：任务切换 / 清空对话都会走这里，保证"一个任务的一条对话线"
+   * 在历史列表里可辨认。
+   */
+  private beginNewSession(): void {
+    const presetId: string = this.preset !== null ? this.preset.id : ''
+    const presetName: string = this.preset !== null ? this.preset.name : ''
+    /* 新会话不继承上一个会话的"最近读过"：否则 get_context 会把别的会话的资料报给模型 */
+    this.taskContext.recentReads = []
+    this.session = appStore.createAiSession(presetId, presetName)
+  }
+
+  /**
+   * 恢复一条历史会话。
+   *
+   * 任务以**会话记录**为准而不是路由参数：任务可能已经被删除，此时回落自由对话，
+   * 但对话内容照常可读——记忆不该因为任务被删而消失。
+   *
+   * @param sessionId - 会话 ID
+   */
+  private restoreSession(sessionId: string): void {
+    const restored: AiSession | null = appStore.getAiSession(sessionId)
+    if (restored === null) {
+      this.beginNewSession()
+      appStore.showToast('该会话已不存在')
+      return
+    }
+    this.session = restored
+    /* 恢复会话时先清空上一个会话的"最近读过"，再由本会话最后一轮证据回填 */
+    this.taskContext.recentReads = []
+    const preset: AiAgentPreset | null = restored.presetId.length > 0
+      ? appStore.settingsStore.getAiPreset(restored.presetId)
+      : null
+    if (preset !== null) {
+      this.applyPresetById(preset.id, false)
+    } else {
+      this.applyPresetById('', false)
+    }
+    this.title = preset !== null ? preset.name : 'AI 助手'
+    this.bubbles = this.buildBubblesFromSession(restored)
+    /*
+     * 从最近一轮的助手消息里恢复"读过什么"：恢复后第一次追问细节时，
+     * get_context 就能告诉模型该重新读哪篇帖子，而不是让它对着历史文本猜。
+     */
+    for (let i: number = restored.messages.length - 1; i >= 0; i--) {
+      if (restored.messages[i].role === AI_SESSION_ROLE_ASSISTANT &&
+        restored.messages[i].toolNotes.length > 0) {
+        this.taskContext.recentReads = restored.messages[i].toolNotes
+        break
+      }
+    }
+    this.resetStreamingState()
+    this.showHistory = false
+    setTimeout((): void => {
+      this.scrollToBottom()
+    }, 0)
+  }
+
+  /**
+   * 把持久化的消息还原成气泡。
+   *
+   * 恢复出来的气泡没有实时工具时间线（那些对象只存在于一次运行内），
+   * 依据信息改由 `evidence` 承担，见 {@link ChatBubble.evidence}。
+   *
+   * @param session - 会话
+   * @returns 气泡数组
+   */
+  private buildBubblesFromSession(session: AiSession): ChatBubble[] {
+    const bubbles: ChatBubble[] = []
+    for (let i: number = 0; i < session.messages.length; i++) {
+      const message: AiSessionMessage = session.messages[i]
+      const bubble: ChatBubble = new ChatBubble(message.role, message.content, false)
+      for (let j: number = 0; j < message.toolNotes.length; j++) {
+        bubble.evidence.push(message.toolNotes[j])
+      }
+      bubbles.push(bubble)
+    }
+    return bubbles
+  }
+
+  /**
+   * 把当前气泡落盘为会话记忆。
+   *
+   * 只写"真实的对话"：失败气泡、被停止的半截回答、本机兜底文案都不是模型产出，
+   * 写进去会让下一轮的上下文出现"AI 说过但其实是客户端提示"的伪事实。
+   */
+  private persistSession(): void {
+    if (this.session === null) {
+      return
+    }
+    const messages: AiSessionMessage[] = []
+    const now: number = Date.now()
+    for (let i: number = 0; i < this.bubbles.length; i++) {
+      const bubble: ChatBubble = this.bubbles[i]
+      if (bubble.content.trim().length === 0) {
+        continue
+      }
+      if (bubble.role === AI_SESSION_ROLE_USER) {
+        messages.push(this.toSessionMessage(AI_SESSION_ROLE_USER, bubble.content, [], now))
+        continue
+      }
+      if (bubble.isStreaming || bubble.failed || bubble.stopped || bubble.localOnly) {
+        continue
+      }
+      messages.push(this.toSessionMessage(AI_SESSION_ROLE_ASSISTANT, bubble.content, bubble.evidence, now))
+    }
+    if (messages.length === 0) {
+      return
+    }
+    this.session.messages = messages
+    this.session.presetId = this.preset !== null ? this.preset.id : ''
+    this.session.presetName = this.preset !== null ? this.preset.name : ''
+    appStore.saveAiSession(this.session)
+  }
+
+  /**
+   * 构造一条待持久化的消息。
+   *
+   * @param role - 角色
+   * @param content - 正文
+   * @param notes - 工具证据行（仅 assistant）
+   * @param createdAt - 时间戳
+   * @returns 消息
+   */
+  private toSessionMessage(role: string, content: string, notes: string[],
+    createdAt: number): AiSessionMessage {
+    const message: AiSessionMessage = new AiSessionMessage()
+    message.role = role
+    message.content = content
+    message.createdAt = createdAt
+    for (let i: number = 0; i < notes.length && i < MAX_AI_SESSION_TOOL_NOTES; i++) {
+      message.toolNotes.push(notes[i])
+    }
+    return message
+  }
+
+  /**
+   * 本轮工具调用的可读摘要（用于恢复会话后展示依据）。
+   *
+   * @param invocations - 工具时间线
+   * @returns 摘要行
+   */
+  private buildEvidenceLines(invocations: AiToolInvocation[]): string[] {
+    const lines: string[] = []
+    for (let i: number = 0; i < invocations.length; i++) {
+      if (lines.length >= MAX_AI_SESSION_TOOL_NOTES) {
+        break
+      }
+      const invocation: AiToolInvocation = invocations[i]
+      /* 只记成功的：失败调用不是"读过的资料"，留着会让下一轮误以为拿到过数据 */
+      if (invocation.status !== 'success') {
+        continue
+      }
+      let line: string = invocation.displayName
+      const preview: string = this.toolSummaryText(invocation)
+      if (preview.length > 0) {
+        line += ' · ' + preview
+      }
+      if (invocation.count > 0) {
+        line += ' · ' + invocation.count.toString() + ' 条'
+      }
+      lines.push(line)
+    }
+    return lines
+  }
+
+  /**
+   * 把本轮工具证据写进"本会话最近读过的资料"，供 `get_context` 展示。
+   *
+   * 为什么走工具而不是 system：这段内容每轮都变，拼进 system 会让前缀缓存整段失效
+   * （`docs/AI_AGENT_REDESIGN.md` §8.2）。模型追问细节时，get_context 会告诉它
+   * "刚才读过什么"，它据此重新调用工具取原文即可命中客户端结果缓存。
+   *
+   * @param invocations - 工具时间线
+   */
+  private syncRecentReads(invocations: AiToolInvocation[]): void {
+    const lines: string[] = this.buildEvidenceLines(invocations)
+    if (lines.length === 0) {
+      return
+    }
+    this.taskContext.recentReads = lines
+  }
+
+  /** 打开历史对话面板并刷新列表。 */
+  private openHistory(): void {
+    this.showTaskPicker = false
+    this.historySessions = appStore.listAiSessions()
+    this.showHistory = true
+  }
+
+  /**
+   * 删除一条历史会话。
+   *
+   * 删的若是当前会话，连带清空屏幕并新开一条：否则用户会看到"内容还在、
+   * 下次保存又冒出来"的幽灵记录。
+   *
+   * @param sessionId - 会话 ID
+   */
+  private removeHistorySession(sessionId: string): void {
+    appStore.deleteAiSession(sessionId)
+    if (this.session !== null && this.session.id === sessionId) {
+      this.session = null
+      this.bubbles = []
+      this.toolInvocations = []
+      this.beginNewSession()
+    }
+    this.historySessions = appStore.listAiSessions()
+    appStore.showToast('已删除该对话')
+  }
+
+  /** 清空本机保存的全部对话记录（确认框回调）。 */
+  private clearAllHistory(): void {
+    appStore.clearAiSessions()
+    this.historySessions = []
+    this.session = null
+    this.bubbles = []
+    this.toolInvocations = []
+    this.beginNewSession()
+    this.showHistory = false
+    appStore.showToast('已清空对话记录')
   }
 
   // ============================================================
@@ -357,7 +652,10 @@ struct AiChatPage {
     if (this.preset !== null && this.preset.id === preset.id) {
       return
     }
+    /* 先落盘旧会话：此刻 this.preset 还是旧任务，任务名快照才正确 */
+    this.persistSession()
     this.applyPresetById(preset.id, true)
+    this.beginNewSession()
     appStore.showToast('已切换到「' + preset.name + '」')
   }
 
@@ -366,6 +664,7 @@ struct AiChatPage {
    */
   private switchToFreeChat(): void {
     this.showTaskPicker = false
+    this.persistSession()
     this.preset = null
     this.taskName = ''
     this.taskDescription = ''
@@ -374,6 +673,7 @@ struct AiChatPage {
     this.bubbles = []
     this.toolInvocations = []
     this.refreshToolSummaries()
+    this.beginNewSession()
   }
 
   // ============================================================
@@ -485,7 +785,10 @@ struct AiChatPage {
       aiBubble.sources = result.sources
       aiBubble.cards = result.cards
       aiBubble.localOnly = result.localFallback
+      aiBubble.evidence = this.buildEvidenceLines(result.toolInvocations)
       this.bubbles.push(aiBubble)
+      /* 供 get_context 展示"本会话最近读过什么"：用户追问细节时模型据此重新取原文 */
+      this.syncRecentReads(result.toolInvocations)
     } catch (err) {
       if (!this.isActiveRequest(requestId)) {
         return
@@ -497,6 +800,7 @@ struct AiChatPage {
           'assistant', partial.length > 0 ? partial : '已停止生成', false)
         stoppedBubble.stopped = true
         stoppedBubble.toolInvocations = this.toolInvocations
+        stoppedBubble.evidence = this.buildEvidenceLines(this.toolInvocations)
         this.bubbles.push(stoppedBubble)
         return
       }
@@ -510,6 +814,8 @@ struct AiChatPage {
       if (this.isActiveRequest(requestId)) {
         this.resetStreamingState()
         this.isSending = false
+        /* 每轮结束即落盘：进程被杀 / 用户直接划掉应用也不会丢掉刚聊完的这一轮 */
+        this.persistSession()
         setTimeout((): void => {
           if (this.isActiveRequest(requestId)) {
             this.scrollToBottom()
@@ -802,7 +1108,13 @@ struct AiChatPage {
         rightIcon: $r('app.media.icon_ai_settings'),
         rightIconAccessibilityText: '切换 AI 任务',
         onRightClick: (): void => {
+          this.showHistory = false
           this.showTaskPicker = true
+        },
+        secondaryRightIcon: $r('app.media.icon_clock'),
+        secondaryRightIconAccessibilityText: '历史对话',
+        onSecondaryRightClick: (): void => {
+          this.openHistory()
         },
         scrollEffectProgress: this.titleScrollEffectProgress,
         onBack: (): void => { this.getUIContext().getRouter().back() }
@@ -812,6 +1124,10 @@ struct AiChatPage {
 
       if (this.showTaskPicker) {
         this.RenderTaskPicker()
+      }
+
+      if (this.showHistory) {
+        this.RenderHistoryPicker()
       }
     }
     .width('100%')
@@ -1056,6 +1372,153 @@ struct AiChatPage {
   }
 
   /**
+   * 历史对话面板。
+   *
+   * 与任务面板同构（底部抽屉 + 点空白关闭），但遮罩改用统一资源 `UIMaterialManager.scrim`：
+   * 页面级浮层的遮罩只有一个来源，业务代码不再自取 `#66000000`。
+   */
+  @Builder
+  RenderHistoryPicker() {
+    Column() {
+      Column()
+        .width('100%')
+        .layoutWeight(1)
+        .onClick((): void => {
+          this.showHistory = false
+        })
+
+      Column() {
+        Row() {
+          Text('历史对话')
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(AppColors.textPrimary)
+            .layoutWeight(1)
+          Text('关闭')
+            .fontSize(13)
+            .fontColor(AppColors.textSecondary)
+            .padding({ left: 8, right: 4, top: 4, bottom: 4 })
+            .onClick((): void => {
+              this.showHistory = false
+            })
+        }
+        .width('100%')
+        .padding({ left: 20, right: 16, top: 16, bottom: 8 })
+
+        Scroll() {
+          Column() {
+            /* 新对话：先把当前会话落盘，再清屏开一条新的 */
+            Row() {
+              Image($r('app.media.icon_nav_add'))
+                .width(15)
+                .height(15)
+                .fillColor(AppColors.primary)
+              Text('开始新对话')
+                .fontSize(14)
+                .fontColor(AppColors.primary)
+                .margin({ left: 8 })
+              Blank()
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 12, bottom: 12 })
+            .borderRadius(10)
+            .backgroundColor(AppColors.bgTertiary)
+            .onClick((): void => {
+              this.showHistory = false
+              this.persistSession()
+              this.bubbles = []
+              this.toolInvocations = []
+              this.beginNewSession()
+            })
+
+            if (this.historySessions.length === 0) {
+              Text('还没有保存的对话。对话内容会自动保存在本机，退出后可从这里继续。')
+                .fontSize(12)
+                .fontColor(AppColors.textTertiary)
+                .lineHeight(18)
+                .margin({ top: 16, left: 12, right: 12 })
+            }
+
+            ForEach(this.historySessions, (session: AiSession) => {
+              Row() {
+                Column() {
+                  Text(session.title.length > 0 ? session.title : '未命名对话')
+                    .fontSize(14)
+                    .fontColor(this.isCurrentSession(session) ? AppColors.primary : AppColors.textPrimary)
+                    .fontWeight(this.isCurrentSession(session) ? FontWeight.Medium : FontWeight.Normal)
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  Text(sessionSubtitle(session) + ' · ' + formatAiSessionTime(session.updatedAt))
+                    .fontSize(11)
+                    .fontColor(AppColors.textTertiary)
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .margin({ top: 2 })
+                }
+                .layoutWeight(1)
+                .alignItems(HorizontalAlign.Start)
+
+                Row() {
+                  Image($r('app.media.icon_delete'))
+                    .width(15)
+                    .height(15)
+                    .fillColor(AppColors.textTertiary)
+                }
+                .padding(8)
+                .margin({ left: 8 })
+                .onClick((): void => {
+                  this.removeHistorySession(session.id)
+                })
+              }
+              .width('100%')
+              .padding({ left: 12, right: 8, top: 10, bottom: 10 })
+              .borderRadius(10)
+              .margin({ top: 6 })
+              .onClick((): void => {
+                this.restoreSession(session.id)
+              })
+            }, (session: AiSession): string => session.id + '_' + session.updatedAt.toString())
+
+            if (this.historySessions.length > 0) {
+              Text('清空全部对话记录')
+                .fontSize(12)
+                .fontColor(AppColors.destructive)
+                .width('100%')
+                .textAlign(TextAlign.Center)
+                .padding({ top: 14, bottom: 6 })
+                .onClick((): void => {
+                  this.clearHistoryDialogController.open()
+                })
+            }
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, bottom: 16 })
+        }
+        .width('100%')
+        .constraintSize({ maxHeight: 420 })
+        .scrollBar(BarState.Off)
+      }
+      .width('100%')
+      .backgroundColor(AppColors.bgSecondary)
+      .borderRadius({ topLeft: 20, topRight: 20 })
+      .padding({ bottom: 12 })
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(UIMaterialManager.scrim)
+  }
+
+  /**
+   * 判断会话是否为当前正在聊的这条。
+   *
+   * @param session - 会话
+   * @returns true 表示当前会话
+   */
+  private isCurrentSession(session: AiSession): boolean {
+    return this.session !== null && this.session.id === session.id
+  }
+
+  /**
    * 判断任务是否为当前任务。
    *
    * @param preset - 任务
@@ -1260,6 +1723,30 @@ struct AiChatPage {
               .margin({ bottom: 5 })
             }, (invocation: AiToolInvocation): string =>
               invocation.id + '_' + invocation.status + (invocation.fromCache ? '_c' : ''))
+          }
+
+          /* 恢复出来的会话没有实时时间线对象，用持久化的证据摘要说明"这轮依据什么" */
+          if (bubble.toolInvocations.length === 0 && bubble.evidence.length > 0) {
+            Column() {
+              ForEach(bubble.evidence, (line: string, index: number) => {
+                Row() {
+                  Image($r('app.media.icon_ai_analyzing'))
+                    .width(11).height(11)
+                    .fillColor(AppColors.textTertiary)
+                  Text(line)
+                    .fontSize(11)
+                    .fontColor(AppColors.textTertiary)
+                    .layoutWeight(1)
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .margin({ left: 5 })
+                }
+                .width('100%')
+                .margin({ bottom: 4 })
+              }, (line: string, index: number): string => index.toString() + '|' + line.length.toString())
+            }
+            .width('100%')
+            .margin({ bottom: 4 })
           }
 
           MdContentView({

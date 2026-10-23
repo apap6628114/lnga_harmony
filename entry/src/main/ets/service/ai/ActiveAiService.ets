@@ -23,6 +23,12 @@ import {
   resolvePresetPrompt
 } from '../../model/AiAgentPreset'
 import { ChatMessage, AiTokenUsage, RequestCanceller } from './AiProtocolTypes'
+import {
+  DEFAULT_HISTORY_TOKEN_BUDGET,
+  HistoryFitResult,
+  buildFoldedHistorySection,
+  fitHistoryToBudget
+} from './ContextBudget'
 import { runAiAgent, AiAgentOptions, AiAgentResult } from './AiAgentRunner'
 import { AiToolCard, AiToolContext, AiToolInvocation, AiToolSource } from './tools/AiToolAdapter'
 import { aiToolRegistry } from './tools/ToolRegistry'
@@ -211,9 +217,18 @@ export async function chatCompleteWithActiveAiStream(
   const toolContext: AiToolContext = buildToolContext(effectivePreset, effectiveContext)
 
   // 任务提示词 + 上下文说明 + 工具可用性：放在 system 消息里，
-  // 正文数据仍由模型调用工具读取
+  // 正文数据仍由模型调用工具读取。
+  /*
+   * 历史先按 token 预算裁剪：超窗轮次移出上下文并折成"问过什么"的清单。
+   * 不裁剪的话长会话会先撞服务端窗口、再撞账单。
+   */
+  const fit: HistoryFitResult = fitHistoryToBudget(messages, DEFAULT_HISTORY_TOKEN_BUDGET)
   const conversation: ChatMessage[] = buildConversation(
-    messages, effectivePreset, toolContext)
+    fit, effectivePreset, toolContext)
+  if (fit.truncated) {
+    logger.info('history trimmed: kept=%{public}d, dropped=%{public}d, folded=%{public}d, estimated=%{public}d tokens',
+      fit.messages.length, fit.droppedMessages, fit.foldedQuestions.length, fit.estimatedTokens)
+  }
 
   const invocations: AiToolInvocation[] = []
   const options: AiAgentOptions = new AiAgentOptions()
@@ -256,7 +271,7 @@ export async function chatCompleteWithActiveAiStream(
 }
 
 /**
- * 组装最终发给模型的对话：system（任务提示词 + 工具使用规范）+ 历史。
+ * 组装最终发给模型的对话：system（任务提示词 + 折叠说明 + 工具使用规范）+ 历史。
  *
  * 已有 system 消息时把内容合并进去，避免部分服务商只接受单条 system。
  *
@@ -265,12 +280,15 @@ export async function chatCompleteWithActiveAiStream(
  * {@link toolUsageGuide} 的注释——system 里任何逐请求变化的内容都会让
  * DeepSeek / OpenAI 的前缀缓存整段失效。
  *
- * @param messages - 页面历史
+ * 唯一的例外是**折叠说明**：它只会在历史被裁剪时出现，而裁剪本身已经改写了前缀，
+ * 这次请求注定 miss；把"之前问过什么"说清楚比保住一次缓存更有价值。
+ *
+ * @param fit - 已按预算裁剪的历史
  * @param preset - 任务（可为 null）
  * @param toolContext - 工具执行上下文（用于判断上下文工具是否可用）
  * @returns 组装后的消息
  */
-function buildConversation(messages: ChatMessage[], preset: AiAgentPreset | null,
+function buildConversation(fit: HistoryFitResult, preset: AiAgentPreset | null,
   toolContext: AiToolContext): ChatMessage[] {
   const systemParts: string[] = []
   if (preset !== null) {
@@ -278,6 +296,10 @@ function buildConversation(messages: ChatMessage[], preset: AiAgentPreset | null
     if (prompt.trim().length > 0) {
       systemParts.push(prompt.trim())
     }
+  }
+  const foldedSection: string = buildFoldedHistorySection(fit.foldedQuestions, fit.foldedOmitted)
+  if (foldedSection.length > 0) {
+    systemParts.push(foldedSection)
   }
   const contextToolReady: boolean = presetAllowsTool(preset, 'get_context') &&
     isAiToolEnabled(toolContext.tools, 'get_context')
@@ -293,8 +315,8 @@ function buildConversation(messages: ChatMessage[], preset: AiAgentPreset | null
 
   const result: ChatMessage[] = []
   let systemMerged: boolean = false
-  for (let i: number = 0; i < messages.length; i++) {
-    const src: ChatMessage = messages[i]
+  for (let i: number = 0; i < fit.messages.length; i++) {
+    const src: ChatMessage = fit.messages[i]
     if (src.role === 'system' && !systemMerged && systemParts.length > 0) {
       const merged: string = systemParts.join('\n\n') + '\n\n' + src.content
       result.push(new ChatMessage('system', merged))
