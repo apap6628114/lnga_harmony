@@ -9,6 +9,9 @@
  * `template=std_error`（HTTP 200、code 仍为 521）表示 html 是服务端异常提示页
  * （帖子被锁定 / 待审核 / 权限不足等），由 extractAppArticleHtml 直接上抛服务端
  * 报告的原因，不得进入 HTML 降级解析。
+ * 携带 pid 的单帖请求若解析出 0 个楼层，说明目标楼层已不存在 / 不可见，统一归一为
+ * `THREAD_FLOOR_MISSING_ERROR`（见 isMissingFloorSinglePostView），而不是让 UI 落到
+ * 「HTML 解析结果没有帖子楼层」这种技术性兜底文案。
  * 支持 page=e（末页）、pid 定位（单帖+贴条）、authorid 只看楼主。
  * 发帖、回帖、评论、附件上传等写入操作见 ThreadWriteApi。
  */
@@ -125,6 +128,24 @@ const APP_TEMPLATE_ERROR: string = 'std_error';
 const POST_ARG_MARKER: string = 'commonui.postArg.proc(';
 
 /**
+ * 目标楼层已不存在时对外暴露的错误文案。
+ *
+ * 官方 read.php 的**单帖视图**（请求携带 `pid`）在目标楼层被删除 / 对当前账号
+ * 不可见时，并不返回 `template=std_error` 错误页，而是返回 HTTP 200、
+ * `template=read`、**0 个楼层行**的空帖子页：没有 `commonui.postArg.proc(` 楼层
+ * 锚点，也没有任何 `msginfo` 错误标记，页面上只有主题壳。
+ *
+ * 这种响应只能靠"单帖视图却解析出 0 个楼层"判定——整页视图（不带 pid）在末页
+ * 只有主楼等场景下也可能单薄，不能套用同一条判据。命中后必须给出可读原因，
+ * 否则会退化成「HTML 解析结果没有帖子楼层」这种没有信息量的兜底文案。
+ *
+ * 实测范围：已删除楼层（tid=47776015、pid=885596636）确认返回该形态；审核中、
+ * 权限受限等其他"不可见"楼层是否同形尚未单独取样，因此文案取用户可读的合并表述
+ * 「不存在或已删除」，不把原因收窄成"被删除"。
+ */
+export const THREAD_FLOOR_MISSING_ERROR: string = '该楼层不存在或已删除';
+
+/**
  * 从 NGA 错误提示页 HTML 中提取服务端报告的原因文本。
  *
  * 错误页在正文首部给出 `<!--msgcodestart-->N<!--msgcodeend-->` 与
@@ -197,6 +218,33 @@ export function extractAppArticleHtml(response: object): string {
 }
 
 /**
+ * 单帖视图是否解析不出任何楼层。
+ *
+ * 官方 read.php 对**已删除 / 不可见楼层**的单帖请求（携带 `pid`）返回 HTTP 200、
+ * `template=read`、`__R` 为空对象的"空帖子页"：既没有 `commonui.postArg.proc(` 楼层
+ * 锚点，也没有任何 `msginfo` 错误标记。整页视图（不带 pid）在极端情况下也可能只有
+ * 少量楼层，因此该判据必须同时要求"请求带 pid"。
+ *
+ * 纯函数：仅依据请求参数与解析结果判定，不依赖网络与渲染状态，便于单测覆盖。
+ *
+ * @param pid - 请求携带的楼层 ID（空串表示整页视图）
+ * @param parsed - HTML 解析后的同形状原始数据
+ * @returns 单帖视图且 0 个楼层时为 true
+ */
+export function isMissingFloorSinglePostView(pid: string, parsed: object | null): boolean {
+  if (pid.length === 0 || !parsed) {
+    return false;
+  }
+  const parsedObj: Record<string, Object> = parsed as Record<string, Object>;
+  const dataObj: Record<string, Object> | undefined = parsedObj['data'] as Record<string, Object> | undefined;
+  const rawRows: Record<string, Object> | undefined = dataObj?.['__R'] as Record<string, Object> | undefined;
+  if (!rawRows) {
+    return false;
+  }
+  return Object.keys(rawRows).length === 0;
+}
+
+/**
  * 通过官方 APP read.php __output=17 拉取并解析帖子 HTML。
  *
  * @param uid - 当前登录用户 ID
@@ -216,8 +264,15 @@ async function fetchAppArticleHtmlRaw(uid: string, cid: string, tid: string,
   const parsed: Object = await taskpool.execute(parseHtmlTask, html);
   const parsedObj: Record<string, Object> = parsed as Record<string, Object>;
   const parsedData: Record<string, Object> | undefined = parsedObj['data'] as Record<string, Object> | undefined;
-  if (!parsedData || parsedData['__R'] === undefined) {
+  const rawRows: Record<string, Object> | undefined = parsedData?.['__R'] as Record<string, Object> | undefined;
+  if (!rawRows) {
     throw new Error('APP read.php HTML 解析结果缺少帖子楼层');
+  }
+  // 单帖视图（请求带 pid）解析出 0 个楼层：服务端用"空帖子页"表达该楼层已被删除 /
+  // 不可见（不是错误页，取数层无法提前拦截）。此时必须给出可读原因，不能交给
+  // getThread 的「HTML 解析结果没有帖子楼层」兜底文案。
+  if (isMissingFloorSinglePostView(pid, parsedObj)) {
+    throw new Error(THREAD_FLOOR_MISSING_ERROR);
   }
   return parsedObj;
 }
@@ -312,8 +367,13 @@ export async function fetchThreadRaw(token: string, tid: string, pid: string,
       tid || '', pid, authorid, page);
     return { raw: rawObj, error: '' };
   } catch (e) {
-    const error: string = (e as Error).message ?? 'APP HTML 请求或解析异常';
-    logger.error('[NGA][REQ] read.php HTML 请求或解析失败: %{public}s', error);
+    const error: string = (e as Error).message ?? 'HTML 请求或解析异常';
+    if (error === THREAD_FLOOR_MISSING_ERROR) {
+      // 目标楼层已删除 / 不可见属于预期业务状态，不是取数故障，不污染错误日志
+      logger.warn('[NGA][REQ] 目标楼层已不存在 tid=%{public}s pid=%{public}s', tid, pid);
+    } else {
+      logger.error('[NGA][REQ] read.php HTML 请求或解析失败: %{public}s', error);
+    }
     return { raw: null, error: error };
   }
 }
@@ -350,7 +410,10 @@ export async function getThread(token: string, tid: string, pid: string,
     fillThreadResult(fetched.raw, result, blacklist, keywords, noteMap);
     if (result.posts.length === 0 && !hasRawThreadRows(fetched.raw)) {
       result.ok = false;
-      result.error = result.error || 'HTML 解析结果没有帖子楼层';
+      // 单帖视图（带 pid）拿不到任何可用楼层时，语义是"目标楼层不存在/不可见"，
+      // 与整页视图的空响应区分开——后者才保留技术性兜底文案。
+      result.error = result.error
+        || (pid.length > 0 ? THREAD_FLOOR_MISSING_ERROR : 'HTML 解析结果没有帖子楼层');
     }
   } catch (e) {
     const htmlErr: string = (e as Error).message ?? 'HTML 解析异常';

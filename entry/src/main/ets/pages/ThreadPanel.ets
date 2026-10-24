@@ -9,10 +9,11 @@ import {
   PRESET_ID_POST_SUMMARY
 } from '../model/AiAgentPreset'
 import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
-import { getThread } from '../service/api/ThreadApi'
+import { getThread, THREAD_FLOOR_MISSING_ERROR } from '../service/api/ThreadApi'
 import { votePost } from '../service/api/FavoriteApi'
 import { getActiveDomain } from '../service/api/MiscApi'
-import type { ThreadResult, PostReplyResult } from '../model/ThreadResult'
+import { ThreadResult } from '../model/ThreadResult'
+import type { PostReplyResult } from '../model/ThreadResult'
 import type { PostInfo } from '../model/PostInfo'
 import { VoteResult } from '../model/NgaApiResults'
 import { FavoriteMembershipState } from '../model/Favorite'
@@ -75,6 +76,29 @@ const PAGE_BAR_PAD = 10
 
 /** 页码指示器里「到」格的宽度（vp）：显式给定，宽度分档才不依赖文字度量。 */
 const PAGE_BAR_GOTO_W = 22
+
+/**
+ * 一次替换加载的取数结果。
+ *
+ * `floorMissing` 表示"本次是目标楼层已删除后的整页回退视图"，必须随本次调用返回，
+ * 不能落成组件字段：回退请求在途时用户可能切页 / 切帖，字段会被新一轮加载的清零与
+ * 旧调用的写入交错，导致新加载误弹「该楼层不存在或已删除」。
+ */
+class ThreadPageFetch {
+  /** 帖子请求结果。 */
+  result: ThreadResult
+  /** 是否因目标楼层已删除而回退为整页视图。 */
+  floorMissing: boolean
+
+  /**
+   * @param result - 帖子请求结果
+   * @param floorMissing - 是否因目标楼层已删除而回退为整页视图
+   */
+  constructor(result: ThreadResult, floorMissing: boolean) {
+    this.result = result
+    this.floorMissing = floorMissing
+  }
+}
 
 /**
  * 页码指示器里"当前页定位点"（数字下的「•」）相对**居中位置**的下移量（vp）。
@@ -925,7 +949,7 @@ export struct ThreadPanel {
     }
     if (!positioned && targetPid.length > 0) {
       // 单帖兜底已尝试仍失败（服务端返回空或该楼层已删除）
-      appStore.showToast('该楼层不存在或已删除')
+      appStore.showToast(THREAD_FLOOR_MISSING_ERROR)
     }
     if (!positioned) {
       this.scroller.scrollToIndex(0, false, ScrollAlign.START)
@@ -1212,6 +1236,76 @@ export struct ThreadPanel {
   }
 
   /**
+   * 取一页帖子；单帖兜底命中已删除楼层时回退到整页视图。
+   *
+   * 官方 read.php 对已删除 / 不可见楼层的单帖请求（带 pid）返回的是 0 楼层的空
+   * 帖子页，取数层已将其归一为 {@link THREAD_FLOOR_MISSING_ERROR}。若仍停在错误页，
+   * 用户既进不去帖子、也看不到主题内容，且错误文案与"楼层没了"无关。这里改为
+   * 回退第 1 页整页视图，成功后提交分支提示一次「该楼层不存在或已删除」。
+   *
+   * 其余失败（网络 / 权限 / 帖子锁定等）保持原错误态，不误报为楼层删除。
+   * 回退结果以返回值携带（而非组件字段），跨 await 的切页 / 切帖不会污染新一轮加载。
+   *
+   * @param targetPage - 请求页码
+   * @param requestPid - 请求 pid（仅单帖兜底时非空）
+   * @param previousPosts - 替换前的帖子，用于跨页引用补全
+   * @param generation - 本次替换加载的分页会话代际
+   * @returns 取数结果与是否发生了楼层已删除的回退
+   */
+  private async fetchPageWithFloorFallback(targetPage: number, requestPid: string,
+    previousPosts: PostInfo[], generation: number): Promise<ThreadPageFetch> {
+    let result: ThreadResult = new ThreadResult()
+    try {
+      result = await this.fetchPostsPage(
+        targetPage, requestPid, 15000, taskpool.Priority.HIGH, previousPosts)
+    } catch (error) {
+      // 兜底请求异常（超时等）时复位兜底标记：错误页重试改为整页请求，不再重复单帖兜底。
+      // ArkTS 的 throw 只接受 Error，这里按项目统一口径用 formatError 还原消息后重抛。
+      this.singlePostFallback = false
+      this.fallbackPrevTotalPages = 0
+      this.fallbackPrevPage = 0
+      throw new Error(formatError(error))
+    }
+    if (result.ok || !this.singlePostFallback
+      || result.error !== THREAD_FLOOR_MISSING_ERROR) {
+      return new ThreadPageFetch(result, false)
+    }
+    if (generation !== this.mgr.getGeneration()) {
+      // 已有新一轮加载接管：不再回退（结果会被调用方的代际校验丢弃）
+      return new ThreadPageFetch(result, false)
+    }
+    return await this.reopenFullPageAfterMissingFloor(previousPosts, result.error, generation)
+  }
+
+  /**
+   * 单帖兜底命中已删除楼层后，回退到第 1 页整页视图。
+   *
+   * 回退前清空定位意图：整页视图已确认不含目标 pid，若保留 pendingTargetPid，
+   * `applyListNavigation` 会再次发起单帖兜底，形成"兜底 → 回退 → 再兜底"循环。
+   * 使用较短超时（10s）：单帖请求已等过一轮，回退只为让用户进入帖子，不再叠加 15s。
+   *
+   * @param previousPosts - 替换前的帖子，用于跨页引用补全
+   * @param reason - 单帖兜底的失败原因（仅用于日志）
+   * @param generation - 本次替换加载的分页会话代际
+   * @returns 整页取数结果与楼层已删除标记（仅整页成功且代际未变时为 true）
+   */
+  private async reopenFullPageAfterMissingFloor(previousPosts: PostInfo[],
+    reason: string, generation: number): Promise<ThreadPageFetch> {
+    logger.warn(
+      'floor-missing reopen tid=%{public}s pid=%{public}s error=%{public}s',
+      this.threadTid, this.pendingTargetPid, reason
+    )
+    this.singlePostFallback = false
+    this.fallbackPrevTotalPages = 0
+    this.fallbackPrevPage = 0
+    this.pendingTargetPid = ''
+    const result: ThreadResult = await this.fetchPostsPage(
+      1, '', 10000, taskpool.Priority.HIGH, previousPosts
+    )
+    return new ThreadPageFetch(result, result.ok && generation === this.mgr.getGeneration())
+  }
+
+  /**
    * 加载一页帖子并按替换、后置或前置模式提交到连续窗口。
    *
    * 只有替换操作会推进分页会话代际；同一会话内的前置和后置请求可以并行，
@@ -1272,9 +1366,13 @@ export struct ThreadPanel {
     )
 
     try {
-      const result: ThreadResult = await this.fetchPostsPage(
-        targetPage, requestPid, 15000, taskpool.Priority.HIGH, previousPosts
-      )
+      // 单帖兜底命中已删除楼层时不再停在错误页：取数层把"单帖视图 0 楼层"归一为
+      // 可读原因，这里据此回退整页视图，让用户至少能进入帖子（见 fetchPageWithFloorFallback）。
+      const page: ThreadPageFetch = mode === ThreadLoadMode.REPLACE
+        ? await this.fetchPageWithFloorFallback(targetPage, requestPid, previousPosts, generation)
+        : new ThreadPageFetch(
+          await this.fetchPostsPage(targetPage, requestPid, 15000, taskpool.Priority.HIGH, previousPosts), false)
+      const result: ThreadResult = page.result
       if (generation !== this.mgr.getGeneration()) {
         logger.warn(
           'page-load stale mode=%{public}s tid=%{public}s requested=%{public}d capturedGen=%{public}d currentGen=%{public}d',
@@ -1333,6 +1431,10 @@ export struct ThreadPanel {
             this.syncTrackedOnOpen()
           }
           this.prepareListNavigation(generation, resolvedPage, this.pendingTargetPid)
+          if (page.floorMissing) {
+            // 本次是"目标楼层已删除"回退后的整页视图：楼层不可能出现，明确告知用户
+            appStore.showToast(THREAD_FLOOR_MISSING_ERROR)
+          }
         } else if (mode === ThreadLoadMode.APPEND) {
           const previousEnd: number = this.mgr.loadedPageEnd
           const added: PostInfo[] = this.mgr.appendPosts(

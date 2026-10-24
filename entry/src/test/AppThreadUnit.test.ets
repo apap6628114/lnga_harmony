@@ -2,7 +2,8 @@ import { describe, it, expect } from '@ohos/hypium'
 import { parseThreadData } from '../main/ets/parser/ThreadParser'
 import { parseNgaError } from '../main/ets/parser/ErrorParser'
 import {
-  buildThreadHtmlRequest, extractAppArticleHtml, extractHtmlErrorPageMessage, hasRawThreadRows, fillThreadResult
+  buildThreadHtmlRequest, extractAppArticleHtml, extractHtmlErrorPageMessage, hasRawThreadRows,
+  fillThreadResult, isMissingFloorSinglePostView, THREAD_FLOOR_MISSING_ERROR
 } from '../main/ets/service/api/ThreadApi'
 import { parseHtmlToRawJson } from '../main/ets/parser/nga/html-thread/index'
 import type { ThreadRowInfo } from '../main/ets/model/Thread'
@@ -484,6 +485,50 @@ export default function appThreadUnitTest(): void {
       expect(result.posts[0].authorid).assertEqual(41976057)
       expect(result.posts[0].authorKey).assertEqual('41976057')
       expect(result.posts[1].authorKey).assertEqual('450870')
+    })
+
+    it('reportsMissingFloorForEmptySinglePostView', 0, (): void => {
+      /**
+       * 实测 tid=47776015 的已删除楼层（pid=885596636）：read.php 单帖视图返回
+       * HTTP 200、template=read、__R 为空对象的"空帖子页"，既不是 std_error 错误页，
+       * 也没有楼层锚点。请求带 pid 时必须判定为「楼层不存在」，而不是解析失败。
+       */
+      const emptyView: object = JSON.parse(
+        '{"data":{"__R":{},"__U":{},"__T":{"tid":47776015},"__F":{},' +
+          '"__ROWS":13,"__R__ROWS":1,"__R__ROWS_PAGE":1,"__PAGE":1}}')
+      expect(isMissingFloorSinglePostView('885596636', emptyView)).assertTrue()
+    })
+
+    it('exposesReadableFloorMissingMessage', 0, (): void => {
+      /** 用户可见文案是契约：面板回退整页后 toast 与取数层错误共用同一常量。 */
+      expect(THREAD_FLOOR_MISSING_ERROR).assertEqual('该楼层不存在或已删除')
+    })
+
+    it('keepsSinglePostViewWithRowsAsExistingFloor', 0, (): void => {
+      /** 对照：正常单帖视图解析出 1 个楼层，不得判为楼层删除。 */
+      const raw: Record<string, Object> = createParsedHtmlThreadResponse() as Record<string, Object>
+      expect(isMissingFloorSinglePostView('824920438', raw)).assertFalse()
+    })
+
+    it('keepsEmptyRowShellAsPresentResponse', 0, (): void => {
+      /**
+       * __R 有一行但行内没有 pid：判据只看"楼层表是否为空"，不把残缺行当成楼层删除
+       * （避免把服务端数据异常误报成用户可读的"楼层已删"）。这类响应由 getThread
+       * 的 hasRawThreadRows 兜底为「楼层不存在或已删除」文案，但判定本身保持保守。
+       */
+      const rowShell: object = JSON.parse(
+        '{"data":{"__R":{"0":{"lou":0,"content":"占位"}},"__ROWS":1,"__PAGE":1}}')
+      expect(isMissingFloorSinglePostView('824920438', rowShell)).assertFalse()
+    })
+
+    it('ignoresEmptyRowsWithoutPid', 0, (): void => {
+      /**
+       * 整页视图不带 pid：__R 为空只说明响应异常，交给 getThread 的兜底文案；
+       * 缺 data / 缺 __R / 解析结果为空时同样不得判为楼层删除。
+       */
+      expect(isMissingFloorSinglePostView('', JSON.parse('{"data":{"__R":{}}}'))).assertFalse()
+      expect(isMissingFloorSinglePostView('885596636', JSON.parse('{"data":{}}'))).assertFalse()
+      expect(isMissingFloorSinglePostView('885596636', null)).assertFalse()
     })
   })
 }

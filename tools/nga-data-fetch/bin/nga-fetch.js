@@ -11,8 +11,9 @@
  *   node bin/nga-fetch.js app-json <endpoint> [k=v ...] [--output <n>]
  *       [--sign-params <值>] [--query <k=v>]... [--out <file>] [--raw]
  *       使用官方 APP 签名 POST 抓取接口；__lib/__act 等 URL 参数通过 --query 传入。
- *   node bin/nga-fetch.js app-html <tid> [page] [--out <file>]
- *       使用官方 APP read.php __output=17 抓取包装内的完整帖子 HTML。
+ *   node bin/nga-fetch.js app-html <tid> [page] [--pid <pid>] [--out <file>]
+ *       使用官方 APP read.php __output=17 抓取包装内的完整帖子 HTML；
+ *       带 --pid 时复现"单帖视图"（App 内整页未命中目标楼层后的兜底请求）。
  *   node bin/nga-fetch.js check
  *       校验当前凭证结构（不发请求）。
  *   node bin/nga-fetch.js verify [--url <u>]
@@ -44,7 +45,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--out' || arg === '--base' || arg === '--url' || arg === '--marker' ||
-      arg === '--output' || arg === '--sign-params' || arg === '--query') {
+      arg === '--output' || arg === '--sign-params' || arg === '--query' || arg === '--pid') {
       const key = arg.slice(2)
       options[key] = options[key] === undefined ? argv[++i] : [].concat(options[key], argv[++i])
       continue
@@ -150,12 +151,16 @@ async function cmdAppJson(args, options) {
 async function cmdAppHtml(args, options) {
   const tid = args[0]
   const page = args[1] || '1'
+  const pid = options.pid || ''
   if (!tid || !/^\d+$/.test(tid)) {
-    exitError('用法: nga-fetch app-html <tid> [page] [--out <file>]')
+    exitError('用法: nga-fetch app-html <tid> [page] [--pid <pid>] [--out <file>]')
+  }
+  if (pid && !/^\d+$/.test(pid)) {
+    exitError(`--pid 应为数字楼层 ID: ${pid}`)
   }
   const result = await fetchNgaAppArticleHtml({
     tid,
-    pid: '',
+    pid,
     topid: '',
     authorid: '',
     opt: '',
@@ -165,9 +170,12 @@ async function cmdAppHtml(args, options) {
   if (!result.ok) {
     exitError(`read.php APP HTML 失败 [${result.kind}]: ${result.error || ''}`)
   }
-  const outFile = options.out || `app-read-tid${tid}-page${page}.html`
+  const pidSuffix = pid ? `-pid${pid}` : ''
+  const outFile = options.out || `app-read-tid${tid}${pidSuffix}-page${page}.html`
   writeFileSync(outFile, result.html, 'utf8')
-  console.log(`APP read.php tid=${tid} page=${page} -> ${outFile}（${result.html.length} 字符）`)
+  const envelope = result.envelope || {}
+  console.log(`APP read.php tid=${tid}${pid ? ` pid=${pid}` : ''} page=${page}` +
+    ` code=${envelope.code} template=${envelope.template} -> ${outFile}（${result.html.length} 字符）`)
 }
 
 function defaultOutName(endpoint, params) {

@@ -22,6 +22,36 @@ const NGA_APP_SECRET = '392e916a6d1d8b7523e2701470000c30bc2165a1'
 /** 官方 APP 默认 API 主机。 */
 const NGA_APP_BASE = 'https://ngabbs.com'
 
+/** 客户端 checksum 第一段盐（与 App 侧 NgaSigner.makeClientChecksum 一致）。 */
+const CLIENT_CHECKSUM_SALT_1 = '161c8c015f912abf4434c3263279c296'
+
+/** 客户端 checksum 第二段盐（与 App 侧 NgaSigner.makeClientChecksum 一致）。 */
+const CLIENT_CHECKSUM_SALT_2 = '12d6af9da0f1fe4e3c87f76ce0aec149'
+
+/**
+ * 生成 `__ngaClientChecksum`（notify/list 等特殊接口使用）。
+ *
+ * 算法与 App 侧 `entry/src/main/ets/common/security/NgaSigner.ets` 的
+ * `makeClientChecksum` 保持一致：
+ *
+ * ```text
+ * md51 = MD5(salt1 + ts)
+ * md52 = MD5(md51 + salt2)
+ * checksum = MD5(uid + md52 + ts) + ts
+ * ```
+ *
+ * 两处实现共用同一组盐值，改盐时两边必须同步，否则通知列表请求会被服务端拒绝。
+ *
+ * @param {string} uid - 被登录用户 uid
+ * @param {string} ts - UNIX 秒时间戳字符串
+ * @returns {string} checksum（末尾拼接 ts）
+ */
+function makeClientChecksum(uid, ts) {
+  const md51 = createHash('md5').update(CLIENT_CHECKSUM_SALT_1 + ts, 'utf8').digest('hex')
+  const md52 = createHash('md5').update(md51 + CLIENT_CHECKSUM_SALT_2, 'utf8').digest('hex')
+  return `${createHash('md5').update(uid + md52 + ts, 'utf8').digest('hex')}${ts}`
+}
+
 /**
  * 从 Cookie 中读取 APP 签名所需的 uid 与 token。
  *
@@ -226,6 +256,7 @@ module.exports = {
   NGA_APP_BASE,
   parseAppCredential,
   makeAppSign,
+  makeClientChecksum,
   buildAppHeaders,
   buildAppFields,
   classifyAppJsonText,
