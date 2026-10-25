@@ -148,6 +148,80 @@ export function formatToolTime(timestamp: number): string {
 }
 
 /**
+ * 毫秒时间戳转 `formatToolTime` 需要的秒级值。
+ *
+ * 数据源的单位并不统一（本地台账多是毫秒、服务端字段多是秒），转换只在这里做，
+ * 调用点不要自己再除一次 1000。集中成一个导出函数也是为了能被单测钉住。
+ *
+ * @param ms - 毫秒时间戳
+ * @returns 秒级时间戳；非法/非正值返回 0
+ */
+export function toSeconds(ms: number): number {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return 0
+  }
+  return Math.floor(ms / 1000)
+}
+
+/**
+ * 读取可能缺失的字符串字段。
+ *
+ * 本地持久化数据（浏览记录 / 离线存档）可能来自旧格式或外部导入文件，
+ * 字段缺失是**预期输入**而不是程序错误；直接访问 `.length` 会抛异常并终止整轮 Agent。
+ *
+ * @param value - 原始字段值（运行时可能为 undefined）
+ * @returns 字符串；缺失时为空串
+ */
+export function pickText(value: string | undefined): string {
+  return value === undefined || value === null ? '' : value
+}
+
+/**
+ * 读取可能缺失的数字字段。
+ *
+ * @param value - 原始字段值（运行时可能为 undefined）
+ * @param fallback - 缺失或非法时的回退值
+ * @returns 数字
+ */
+export function pickNumber(value: number | undefined, fallback: number): number {
+  if (value === undefined || value === null) {
+    return fallback
+  }
+  return Number.isFinite(value) ? value : fallback
+}
+
+/**
+ * 服务端对「超过时限」主题返回的占位文案。
+ *
+ * 出现在用户发帖/回帖列表（`app_api.php user/subjects|replys`）的深层条目上：
+ * 占位条目的 `tid` 是**列表序号**（不是真实 tid）、`postdate` 为空串、正文为空，
+ * 拿它去读帖必然失败。判断只能靠这条固定文案（实测文案不带前后缀，但保留包含匹配）。
+ */
+const PLACEHOLDER_SUBJECT_TEXT: string = '帖子发布或回复时间超过限制'
+
+/**
+ * 受权限限制的占位文案（与上面一类，都是"条目存在但不可读"）。
+ */
+const PERMISSION_DENIED_TEXT: string = '帐号权限不足'
+
+/**
+ * 判断一条主题列表条目的标题是否是不可读条目（超时限 / 权限不足）。
+ *
+ * 口径与既有消费方 `UserApi.getUserActivityAnalysis` 一致：两者都按文案过滤，
+ * 因为这类条目的 tid 不可用（超时限是列表序号，权限不足读不到内容）。
+ *
+ * @param subject - 条目标题
+ * @returns true 表示占位/不可读条目
+ */
+export function isPlaceholderSubject(subject: string): boolean {
+  if (subject.length === 0) {
+    return false
+  }
+  return subject.indexOf(PLACEHOLDER_SUBJECT_TEXT) >= 0 ||
+    subject.indexOf(PERMISSION_DENIED_TEXT) >= 0
+}
+
+/**
  * 构造「未登录」失败结果。
  *
  * @returns 失败结果
@@ -175,6 +249,18 @@ export function failedResult(message: string, code: string = ''): AiToolResult {
   result.errorMessage = message
   result.content = '工具执行失败：' + message
   return result
+}
+
+/**
+ * 构造「拿不到当前账号 UID」的失败结果。
+ *
+ * 工具可用性只要求「已登录 + 有令牌」，理论上仍可能出现 uid 缺失；
+ * 此时直接说「未登录」会与用户看到的登录状态矛盾，统一用本结果。
+ *
+ * @returns 失败结果
+ */
+export function missingSelfUidResult(): AiToolResult {
+  return failedResult('拿不到当前登录账号的 UID，请提示用户重新登录后再试', TOOL_ERROR_LOGIN_REQUIRED)
 }
 
 /**

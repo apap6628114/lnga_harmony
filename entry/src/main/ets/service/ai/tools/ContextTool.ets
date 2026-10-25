@@ -141,7 +141,8 @@ function buildEmptyParameters(): Record<string, Object> {
  */
 function buildIdentitySection(context: AiToolContext): string {
   if (!context.authenticated || context.selfUid.length === 0) {
-    return '【当前登录账号】\n未登录。站内 NGA 工具不可用；需要时请提示用户先登录。'
+    return '【当前登录账号】\n未登录。需要登录的站内工具不可用（「离线保存」等本地工具仍可用）；' +
+      '需要时请提示用户先登录。'
   }
   const name: string = context.selfUserName.length > 0 ? '，用户名「' + context.selfUserName + '」' : ''
   return '【当前登录账号】\nuid=' + context.selfUid + name +

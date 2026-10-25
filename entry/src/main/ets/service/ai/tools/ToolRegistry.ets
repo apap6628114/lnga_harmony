@@ -39,6 +39,10 @@ import { NgaListTopicsTool, NgaSearchTopicsTool } from './nga/NgaTopicTools'
 import { NgaListForumsTool, NgaSearchForumTool } from './nga/NgaForumTools'
 import { NgaGetMeTool, NgaGetUserTool, NgaSearchUserTool, NgaUserActivityTool } from './nga/NgaUserTools'
 import { NgaListFavoritesTool } from './nga/NgaFavoriteTools'
+import { NgaMyHistoryTool, NgaMySavedTool, NgaMyTrackedTool } from './nga/NgaMyLibraryTools'
+import { NgaMyPostsTool, NgaMyRepliesTool } from './nga/NgaMyPostTools'
+import { NgaMyFollowingTool, NgaMyNotificationsTool } from './nga/NgaMySocialTools'
+import { NgaMyMessagesTool } from './nga/NgaMyMessageTools'
 
 const logger = new Logger(DOMAIN_SERVICE, 'AiToolRegistry')
 
@@ -78,6 +82,20 @@ export function bindToolCacheAccount(uid: string): void {
 function isNgaTool(name: string): boolean {
   const meta: AiToolMeta | null = findAiToolMeta(name)
   return meta !== null && meta.category === NGA_CATEGORY
+}
+
+/**
+ * 判断工具是否纯本地（不发起 NGA 网络请求）。
+ *
+ * 风控冷却闸门只应挡住"会打服务端"的工具：本地台账类工具（浏览记录 / 离线存档 /
+ * 跟踪列表）在冷却期仍应可读，否则网络被限流会连带把本地功能也锁死。
+ *
+ * @param name - 工具名
+ * @returns true 表示纯本地工具
+ */
+function isLocalOnlyTool(name: string): boolean {
+  const meta: AiToolMeta | null = findAiToolMeta(name)
+  return meta !== null && meta.localOnly === true
 }
 
 /**
@@ -329,8 +347,9 @@ export class AiToolRegistry {
     }
 
     // 2) 本地风控闸门：冷却期内的站内请求一律不发。这比"发了再被限流"省一次握手，
-    //    也避免模型把冷却期当成空数据、进而换工具反复试探
-    if (isNgaTool(name) && ngaThrottler.isCoolingDown()) {
+    //    也避免模型把冷却期当成空数据、进而换工具反复试探。
+    //    纯本地工具（浏览记录 / 离线存档 / 跟踪列表）不发请求，不受此闸门约束。
+    if (isNgaTool(name) && !isLocalOnlyTool(name) && ngaThrottler.isCoolingDown()) {
       return throttleGateResult(ngaThrottler.cooldownRemainingMs())
     }
 
@@ -340,7 +359,8 @@ export class AiToolRegistry {
     // （例如 read.php 的节流响应没有 html，工具层只能报「没读到楼层」）。
     // 这里用「本次执行后进入了冷却」这个事实反推：本次失败就是风控造成的，
     // 统一改写为 rate_limited，让 Agent 层据此停止本次运行、不要让模型换工具继续试。
-    if (!result.success && isNgaTool(name) && ngaThrottler.isCoolingDown() &&
+    if (!result.success && isNgaTool(name) && !isLocalOnlyTool(name) &&
+      ngaThrottler.isCoolingDown() &&
       (result.errorCode === TOOL_ERROR_EMPTY || result.errorCode === TOOL_ERROR_UPSTREAM ||
         result.errorCode.length === 0)) {
       result.errorCode = TOOL_ERROR_RATE_LIMITED
@@ -403,6 +423,18 @@ function createAiToolRegistry(): AiToolRegistry {
   registry.register(new NgaSearchUserTool())
   registry.register(new NgaUserActivityTool())
   registry.register(new NgaListFavoritesTool())
+  // 「我的」本地资料（浏览记录 / 离线保存 / 跟踪）：零网络请求
+  registry.register(new NgaMyHistoryTool())
+  registry.register(new NgaMySavedTool())
+  registry.register(new NgaMyTrackedTool())
+  // 「我的」站内记录（发帖 / 回帖）：走官方 user/subjects|replys，签名 uid 固定为当前账号
+  registry.register(new NgaMyPostsTool())
+  registry.register(new NgaMyRepliesTool())
+  // 「我的」社交推送（关注动态 / 通知）：数据来自 Store 缓存，与消息中心同源
+  registry.register(new NgaMyFollowingTool())
+  registry.register(new NgaMyNotificationsTool())
+  // 私信：消息中心「私信」Tab（列表 / 会话详情），只读
+  registry.register(new NgaMyMessagesTool())
   // 联网工具（需要搜索服务）
   registry.register(new WebSearchTool())
   registry.register(new WebFetchTool())

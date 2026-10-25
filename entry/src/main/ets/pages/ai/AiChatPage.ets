@@ -1140,7 +1140,10 @@ struct AiChatPage {
       if (card.route === 'thread') {
         const tid: string = params['tid'] ?? ''
         if (tid.length > 0) {
-          screen = Screen.thread(tid)
+          // 通知卡片会带 pid / page：落到对应楼层而不是帖子首页
+          const pid: string = params['pid'] ?? ''
+          const page: number = Number(params['page'] ?? '1')
+          screen = Screen.thread(tid, Number.isFinite(page) && page > 0 ? page : 1, pid)
         }
       } else if (card.route === 'profile') {
         const uid: string = params['uid'] ?? ''
@@ -1151,6 +1154,11 @@ struct AiChatPage {
         const name: string = params['name'] ?? ''
         const fid: number = Number(params['fid'] ?? '0')
         screen = Screen.topicList(name, fid)
+      } else if (card.route === 'message') {
+        const mid: string = params['mid'] ?? ''
+        if (mid.length > 0) {
+          screen = Screen.messageDetail(mid)
+        }
       }
     } catch (e) {
       return
@@ -2030,6 +2038,28 @@ struct AiChatPage {
     if (invocation.name === 'nga_list_favorites') {
       return $r('app.media.icon_star')
     }
+    // 「我的」本地资料与社交推送：图标与个人主页对应入口保持一致
+    if (invocation.name === 'nga_my_history') {
+      return $r('app.media.profile_history')
+    }
+    if (invocation.name === 'nga_my_saved') {
+      return $r('app.media.icon_export')
+    }
+    if (invocation.name === 'nga_my_tracked' || invocation.name === 'nga_my_notifications') {
+      return $r('app.media.icon_bell')
+    }
+    if (invocation.name === 'nga_my_messages') {
+      return $r('app.media.icon_mail')
+    }
+    if (invocation.name === 'nga_my_following') {
+      return $r('app.media.icon_people')
+    }
+    if (invocation.name === 'nga_my_posts') {
+      return $r('app.media.profile_topics')
+    }
+    if (invocation.name === 'nga_my_replies') {
+      return $r('app.media.profile_replies')
+    }
     return $r('app.media.icon_ai_analyzing')
   }
 
@@ -2045,6 +2075,14 @@ struct AiChatPage {
     }
     if (card.kind === 'forum') {
       return $r('app.media.icon_category')
+    }
+    // 通知卡片：route 仍是 thread（点击打开对应帖子），只是图标用铃铛以区分来源
+    if (card.kind === 'notification') {
+      return $r('app.media.icon_bell')
+    }
+    // 私信会话卡片：点击打开该会话详情
+    if (card.kind === 'message') {
+      return $r('app.media.icon_mail')
     }
     return $r('app.media.icon_chat_bubble')
   }

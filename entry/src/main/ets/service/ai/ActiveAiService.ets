@@ -214,7 +214,7 @@ export function getReadyToolNames(preset: AiAgentPreset | null,
 export function getToolAvailabilityHint(): string {
   const problems: string[] = []
   if (!appStore.auth.isAuthenticated) {
-    problems.push('未登录，站内工具不可用')
+    problems.push('未登录，需要登录的站内工具不可用（离线保存等本地工具仍可用）')
   }
   const settings = appStore.settingsStore.getAiToolSettings()
   const needsSearch: boolean = isAiToolEnabled(settings, 'web_search') ||

@@ -120,12 +120,17 @@ export default function aiToolContractTest(): void {
       }
     })
 
-    it('loggedOutExposesOnlyMetaTools', 0, (): void => {
+    it('loggedOutExposesMetaAndOfflineTools', 0, (): void => {
       const names: string[] = aiToolRegistry.getAvailableNames(makeContext(false))
-      /* 未登录时只剩零网络请求的元工具：上下文读取 + 大结果续读 */
-      expect(names.length).assertEqual(2)
+      /*
+       * 未登录时只剩零网络请求的工具：上下文读取 + 大结果续读 + 离线存档。
+       * nga_my_saved 免登录是有意为之——存档是设备本地文件，登出流程不清它，
+       * 登出后用户仍能问「我保存了哪些帖子」。
+       */
+      expect(names.length).assertEqual(3)
       expect(names.indexOf('get_context') >= 0).assertTrue()
       expect(names.indexOf('expand_tool_result') >= 0).assertTrue()
+      expect(names.indexOf('nga_my_saved') >= 0).assertTrue()
     })
 
     it('loggedInWithoutSearchExposesNgaToolsOnly', 0, (): void => {
@@ -142,7 +147,7 @@ export default function aiToolContractTest(): void {
           ngaCount++
         }
       }
-      expect(ngaCount).assertEqual(10)
+      expect(ngaCount).assertEqual(18)
     })
 
     it('contextToolReportsLoginStateAndBlockedTools', 0, async (): Promise<void> => {

@@ -95,6 +95,14 @@ export interface AiToolMeta {
    * {@link AI_TOOL_CACHE_TTL_LONG}，其余留空走短 TTL。
    */
   cacheTtlMs?: number
+  /**
+   * 是否纯本地工具（缺省 false）：不发起任何 NGA 网络请求。
+   *
+   * 这类工具（浏览记录 / 离线存档 / 跟踪列表）不能走风控冷却闸门——
+   * 冷却只该挡住"会打服务端"的工具，否则网络被限流时连本地台账都读不到。
+   * 也不要求登录态的工具（离线存档）同样适用。
+   */
+  localOnly?: boolean
 }
 
 /**
@@ -267,6 +275,97 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',
     defaultEnabled: true
+  },
+  {
+    name: 'nga_my_history',
+    title: '浏览记录',
+    description: '读取本地浏览记录（最近打开过的帖子，最多 500 条），可按 tid 查单帖是否看过',
+    category: AiToolCategory.NGA,
+    requires: TOOL_REQUIRES_LOGIN,
+    requirementHint: '登录后可用',
+    defaultEnabled: true,
+    // 本地台账（内存 + Preferences）：工具层缓存只会读到更旧的快照
+    cacheTtlMs: 0,
+    // 不发网络请求：风控冷却期也应可用
+    localOnly: true
+  },
+  {
+    name: 'nga_my_saved',
+    title: '离线保存',
+    description: '读取本地离线保存的帖子存档（设备级、跨账号，未登录也可用）',
+    category: AiToolCategory.NGA,
+    requires: TOOL_REQUIRES_NONE,
+    requirementHint: '',
+    defaultEnabled: true,
+    // 存档是本地文件，读写都在本进程内完成，缓存无意义
+    cacheTtlMs: 0,
+    // 不发网络请求且不要求登录：必须绕过风控冷却闸门
+    localOnly: true
+  },
+  {
+    name: 'nga_my_tracked',
+    title: '跟踪中的帖子',
+    description: '读取跟踪列表：总回复、未读新增、最后回复时间与锁定状态，可按 tid 查单帖',
+    category: AiToolCategory.NGA,
+    requires: TOOL_REQUIRES_LOGIN,
+    requirementHint: '登录后可用',
+    defaultEnabled: true,
+    // 轮询快照由 Store 维护，工具层不得再叠加 TTL
+    cacheTtlMs: 0,
+    // 只读 Store 快照，不发网络请求
+    localOnly: true
+  },
+  {
+    name: 'nga_my_posts',
+    title: '我的发帖',
+    description: '读取我发布的主题（官方接口带真实总页数，可翻页），用于「我一共发了多少帖」',
+    category: AiToolCategory.NGA,
+    requires: TOOL_REQUIRES_LOGIN,
+    requirementHint: '登录后可用',
+    defaultEnabled: true,
+    cacheTtlMs: AI_TOOL_CACHE_TTL_SHORT
+  },
+  {
+    name: 'nga_my_replies',
+    title: '我的回帖',
+    description: '读取我最近的回帖（每页 20 条，更早的记录服务端不可读；不能用于全量统计）',
+    category: AiToolCategory.NGA,
+    requires: TOOL_REQUIRES_LOGIN,
+    requirementHint: '登录后可用',
+    defaultEnabled: true,
+    cacheTtlMs: AI_TOOL_CACHE_TTL_SHORT
+  },
+  {
+    name: 'nga_my_following',
+    title: '关注动态',
+    description: '读取关注动态：我关注的用户最近发主题 / 回帖 / 收藏，可按 refresh 拉取最新一页',
+    category: AiToolCategory.NGA,
+    requires: TOOL_REQUIRES_LOGIN,
+    requirementHint: '登录后可用',
+    defaultEnabled: true,
+    // 动态由 Store 轮询刷新，工具层再缓存会读到更旧的快照
+    cacheTtlMs: 0
+  },
+  {
+    name: 'nga_my_notifications',
+    title: '我的通知',
+    description: '读取我的通知（消息 Tab，不含私信），含本地已读状态；缓存为空时自动拉取一次',
+    category: AiToolCategory.NGA,
+    requires: TOOL_REQUIRES_LOGIN,
+    requirementHint: '登录后可用',
+    defaultEnabled: true,
+    // 已读状态是本地易变状态：缓存会让「未读」在用户读完后继续显示旧值
+    cacheTtlMs: 0
+  },
+  {
+    name: 'nga_my_messages',
+    title: '我的私信',
+    description: '读取私信会话列表，或按 mid 读取会话内消息正文（只读，不含发送）',
+    category: AiToolCategory.NGA,
+    requires: TOOL_REQUIRES_LOGIN,
+    requirementHint: '登录后可用',
+    defaultEnabled: true,
+    cacheTtlMs: AI_TOOL_CACHE_TTL_SHORT
   },
   {
     name: 'web_search',
