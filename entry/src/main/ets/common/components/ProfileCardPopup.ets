@@ -110,10 +110,15 @@ export struct ProfileCardPopup {
    */
   private launchAiTask(preset: AiAgentPreset | null, title: string): void {
     const userName: string = this.profile !== null ? this.profile.userName : ''
-    let prompt: string = '请先读取当前用户（uid=' + this.targetUid + '）的资料与活跃数据，然后输出：\n'
-    prompt += '1. 用户画像：身份、兴趣领域、在论坛中的角色\n'
-    prompt += '2. 活跃规律：主要版块、发帖时段、讨论倾向\n'
-    prompt += '3. 一句话点评'
+    /*
+     * 首条消息只负责「定位数据 + 交给任务」，输出结构完全由任务的系统提示词决定。
+     * 旧实现在这里写死了「用户画像 / 活跃规律 / 一句话点评」三段，用户改完
+     * 「用户分析」的系统提示词后，这条用户消息仍会把模型拉回旧结构，
+     * 表现为「设置里保存的提示词没生效」。
+     */
+    const prompt: string = preset === null
+      ? '请先读取当前用户（uid=' + this.targetUid + '）的资料与活跃数据并分析。'
+      : '请先读取当前用户（uid=' + this.targetUid + '）的资料与活跃数据，按任务要求完成分析。'
     this.getUIContext().getRouter().pushUrl({
       url: 'pages/ai/AiChatPage',
       params: {

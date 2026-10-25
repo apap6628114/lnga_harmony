@@ -5,8 +5,7 @@ import { taskpool } from '@kit.ArkTS'
 import { appStore } from '../store/AppStore'
 import {
   AiAgentPreset,
-  PRESET_ENTRY_THREAD,
-  PRESET_ID_POST_SUMMARY
+  PRESET_ENTRY_THREAD
 } from '../model/AiAgentPreset'
 import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
 import { getThread, THREAD_FLOOR_MISSING_ERROR } from '../service/api/ThreadApi'
@@ -2262,14 +2261,17 @@ export struct ThreadPanel {
   private launchAiTask(preset: AiAgentPreset | null, p: PostInfo, title: string): void {
     TtsPlayer.stop()
     const presetId: string = preset !== null ? preset.id : ''
-    let prompt: string = ''
-    if (presetId === PRESET_ID_POST_SUMMARY) {
-      prompt = '请调用读帖工具读取当前帖子第 ' + p.lou.toString() + ' 楼（作者 ' + p.author + '）的内容并总结：\n'
-      prompt += '1. 核心观点\n2. 关键信息\n3. 逻辑脉络\n4. 一句话总结'
-    } else {
-      prompt = '请基于当前帖子第 ' + p.lou.toString() + ' 楼（作者 ' + p.author + '）完成任务。'
-      prompt += '需要正文或其它楼层时，调用读帖工具读取。'
-    }
+    /*
+     * 首条消息只负责「定位数据 + 交给任务」，输出结构完全由任务的系统提示词决定。
+     *
+     * 旧实现在这里给内置「帖子总结」写死了「核心观点 / 关键信息 / 逻辑脉络 /
+     * 一句话总结」四段，用户改完任务的系统提示词后，这条用户消息仍会把模型拉回
+     * 旧结构，表现为「设置里保存的提示词没生效」。
+     */
+    const floorText: string = '当前帖子第 ' + p.lou.toString() + ' 楼（作者 ' + p.author + '）'
+    const prompt: string = preset === null
+      ? '请读取' + floorText + '的内容并总结；需要正文或其它楼层时，调用读帖工具读取。'
+      : '请读取' + floorText + '的内容，按任务要求完成；需要正文或其它楼层时，调用读帖工具读取。'
     this.getUIContext().getRouter().pushUrl({
       url: 'pages/ai/AiChatPage',
       params: {

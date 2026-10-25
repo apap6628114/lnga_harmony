@@ -173,6 +173,13 @@ export struct AiSettingsPanel {
   @State editTaskEntries: string[] = []
   /** 任务编辑：是否内置任务。 */
   @State editTaskBuiltin: boolean = false
+  /**
+   * 打开任务编辑器时的快照，用于判断是否有未保存的修改。
+   *
+   * 不参与 UI，因此不用 @State；`systemPrompt` 存的是**实际生效**的提示词
+   * （内置任务来自场景存储），与 `editTaskPrompt` 同一口径才能正确比较。
+   */
+  private taskBaseline: AiAgentPreset | null = null
   /** 搜索服务配置列表快照。 */
   @State searchProfiles: AiSearchProfile[] = []
   /** 当前展开编辑的搜索配置 ID。 */
@@ -269,7 +276,7 @@ export struct AiSettingsPanel {
     if (entry) {
       entry.preBack = (): boolean => {
         if (this.editingPresetId.length > 0) {
-          this.closePresetEditor()
+          this.requestClosePresetEditor()
           return true
         }
         if (this.hasUnsavedEdit() || this.hasSearchUnsavedEdit()) {
@@ -1326,7 +1333,7 @@ export struct AiSettingsPanel {
         scrollEffectProgress: this.titleScrollEffectProgress,
         onBack: (): void => {
           if (this.editingPresetId.length > 0) {
-            this.closePresetEditor()
+            this.requestClosePresetEditor()
             return
           }
           if (this.hasUnsavedEdit() || this.hasSearchUnsavedEdit()) {
@@ -2896,11 +2903,60 @@ export struct AiSettingsPanel {
     this.editTaskContexts = copyStringList(preset.contexts)
     this.editTaskEntries = copyStringList(preset.entries)
     this.editTaskBuiltin = preset.builtin
+    const baseline: AiAgentPreset = new AiAgentPreset()
+    baseline.id = preset.id
+    baseline.name = preset.name
+    baseline.description = preset.description
+    baseline.icon = preset.icon
+    baseline.systemPrompt = prompt
+    baseline.tools = copyStringList(preset.tools)
+    baseline.contexts = copyStringList(preset.contexts)
+    baseline.entries = copyStringList(preset.entries)
+    this.taskBaseline = baseline
+  }
+
+  /**
+   * 判断任务表单是否有未保存的修改。
+   *
+   * 与 profile / 搜索配置两个表单一致：直接丢弃会让人误以为「已经保存」，
+   * 这是「改了提示词但实际没生效」的常见来源之一。
+   *
+   * @returns 是否有未保存修改
+   */
+  private hasTaskUnsavedEdit(): boolean {
+    if (this.editingPresetId.length === 0) {
+      return false
+    }
+    const base: AiAgentPreset | null = this.taskBaseline
+    if (base === null) {
+      return false
+    }
+    return this.editTaskName !== base.name ||
+      this.editTaskDescription !== base.description ||
+      this.editTaskIcon !== base.icon ||
+      this.editTaskPrompt !== base.systemPrompt ||
+      !sameStringSet(this.editTaskTools, base.tools) ||
+      !sameStringSet(this.editTaskContexts, base.contexts) ||
+      !sameStringSet(this.editTaskEntries, base.entries)
+  }
+
+  /**
+   * 请求关闭任务编辑器：有未保存修改时先确认。
+   */
+  private requestClosePresetEditor(): void {
+    if (this.hasTaskUnsavedEdit()) {
+      this.showDiscardConfirm((): void => {
+        this.closePresetEditor()
+      })
+      return
+    }
+    this.closePresetEditor()
   }
 
   /** 关闭任务编辑器。 */
   private closePresetEditor(): void {
     this.editingPresetId = ''
+    this.taskBaseline = null
     this.editTaskName = ''
     this.editTaskDescription = ''
     this.editTaskPrompt = ''
@@ -3430,7 +3486,7 @@ export struct AiSettingsPanel {
           .fontColor(AppColors.textSecondary)
           .padding({ left: 16, right: 16, top: 10, bottom: 10 })
           .onClick((): void => {
-            this.closePresetEditor()
+            this.requestClosePresetEditor()
           })
 
         Text(this.editingPresetId === NEW_ID ? '新建 AI 任务' : '编辑 AI 任务')
@@ -3538,12 +3594,19 @@ export struct AiSettingsPanel {
               .fontSize(13)
               .fontColor(AppColors.textSecondary)
               .layoutWeight(1)
-            if (!this.editTaskBuiltin && this.editTaskPrompt.length > 0) {
-              Text('清空')
+            if (this.editTaskPrompt.length > 0) {
+              Text(this.editTaskBuiltin ? '恢复默认' : '清空')
                 .fontSize(12)
                 .fontColor(AppColors.textTertiary)
                 .onClick((): void => {
-                  this.editTaskPrompt = ''
+                  /*
+                   * 内置任务的提示词存在场景存储里，空串会被解析成默认提示词；
+                   * 这里直接把默认全文填回表单，保存时 `setScenarioPrompt` 检测到
+                   * 内容与默认一致，会删掉自定义条目、回落到默认。
+                   */
+                  this.editTaskPrompt = this.editTaskBuiltin
+                    ? (DEFAULT_SYSTEM_PROMPTS[this.editingPresetId] ?? '')
+                    : ''
                 })
             }
           }
@@ -3566,7 +3629,8 @@ export struct AiSettingsPanel {
             .padding({ left: 12, right: 12, top: 8, bottom: 8 })
             .margin({ bottom: 6 })
 
-          Text(this.editTaskPrompt.length.toString() + ' 字 · 留空则使用通用助手行为')
+          Text(this.editTaskPrompt.length.toString() + ' 字 · ' +
+            (this.editTaskBuiltin ? '留空则使用内置默认提示词' : '留空则使用通用助手行为'))
             .fontSize(11)
             .fontColor(AppColors.textTertiary)
             .width('100%')
@@ -3713,6 +3777,25 @@ function toggleInList(src: string[], value: string): string[] {
     dest.push(value)
   }
   return dest
+}
+
+/**
+ * 判断两个字符串数组是否等价（不区分顺序，重复项忽略）。
+ *
+ * @param a - 数组 A
+ * @param b - 数组 B
+ * @returns true 表示成员集合相同
+ */
+function sameStringSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) {
+    return false
+  }
+  for (let i: number = 0; i < a.length; i++) {
+    if (b.indexOf(a[i]) < 0) {
+      return false
+    }
+  }
+  return true
 }
 
 /** 任务图标可选值。 */
