@@ -130,7 +130,8 @@ export class NgaMyPostsTool implements AiToolAdapter {
 
     const properties: Record<string, Object> = {}
     properties['page'] = intProperty('页码，从 1 开始，默认 1')
-    properties['limit'] = intProperty('本页展示条数 1-50，默认 20；不改变服务端返回页的大小')
+    properties['limit'] = intProperty('本页展示条数 1-' + MAX_LIMIT.toString() +
+      '，默认 ' + DEFAULT_LIMIT.toString() + '；不改变服务端返回页的大小')
 
     const required: string[] = []
     definition.parameters = buildToolParameters(properties, required)
@@ -284,7 +285,8 @@ export class NgaMyRepliesTool implements AiToolAdapter {
 
     const properties: Record<string, Object> = {}
     properties['page'] = intProperty('页码，从 1 开始，默认 1；越往后有效条目越少，通常只看前几页')
-    properties['limit'] = intProperty('本页展示条数 1-50，默认 20；不改变服务端每页 20 条的大小')
+    properties['limit'] = intProperty('本页展示条数 1-' + MAX_LIMIT.toString() +
+      '，默认 ' + DEFAULT_LIMIT.toString() + '；不改变服务端每页 20 条的大小')
 
     const required: string[] = []
     definition.parameters = buildToolParameters(properties, required)

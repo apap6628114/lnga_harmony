@@ -74,7 +74,8 @@ export class GetContextTool implements AiToolAdapter {
     definition.description =
       '读取本次对话所在的页面上下文（帖子 tid / 楼层 pid / 用户 uid / 版块 fid）、' +
         '当前登录账号，以及此刻可用与不可用的工具清单。不需要任何参数。' +
-        '多数工具会自动带入当前页面标识，因此只在工具回报"缺少 tid / uid / fid"、' +
+        '部分工具会自动带入当前页面标识（读帖 / 版块列表 / 用户资料 / 活跃分析），' +
+        '因此只在工具回报"缺少 tid / uid / fid"、' +
         '或需要确认"我当前在哪、还能用什么工具"时调用它。'
     definition.parameters = buildEmptyParameters()
     return definition

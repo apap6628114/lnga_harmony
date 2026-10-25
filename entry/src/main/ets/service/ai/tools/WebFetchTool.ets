@@ -49,7 +49,8 @@ export class WebFetchTool implements AiToolAdapter {
     definition.name = TOOL_NAME
     definition.description =
       '抓取指定网页并返回其 Markdown 正文。当搜索摘要不足以回答问题、' +
-        '或者用户直接给出链接时使用。一次只抓一个 URL。' +
+        '或者用户直接给出链接时使用。一次只抓一个 URL，' +
+        'url 必须是 http 或 https 开头的完整链接（裸域名会被拒绝）。' +
         '正文超过 12000 个字符会被截断（结果中带截断标记），长文请告诉用户只读了前半部分。'
 
     const urlProp: Record<string, Object> = {}
@@ -117,6 +118,19 @@ export class WebFetchTool implements AiToolAdapter {
       result.content = '抓取失败：没有提供网页地址。'
       return result
     }
+    /*
+     * 描述里声明了「必须是 http / https 开头」，实现必须真的执行它：
+     * 模型常把搜索结果里的裸域名（example.com/xxx）直接塞进来，服务端只会回一个
+     * 语焉不详的失败；在这里拦下并给出可执行的修正方式，比发一次必然失败的请求更好。
+     */
+    if (!isHttpUrl(url)) {
+      result.success = false
+      result.errorCode = TOOL_ERROR_BAD_ARGS
+      result.errorMessage = '网页地址缺少 http/https 协议'
+      result.content = '抓取失败：网页地址「' + url +
+        '」不是完整的 http/https 链接。请传带协议的完整 URL（例如 https://example.com/...）。'
+      return result
+    }
 
     const search: AiSearchProfile | null = context.search
     if (search === null) {
@@ -152,6 +166,17 @@ export class WebFetchTool implements AiToolAdapter {
     result.content = buildFetchContent(title, url, response.content)
     return result
   }
+}
+
+/**
+ * 判断地址是否带 http / https 协议。
+ *
+ * @param url - 网页地址
+ * @returns true 表示是完整的 http/https 链接
+ */
+function isHttpUrl(url: string): boolean {
+  const lower: string = url.toLowerCase()
+  return lower.startsWith('http://') || lower.startsWith('https://')
 }
 
 /**

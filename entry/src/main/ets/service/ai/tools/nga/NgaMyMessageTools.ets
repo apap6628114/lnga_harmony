@@ -100,8 +100,9 @@ export class NgaMyMessagesTool implements AiToolAdapter {
 
     const properties: Record<string, Object> = {}
     properties['mid'] = stringProperty('会话 ID（先不带 mid 列出会话，再把对应 mid 传回来）；省略时列出会话')
-    properties['page'] = intProperty('页码，从 1 开始，默认 1；详情页翻页可看更早的消息')
-    properties['limit'] = intProperty('返回条数 1-50，默认 20')
+    properties['page'] = intProperty('页码，从 1 开始，默认 1；列表与会话详情都支持翻页，可看更早的会话 / 消息')
+    properties['limit'] = intProperty('返回条数 1-' + MAX_LIMIT.toString() +
+      '，默认 ' + DEFAULT_LIMIT.toString() + '；超出单页条数时需配合 page 翻页')
 
     const required: string[] = []
     definition.parameters = buildToolParameters(properties, required)
@@ -185,7 +186,8 @@ export class NgaMyMessagesTool implements AiToolAdapter {
       }
     }
     if (list.length > shown) {
-      content += '\n（本页还有 ' + (list.length - shown).toString() + ' 个未展示，可增大 limit）'
+      content += '\n（本页还有 ' + (list.length - shown).toString() +
+        ' 个未展示，可增大 limit（上限 50））'
     }
     if (info.nextPage > 0) {
       content += '\n（还有更早的会话，可传 page=' + info.nextPage.toString() + '）'
@@ -242,7 +244,8 @@ export class NgaMyMessagesTool implements AiToolAdapter {
       content += '\n'
     }
     if (articles.length > shown) {
-      content += '\n（本页还有 ' + (articles.length - shown).toString() + ' 条未展示，可增大 limit）'
+      content += '\n（本页还有 ' + (articles.length - shown).toString() +
+        ' 条未展示，可增大 limit（上限 50）或翻页）'
     }
     if (info.nextPage > 0) {
       content += '\n（还有更早的消息，可传 page=' + info.nextPage.toString() + '）'

@@ -20,7 +20,7 @@ import { ThreadResult } from '../../../../model/ThreadResult'
 import type { PostInfo } from '../../../../model/PostInfo'
 import {
   DEFAULT_MAX_CHARS,
-  TruncatedText,
+  MAX_MAX_CHARS,
   bbcodeToText,
   buildToolParameters,
   failedResult,
@@ -31,16 +31,23 @@ import {
   readIntArg,
   readStringArg,
   stringProperty,
-  topicCard,
-  truncateText
+  topicCard
 } from './NgaToolSupport'
 
 /** 工具名称。 */
 const TOOL_NAME: string = 'nga_read_thread'
 /** 默认读取楼数。 */
 const DEFAULT_MAX_FLOORS: number = 15
-/** 单楼正文上限。 */
-const MAX_FLOOR_CHARS: number = 1800
+/** 单次最多展示的楼层数（单页约 20 楼，50 足够覆盖一页并留余量）。 */
+const MAX_MAX_FLOORS: number = 50
+/**
+ * 单楼正文的硬上限。
+ *
+ * 与 `MAX_MAX_CHARS` 取同一个值：单楼正文不应有比「一次工具调用总预算」更小的
+ * 独立天花板。旧实现固定 1800 字，模型把 `max_chars` 调到 20000 也读不到长楼的
+ * 后半段——没有任何参数能突破它，属于「看到了上限却拿不到数据」。
+ */
+const MAX_FLOOR_CHARS: number = MAX_MAX_CHARS
 
 /**
  * 读帖工具。
@@ -68,17 +75,20 @@ export class NgaReadThreadTool implements AiToolAdapter {
       '读取 NGA 帖子的标题、版块、页码与楼层正文（已转纯文本）。' +
         '当前页面有帖子时可省略 tid 直接读当前帖。' +
         '每次只读一页（约 20 楼）：想读更多楼层请翻页（传更大的 page），' +
-        'max_floors 只控制本次展示多少楼，不能跨页。' +
-        '单楼正文超过 1800 字会被截断，总正文受 max_chars 限制。'
+        'max_floors 只控制本次展示多少楼，不能跨页；本页还有楼层未展示时结果里会明确提示。' +
+        '正文总量受 max_chars 限制（500-20000）；单个楼层过长时会按剩余预算截断，' +
+        '并用更大的 max_chars 重读可拿到该楼剩余部分。'
 
     const properties: Record<string, Object> = {}
     properties['tid'] = stringProperty('帖子 ID；省略时使用当前打开的帖子')
     properties['page'] = intProperty('页码，从 1 开始，默认 1；每次只读一页')
     properties['pid'] = stringProperty('楼层 pid；用于定位到该楼层所在页。' +
       '必须同时提供 tid，只给 pid 会失败')
-    properties['max_floors'] = intProperty('本次最多展示多少个楼层，1-50，默认 15；' +
-      '受单页楼层数（约 20）限制，不能跨页')
-    properties['max_chars'] = intProperty('本次返回正文总字符上限，500-20000，默认 6000')
+    properties['max_floors'] = intProperty('本次最多展示多少个楼层，1-' +
+      MAX_MAX_FLOORS.toString() + '，默认 ' + DEFAULT_MAX_FLOORS.toString() +
+      '；受单页楼层数（约 20）限制，不能跨页')
+    properties['max_chars'] = intProperty('本次返回正文总字符上限，500-' +
+      MAX_MAX_CHARS.toString() + '，默认 ' + DEFAULT_MAX_CHARS.toString())
 
     const required: string[] = []
     definition.parameters = buildToolParameters(properties, required)
@@ -125,8 +135,8 @@ export class NgaReadThreadTool implements AiToolAdapter {
         '请传 tid（可从帖子链接或 nga_search_topics 得到）', TOOL_ERROR_BAD_ARGS)
     }
     const page: number = readIntArg(args, 'page', 1, 1, 100000)
-    const maxFloors: number = readIntArg(args, 'max_floors', DEFAULT_MAX_FLOORS, 1, 50)
-    const maxChars: number = readIntArg(args, 'max_chars', DEFAULT_MAX_CHARS, 500, 20000)
+    const maxFloors: number = readIntArg(args, 'max_floors', DEFAULT_MAX_FLOORS, 1, MAX_MAX_FLOORS)
+    const maxChars: number = readIntArg(args, 'max_chars', DEFAULT_MAX_CHARS, 500, MAX_MAX_CHARS)
 
     let result: ThreadResult = await getThread(context.token, tid, pid, '', page.toString())
     // read.php 带 pid 时通常直接返回该楼所在页，但不保证；未命中时用项目里
@@ -156,40 +166,75 @@ export class NgaReadThreadTool implements AiToolAdapter {
 
     const limit: number = Math.min(maxFloors, result.posts.length)
     let consumed: number = content.length
-    let truncatedAny: boolean = false
+    let shownFloors: number = 0
+    /** 因单楼正文超出预算而被截断的楼层号（0 表示未发生）。 */
+    let cutFloor: number = 0
+    /** 被截断楼层正文的完整字符数（用于说明实际损失了多少）。 */
+    let cutFloorChars: number = 0
     for (let i: number = 0; i < limit; i++) {
       const post: PostInfo = result.posts[i]
-      let body: string = bbcodeToText(post.content)
-      const bodyCut: TruncatedText = truncateText(body, MAX_FLOOR_CHARS)
-      body = bodyCut.text
-      if (bodyCut.truncated) {
-        truncatedAny = true
-      }
+      const body: string = bbcodeToText(post.content)
       const header: string = '\n—— 第' + post.lou.toString() + '楼 · 作者：' +
         (post.author.length > 0 ? post.author : '匿名') +
         (post.postdate.length > 0 ? ' · ' + post.postdate : '') + ' ——\n'
-      const block: string = header + (body.length > 0 ? body : '（空正文）') + '\n'
-      if (consumed + block.length > maxChars) {
-        truncatedAny = true
-        content += '\n（正文已达本次读取上限，剩余 ' + (limit - i).toString() +
-          ' 个楼层未展示；需要时增大 max_chars 或翻页）\n'
+      const floorText: string = body.length > 0 ? body : '（空正文）'
+      const remaining: number = maxChars - consumed
+      if (remaining <= header.length + 1) {
+        // 连楼层头都放不下：不追加半截标题，剩余楼层统一在循环后提示
         break
       }
-      content += block
-      consumed += block.length
+      const bodyBudget: number = remaining - header.length - 1
+      const bodyLimit: number = Math.min(bodyBudget, MAX_FLOOR_CHARS)
+      if (floorText.length <= bodyLimit) {
+        const block: string = header + floorText + '\n'
+        content += block
+        consumed += block.length
+        shownFloors++
+        continue
+      }
+      /*
+       * 单楼就超出剩余预算：旧实现直接丢弃整个楼层（模型拿到只有标题、没有正文），
+       * 或按 1800 字固定截断后再也没有入口读剩余。这里给出前 bodyLimit 字并标注
+       * 「用更大的 max_chars 重读」，保证任何长度的楼层都有可执行的下一步。
+       */
+      content += header + floorText.substring(0, bodyLimit) +
+        '…（本楼正文超出本次预算，已截断；用更大的 max_chars 重读本页可拿到剩余部分）' + '\n'
+      shownFloors++
+      cutFloor = post.lou
+      cutFloorChars = floorText.length
+      break
     }
 
-    const readCount: number = Math.min(limit, result.posts.length)
+    const remainingFloors: number = result.posts.length - shownFloors
+    if (cutFloor > 0) {
+      if (maxChars >= MAX_MAX_CHARS) {
+        // 已经到工具硬上限，再让模型「增大 max_chars」就是给一条走不通的路
+        content += '\n（第 ' + cutFloor.toString() + ' 楼正文共 ' + cutFloorChars.toString() +
+          ' 字，超过单次输出上限 ' + MAX_MAX_CHARS.toString() +
+          ' 字符，本次只展示了前一部分；无法通过增大 max_chars 读全，' +
+          '需要完整内容请让用户在客户端打开该楼）\n'
+      } else {
+        content += '\n（第 ' + cutFloor.toString() + ' 楼正文共 ' + cutFloorChars.toString() +
+          ' 字，超出本次 max_chars=' + maxChars.toString() +
+          ' 的预算，只展示了前一部分；需要完整正文时增大 max_chars 重读本页）\n'
+      }
+    } else if (shownFloors < limit) {
+      content += '\n（正文已达本次读取上限 max_chars=' + maxChars.toString() + '，本页还有 ' +
+        (limit - shownFloors).toString() + ' 个楼层未展示；可增大 max_chars 或翻页）\n'
+    } else if (remainingFloors > 0) {
+      content += '\n（本页还有 ' + remainingFloors.toString() +
+        ' 个楼层未展示，可增大 max_floors 后重读本页）\n'
+    }
+
     const result2: AiToolResult = new AiToolResult()
     result2.success = true
     result2.summary = subject
-    result2.count = readCount
-    result2.content = content +
-      (truncatedAny ? '\n（部分正文已截断，可按需继续读取）' : '')
+    result2.count = shownFloors
+    result2.content = content
 
     const cards: AiToolCard[] = []
     cards.push(topicCard(tid, subject,
-      (forumName.length > 0 ? forumName + ' · ' : '') + readCount.toString() + ' 楼'))
+      (forumName.length > 0 ? forumName + ' · ' : '') + shownFloors.toString() + ' 楼'))
     result2.cards = cards
     return result2
   }

@@ -6,9 +6,14 @@
  *  - `nga_my_saved`：离线保存的帖子存档（设备级，登出流程不清它，免登录）
  *  - `nga_my_tracked`：跟踪中的帖子（总回复 / 已读基准 / 未读新增 / 锁定态）
  *
- * 共同形态：**列表 + 单帖查询**。不传 `tid` 时返回最近 N 条；传 `tid` 时只回答
- * "这帖我看过吗 / 保存了吗 / 在跟踪吗"。两类问题在对话里同样高频，而单帖查询
- * 的成本只是一个可选参数，不额外增加工具数量。
+ * 共同形态：**列表 + 单帖查询**。不传 `tid` 时按 `offset` / `limit` 返回一段窗口；
+ * 传 `tid` 时只回答"这帖我看过吗 / 保存了吗 / 在跟踪吗"。两类问题在对话里同样高频，
+ * 而单帖查询的成本只是一个可选参数，不额外增加工具数量。
+ *
+ * 为什么必须同时有 `offset` 和 `limit`：浏览记录最多 500 条、存档与动态缓存也可能上百条。
+ * 只有 `limit` 时单次最多给 50 条，其余数据没有入口；而旧文案还写着「可增大 limit」，
+ * 模型照着做只会拿到同样被上限截断的结果。窗口（offset + limit + 续读提示）让模型
+ * 能真正读完全部本地台账。
  *
  * 时间单位约定（三处数据源不一致，转换集中在这里与 `NgaToolSupport.toSeconds`）：
  *  - `BrowseHistoryEntry.ts`、`SavedThread.savedAt`、`TrackedThread.createdAt` 是**毫秒**
@@ -27,16 +32,22 @@ import {
   AiToolCard,
   AiToolContext,
   AiToolResult,
+  TOOL_ERROR_BAD_ARGS,
   TOOL_ERROR_EMPTY
 } from '../AiToolAdapter'
 import { isAiToolEnabled } from '../../../../model/AiToolConfig'
 import { appStore } from '../../../../store/AppStore'
+import { HISTORY_MAX_COUNT } from '../../../../store/HistoryStore'
 import type { BrowseHistoryEntry } from '../../../../store/HistoryStore'
 import type { SavedThread } from '../../../../model/SavedThread'
+import { TRACK_MAX_COUNT } from '../../../../model/TrackedThread'
 import type { TrackedThread } from '../../../../model/TrackedThread'
 import { remainingTrackDays, unreadReplyCount } from '../../../../common/utils/ThreadTrackPolicy'
 import { READ_BASELINE_UNKNOWN } from '../../../../common/utils/TopicReadPolicy'
 import {
+  ListWindow,
+  MAX_LIST_OFFSET,
+  buildListWindowHint,
   buildToolParameters,
   failedResult,
   formatToolTime,
@@ -49,6 +60,7 @@ import {
   pickText,
   readIntArg,
   readStringArg,
+  resolveListWindow,
   stringProperty,
   toSeconds,
   topicCard
@@ -63,12 +75,14 @@ const TOOL_TRACKED: string = 'nga_my_tracked'
 
 /** 默认返回条数。 */
 const DEFAULT_LIMIT: number = 20
-/** 单次返回条数上限。 */
-const MAX_LIMIT: number = 50
+/** 本地台账工具单次返回条数上限（本地数据无网络成本，可一次多给；更多靠 offset）。 */
+const MAX_LOCAL_LIST_LIMIT: number = 200
+/** 跟踪工具单次返回条数上限（跟踪任务本身最多 TRACK_MAX_COUNT 条，无翻页必要）。 */
+const MAX_TRACKED_LIMIT: number = TRACK_MAX_COUNT
 /** 单次最多附带的卡片数（卡片是 UI 元素，过多会拖慢列表渲染）。 */
 const MAX_CARDS: number = 20
-/** 浏览记录本地保留上限（与 HistoryStore 的 HISTORY_MAX_COUNT 一致）。 */
-const HISTORY_CAP: number = 500
+/** 浏览记录本地保留上限（与 HistoryStore 的 HISTORY_MAX_COUNT 同源，避免描述漂移）。 */
+const HISTORY_CAP: number = HISTORY_MAX_COUNT
 
 /**
  * 生成「版块 · 作者」形式的副标题片段（空字段自动省略）。
@@ -134,13 +148,21 @@ export class NgaMyHistoryTool implements AiToolAdapter {
     definition.description =
       '读取当前登录账号的本地浏览记录：最近打开过的帖子，按时间倒序，客户端最多保留 ' +
         HISTORY_CAP.toString() + ' 条。这是本地台账，不发起网络请求。' +
-        '不传 tid 时列出最近 N 条；传 tid 时只查该帖是否看过，并给出读帖时的回复数基线' +
+        '不传 tid 时列出浏览记录：limit 控制单次条数（1-' + MAX_LOCAL_LIST_LIMIT.toString() +
+        '，默认 ' + DEFAULT_LIMIT.toString() + '），offset 控制从第几条开始（0 起，默认 0）；' +
+        '两者配合可以分页读完全部记录（先读 offset=0，再传 offset=' +
+        MAX_LOCAL_LIST_LIMIT.toString() + '，依此类推），不要因为一次只拿到一部分就声称记录只有这些。' +
+        '传 tid 时只查该帖是否看过，并给出读帖时的回复数基线' +
         '（基线小于当前回复数即表示之后有新回复）。' +
         '用户问「我最近看了哪些帖」「这帖我看过吗」时使用。'
 
     const properties: Record<string, Object> = {}
-    properties['limit'] = intProperty('返回条数 1-50，默认 20；仅在列表模式下生效')
-    properties['tid'] = stringProperty('只查这一个帖子是否在浏览记录里；省略时返回最近浏览列表')
+    properties['limit'] = intProperty('返回条数 1-' + MAX_LOCAL_LIST_LIMIT.toString() +
+      '，默认 ' + DEFAULT_LIMIT.toString() + '；仅在列表模式下生效；看更多请配合 offset')
+    properties['offset'] = intProperty('跳过前多少条（0 起，默认 0）；仅在列表模式下生效。' +
+      '读取第 ' + (MAX_LOCAL_LIST_LIMIT + 1).toString() + ' 条起时传 offset=' +
+      MAX_LOCAL_LIST_LIMIT.toString())
+    properties['tid'] = stringProperty('只查这一个帖子是否在浏览记录里；省略时按 offset / limit 返回列表')
 
     const required: string[] = []
     definition.parameters = buildToolParameters(properties, required)
@@ -185,7 +207,15 @@ export class NgaMyHistoryTool implements AiToolAdapter {
       return failedResult('本地还没有浏览记录：打开任意帖子后会自动记录（最多 ' +
         HISTORY_CAP.toString() + ' 条）。', TOOL_ERROR_EMPTY)
     }
-    return this.describeList(entries, readIntArg(args, 'limit', DEFAULT_LIMIT, 1, MAX_LIMIT))
+    const offset: number = readIntArg(args, 'offset', 0, 0, MAX_LIST_OFFSET)
+    const limit: number = readIntArg(args, 'limit', DEFAULT_LIMIT, 1, MAX_LOCAL_LIST_LIMIT)
+    const window: ListWindow = resolveListWindow(entries.length, offset, limit)
+    if (window.count === 0) {
+      return failedResult('offset=' + window.start.toString() +
+        ' 超出了浏览记录范围（共 ' + entries.length.toString() +
+        ' 条）。请传更小的 offset，或不传 offset 从头读取。', TOOL_ERROR_BAD_ARGS)
+    }
+    return this.describeList(entries, window)
   }
 
   /**
@@ -245,18 +275,20 @@ export class NgaMyHistoryTool implements AiToolAdapter {
   }
 
   /**
-   * 描述最近浏览列表。
+   * 描述浏览记录的一段窗口。
    *
    * @param entries - 浏览记录（按时间倒序）
-   * @param limit - 返回条数
+   * @param window - 本次窗口
    * @returns 工具结果
    */
-  private describeList(entries: BrowseHistoryEntry[], limit: number): AiToolResult {
-    const shown: number = Math.min(limit, entries.length)
-    let content: string = '本地浏览记录（共 ' + entries.length.toString() +
-      ' 条，显示最近 ' + shown.toString() + ' 条）：'
+  private describeList(entries: BrowseHistoryEntry[], window: ListWindow): AiToolResult {
+    let content: string = '本地浏览记录（共 ' + window.total.toString() + ' 条' +
+      (window.start > 0 ? '，从第 ' + (window.start + 1).toString() + ' 条开始' : '，按时间倒序') +
+      '，本次 ' + window.count.toString() + ' 条）：'
     const cards: AiToolCard[] = []
-    for (let i: number = 0; i < shown; i++) {
+    let appended: number = 0
+    const end: number = window.start + window.count
+    for (let i: number = window.start; i < end; i++) {
       const entry: BrowseHistoryEntry | null = entries[i]
       if (entry === null || entry === undefined) {
         continue
@@ -273,18 +305,20 @@ export class NgaMyHistoryTool implements AiToolAdapter {
       if (opened.length > 0) {
         content += ' ' + opened
       }
+      appended++
       if (cards.length < MAX_CARDS && tid.length > 0) {
         cards.push(topicCard(tid, subject, meta.length > 0 ? meta : '浏览记录'))
       }
     }
-    if (entries.length > shown) {
-      content += '\n（还有 ' + (entries.length - shown).toString() + ' 条更早的记录，可增大 limit 继续看）'
+    const hint: string = buildListWindowHint(window)
+    if (hint.length > 0) {
+      content += '\n' + hint
     }
 
     const result: AiToolResult = new AiToolResult()
     result.success = true
     result.summary = '浏览记录'
-    result.count = shown
+    result.count = appended
     result.content = content
     result.cards = cards
     return result
@@ -321,11 +355,15 @@ export class NgaMySavedTool implements AiToolAdapter {
       '读取本地离线保存的帖子存档（「收藏、保存与跟踪」里的离线保存）。' +
         '这是**设备本地文件**，与登录账号无关、不随登出清空，未登录也可用；' +
         '因此不要把它当成「当前账号保存的」。不发起网络请求。' +
-        '不传 tid 时列出最近保存的 N 条（含已存页数与最后楼层）；传 tid 时只查该帖是否已保存。'
+        '不传 tid 时列出最近保存的存档（含已存页数与最后楼层）：limit 1-' +
+        MAX_LOCAL_LIST_LIMIT.toString() + '（默认 ' + DEFAULT_LIMIT.toString() +
+        '），offset 从 0 开始；两者配合可分页读取全部存档。传 tid 时只查该帖是否已保存。'
 
     const properties: Record<string, Object> = {}
-    properties['limit'] = intProperty('返回条数 1-50，默认 20；仅在列表模式下生效')
-    properties['tid'] = stringProperty('只查这一个帖子是否已有离线存档；省略时返回保存列表')
+    properties['limit'] = intProperty('返回条数 1-' + MAX_LOCAL_LIST_LIMIT.toString() +
+      '，默认 ' + DEFAULT_LIMIT.toString() + '；仅在列表模式下生效；看更多请配合 offset')
+    properties['offset'] = intProperty('跳过前多少条（0 起，默认 0）；仅在列表模式下生效')
+    properties['tid'] = stringProperty('只查这一个帖子是否已有离线存档；省略时按 offset / limit 返回列表')
 
     const required: string[] = []
     definition.parameters = buildToolParameters(properties, required)
@@ -361,7 +399,15 @@ export class NgaMySavedTool implements AiToolAdapter {
     if (items.length === 0) {
       return failedResult('本地还没有离线保存的帖子：在帖子页保存后才会出现在这里。', TOOL_ERROR_EMPTY)
     }
-    return this.describeList(items, readIntArg(args, 'limit', DEFAULT_LIMIT, 1, MAX_LIMIT))
+    const offset: number = readIntArg(args, 'offset', 0, 0, MAX_LIST_OFFSET)
+    const limit: number = readIntArg(args, 'limit', DEFAULT_LIMIT, 1, MAX_LOCAL_LIST_LIMIT)
+    const window: ListWindow = resolveListWindow(items.length, offset, limit)
+    if (window.count === 0) {
+      return failedResult('offset=' + window.start.toString() +
+        ' 超出了离线存档范围（共 ' + items.length.toString() +
+        ' 条）。请传更小的 offset，或不传 offset 从头读取。', TOOL_ERROR_BAD_ARGS)
+    }
+    return this.describeList(items, window)
   }
 
   /**
@@ -414,18 +460,20 @@ export class NgaMySavedTool implements AiToolAdapter {
   }
 
   /**
-   * 描述离线存档列表。
+   * 描述离线存档的一段窗口。
    *
    * @param items - 存档列表（按保存时间降序）
-   * @param limit - 返回条数
+   * @param window - 本次窗口
    * @returns 工具结果
    */
-  private describeList(items: SavedThread[], limit: number): AiToolResult {
-    const shown: number = Math.min(limit, items.length)
-    let content: string = '本地离线存档（共 ' + items.length.toString() +
-      ' 条，显示最近 ' + shown.toString() + ' 条；设备级，跨账号）：'
+  private describeList(items: SavedThread[], window: ListWindow): AiToolResult {
+    let content: string = '本地离线存档（共 ' + window.total.toString() + ' 条' +
+      (window.start > 0 ? '，从第 ' + (window.start + 1).toString() + ' 条开始' : '') +
+      '，本次 ' + window.count.toString() + ' 条；设备级，跨账号）：'
     const cards: AiToolCard[] = []
-    for (let i: number = 0; i < shown; i++) {
+    let appended: number = 0
+    const end: number = window.start + window.count
+    for (let i: number = window.start; i < end; i++) {
       const item: SavedThread | null = items[i]
       if (item === null || item === undefined) {
         continue
@@ -451,18 +499,20 @@ export class NgaMySavedTool implements AiToolAdapter {
       if (savedAt.length > 0) {
         content += ' ' + savedAt
       }
+      appended++
       if (cards.length < MAX_CARDS && tid.length > 0) {
         cards.push(topicCard(tid, subject, meta.length > 0 ? meta : '离线存档'))
       }
     }
-    if (items.length > shown) {
-      content += '\n（还有 ' + (items.length - shown).toString() + ' 条更早的存档，可增大 limit 继续看）'
+    const hint: string = buildListWindowHint(window)
+    if (hint.length > 0) {
+      content += '\n' + hint
     }
 
     const result: AiToolResult = new AiToolResult()
     result.success = true
     result.summary = '离线存档'
-    result.count = shown
+    result.count = appended
     result.content = content
     result.cards = cards
     return result
@@ -492,7 +542,7 @@ export class NgaMyTrackedTool implements AiToolAdapter {
     const definition: AiToolDefinition = new AiToolDefinition()
     definition.name = TOOL_TRACKED
     definition.description =
-      '读取当前账号正在跟踪的帖子（客户端最多同时跟踪 50 条）。' +
+      '读取当前账号正在跟踪的帖子（客户端最多同时跟踪 ' + TRACK_MAX_COUNT.toString() + ' 条）。' +
         '每条返回总回复数、已读基准、未读新增数、最后回复时间与锁定状态——' +
         '这是判断「这帖有没有新回复」的唯一本地数据源。' +
         '数据是轮询快照（前台每 10 分钟检查一次），不发起网络请求；' +
@@ -500,7 +550,8 @@ export class NgaMyTrackedTool implements AiToolAdapter {
         '不传 tid 时列出跟踪列表（有未读的排前面）；传 tid 时只查该帖是否在跟踪。'
 
     const properties: Record<string, Object> = {}
-    properties['limit'] = intProperty('返回条数 1-50，默认 20；仅在列表模式下生效')
+    properties['limit'] = intProperty('返回条数 1-' + MAX_TRACKED_LIMIT.toString() +
+      '，默认 ' + DEFAULT_LIMIT.toString() + '；仅在列表模式下生效')
     properties['tid'] = stringProperty('只查这一个帖子是否在跟踪；省略时返回跟踪列表')
 
     const required: string[] = []
@@ -540,7 +591,7 @@ export class NgaMyTrackedTool implements AiToolAdapter {
     if (items.length === 0) {
       return failedResult('当前没有跟踪中的帖子：在帖子页开启跟踪后才会出现在这里。', TOOL_ERROR_EMPTY)
     }
-    return this.describeList(items, readIntArg(args, 'limit', DEFAULT_LIMIT, 1, MAX_LIMIT))
+    return this.describeList(items, readIntArg(args, 'limit', DEFAULT_LIMIT, 1, MAX_TRACKED_LIMIT))
   }
 
   /**

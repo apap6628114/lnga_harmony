@@ -24,8 +24,13 @@ import type { AuthState } from './AuthStore'
 /** 动态缓存结构版本。 */
 const ACTIVITY_CACHE_SCHEMA_VERSION: number = 2
 
-/** 本地最多保留的动态数量（与通知缓存上限保持一致）。 */
-const MAX_CACHED_ACTIVITIES: number = 200
+/**
+ * 本地最多保留的动态数量（与通知缓存上限保持一致）。
+ *
+ * 导出给 AI 工具描述引用：`displayActivities` 内存真源可因分页加载超过这个窗口，
+ * 但冷启动只有最近 200 条，描述必须让模型知道「本地窗口」与「全部动态」的区别。
+ */
+export const MAX_CACHED_ACTIVITIES: number = 200
 
 /** 内存真源 displayActivities 的容量上限（首屏缓存 + 分页追加）。 */
 const MAX_DISPLAY_ACTIVITIES: number = 10000

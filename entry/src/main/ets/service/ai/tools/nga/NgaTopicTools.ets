@@ -21,6 +21,7 @@ import type { TopicListResult } from '../../../../model/NgaApiResults'
 import type { TopicListInfo, ThreadPageInfo } from '../../../../model/Topic'
 import {
   DEFAULT_LIST_LIMIT,
+  MAX_LIST_LIMIT,
   boolProperty,
   buildToolParameters,
   enumProperty,
@@ -46,6 +47,8 @@ import {
 const TOOL_LIST: string = 'nga_list_topics'
 /** 主题搜索工具名。 */
 const TOOL_SEARCH: string = 'nga_search_topics'
+/** 单次最多附带的卡片数（卡片是 UI 元素，过多会拖慢列表渲染）。 */
+const MAX_CARDS: number = 20
 
 /**
  * 版块主题列表工具（nga_list_topics）。
@@ -81,7 +84,8 @@ export class NgaListTopicsTool implements AiToolAdapter {
     properties['sort'] = enumProperty(
       '排序方式：latest=最新回复（默认），new=最新发帖，hot=近 7 天热帖（固定 7 天、不分页），digest=精华',
       ['latest', 'new', 'hot', 'digest'])
-    properties['limit'] = intProperty('返回条数 1-50，默认 20；受服务端单页条数限制（通常 35 条）')
+    properties['limit'] = intProperty('返回条数 1-' + MAX_LIST_LIMIT.toString() +
+      '，默认 ' + DEFAULT_LIST_LIMIT.toString() + '；受服务端单页条数限制（通常 35 条）')
 
     const required: string[] = []
     definition.parameters = buildToolParameters(properties, required)
@@ -124,7 +128,7 @@ export class NgaListTopicsTool implements AiToolAdapter {
     params.fid = fid
     params.page = readIntArg(args, 'page', 1, 1, 1000).toString()
     applySort(params, readStringArg(args, 'sort'))
-    const limit: number = readIntArg(args, 'limit', DEFAULT_LIST_LIMIT, 1, 50)
+    const limit: number = readIntArg(args, 'limit', DEFAULT_LIST_LIMIT, 1, MAX_LIST_LIMIT)
     return fetchAndFormat(context.token, params, limit, '版块')
   }
 }
@@ -154,15 +158,17 @@ export class NgaSearchTopicsTool implements AiToolAdapter {
     definition.description =
       '在 NGA 站内搜索主题。返回标题、作者、回复数、发帖时间与 tid。' +
         '可只搜标题（默认）或同时搜正文（in_content=true），可用 fid 限定版块。' +
-        'key 必须简短（如 2~10 个字），NGA 上限约 74 个汉字，超长会被服务端拒绝并截断。'
+        'key 必须简短（如 2~10 个字）；NGA 上限约 74 个汉字（GBK 149 字节），' +
+        '超出部分会由客户端截断后再检索（服务端不会自动截断，超长直接报错）。'
 
     const properties: Record<string, Object> = {}
     properties['key'] = stringProperty('搜索关键词：2~10 个字的简短词组，不要整段粘贴；' +
-      'NGA 上限约 74 个汉字（GBK 149 字节），超出会被截断')
+      'NGA 上限约 74 个汉字（GBK 149 字节），超出部分会被客户端截断后再检索')
     properties['fid'] = stringProperty('限定版块 ID（可选）')
     properties['in_content'] = boolProperty('是否同时搜索正文，默认 false（只搜标题）')
     properties['page'] = intProperty('页码，从 1 开始，默认 1')
-    properties['limit'] = intProperty('返回条数 1-50，默认 20；受服务端单页条数限制（通常 35 条）')
+    properties['limit'] = intProperty('返回条数 1-' + MAX_LIST_LIMIT.toString() +
+      '，默认 ' + DEFAULT_LIST_LIMIT.toString() + '；受服务端单页条数限制（通常 35 条）')
 
     const required: string[] = []
     required.push('key')
@@ -212,7 +218,7 @@ export class NgaSearchTopicsTool implements AiToolAdapter {
     if (readBoolArg(args, 'in_content', false)) {
       params.content = '1'
     }
-    const limit: number = readIntArg(args, 'limit', DEFAULT_LIST_LIMIT, 1, 50)
+    const limit: number = readIntArg(args, 'limit', DEFAULT_LIST_LIMIT, 1, MAX_LIST_LIMIT)
     const toolResult: AiToolResult = await fetchAndFormat(context.token, params, limit,
       '搜索「' + key + '」')
     if (limited.truncated && toolResult.success) {
@@ -279,9 +285,11 @@ export async function fetchAndFormat(token: string, params: TopicListParams, lim
       content += ' · 发帖：' + time
     }
     content += ' · tid=' + topic.tid.toString() + '\n'
-    cards.push(topicCard(topic.tid.toString(), topic.subject,
-      '作者 ' + (topic.author.length > 0 ? topic.author : '匿名') + ' · 回复 ' +
-        topic.replies.toString() + ' · ' + info.name))
+    if (cards.length < MAX_CARDS) {
+      cards.push(topicCard(topic.tid.toString(), topic.subject,
+        '作者 ' + (topic.author.length > 0 ? topic.author : '匿名') + ' · 回复 ' +
+          topic.replies.toString() + ' · ' + info.name))
+    }
   }
   if (total > count) {
     content += '\n（本页还有 ' + (total - count).toString() + ' 条未展示，可增大 limit）\n'

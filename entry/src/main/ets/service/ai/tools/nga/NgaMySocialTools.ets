@@ -23,18 +23,24 @@ import {
   AiToolCard,
   AiToolContext,
   AiToolResult,
+  TOOL_ERROR_BAD_ARGS,
   TOOL_ERROR_EMPTY,
   TOOL_ERROR_UPSTREAM
 } from '../AiToolAdapter'
 import { isAiToolEnabled } from '../../../../model/AiToolConfig'
 import { appStore } from '../../../../store/AppStore'
+import { MAX_CACHED_ACTIVITIES } from '../../../../store/FollowActivityStore'
+import { MAX_CACHED_NOTIFICATIONS } from '../../../../store/NotificationStore'
 import { NOTI_TYPE_MAP } from '../../../../common/constants/Constants'
 import type { NotiTypeInfo } from '../../../../common/constants/Constants'
 import type { NgaNotification, ReplyNotification, UpvoteNotification } from '../../../../model/Notification'
 import { FollowedActivityType } from '../../../../model/Follow'
 import type { FollowedActivity } from '../../../../model/Follow'
 import {
+  ListWindow,
+  MAX_LIST_OFFSET,
   boolProperty,
+  buildListWindowHint,
   buildToolParameters,
   failedResult,
   formatToolTime,
@@ -45,6 +51,7 @@ import {
   pickText,
   readBoolArg,
   readIntArg,
+  resolveListWindow,
   topicCard
 } from './NgaToolSupport'
 
@@ -173,11 +180,17 @@ export class NgaMyFollowingTool implements AiToolAdapter {
     definition.description =
       '读取「关注动态」：我关注的用户最近发主题、回帖、收藏的行为，按时间倒序。' +
         '默认读客户端本地缓存（零网络请求）；传 refresh=true 才向服务端拉取最新一页。' +
+        '本地持久化窗口为最近 ' + MAX_CACHED_ACTIVITIES.toString() +
+        ' 条，更早的动态需要用户在客户端「消息 → 动态」下拉加载后才会进入内存。' +
+        'limit 控制单次条数（1-' + MAX_LIMIT.toString() + '，默认 ' + DEFAULT_LIMIT.toString() +
+        '），offset 控制从第几条开始（0 起）；两者配合可读取本地已加载的全部动态。' +
         '每条带本地已读标记（seen），可用于回答「我关注的人有什么新动作」。' +
         '这不是通知：通知是别人对我的动作，关注动态是我关注的人的动作。'
 
     const properties: Record<string, Object> = {}
-    properties['limit'] = intProperty('返回条数 1-50，默认 20')
+    properties['limit'] = intProperty('返回条数 1-' + MAX_LIMIT.toString() +
+      '，默认 ' + DEFAULT_LIMIT.toString())
+    properties['offset'] = intProperty('跳过前多少条（0 起，默认 0）；看更早的动态时把它设为上一次返回的 offset 提示值')
     properties['refresh'] = boolProperty('是否先向服务端拉取最新一页再返回，默认 false（只读缓存）')
 
     const required: string[] = []
@@ -210,6 +223,7 @@ export class NgaMyFollowingTool implements AiToolAdapter {
     }
     const args: Record<string, Object> = parseToolArguments(argumentsText)
     const limit: number = readIntArg(args, 'limit', DEFAULT_LIMIT, 1, MAX_LIMIT)
+    const offset: number = readIntArg(args, 'offset', 0, 0, MAX_LIST_OFFSET)
     const refresh: boolean = readBoolArg(args, 'refresh', false)
     let refreshed: boolean = false
     if (refresh) {
@@ -225,16 +239,23 @@ export class NgaMyFollowingTool implements AiToolAdapter {
     }
 
     const unread: number = appStore.unreadActivityCount
-    const shown: number = Math.min(limit, items.length)
+    const window: ListWindow = resolveListWindow(items.length, offset, limit)
+    if (window.count === 0) {
+      return failedResult('offset=' + window.start.toString() +
+        ' 超出了本地关注动态范围（共 ' + items.length.toString() +
+        ' 条）。请传更小的 offset，或不传 offset 从头读取。', TOOL_ERROR_BAD_ARGS)
+    }
     let content: string = '关注动态（共 ' + items.length.toString() + ' 条，' +
-      unread.toString() + ' 条未读；显示前 ' + shown.toString() + ' 条）'
+      unread.toString() + ' 条未读' +
+      (window.start > 0 ? '，从第 ' + (window.start + 1).toString() + ' 条开始' : '') + '）'
     if (refresh) {
       content += refreshed ? '（已刷新）' : '（刷新失败，以下为本地缓存，可能不是最新）'
     }
     content += '\n'
 
     const cards: AiToolCard[] = []
-    for (let i: number = 0; i < shown; i++) {
+    const end: number = window.start + window.count
+    for (let i: number = window.start; i < end; i++) {
       const item: FollowedActivity = items[i]
       const actor: string = item.actorName.length > 0 ? item.actorName : ('uid=' + item.actorUid)
       const verb: string = activityVerb(item)
@@ -255,14 +276,22 @@ export class NgaMyFollowingTool implements AiToolAdapter {
       }
       content += '\n'
     }
-    if (items.length > shown) {
-      content += '\n（还有 ' + (items.length - shown).toString() + ' 条，可增大 limit）'
+    const hint: string = buildListWindowHint(window)
+    if (hint.length > 0) {
+      content += '\n' + hint
+    }
+    // 本地只加载了一部分服务端分页时，必须说清楚"还有没加载的"，否则模型会把当前末尾当全部
+    const loadedPages: number = appStore.getActivityLoadedPages()
+    const totalPages: number = appStore.getActivityTotalPages()
+    if (totalPages > loadedPages) {
+      content += '\n（本地只加载了 ' + loadedPages.toString() + '/' + totalPages.toString() +
+        ' 页动态；更早的动态需要在客户端「消息 → 动态」下拉加载后才能读取）'
     }
 
     const result: AiToolResult = new AiToolResult()
     result.success = true
     result.summary = '关注动态'
-    result.count = shown
+    result.count = window.count
     result.content = content
     result.cards = cards
     return result
@@ -293,12 +322,18 @@ export class NgaMyNotificationsTool implements AiToolAdapter {
     definition.name = TOOL_NOTIFICATIONS
     definition.description =
       '读取我的通知（消息中心「消息」Tab）：谁回复了我、谁提到了我、我的帖子被支持或反对。' +
-        '数据与客户端消息中心同一份缓存，包含本地已读状态。**不含私信**（私信用 nga_my_messages）。' +
+        '数据与客户端消息中心同一份缓存（客户端最多缓存最近 ' +
+        MAX_CACHED_NOTIFICATIONS.toString() + ' 条），包含本地已读状态。' +
+        '**不含私信**（私信用 nga_my_messages）。' +
         '本地缓存为空时会自动向服务端拉取一次。' +
+        'limit 控制单次条数（1-' + MAX_LIMIT.toString() + '，默认 ' + DEFAULT_LIMIT.toString() +
+        '），offset 控制从第几条开始（0 起）；两者配合可读取缓存里的全部通知。' +
         '每条带 tid，可配合 nga_read_thread 看上下文；用户问「有什么新消息」「谁回我了」时使用。'
 
     const properties: Record<string, Object> = {}
-    properties['limit'] = intProperty('返回条数 1-50，默认 20')
+    properties['limit'] = intProperty('返回条数 1-' + MAX_LIMIT.toString() +
+      '，默认 ' + DEFAULT_LIMIT.toString())
+    properties['offset'] = intProperty('跳过前多少条（0 起，默认 0）；看更早的通知时传上一次提示的 offset')
     properties['only_unread'] = boolProperty('是否只返回未读通知，默认 false（全部）')
 
     const required: string[] = []
@@ -331,6 +366,7 @@ export class NgaMyNotificationsTool implements AiToolAdapter {
     }
     const args: Record<string, Object> = parseToolArguments(argumentsText)
     const limit: number = readIntArg(args, 'limit', DEFAULT_LIMIT, 1, MAX_LIMIT)
+    const offset: number = readIntArg(args, 'offset', 0, 0, MAX_LIST_OFFSET)
     const onlyUnread: boolean = readBoolArg(args, 'only_unread', false)
 
     let items: NgaNotification[] = appStore.getCachedNonMessageNotifications()
@@ -370,11 +406,18 @@ export class NgaMyNotificationsTool implements AiToolAdapter {
         ' 条私信类通知不在本工具范围）。', TOOL_ERROR_EMPTY)
     }
 
-    const shown: number = Math.min(limit, filtered.length)
+    const window: ListWindow = resolveListWindow(filtered.length, offset, limit)
+    if (window.count === 0) {
+      return failedResult('offset=' + window.start.toString() +
+        ' 超出了通知列表范围（共 ' + filtered.length.toString() +
+        ' 条）。请传更小的 offset，或不传 offset 从头读取。', TOOL_ERROR_BAD_ARGS)
+    }
     let content: string = '我的通知（共 ' + filtered.length.toString() + ' 条' +
-      (onlyUnread ? '未读' : '') + '，显示前 ' + shown.toString() + ' 条）：\n'
+      (onlyUnread ? '未读' : '') +
+      (window.start > 0 ? '，从第 ' + (window.start + 1).toString() + ' 条开始' : '') + '）：\n'
     const cards: AiToolCard[] = []
-    for (let i: number = 0; i < shown; i++) {
+    const end: number = window.start + window.count
+    for (let i: number = window.start; i < end; i++) {
       const notification: NgaNotification = filtered[i]
       const verb: string = notificationVerb(notification.type)
       const actor: string = notification.userName
@@ -399,15 +442,16 @@ export class NgaMyNotificationsTool implements AiToolAdapter {
       }
       content += '\n'
     }
-    if (filtered.length > shown) {
-      content += '\n（还有 ' + (filtered.length - shown).toString() + ' 条，可增大 limit）'
+    const hint: string = buildListWindowHint(window)
+    if (hint.length > 0) {
+      content += '\n' + hint
     }
     content += '\n需要看通知对应的帖子时调用 nga_read_thread 并传入 tid。'
 
     const result: AiToolResult = new AiToolResult()
     result.success = true
     result.summary = '我的通知'
-    result.count = shown
+    result.count = window.count
     result.content = content
     result.cards = cards
     return result

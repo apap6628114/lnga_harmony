@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@ohos/hypium'
-import { HistoryStore, BrowseHistoryEntry } from '../main/ets/store/HistoryStore'
+import { HistoryStore, BrowseHistoryEntry, HISTORY_MAX_COUNT } from '../main/ets/store/HistoryStore'
 import { PreferencesStore } from '../main/ets/common/infra/PreferencesStore'
 import { SerialQueue } from '../main/ets/common/infra/SerialQueue'
 import { ThreadResult } from '../main/ets/model/ThreadResult'
@@ -10,9 +10,6 @@ import {
   READ_BASELINE_UNREAD,
   topicUpdateDelta
 } from '../main/ets/common/utils/TopicReadPolicy'
-
-/** 浏览历史上限（与 HistoryStore 内部常量同值，用于 LRU 淘汰用例）。 */
-const HISTORY_MAX_COUNT: number = 500
 
 /** 测试账号 uid。 */
 const TEST_UID: string = 'read-ledger-user'

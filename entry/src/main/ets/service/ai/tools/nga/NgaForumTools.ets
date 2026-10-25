@@ -46,6 +46,10 @@ const TOOL_LIST: string = 'nga_list_forums'
 const TOOL_SEARCH: string = 'nga_search_forum'
 /** 全部分类默认最多展示的版块数。 */
 const DEFAULT_ALL_LIMIT: number = 60
+/** 单次最多展示的版块数。 */
+const MAX_ALL_LIMIT: number = 200
+/** 单次最多附带的卡片数（卡片是 UI 元素，过多会拖慢列表渲染）。 */
+const MAX_CARDS: number = 20
 
 /**
  * 我的版块 / 全部版块工具。
@@ -77,7 +81,8 @@ export class NgaListForumsTool implements AiToolAdapter {
     properties['scope'] = enumProperty(
       '范围：favorites=用户收藏的版面（默认），all=全部分类的版块',
       ['favorites', 'all'])
-    properties['limit'] = intProperty('最多返回多少个版块，1-200，默认 40（scope=all 时默认 60）')
+    properties['limit'] = intProperty('最多返回多少个版块，1-' + MAX_ALL_LIMIT.toString() +
+      '，默认 40（scope=all 时默认 ' + DEFAULT_ALL_LIMIT.toString() + '）')
 
     const required: string[] = []
     definition.parameters = buildToolParameters(properties, required)
@@ -109,7 +114,7 @@ export class NgaListForumsTool implements AiToolAdapter {
     }
     const args: Record<string, Object> = parseToolArguments(argumentsText)
     const scope: string = readStringArg(args, 'scope')
-    const limit: number = readIntArg(args, 'limit', scope === 'all' ? DEFAULT_ALL_LIMIT : 40, 1, 200)
+    const limit: number = readIntArg(args, 'limit', scope === 'all' ? DEFAULT_ALL_LIMIT : 40, 1, MAX_ALL_LIMIT)
     if (scope === 'all') {
       return this.fetchAll(context.token, limit)
     }
@@ -136,7 +141,13 @@ export class NgaListForumsTool implements AiToolAdapter {
     for (let i: number = 0; i < count; i++) {
       const board: FavBoardItem = boards[i]
       content += '\n- ' + board.name + '（fid=' + board.fid.toString() + '）'
-      cards.push(forumCard(board.fid.toString(), board.name, '收藏版面'))
+      if (cards.length < MAX_CARDS) {
+        cards.push(forumCard(board.fid.toString(), board.name, '收藏版面'))
+      }
+    }
+    if (boards.length > count) {
+      content += '\n\n（还有 ' + (boards.length - count).toString() +
+        ' 个收藏版面未展示，可增大 limit 后重试）'
     }
     content += '\n\n需要看某个版块的主题时调用 nga_list_topics 并传入 fid。'
     const result: AiToolResult = new AiToolResult()
@@ -178,7 +189,9 @@ export class NgaListForumsTool implements AiToolAdapter {
             continue
           }
           categoryText += '\n  - ' + board.name + '（fid=' + board.fid.toString() + '）'
-          cards.push(forumCard(board.fid.toString(), board.name, category.name + ' / ' + sub.name))
+          if (cards.length < MAX_CARDS) {
+            cards.push(forumCard(board.fid.toString(), board.name, category.name + ' / ' + sub.name))
+          }
           shown++;
         }
       }
@@ -188,7 +201,8 @@ export class NgaListForumsTool implements AiToolAdapter {
     }
     if (total > shown) {
       content += '\n（共 ' + total.toString() + ' 个版块，已展示前 ' + shown.toString() +
-        ' 个；可增大 limit，或改用 nga_search_forum 按英文版块名查找）\n'
+        ' 个；可增大 limit（上限 ' + MAX_ALL_LIMIT.toString() +
+        '），或改用 nga_search_forum 按英文版块名查找）\n'
     }
     const result: AiToolResult = new AiToolResult()
     result.success = true

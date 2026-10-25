@@ -23,6 +23,8 @@ export const MAX_MAX_CHARS: number = 20000
 export const DEFAULT_LIST_LIMIT: number = 20
 /** 列表类工具允许的最大条数。 */
 export const MAX_LIST_LIMIT: number = 50
+/** 列表类工具允许的最大起始偏移。 */
+export const MAX_LIST_OFFSET: number = 5000
 
 /** 截断结果。 */
 export class TruncatedText {
@@ -30,6 +32,81 @@ export class TruncatedText {
   text: string = ''
   /** 是否发生截断 */
   truncated: boolean = false
+}
+
+/**
+ * 一次列表读取的窗口（偏移 + 条数）。
+ *
+ * 工具不能只暴露 `limit`：本地台账（浏览记录）最多 500 条、关注动态缓存可达数百条，
+ * 只有 `limit` 时模型最多拿到 50 条，剩余数据**没有任何入口**——而工具描述里还写着
+ * 「可增大 limit 继续看」，属于虚假能力。窗口把「从第几条开始、本次看多少、还有没有」
+ * 变成显式的三件事，工具只要照着拼文案，就不会再出现「到 50 条就断头」。
+ */
+export class ListWindow {
+  /** 起始下标（已按总数裁剪，0 起） */
+  start: number = 0
+  /** 本次应展示的条数 */
+  count: number = 0
+  /** 目标列表总条数 */
+  total: number = 0
+  /** 是否还有未展示的条目 */
+  hasMore: boolean = false
+  /** 下一段的起始偏移（hasMore 为 false 时等于 total） */
+  nextOffset: number = 0
+}
+
+/**
+ * 把「偏移 + 条数 + 总数」解析成可安全遍历的窗口。
+ *
+ * 边界约定：负偏移按 0 处理；偏移超过总数时窗口为空（`count === 0`），
+ * 由调用方给出明确的「超出范围」提示，而不是返回空列表让模型以为没有数据。
+ *
+ * @param total - 列表总条数
+ * @param offset - 起始偏移（0 起）
+ * @param limit - 本次条数上限
+ * @returns 窗口
+ */
+export function resolveListWindow(total: number, offset: number, limit: number): ListWindow {
+  const window: ListWindow = new ListWindow()
+  const safeTotal: number = total > 0 ? Math.floor(total) : 0
+  window.total = safeTotal
+  let start: number = offset > 0 ? Math.floor(offset) : 0
+  if (start > safeTotal) {
+    start = safeTotal
+  }
+  const safeLimit: number = limit > 0 ? Math.floor(limit) : 0
+  window.start = start
+  window.count = Math.min(safeLimit, safeTotal - start)
+  window.hasMore = start + window.count < safeTotal
+  window.nextOffset = start + window.count
+  return window
+}
+
+/**
+ * 构造列表窗口的续读提示（未读完时给出精确的下一段 offset）。
+ *
+ * 文案刻意把「总共多少、这次看了哪一段、下一条从哪开始」写全：只写「还有 N 条」
+ * 时模型会尝试增大 limit，而 limit 已在上限时它拿不到任何新数据，只能放弃或编造。
+ *
+ * @param window - 列表窗口
+ * @returns 提示文本（已读完且从第 1 条开始时为空串）
+ */
+export function buildListWindowHint(window: ListWindow): string {
+  if (window.count === 0) {
+    return '（本次窗口为空：offset=' + window.start.toString() + ' 超出总数 ' +
+      window.total.toString() + ' 条）'
+  }
+  if (window.hasMore) {
+    return '（共 ' + window.total.toString() + ' 条，本次显示第 ' +
+      (window.start + 1).toString() + '-' + window.nextOffset.toString() + ' 条；还有 ' +
+      (window.total - window.nextOffset).toString() + ' 条，传 offset=' +
+      window.nextOffset.toString() + ' 继续读）'
+  }
+  if (window.start > 0) {
+    return '（已读到末尾：共 ' + window.total.toString() + ' 条，本次显示第 ' +
+      (window.start + 1).toString() + '-' + window.nextOffset.toString() + ' 条）'
+  }
+  return ''
 }
 
 /**
@@ -169,25 +246,38 @@ export function toSeconds(ms: number): number {
  * 本地持久化数据（浏览记录 / 离线存档）可能来自旧格式或外部导入文件，
  * 字段缺失是**预期输入**而不是程序错误；直接访问 `.length` 会抛异常并终止整轮 Agent。
  *
+ * 数字也接受并转成字符串：旧版本把 `tid` / `authorid` 存成数字的情况真实存在，
+ * 只做 `undefined` 判断会让 `tid` 的比较与拼接落到数字语义上（`123 === '123'` 为 false），
+ * 表现为「明明看过却查不到」。
+ *
  * @param value - 原始字段值（运行时可能为 undefined）
  * @returns 字符串；缺失时为空串
  */
-export function pickText(value: string | undefined): string {
-  return value === undefined || value === null ? '' : value
+export function pickText(value: string | number | undefined): string {
+  if (value === undefined || value === null) {
+    return ''
+  }
+  return typeof value === 'number' ? String(value) : value
 }
 
 /**
  * 读取可能缺失的数字字段。
  *
+ * 字符串数字同样接受（外部导入的存档 / 旧格式），非法值回退到 `fallback`。
+ *
  * @param value - 原始字段值（运行时可能为 undefined）
  * @param fallback - 缺失或非法时的回退值
  * @returns 数字
  */
-export function pickNumber(value: number | undefined, fallback: number): number {
+export function pickNumber(value: number | string | undefined, fallback: number): number {
   if (value === undefined || value === null) {
     return fallback
   }
-  return Number.isFinite(value) ? value : fallback
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : fallback
+  }
+  const parsed: number = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
 }
 
 /**

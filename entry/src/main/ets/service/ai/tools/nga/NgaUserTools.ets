@@ -17,7 +17,6 @@ import {
   AiToolResult,
   TOOL_ERROR_BAD_ARGS,
   TOOL_ERROR_EMPTY,
-  TOOL_ERROR_LOGIN_REQUIRED,
   TOOL_ERROR_NOT_FOUND
 } from '../AiToolAdapter'
 import { isAiToolEnabled } from '../../../../model/AiToolConfig'
@@ -41,6 +40,7 @@ import {
   boolProperty,
   isNgaReady,
   loginRequiredResult,
+  missingSelfUidResult,
   missingUserResult,
   parseToolArguments,
   readBoolArg,
@@ -118,7 +118,7 @@ export class NgaGetMeTool implements AiToolAdapter {
       return loginRequiredResult()
     }
     if (context.selfUid.length === 0) {
-      return failedResult('拿不到当前登录账号的 UID，请提示用户重新登录后再试', TOOL_ERROR_LOGIN_REQUIRED)
+      return missingSelfUidResult()
     }
     return fetchProfileResult(context.token, context.selfUid, true)
   }
@@ -152,8 +152,8 @@ export class NgaGetUserTool implements AiToolAdapter {
 
     const properties: Record<string, Object> = {}
     properties['uid'] = stringProperty('用户 UID；省略时使用当前页面用户或当前登录账号')
-    properties['username'] = stringProperty('完整用户名（精确匹配，片段不会命中）；与 uid 二选一，' +
-      '同时传时 username 优先')
+    properties['username'] = stringProperty('完整用户名（精确匹配，片段不会命中）；与 uid 二选一。' +
+      '同时传时以 uid 为准（不会为 username 多发一次解析请求）；只传 username 时会先解析成 uid')
 
     const required: string[] = []
     definition.parameters = buildToolParameters(properties, required)
@@ -315,7 +315,10 @@ export class NgaUserActivityTool implements AiToolAdapter {
     const definition: AiToolDefinition = new AiToolDefinition()
     definition.name = TOOL_ACTIVITY
     definition.description =
-      '读取 NGA 用户的活跃度分析：发帖/回复总数、版块分布、时段分布与近期帖子标题、回复片段。' +
+      '读取 NGA 用户的活跃度样本：版块分布、时段分布与近期帖子标题、回复片段。' +
+        '**口径限制**：只统计发帖 / 回帖接口的**第一页样本**（每页约 35 / 20 条），' +
+        '不是该账号的历史总量——接口不提供全量统计，所以不要把样本条数说成「总共发了多少帖 / 回了多少帖」，' +
+        '回答时请明确写「样本中」。' +
         '参数可省略：不传 uid 时，依次使用当前页面用户、当前登录账号。' +
         '用户说"我最近在哪些版块活跃"时直接调用本工具即可。' +
         'include_samples=false 可省略样本（样本较多时能显著减少上下文占用）。'
@@ -372,12 +375,12 @@ export class NgaUserActivityTool implements AiToolAdapter {
     if (uid === context.selfUid && context.selfUserName.length > 0) {
       content += '（当前登录账号「' + context.selfUserName + '」）'
     }
-    content += ' 的活跃分析：\n'
-    content += '\n- 主题数：' + analysis.topicCount.toString()
-    content += '\n- 回复数：' + analysis.replyCount.toString()
+    content += ' 的活跃样本：\n'
+    content += '\n- 样本主题数：' + analysis.topicCount.toString() + '（第一页样本）'
+    content += '\n- 样本回复数：' + analysis.replyCount.toString() + '（第一页样本）'
 
     if (analysis.forumList.length > 0) {
-      content += '\n\n版块分布（Top ' + analysis.forumList.length.toString() + '）：'
+      content += '\n\n版块分布（' + analysis.forumList.length.toString() + ' 个版块）：'
       for (let i: number = 0; i < analysis.forumList.length; i++) {
         const stat: ForumStat = analysis.forumList[i]
         content += '\n- ' + stat.name + '：主题 ' + stat.topicCount.toString() +
@@ -418,12 +421,12 @@ export class NgaUserActivityTool implements AiToolAdapter {
         content += '\n' + (i + 1).toString() + '. ' + analysis.replySnippets[i]
       }
     }
-    content += '\n\n如需具体帖子内容，调用 nga_read_thread。'
+    content += '\n\n以上只统计第一页样本，不是该账号的历史总量。如需具体帖子内容，调用 nga_read_thread。'
 
     const result: AiToolResult = new AiToolResult()
     result.success = true
-    result.summary = '活跃分析 uid=' + uid
-    result.count = analysis.forumList.length
+    result.summary = '活跃样本 uid=' + uid
+    result.count = analysis.topicCount + analysis.replyCount
     result.content = content
     const cards: AiToolCard[] = []
     cards.push(userCard(uid, 'uid=' + uid,

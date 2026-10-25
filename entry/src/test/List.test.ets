@@ -36,6 +36,7 @@ import aiSessionUnitTest from './AiSessionUnit.test';
 import aiContextSummaryTest from './AiContextSummary.test';
 import aiContextArchiveTest from './AiContextArchive.test';
 import aiMyToolsUnitTest from './AiMyToolsUnit.test';
+import aiToolTruthfulnessTest from './AiToolTruthfulness.test';
 
 /**
  * 注册全部本地单元测试。
@@ -79,4 +80,5 @@ export default function testsuite(): void {
   aiContextSummaryTest();
   aiContextArchiveTest();
   aiMyToolsUnitTest();
+  aiToolTruthfulnessTest();
 }

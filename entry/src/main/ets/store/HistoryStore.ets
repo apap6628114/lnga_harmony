@@ -32,7 +32,13 @@ export class BrowseHistoryEntry {
   ts: number = 0
 }
 
-const HISTORY_MAX_COUNT: number = 500
+/**
+ * 浏览记录本地保留上限（条）。
+ *
+ * 导出给 AI 工具层引用：工具描述里写死了「最多 500 条」，如果只做事本地常量，
+ * 将来改这里而漏改描述，模型会基于错误的总量判断「已经全部读完」。
+ */
+export const HISTORY_MAX_COUNT: number = 500
 
 /**
  * 帖子浏览历史管理。

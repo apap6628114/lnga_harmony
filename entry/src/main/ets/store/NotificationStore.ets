@@ -29,8 +29,8 @@ import type { AuthState } from './AuthStore'
 /** 通知缓存结构版本。 */
 const NOTIFICATION_CACHE_SCHEMA_VERSION: number = 3
 
-/** 本地最多保留的通知数量。 */
-const MAX_CACHED_NOTIFICATIONS: number = 200
+/** 本地最多保留的通知数量（导出给 AI 工具描述引用，避免「全部通知」被理解成服务端全量）。 */
+export const MAX_CACHED_NOTIFICATIONS: number = 200
 
 /** 普通刷新最短成功间隔。 */
 const NOTIFICATION_REFRESH_DELAY: number = 30 * 1000

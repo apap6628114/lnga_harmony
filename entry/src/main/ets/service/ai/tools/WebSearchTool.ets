@@ -61,7 +61,8 @@ export class WebSearchTool implements AiToolAdapter {
     const queryProp: Record<string, Object> = {}
     queryProp['type'] = 'string'
     queryProp['description'] = '搜索关键词或自然语言问题，尽量具体；' +
-      '上限 128 个字符，超出会被截断（服务端超长直接报错，不会自动截断），不要粘整段长文'
+      '上限 128 个字符，超出部分会被客户端截断后再搜索' +
+      '（服务端不会自动截断，超长直接报错），不要粘整段长文'
 
     const countProp: Record<string, Object> = {}
     countProp['type'] = 'integer'
@@ -124,11 +125,14 @@ export class WebSearchTool implements AiToolAdapter {
     // 且服务端不截断；模型常把整段问题当 query 传，这里统一裁到上限。
     const limited: LimitedText = truncateToCodePoints(query, MAX_WEB_SEARCH_QUERY_CODE_POINTS)
     query = limited.text
-    let count: number = DEFAULT_RESULT_COUNT
     const countRaw: Object | undefined = args['count']
+    let countValue: string | number | undefined = undefined
     if (typeof countRaw === 'number') {
-      count = Math.max(1, Math.min(MAX_RESULT_COUNT, Math.round(countRaw as number)))
+      countValue = countRaw as number
+    } else if (typeof countRaw === 'string') {
+      countValue = countRaw as string
     }
+    const count: number = normalizeResultCount(countValue)
 
     const result: AiToolResult = new AiToolResult()
     result.summary = query
@@ -168,6 +172,38 @@ export class WebSearchTool implements AiToolAdapter {
     }
     return result
   }
+}
+
+/**
+ * 解析返回条数（兼容模型把整数写成字符串 "5" 的情况）。
+ *
+ * @param raw - 原始参数值（数字 / 字符串 / 缺失）
+ * @returns 1-10 的整数；缺失或非法时返回默认值
+ */
+export function normalizeResultCount(raw: string | number | undefined): number {
+  if (typeof raw === 'number') {
+    return clampResultCount(raw)
+  }
+  if (typeof raw === 'string') {
+    const parsed: number = Number(raw)
+    if (!isNaN(parsed)) {
+      return clampResultCount(parsed)
+    }
+  }
+  return DEFAULT_RESULT_COUNT
+}
+
+/**
+ * 把条数夹到允许区间。
+ *
+ * @param value - 原始数字
+ * @returns 1-10 的整数
+ */
+function clampResultCount(value: number): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_RESULT_COUNT
+  }
+  return Math.max(1, Math.min(MAX_RESULT_COUNT, Math.round(value)))
 }
 
 /**

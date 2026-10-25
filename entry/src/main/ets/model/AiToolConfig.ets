@@ -260,7 +260,7 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
   {
     name: 'nga_user_activity',
     title: '用户活跃分析',
-    description: '读取用户版块活跃分布、时段分布与近期发帖回复样本',
+    description: '读取用户第一页样本的版块活跃分布、时段分布与近期发帖回复样本（不是全量统计）',
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',
@@ -279,7 +279,7 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
   {
     name: 'nga_my_history',
     title: '浏览记录',
-    description: '读取本地浏览记录（最近打开过的帖子，最多 500 条），可按 tid 查单帖是否看过',
+    description: '读取本地浏览记录（最近打开过的帖子，最多 500 条，可用 offset 分页读完全部），可按 tid 查单帖是否看过',
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',
@@ -292,7 +292,7 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
   {
     name: 'nga_my_saved',
     title: '离线保存',
-    description: '读取本地离线保存的帖子存档（设备级、跨账号，未登录也可用）',
+    description: '读取本地离线保存的帖子存档（设备级、跨账号，未登录也可用；可用 offset 分页）',
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_NONE,
     requirementHint: '',
@@ -318,7 +318,7 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
   {
     name: 'nga_my_posts',
     title: '我的发帖',
-    description: '读取我发布的主题（官方接口带真实总页数，可翻页），用于「我一共发了多少帖」',
+    description: '读取我发布的主题（官方接口带真实总页数，可翻页；不返回主题总数，不可用于统计发帖总数）',
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',
@@ -338,7 +338,7 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
   {
     name: 'nga_my_following',
     title: '关注动态',
-    description: '读取关注动态：我关注的用户最近发主题 / 回帖 / 收藏，可按 refresh 拉取最新一页',
+    description: '读取关注动态：我关注的用户最近发主题 / 回帖 / 收藏，可按 refresh 拉取最新一页、按 offset 分页',
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',
@@ -349,7 +349,7 @@ export const AI_TOOL_CATALOG: AiToolMeta[] = [
   {
     name: 'nga_my_notifications',
     title: '我的通知',
-    description: '读取我的通知（消息 Tab，不含私信），含本地已读状态；缓存为空时自动拉取一次',
+    description: '读取我的通知（消息 Tab，不含私信），含本地已读状态；缓存为空时自动拉取一次，可按 offset 分页',
     category: AiToolCategory.NGA,
     requires: TOOL_REQUIRES_LOGIN,
     requirementHint: '登录后可用',

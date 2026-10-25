@@ -19,6 +19,7 @@ import type { FavoriteFolderListResult } from '../../../../model/NgaApiResults'
 import type { FavoriteTopicFolder } from '../../../../model/Favorite'
 import {
   DEFAULT_LIST_LIMIT,
+  MAX_LIST_LIMIT,
   buildToolParameters,
   failedResult,
   intProperty,
@@ -62,8 +63,10 @@ export class NgaListFavoritesTool implements AiToolAdapter {
     const properties: Record<string, Object> = {}
     properties['folder_id'] = stringProperty('收藏夹数字 ID（先用本工具不带参数列出，再传回这里）；' +
       '省略时只列出收藏夹')
-    properties['page'] = intProperty('收藏夹内主题的页码，从 1 开始，默认 1')
-    properties['limit'] = intProperty('返回条数 1-50，默认 20；受服务端单页条数限制（通常 35 条）')
+    properties['page'] = intProperty('收藏夹内主题的页码，从 1 开始，默认 1；仅在传入 folder_id 时生效')
+    properties['limit'] = intProperty('返回条数 1-' + MAX_LIST_LIMIT.toString() +
+      '，默认 ' + DEFAULT_LIST_LIMIT.toString() + '；仅在传入 folder_id 时生效；' +
+      '受服务端单页条数限制（通常 35 条）')
 
     const required: string[] = []
     definition.parameters = buildToolParameters(properties, required)
@@ -95,7 +98,7 @@ export class NgaListFavoritesTool implements AiToolAdapter {
     }
     const args: Record<string, Object> = parseToolArguments(argumentsText)
     const folderId: string = readStringArg(args, 'folder_id')
-    const limit: number = readIntArg(args, 'limit', DEFAULT_LIST_LIMIT, 1, 50)
+    const limit: number = readIntArg(args, 'limit', DEFAULT_LIST_LIMIT, 1, MAX_LIST_LIMIT)
     const page: number = readIntArg(args, 'page', 1, 1, 1000)
     if (folderId.length === 0) {
       return this.listFolders(context.token)
