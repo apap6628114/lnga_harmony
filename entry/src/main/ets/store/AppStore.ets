@@ -1,6 +1,22 @@
 import { Context } from '@kit.AbilityKit'
+import { bundleManager } from '@kit.AbilityKit'
 import { PreferencesStore } from '../common/infra/PreferencesStore'
 import { SerialQueue } from '../common/infra/SerialQueue'
+import { persistenceHub, PersistenceHub } from '../common/persistence/PersistenceHub'
+import { MigrationEngine, MigrationInspection, MigrationPlan } from '../common/persistence/MigrationEngine'
+import { PersistenceCatalog } from '../common/persistence/PersistenceCatalog'
+import {
+  MigrationDomainStatus,
+  MigrationReport,
+  MigrationStatus,
+  PersistenceMeta
+} from '../common/persistence/PersistenceTypes'
+import { dataTransferService, DataTransferService } from '../common/transfer/DataTransferService'
+import { AppScheduler } from '../common/scheduler/AppScheduler'
+import { SchedulerTrigger } from '../common/scheduler/SchedulerTypes'
+import { BuiltinTaskHost, registerBuiltinTasks } from '../common/scheduler/BuiltinTasks'
+import { KEY_DATA_MANAGEMENT_VERSION, KEY_MIGRATION_STATUS } from '../common/constants/AppStorageKeys'
+import { bumpAppStorageVersion } from '../common/utils/AppStorageVersion'
 import { AuthStore } from './AuthStore'
 import { SettingsStore } from './SettingsStore'
 import { CategoryStore } from './CategoryStore'
@@ -120,6 +136,23 @@ class AppStoreClass {
   private credentialRecheckTimer: number = -1
   /** 已排过的复验轮次（决定下一次的退避档位）。 */
   private credentialRecheckAttempt: number = 0
+  /** 迁移引擎（init 后可用；数据管理页「重试升级」与旧数据清理经此调用）。 */
+  private migrationEngine: MigrationEngine | null = null
+  /** 本次启动的迁移报告（真实源副本，UI/日志可查）。 */
+  private startupMigrationReport: MigrationReport | null = null
+  /** 应用版本信息（迁移/导出容器的诊断字段）。 */
+  private appVersionName: string = ''
+  private appVersionCode: number = 0
+  /**
+   * 应用内调度器（统一时机任务的唯一入口）。
+   *
+   * 设计见 `docs/PERSISTENCE_UNIFICATION_DESIGN.md` §7：把原本散落在 EntryAbility 与各
+   * PollingController 的时机任务收敛到一张注册表；本类只提供宿主回调与生命周期事件。
+   *
+   * **非 final 字段**：Ability 在进程存活期间被重建 / init 重入时，旧实例可能已 shutdown
+   * （disposed 后不可恢复），必须能整体替换（见 `recreateScheduler`）。
+   */
+  scheduler: AppScheduler = new AppScheduler()
 
   constructor() {
     this.pollingParticipants = [
@@ -136,6 +169,7 @@ class AppStoreClass {
         (): void => { this.trackedThreadStore.stopPolling() }
       )
     ]
+    // 调度器实例在 `init` 中创建/重建（见 recreateScheduler），此处不再注册
     // 帖子失效 / 长期无新回复导致的自动停止跟踪统一在这里提示（用户主动移除不提示）
     this.trackedThreadStore.onStopNotice = (notice: TrackStopNotice): void => {
       const message: string = formatTrackStopNotice(notice)
@@ -143,6 +177,25 @@ class AppStoreClass {
         this.showToast(message)
       }
     }
+  }
+
+  /**
+   * 创建（或重建）调度器并注册内置任务。
+   *
+   * 为什么每次 init 都重建：`AppScheduler.shutdown()` 后实例进入 disposed 状态且不可恢复；
+   * Ability 在进程存活期间被重建、或 `init` 被重入时，若不重建，签到/会话校验/轮询等任务
+   * 会**永久静默失效**（start/notify 全部被忽略且无报错）。
+   */
+  private recreateScheduler(): void {
+    try {
+      this.scheduler.shutdown()
+    } catch (e) {
+      // 旧实例可能从未启动，shutdown 幂等
+    }
+    this.scheduler = new AppScheduler()
+    this.scheduler.bindForegroundProbe((): boolean => this.foregroundActive)
+    this.scheduler.bindAuthProbe((): boolean => this.auth.isAuthenticated)
+    registerBuiltinTasks(this.scheduler, this.createBuiltinTaskHost())
   }
 
   // ---------- Sub Stores ----------
@@ -175,10 +228,21 @@ class AppStoreClass {
     this.initialized = false
     this.initializationFinished = false
     this.stopAllPolling()
+    this.recreateScheduler()
     this.bindSessionGuard()
     try {
       this.context = context
       await this.store.init(context, 'nga_app_store')
+
+      /*
+       * 持久化统一治理（PERSISTENCE_UNIFICATION_DESIGN.md §5.3）：
+       * 1) Hub 初始化（清 pending、打开双后端）；
+       * 2) 启动迁移检测 + 执行——必须早于任何 Store init，否则改读新键的 Store 会
+       *    在旧数据尚未搬移时读到空、表现为"升级后数据全丢"；
+       * 3) 之后各 Store 按新键加载。
+       */
+      await persistenceHub.init(this.store, this.writeQueue, context.filesDir)
+      await this.runStartupMigration()
 
       // 存档与登录态无关，随应用启动即初始化（不按账号区分）
       await this.savedThreadStore.init(context)
@@ -186,16 +250,15 @@ class AppStoreClass {
       // 编辑器草稿与草稿媒体副本（键内已含 uid 哈希，目录本身不按账号分）
       await draftStore.init(context)
       await draftMediaStore.init(context)
-      // 超期/超容量清理**延后**到启动主流程之外：它要逐文件 statSync（主线程同步 IO），
-      // 放在这里会拖慢冷启动。`initDraftCleanup` 用 setTimeout 让出当前帧并分批推进。
-      this.initDraftCleanup()
+      // 超期/超容量清理由调度器任务 `draft.cleanup`（STARTUP + 800ms 延迟）驱动，
+      // 这里不再直接 setTimeout：见 docs/PERSISTENCE_UNIFICATION_DESIGN.md §7.4。
 
       // 子 Store 中不依赖 uid 的先初始化（同步赋值引用）
       await this.voteStore.init(this.store, this.writeQueue)
       await this.historyStore.init(this.store, this.writeQueue)
       await this.readingProgressStore.init(this.store, this.writeQueue)
 
-      // 认证 + 分类（部分依赖 uid）
+      // 认证 + 分类（分类为设备级缓存，不再依赖 uid）
       await this.authStore.init(this.store, this.writeQueue)
       await this.categoryStore.init(this.store, this.writeQueue, this.authStore.state)
 
@@ -203,12 +266,14 @@ class AppStoreClass {
       // 保证未登录用户冷启动后主题/状态栏样式正确（见 docs/THEME_DESIGN.md）
       await this.settingsStore.initTheme(this.store, this.writeQueue, this.context)
 
-      // 用户数据（依赖 uid）
-      if (this.authStore.state.uid) {
-        await this.loadUserData()
-      }
+      // 用户数据（设备级域无论登录与否都加载；账号镜像域仅在已登录时加载）
+      await this.loadUserData()
       this.settingsStore.applyCurrentTheme()
       this.initialized = true
+      // 调度器：解除 STARTUP 门禁 → 启动心跳 → 派发启动任务（签到/轮询/草稿清理/旧数据清理）
+      this.scheduler.setStartupComplete()
+      this.scheduler.start()
+      this.scheduler.notify(SchedulerTrigger.STARTUP)
       this.reconcilePolling()
 
       logger.info('AppStore initialized')
@@ -218,6 +283,118 @@ class AppStoreClass {
     } finally {
       this.initializationFinished = true
     }
+  }
+
+  /**
+   * 启动迁移：检测旧数据并转换为统一格式。
+   *
+   * 三条来源共用同一引擎（设计文档 §5.2）：版本升级、系统备份恢复、用户导入。
+   * 失败不阻塞启动：报告发布到 AppStorage，MainPage 展示一次提醒，数据管理页可重试。
+   */
+  private async runStartupMigration(): Promise<void> {
+    this.readAppVersion()
+    const engine: MigrationEngine = new MigrationEngine(
+      persistenceHub, this.store, this.appVersionName, this.appVersionCode)
+    this.migrationEngine = engine
+    try {
+      const currentUid: string = await this.readCurrentUidForMigration()
+      const inspection: MigrationInspection = await engine.inspect(currentUid)
+      let report: MigrationReport
+      if (inspection.pending) {
+        const plan: MigrationPlan = await engine.buildPlan(currentUid, await persistenceHub.metaStore.load())
+        report = await engine.run(plan, currentUid)
+      } else {
+        const meta = await persistenceHub.metaStore.load()
+        if (meta === null) {
+          // 首次安装：直接落锚点，不迁移
+          const fresh = await persistenceHub.metaStore.createFresh(
+            this.appVersionName, this.appVersionCode)
+          report = fresh.migration
+        } else {
+          report = meta.migration
+        }
+      }
+      this.publishMigrationReport(report)
+      // 导入导出服务依赖 Hub/Store 与版本信息，迁移后即可用（数据管理页生命周期内有效）
+      dataTransferService.init(persistenceHub, this.store, this.appVersionName, this.appVersionCode,
+        (): string => this.authStore.state.uid)
+      await dataTransferService.cleanupExpiredUndo()
+    } catch (e) {
+      // 迁移异常不得让应用停在"初始化失败"：记录并继续用现有数据启动
+      logger.error('启动迁移异常: %{public}s', formatError(e))
+      const failed: MigrationReport = new MigrationReport()
+      failed.status = MigrationStatus.FAILED
+      failed.finishedAt = Date.now()
+      this.publishMigrationReport(failed)
+    }
+  }
+
+  /**
+   * 读取应用版本信息（迁移报告与导出容器的诊断字段）。
+   */
+  private readAppVersion(): void {
+    try {
+      const info = bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT)
+      this.appVersionName = info.versionName
+      this.appVersionCode = info.versionCode
+    } catch (e) {
+      logger.warn('读取应用版本失败: %{public}s', formatError(e))
+      this.appVersionName = ''
+      this.appVersionCode = 0
+    }
+  }
+
+  /**
+   * 迁移取舍用的当前 uid：优先新键 `v2.auth`，回退旧键 `auth`。
+   *
+   * 迁移发生在 authStore.init 之前（此时新键可能还不存在），因此不能依赖 authStore。
+   *
+   * @returns 当前登录 uid；未登录/无凭证返回空串
+   */
+  private async readCurrentUidForMigration(): Promise<string> {
+    const authSpec = PersistenceCatalog.byId('auth')
+    if (authSpec !== null) {
+      const uid: string = await this.readUidFromAuthKey(authSpec.fullKey())
+      if (uid.length > 0) {
+        return uid
+      }
+    }
+    return await this.readUidFromAuthKey('auth')
+  }
+
+  /**
+   * 从指定 auth 键解析 uid。
+   *
+   * @param key - `v2.auth` 或旧键 `auth`
+   * @returns uid；键不存在/解析失败返回空串
+   */
+  private async readUidFromAuthKey(key: string): Promise<string> {
+    const raw: string = await this.store.getString(key, '')
+    if (raw.length === 0) {
+      return ''
+    }
+    try {
+      const parsed: Object = JSON.parse(raw)
+      if (parsed === null || parsed === undefined || Array.isArray(parsed) || typeof parsed !== 'object') {
+        return ''
+      }
+      const record: Record<string, Object> = parsed as Record<string, Object>
+      const uid: Object | undefined = record['uid']
+      return typeof uid === 'string' ? uid as string : ''
+    } catch (e) {
+      return ''
+    }
+  }
+
+  /**
+   * 发布迁移报告到内存与 AppStorage（MainPage 据此弹一次性提醒）。
+   *
+   * @param report - 迁移报告
+   */
+  private publishMigrationReport(report: MigrationReport): void {
+    this.startupMigrationReport = report
+    AppStorage.setOrCreate(KEY_MIGRATION_STATUS, report.status)
+    bumpAppStorageVersion(KEY_DATA_MANAGEMENT_VERSION)
   }
 
   /** 返回 AppStore 及全部用户 Store 是否完成初始化。 */
@@ -289,6 +466,40 @@ class AppStoreClass {
       logger.warn('draft media still over %{public}d bytes after orphan reclaim ' +
         '(claimed dirs=%{public}d kept)', DRAFT_MEDIA_MAX_BYTES, result.protectedCount)
     }
+  }
+
+  /**
+   * 构造调度任务宿主（把调度器的业务动作回接到本 Store 与各领域 Store）。
+   *
+   * 所有回调都自行容错：调度器会兜底 catch，但正常失败不应污染任务状态。
+   *
+   * @returns 任务宿主
+   */
+  private createBuiltinTaskHost(): BuiltinTaskHost {
+    const host: BuiltinTaskHost = new BuiltinTaskHost()
+    host.verifySession = async (): Promise<void> => {
+      // SessionGuard 内部有 10 分钟节流 + 降级态 1 分钟，任务层的 minInterval 只是第一道闸
+      await this.sessionGuard.verifyOnForeground()
+    }
+    host.autoCheckin = async (): Promise<void> => {
+      await this.autoCheckinIfNeeded()
+    }
+    host.pollNotifications = async (): Promise<void> => {
+      await this.refreshNotifications(false)
+    }
+    host.pollActivities = async (): Promise<void> => {
+      await this.refreshActivities(false)
+    }
+    host.checkTracked = async (): Promise<void> => {
+      await this.trackedThreadStore.refresh(false)
+    }
+    host.cleanupDrafts = (): void => {
+      this.initDraftCleanup()
+    }
+    host.cleanupLegacy = async (): Promise<void> => {
+      await this.cleanupLegacyData(false)
+    }
+    return host
   }
 
   /** 返回 AppStore 初始化流程是否已经成功或失败地结束。 */
@@ -490,18 +701,39 @@ class AppStoreClass {
     return globalSessionGuard
   }
 
+  /**
+   * 加载数据。
+   *
+   * 改造后（取消账号隔离）分两类：
+   * - **设备级域**：无论是否登录都加载（设置/主题/分类/资料/跟踪/AI/历史/进度/投票）；
+   * - **账号镜像域**：仅在已登录时加载，Store 内部按 ownerUid 判定有效性（通知/动态/收藏关系）。
+   */
   private async loadUserData(): Promise<void> {
+    // 设备级域（不依赖 uid）
     await this.settingsStore.init(this.store, this.writeQueue, this.authStore.state, this.context)
     await this.profileStore.init(this.store, this.writeQueue, this.authStore.state)
-    await this.notificationStore.init(this.store, this.writeQueue, this.authStore.state)
-    await this.followActivityStore.init(this.store, this.writeQueue, this.authStore.state)
-    await this.favoriteStore.init(this.store, this.writeQueue, this.authStore.state)
     await this.trackedThreadStore.init(this.store, this.writeQueue, this.authStore.state)
     await this.aiSessionStore.init(this.store, this.writeQueue, this.authStore.state)
     await this.aiToolCacheStore.init(this.store, this.writeQueue, this.authStore.state)
+    // 账号镜像域（仅已登录）
+    await this.loadMirrorData()
     /* 浏览历史兼作主题列表的已读台账（看过 / 有更新标记的数据源），随用户数据一并预载：
        它是懒加载的，不在这里拉起的话列表会先按"全部没看过"渲染一遍再刷新（见 HistoryStore.preload） */
     await this.historyStore.preload(this.authStore.state.uid)
+  }
+
+  /**
+   * 只加载/重载账号镜像域（通知 / 关注动态 / 收藏成员关系）。
+   *
+   * 登录成功与切换账号时调用；设备级域不重复加载（同一份数据，取消隔离后的预期行为）。
+   */
+  private async loadMirrorData(): Promise<void> {
+    if (this.authStore.state.uid.length === 0) {
+      return
+    }
+    await this.notificationStore.init(this.store, this.writeQueue, this.authStore.state)
+    await this.followActivityStore.init(this.store, this.writeQueue, this.authStore.state)
+    await this.favoriteStore.init(this.store, this.writeQueue, this.authStore.state)
   }
 
   /** 后台时刷盘 */
@@ -510,6 +742,8 @@ class AppStoreClass {
     this.aiToolCacheStore.flush()
     await this.writeQueue.enqueue(async (): Promise<void> => {})
     await this.store.flush()
+    /* 统一治理层再兜一次（含 .pending 清理的时序安全）：Hub 内部同样排空写队列后 flush */
+    await persistenceHub.flush()
   }
 
   // ---------- Facade: Auth ----------
@@ -522,7 +756,11 @@ class AppStoreClass {
     this.stopAllPolling()
     const uidChanged = await this.authStore.setAuth(token, uid, nickName, avatarUrl)
     if (uidChanged) {
-      await this.loadUserData()
+      /*
+       * 只重载账号镜像域。设备级域（设置/历史/进度/AI 会话等）在取消账号隔离后是同一份
+       * 设备数据，不需要也不能因为换号而重载（设计文档 ADR-001 §3.4）。
+       */
+      await this.loadMirrorData()
       this.settingsStore.applyCurrentTheme()
     }
     // 新会话：复位"未登录信号"去抖窗口与降级标记，避免登录后立刻失效被上一轮窗口吞掉，
@@ -530,35 +768,47 @@ class AppStoreClass {
     globalSessionGuard.resetForNewSession()
     this.resetCredentialState()
     this.reconcilePolling()
+    // 登录事件：签到 / 会话校验 / 镜像域轮询由调度器任务表统一响应
+    this.scheduler.notify(SchedulerTrigger.LOGIN)
   }
 
   clearAuth(): void {
     this.stopAllPolling()
-    // ⚠️ 以下顺序有严格依赖：cancel/reset 必须在 authStore.clearAuth() 之前，
-    // 否则后者 enqueue 的 persistAuth 写入任务会被取消。
-    // 先取消队列中所有待执行的任务（如已入队的 history/vote 旧 uid 写入）
+    /*
+     * ⚠️ 顺序依赖：cancel/reset 必须在 authStore.clearAuth() 之前，否则后者 enqueue 的
+     * persistAuth 写入任务会被取消。
+     *
+     * 但要诚实说明现状（盘点已确认，见设计文档 §0.1.1 第 2 条）：`SerialQueue.cancel()`
+     * 后紧随 `reset()` 会把 cancelled 标志清回 false，**已入队的闭包仍会执行**——这里的
+     * cancel 并不真正取消在途写。磁盘一致性由随后的 `authStore.clearAuth()` 把空凭证
+     * 排到新链上写盘来保证；不要在此基础上叠加"取消在途写入"的假设。
+     */
     this.writeQueue.cancel()
     this.writeQueue.reset()
     // 再清空认证状态（会 enqueue 写入空 auth，此时 queue 已重置为干净状态）
     this.authStore.clearAuth()
-    this.settingsStore.reset()
-    this.categoryStore.reset()
-    this.profileStore.reset()
+    /*
+     * 取消账号隔离后的退出语义（设计文档 ADR-001 / §8.2）：
+     * - **账号镜像域**：清内存（磁盘保留；下次登录同账号仍可见，换账号后 ownerUid 不符自动作废）；
+     * - **设备级域**：不 reset（设置/主题/分类/资料/历史/进度/投票/跟踪/AI/草稿/存档保留），
+     *   未登录状态下继续可用——这是本次治理最核心的用户可见变化。
+     *
+     * 注意：此处移除 `settingsStore.reset()` / `categoryStore.reset()` / `profileStore.reset()` /
+     * `voteStore.reset()` / `historyStore.reset()` / `readingProgressStore.reset()` /
+     * `trackedThreadStore.reset()` / `aiSessionStore.reset()` / `aiToolCacheStore.reset()` 是
+     * **刻意**的，不是遗漏；这些数据属于设备，不属于账号。真正需要"清空一切"的入口是
+     * 数据管理页的「清空本地数据」。
+     */
     this.notificationStore.reset()
     this.followActivityStore.reset()
-    this.voteStore.reset()
-    this.historyStore.reset()
-    this.readingProgressStore.reset()
     this.favoriteStore.reset()
-    this.trackedThreadStore.reset()
-    this.aiSessionStore.reset()
-    this.aiToolCacheStore.reset()
     floatingLayerStore.clear()
     routerStore.reset()
     // 真未登录：降级态失去意义，顺带取消待执行的自动复验
     this.resetCredentialState()
     // 与 setAuth 对称：退出后统一协调轮询状态（此时未认证 → 停止轮询，幂等无害）
     this.reconcilePolling()
+    this.scheduler.notify(SchedulerTrigger.LOGOUT)
   }
 
   createSession(uid: string, cid: string, nickName: string, avatarUrl: string): Promise<string> {
@@ -584,9 +834,9 @@ class AppStoreClass {
   }
 
   /** 若自动签到实际成功，则显示全局成功提示。 */
-  autoCheckinIfNeeded(): void {
+  autoCheckinIfNeeded(): Promise<void> {
     const requestUid: string = this.auth.uid
-    this.settingsStore.autoCheckinIfNeeded().then((checked: boolean): void => {
+    return this.settingsStore.autoCheckinIfNeeded().then((checked: boolean): void => {
       // 签到请求期间可能已退出或切换账号：身份不一致时不再提示
       if (checked && this.auth.uid === requestUid && this.auth.isAuthenticated) {
         this.showToast('自动签到成功')
@@ -642,13 +892,31 @@ class AppStoreClass {
    */
   setForegroundActive(active: boolean): void {
     this.foregroundActive = active
-    this.reconcilePolling()
+    if (this.initialized) {
+      if (!active) {
+        // 回后台：停止前台派发并通知后台任务（当前任务表仅前台任务，后台任务预留）
+        this.scheduler.notify(SchedulerTrigger.BACKGROUND)
+      }
+      this.reconcilePolling()
+    }
     if (active && this.auth.credentialState === CredentialState.DEGRADED) {
       this.scheduleCredentialRecheck()
     }
   }
+
   /**
-   * 根据初始化、认证与前台状态启动或停止全部前台轮询参与者。
+   * 关闭调度器（Ability onDestroy 调用）。
+   *
+   * 清理心跳与待执行定时器；进程销毁后不应再有任何调度回调。
+   */
+  shutdownScheduler(): void {
+    this.scheduler.shutdown()
+  }
+  /**
+   * 根据初始化、认证与前台状态协调前台任务。
+   *
+   * 调度器接管后：条件满足时派发 `FOREGROUND`（由任务表按节流/单飞执行），条件不满足时
+   * 停止旧的 `PollingController` 实例（它们在本版本中不再被启动，保留停机调用只为兜底）。
    */
   private reconcilePolling(): void {
     if (shouldEnablePolling(
@@ -656,7 +924,7 @@ class AppStoreClass {
       this.initialized,
       this.auth.isAuthenticated
     )) {
-      this.startAllPolling()
+      this.scheduler.notify(SchedulerTrigger.FOREGROUND)
       return
     }
     this.stopAllPolling()
@@ -834,6 +1102,176 @@ class AppStoreClass {
   deleteAiSession(id: string): void { this.aiSessionStore.deleteSession(id) }
   /** 清空当前账号的全部 AI 会话。 */
   clearAiSessions(): void { this.aiSessionStore.clearAllSessions() }
+
+  // ---------- Facade: Persistence / Data Management ----------
+
+  /** 本次启动的迁移报告（无则 null）。 */
+  get migrationReport(): MigrationReport | null {
+    return this.startupMigrationReport
+  }
+
+  /** 迁移是否已完成（含"无需迁移"）。 */
+  get migrationSettled(): boolean {
+    const report: MigrationReport | null = this.startupMigrationReport
+    if (report === null) {
+      return false
+    }
+    return report.status === MigrationStatus.COMPLETED ||
+      report.status === MigrationStatus.NOT_REQUIRED
+  }
+
+  /** 迁移失败域数量。 */
+  get migrationFailedCount(): number {
+    const report: MigrationReport | null = this.startupMigrationReport
+    return report === null ? 0 : report.count(MigrationDomainStatus.FAILED)
+  }
+
+  /** 持久化中心（数据管理页读取域体积/健康用）。 */
+  get persistence(): PersistenceHub {
+    return persistenceHub
+  }
+
+  /** 数据导入导出服务。 */
+  get dataTransfer(): DataTransferService {
+    return dataTransferService
+  }
+
+  /**
+   * 重试迁移（数据管理页「重试升级」）。
+   *
+   * 幂等：已完成域会被 `SKIPPED`，不会重复转换。
+   *
+   * @returns 最新迁移报告
+   */
+  async retryMigration(): Promise<MigrationReport> {
+    const engine: MigrationEngine | null = this.migrationEngine
+    if (engine === null) {
+      throw new Error('迁移引擎未就绪')
+    }
+    const currentUid: string = this.auth.uid
+    const plan: MigrationPlan = await engine.buildPlan(currentUid, await persistenceHub.metaStore.load())
+    const report: MigrationReport = await engine.run(plan, currentUid)
+    this.publishMigrationReport(report)
+    return report
+  }
+
+  /**
+   * 清理到期的旧格式数据（默认要求已到保留期；force=true 为「立即清理」）。
+   *
+   * @param force - 是否忽略保留期
+   * @returns 清理条目数
+   */
+  async cleanupLegacyData(force: boolean): Promise<number> {
+    const engine: MigrationEngine | null = this.migrationEngine
+    const report: MigrationReport | null = this.startupMigrationReport
+    if (engine === null || report === null) {
+      return 0
+    }
+    const removed: number = await engine.cleanupLegacy(report, force)
+    if (removed > 0) {
+      /*
+       * 清理成功后必须回写 meta：否则 `v2.meta.migration.legacyKeys` 仍留着已删除的键，
+       * 数据管理页会永久显示"N 项待清理"，下次启动还会再扫一遍。
+       */
+      report.legacyKeys = []
+      report.legacyCleanupAt = 0
+      this.startupMigrationReport = report
+      const meta: PersistenceMeta | null = await persistenceHub.metaStore.load()
+      if (meta !== null) {
+        meta.migration = report
+        await persistenceHub.metaStore.save(meta)
+      }
+      bumpAppStorageVersion(KEY_DATA_MANAGEMENT_VERSION)
+    }
+    return removed
+  }
+
+  /**
+   * 清空全部可清空的本地数据（数据管理页危险操作）。
+   *
+   * 凭证、多会话表与 meta 锚点不在清空范围（`clearable=false`），避免"清数据把自己登出"
+   * 与"锚点丢失触发全量迁移"。
+   *
+   * @returns 清空的域数量
+   */
+  async clearAllLocalData(): Promise<number> {
+    const specs = PersistenceCatalog.clearable()
+    let cleared: number = 0
+    for (let i: number = 0; i < specs.length; i++) {
+      await persistenceHub.removeDomain(specs[i])
+      cleared++
+    }
+    /*
+     * 旧格式数据要一并清除：否则下次启动的迁移检测会把旧草稿/存档/旧键重新迁回来，
+     * 用户看到"清空后又出现"（文件域检测还依赖 meta 报告，但旧键检测总会命中）。
+     */
+    await persistenceHub.removeLegacyKeys()
+    persistenceHub.removeLegacyFileDirs()
+    /*
+     * 清盘后必须同步重置内存态：各 Store 的内存快照若继续存活，页面会显示"已删除的数据"
+     * 直到进程重启。这里复用既有 `reset()`（各 Store 已实现"清内存 + 恢复默认"语义），
+     * 文件域用各自的重新扫描入口。
+     */
+    this.settingsStore.reset()
+    /*
+     * 主题清空后回到默认（跟随系统）：`settingsStore.reset()` 内部的 restoreGlobal 会把
+     * 清空前内存里的旧主题重新持久化写回 `v2.theme`，不显式改回默认等于"没清掉主题"。
+     */
+    this.settingsStore.setTheme('system')
+    this.categoryStore.reset()
+    this.profileStore.reset()
+    this.notificationStore.reset()
+    this.followActivityStore.reset()
+    this.voteStore.reset()
+    this.historyStore.reset()
+    this.readingProgressStore.reset()
+    this.favoriteStore.reset()
+    this.trackedThreadStore.reset()
+    this.aiSessionStore.reset()
+    this.aiToolCacheStore.reset()
+    draftStore.reloadAfterClear()
+    this.savedThreadStore.reload()
+    /* 撤销快照（`v2.<domain>.undo`）含明文隐私内容，清空本地数据时必须一并清理 */
+    await dataTransferService.clearAllUndoSnapshots()
+    await persistenceHub.flush()
+    bumpAppStorageVersion(KEY_DATA_MANAGEMENT_VERSION)
+    return cleared
+  }
+
+  /**
+   * 导入完成后重载各域内存（数据管理页在 applyImport 成功后调用）。
+   *
+   * 导入写的是磁盘键，而各 Store 持有内存快照；不重载的话，用户要重启应用才能看到导入的数据。
+   * 这里按"设备级域重新 init + 懒加载域 reset 后按需重读 + 文件域重扫"的顺序刷新，
+   * 账号镜像域由 `loadMirrorData` 重新加载。
+   *
+   * 注意：不做 `clearAuth` 式的全量 reset——那会清掉正在编辑的会话态。
+   */
+  async reloadAfterImport(): Promise<void> {
+    try {
+      await this.settingsStore.init(this.store, this.writeQueue, this.authStore.state, this.context)
+      /* 主题是独立全局域（v2.theme），导入可能写了它：必须重新加载内存真源 */
+      await this.settingsStore.initTheme(this.store, this.writeQueue, this.context)
+      await this.profileStore.init(this.store, this.writeQueue, this.authStore.state)
+      await this.trackedThreadStore.init(this.store, this.writeQueue, this.authStore.state)
+      await this.aiSessionStore.init(this.store, this.writeQueue, this.authStore.state)
+      await this.aiToolCacheStore.init(this.store, this.writeQueue, this.authStore.state)
+      await this.loadMirrorData()
+      // 懒加载域：清内存后由下一次访问重新读盘（历史额外预载，保证列表首帧已读标记正确）
+      this.voteStore.reset()
+      this.readingProgressStore.reset()
+      this.historyStore.reset()
+      await this.historyStore.preload(this.authStore.state.uid)
+      // 文件域重新扫描磁盘
+      this.savedThreadStore.reload()
+      draftStore.reloadAfterClear()
+      this.settingsStore.applyCurrentTheme()
+      bumpAppStorageVersion(KEY_DATA_MANAGEMENT_VERSION)
+      logger.info('reloaded after data import')
+    } catch (e) {
+      logger.warn('reloadAfterImport failed: %{public}s', formatError(e))
+    }
+  }
 
   // ---------- Facade: Toast ----------
 

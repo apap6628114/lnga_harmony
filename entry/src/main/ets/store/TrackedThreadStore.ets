@@ -6,7 +6,8 @@
  *   帖间留 {@link TRACK_CHECK_GAP} 间隔，避免请求突发触发风控；
  * - 条件抓取：非强制刷新受 30s 最小成功间隔约束，并发调用复用同一请求
  *   （BaseStore.runGuardedRefresh 统一协调）；全量检查另有 refreshing 并发闸门；
- * - 缓存：按账号隔离的偏好持久化信封（CacheEnvelopeStore）；
+ * - 缓存：设备级域信封（`CacheEnvelopeStore`，键 `v2.tracked_threads`；跟踪任务是本机
+ *   用户数据，不再按账号隔离，检查仍需要当前登录态提供 token）；
  * - 红点：unreadTrackCount 写入 AppStorage，供「跟踪」Tab 角标与入口铃铛合并计数；
  * - 有效性：请求回写前做 generation/uid/token 四重校验（BaseStore.isRequestCurrent）。
  *
@@ -34,6 +35,7 @@ import {
 } from '../common/utils/ThreadTrackPolicy'
 import { fetchThreadTrackStatus } from '../service/api/ThreadTrackApi'
 import { Logger, DOMAIN_STORE, formatError } from '../common/utils/Logger'
+import { DomainIds } from '../common/persistence/PersistenceCatalog'
 import {
   TrackedThread,
   ThreadTrackStatus,
@@ -45,9 +47,6 @@ import {
   TRACK_POLL_INTERVAL
 } from '../model/TrackedThread'
 import type { AuthState } from './AuthStore'
-
-/** 跟踪缓存结构版本。v2：新增 `seenLastPostTs`（已读时的服务端最后回复时间）。 */
-const TRACKED_THREAD_SCHEMA_VERSION: number = 2
 
 /** 全量检查的最短成功间隔（前台轮询按此节流；本功能无下拉刷新入口）。 */
 const TRACK_REFRESH_DELAY: number = 30 * 1000
@@ -109,7 +108,7 @@ export class TrackedThreadStore extends BaseStore<Object> {
   private items: TrackedThread[] = []
   /** 前台轮询调度器。 */
   private pollingController!: PollingController
-  /** 按账号隔离的缓存信封工具。 */
+  /** 设备级域信封工具（键与版本取自域注册表）。 */
   private cacheEnvelope!: CacheEnvelopeStore<TrackedThread>
   /** 全量检查并发闸门。 */
   private refreshing: boolean = false
@@ -126,14 +125,13 @@ export class TrackedThreadStore extends BaseStore<Object> {
       })
     })
     this.cacheEnvelope = new CacheEnvelopeStore<TrackedThread>(
-      TRACKED_THREAD_SCHEMA_VERSION,
-      'tracked_threads',
+      DomainIds.TRACKED_THREADS,
       (value: Object): boolean => isValidCachedTrackedThread(value)
     )
   }
 
   /**
-   * 注入持久化、写队列和认证依赖并加载当前账号的跟踪列表。
+   * 注入持久化、写队列和认证依赖并加载本机跟踪列表（设备级，未登录也加载）。
    *
    * @param store - 偏好存储
    * @param queue - 串行写队列
@@ -146,11 +144,7 @@ export class TrackedThreadStore extends BaseStore<Object> {
     this.refreshing = false
     this.checkingTids.clear()
     this.clearRefreshState()
-    if (auth.uid) {
-      await this.loadCachedItems()
-    } else {
-      this.publishUnread()
-    }
+    await this.loadCachedItems()
   }
 
   /**
@@ -648,10 +642,11 @@ export class TrackedThreadStore extends BaseStore<Object> {
   // ==================== 持久化与发布 ====================
 
   /**
-   * 加载当前账号的跟踪缓存；信封非法时以空列表覆盖。
+   * 加载本机跟踪缓存；信封非法时以空列表覆盖。
    */
   private async loadCachedItems(): Promise<void> {
-    const cached: TrackedThread[] | null = await this.cacheEnvelope.load(this.store, this.auth.uid)
+    const uid: string = this.auth ? this.auth.uid : ''
+    const cached: TrackedThread[] | null = await this.cacheEnvelope.load(this.store, uid)
     if (cached === null) {
       this.items = []
       this.publishUnread()
@@ -666,7 +661,7 @@ export class TrackedThreadStore extends BaseStore<Object> {
    * 落盘跟踪列表快照。
    */
   private persist(): void {
-    this.cacheEnvelope.persist(this.auth.uid, this.items, this.store, this.writeQueue)
+    this.cacheEnvelope.persist(this.auth ? this.auth.uid : '', this.items, this.store, this.writeQueue)
   }
 
   /**

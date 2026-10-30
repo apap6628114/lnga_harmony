@@ -6,8 +6,30 @@ import type { Session } from './SessionRegistry'
 import { RecoveryCredential, selectRecoveryCredential } from './SessionRecovery'
 
 import { Logger, DOMAIN_STORE } from '../common/utils/Logger'
+import { DomainIds, PersistenceCatalog } from '../common/persistence/PersistenceCatalog'
+import { DomainSpec } from '../common/persistence/PersistenceTypes'
 
 const logger = new Logger(DOMAIN_STORE, 'AuthStore')
+
+/**
+ * 返回凭证域的 Preferences 键（统一命名空间 `v2.auth`）。
+ *
+ * @returns 键名；域未登记时为空串
+ */
+function authKey(): string {
+  const spec: DomainSpec | null = PersistenceCatalog.byId(DomainIds.AUTH)
+  return spec === null ? '' : spec.fullKey()
+}
+
+/**
+ * 返回多账号会话表域的 Preferences 键（统一命名空间 `v2.sessions`）。
+ *
+ * @returns 键名；域未登记时为空串
+ */
+function sessionsKey(): string {
+  const spec: DomainSpec | null = PersistenceCatalog.byId(DomainIds.SESSIONS)
+  return spec === null ? '' : spec.fullKey()
+}
 
 /**
  * 凭证的服务端确认状态。
@@ -73,8 +95,6 @@ class PersistedAuth {
   cid?: string
 }
 
-const SESSION_KEY: string = 'sessions'
-
 /**
  * 认证状态与多账户登录会话管理
  */
@@ -137,6 +157,10 @@ export class AuthStore extends BaseStore<AuthState> {
    *   数据，不接受掉电/杀进程的写入窗口；非关键更新才传 false 交给定时器合并）
    */
   private persistAuth(immediate: boolean = true): void {
+    const key: string = authKey()
+    if (key.length === 0) {
+      return
+    }
     const data = new PersistedAuth()
     data.token = this.state.token
     data.uid = this.state.uid
@@ -144,7 +168,7 @@ export class AuthStore extends BaseStore<AuthState> {
     data.avatarUrl = this.state.avatarUrl
     data.cid = this.persistedCid
     this.writeQueue.enqueue(async (): Promise<void> => {
-      await this.store.putJSON('auth', data, immediate)
+      await this.store.putJSON(key, data, immediate)
       if (!immediate) {
         this.store.scheduleFlush()
       }
@@ -163,7 +187,12 @@ export class AuthStore extends BaseStore<AuthState> {
   }
 
   private async loadAuth(): Promise<void> {
-    const saved = await this.store.getJSON<PersistedAuth>('auth')
+    const key: string = authKey()
+    if (key.length === 0) {
+      this.state.initialized = true
+      return
+    }
+    const saved = await this.store.getJSON<PersistedAuth>(key)
     if (saved) {
       this.state.token = saved.token
       this.state.uid = saved.uid
@@ -249,7 +278,11 @@ export class AuthStore extends BaseStore<AuthState> {
   // ============== Session ==============
 
   private async loadSessions(): Promise<void> {
-    const saved = await this.store.getJSON<Array<Array<Object>>>(SESSION_KEY)
+    const key: string = sessionsKey()
+    if (key.length === 0) {
+      return
+    }
+    const saved = await this.store.getJSON<Array<Array<Object>>>(key)
     if (!saved) return
     for (let i = 0; i < saved.length; i++) {
       // 单条容错：坏条目（缺字段/结构被写坏）跳过即可，不能让整表解析失败——
@@ -279,16 +312,20 @@ export class AuthStore extends BaseStore<AuthState> {
   private persistSessions(immediate: boolean = false): void {
     if (!this.sessionsDirty) return
     this.sessionsDirty = false
+    const key: string = sessionsKey()
+    if (key.length === 0) {
+      return
+    }
     const entries: Array<Array<Object>> = []
     const keys: string[] = sessionRegistry.getTokens()
-    for (const key of keys) {
-      const session: Session | null = sessionRegistry.getSession(key)
+    for (const registryKey of keys) {
+      const session: Session | null = sessionRegistry.getSession(registryKey)
       if (session) {
-        entries.push([key, session])
+        entries.push([registryKey, session])
       }
     }
     this.writeQueue.enqueue(async (): Promise<void> => {
-      await this.store.putJSON(SESSION_KEY, entries, immediate)
+      await this.store.putJSON(key, entries, immediate)
     })
   }
 

@@ -146,6 +146,7 @@ export default class EntryAbility extends UIAbility {
   /** 销毁 Ability 并释放全局服务。 */
   onDestroy(): void {
     appStore.setForegroundActive(false)
+    appStore.shutdownScheduler()
     TtsPlayer.shutdown()
     try {
       this.context.getApplicationContext().offSystemConfigurationUpdated(this.sysConfigUpdatedCallback)
@@ -250,15 +251,12 @@ export default class EntryAbility extends UIAbility {
 
   /** 应用进入前台时恢复前台服务。 */
   onForeground(): void {
+    /*
+     * 回前台事件统一交给调度器（`AppStore.setForegroundActive` 内部 notify(FOREGROUND)）：
+     * 自动签到 / 会话校验 / 通知与动态轮询 / 跟踪检查由任务表按"注册顺序 + 最小间隔"串行执行，
+     * 不再在这里并列直调（那是回前台请求风暴的来源，见文档 §7.5）。
+     */
     appStore.setForegroundActive(true)
-    if (appStore.isInitialized) {
-      appStore.autoCheckinIfNeeded();
-      // 前台恢复校验：距上次校验超过 10 分钟才发一次 iflogin（约 80~230ms），
-      // 覆盖"隔夜回来 cid 已失效"——不阻塞 UI，UNKNOWN 不清登录态。
-      appStore.sessionGuard.verifyOnForeground().catch((e: Error): void => {
-        logger.warn('前台会话校验失败: %{public}s', formatError(e));
-      });
-    }
     logger.info( '%{public}s', 'Ability onForeground');
   }
 

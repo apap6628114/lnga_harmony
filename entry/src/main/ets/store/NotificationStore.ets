@@ -22,12 +22,10 @@ import {
   mergeNotifications
 } from '../common/utils/NotificationPolicy'
 import { Logger, DOMAIN_STORE, formatError } from '../common/utils/Logger'
+import { DomainIds } from '../common/persistence/PersistenceCatalog'
 import type { NgaNotification } from '../model/Notification'
 import type { NotificationsResult } from '../model/NgaApiResults'
 import type { AuthState } from './AuthStore'
-
-/** 通知缓存结构版本。 */
-const NOTIFICATION_CACHE_SCHEMA_VERSION: number = 3
 
 /** 本地最多保留的通知数量（导出给 AI 工具描述引用，避免「全部通知」被理解成服务端全量）。 */
 export const MAX_CACHED_NOTIFICATIONS: number = 200
@@ -48,8 +46,8 @@ const logger: Logger = new Logger(DOMAIN_STORE, 'NotificationStore')
  * - 定时抓取：前台 300s 轮询（PollingController 调度）
  * - 条件抓取：非强制刷新受 30s 最小成功间隔约束，并发调用复用同一请求
  *   （runGuardedRefresh 统一协调）
- * - 缓存：按账号隔离的偏好持久化信封（CacheEnvelopeStore，schemaVersion=3），
- *   上限 200 条
+ * - 缓存：账号镜像域信封（`CacheEnvelopeStore`，键 `v2.notifications`，信封内
+ *   `ownerUid` 软隔离——切号后旧账号的镜像判非法并重建），上限 200 条
  * - 有效性：请求回写前做 generation/uid/token 四重校验（BaseStore.isRequestCurrent）
  */
 export class NotificationStore extends BaseStore<Object> {
@@ -63,7 +61,7 @@ export class NotificationStore extends BaseStore<Object> {
   private cachedNotifications: NgaNotification[] = []
   /** 前台轮询调度器（start 立即刷新一次 + 定时重复，普通刷新自带节流与并发复用）。 */
   private pollingController!: PollingController
-  /** 按账号隔离的缓存信封工具（校验 / 加载 / 落盘统一封装）。 */
+  /** 账号镜像域信封工具（校验 / 加载 / 落盘统一封装，键与版本取自域注册表）。 */
   private cacheEnvelope!: CacheEnvelopeStore<NgaNotification>
 
   constructor() {
@@ -72,8 +70,7 @@ export class NotificationStore extends BaseStore<Object> {
       this.refreshNotifications(false)
     })
     this.cacheEnvelope = new CacheEnvelopeStore<NgaNotification>(
-      NOTIFICATION_CACHE_SCHEMA_VERSION,
-      'cached_notifications',
+      DomainIds.NOTIFICATIONS,
       (value: Object): boolean => isValidCachedNotification(value)
     )
   }
@@ -270,14 +267,17 @@ export class NotificationStore extends BaseStore<Object> {
   }
 
   /**
-   * 加载新版缓存；旧格式或非法缓存直接覆盖为空。
+   * 加载新版缓存。
+   *
+   * 读失败（ownerUid 不符 / 版本非法 / 数据损坏）时**只清内存、不写空盘**：写空会把上一个账号
+   * （或损坏前）的快照立即销毁——取消账号隔离后旧快照是切号的唯一离线兜底，下一次成功轮询
+   * 自然会覆盖它（设计文档 §3.3 / §0.1.1 第 3 条）。
    */
   private async loadCachedNotifications(): Promise<void> {
     const items: NgaNotification[] | null = await this.cacheEnvelope.load(this.store, this.auth.uid)
     if (items === null) {
       this.cachedNotifications = []
       this.publishState()
-      this.persistCachedNotifications()
       return
     }
 

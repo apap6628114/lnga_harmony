@@ -24,8 +24,9 @@
  */
 
 import { appStore } from '../store/AppStore'
-import { routerStore, RouterStoreClass } from '../store/RouterStore'
+import { routerStore, RouterStoreClass, Screen } from '../store/RouterStore'
 import { SessionVerdict } from '../service/api/AuthErrors'
+import { MigrationDomainStatus, MigrationReport } from '../common/persistence/PersistenceTypes'
 
 import { floatingLayerStore, FloatingLayerStoreClass, FloatingPage } from '../store/FloatingLayerStore'
 import {
@@ -131,9 +132,69 @@ struct MainPage {
   aboutToAppear(): void {
     // 登录进入主页面后保持屏幕常亮（不息屏），离开主页面时恢复自动息屏
     enableKeepScreenOn()
+    this.maybeShowMigrationNotice()
     this.checkAuth().catch((e: Error): void => {
       logger.error('checkAuth failed: %{public}s', (e as Error).message)
     })
+  }
+
+  /** 本地数据迁移提醒是否已展示（一次会话只提醒一次）。 */
+  private migrationNoticeShown: boolean = false
+
+  /**
+   * 本地数据升级提醒（设计文档 §5.5）。
+   *
+   * - 有实际迁移成功：Toast 轻提示（不打断）；
+   * - 有失败域：模态对话框 + 直达数据管理页（迁移涉及用户数据，必须可见）；
+   * - 仅"无需迁移"：静默。
+   *
+   * 放在 MainPage 而不是 Index：Index 处于冷启动 loading 态，弹窗会与"跳转后立即销毁"竞争。
+   */
+  private maybeShowMigrationNotice(): void {
+    if (this.migrationNoticeShown) {
+      return
+    }
+    this.migrationNoticeShown = true
+    const report: MigrationReport | null = appStore.migrationReport
+    if (report === null) {
+      return
+    }
+    const failed: number = report.count(MigrationDomainStatus.FAILED)
+    const migrated: number = report.count(MigrationDomainStatus.MIGRATED)
+    if (failed > 0) {
+      this.showMigrationFailedDialog(failed)
+      return
+    }
+    if (migrated > 0) {
+      appStore.showToast('本地数据已升级为统一格式（' + String(migrated) + ' 项）')
+    }
+  }
+
+  /**
+   * 迁移失败提醒对话框。
+   *
+   * @param failed - 失败的域数量
+   */
+  private showMigrationFailedDialog(failed: number): void {
+    try {
+      this.getUIContext().showAlertDialog({
+        title: '本地数据升级',
+        message: '有 ' + String(failed) + ' 项数据升级失败，旧数据已保留。\n可在「设置 → 数据管理」查看详情或重试。',
+        primaryButton: {
+          value: '查看详情',
+          action: (): void => {
+            routerStore.navigateActivity(Screen.dataManagement())
+          }
+        },
+        secondaryButton: {
+          value: '知道了',
+          action: (): void => {
+          }
+        }
+      })
+    } catch (e) {
+      logger.error('show migration dialog failed: %{public}s', (e as Error).message)
+    }
   }
 
   aboutToDisappear(): void {
@@ -686,6 +747,7 @@ struct MainPage {
 
     appStore.ensureProfile(appStore.auth.uid)
     appStore.settingsStore.ensureFavorites()
-    appStore.autoCheckinIfNeeded()
+    // 自动签到已由调度器任务 `checkin.auto`（STARTUP / FOREGROUND）接管，
+    // 这里不再重复调用（见 docs/PERSISTENCE_UNIFICATION_DESIGN.md §7.4）。
   }
 }

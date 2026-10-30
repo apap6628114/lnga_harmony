@@ -234,6 +234,8 @@ export class SettingsIconColors {
   static readonly credentialExport: string = '#0F766E'
   /** 清除缓存的维护琥珀色。 */
   static readonly clearCache: string = '#B45309'
+  /** 数据管理（持久化统一治理）的数据库灰蓝色。 */
+  static readonly dataManagement: string = '#475569'
 }
 
 /**

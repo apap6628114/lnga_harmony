@@ -37,6 +37,13 @@ export struct SettingsPanel {
   @StorageProp('aiConfigVersion') @Watch('onAiConfigVersionChange') aiConfigVersion: number = 0
   /** 当前帖子内容字号，用于响应字体设置页的实时更新。 */
   @StorageProp('contentFontSize') contentFontSize: number = 15
+  /**
+   * 本地数据迁移状态（`MigrationStatus` 字符串值，见 AppStorageKeys）。
+   *
+   * 迁移有失败/部分成功时在「数据管理」入口显示警示徽标——迁移是用户数据相关动作，
+   * 不能只写日志（设计文档 §5.5）。
+   */
+  @StorageProp('migrationStatus') migrationStatus: string = ''
   @State cacheSizeText: string = ''
   @State clearingCache: boolean = false
   @State imageStrategyBadge: string = '始终加载'
@@ -347,9 +354,16 @@ export struct SettingsPanel {
       }
 
       const content = await serializeCredentialExport({ uid: session.uid, cid: session.cid }, password)
+      /*
+       * 文件句柄必须 try/finally 关闭：writeSync 抛错（磁盘满/权限）时若不关，fd 泄漏；
+       * picker 预创建的空文件也会残留（EXPORT_IMPORT_RESEARCH.md F1 类缺陷）。
+       */
       const file = fileIo.openSync(uris[0], fileIo.OpenMode.READ_WRITE)
-      fileIo.writeSync(file.fd, content)
-      fileIo.closeSync(file)
+      try {
+        fileIo.writeSync(file.fd, content)
+      } finally {
+        fileIo.closeSync(file)
+      }
       appStore.showToast('账号凭证已加密导出')
     } catch (e) {
       appStore.showToast((e as Error).message || '导出失败')
@@ -686,6 +700,23 @@ export struct SettingsPanel {
                 isOn: appStore.settings.debugMode,
                 onChange: (v: boolean) => {
                   appStore.settingsStore.setDebugMode(v)
+                }
+              })
+            }
+            .width('92%')
+            .backgroundColor(AppColors.bgTertiary)
+            .borderRadius(12)
+            .margin({ top: 12 })
+
+            // ---- Block 3B2: 数据管理（持久化统一治理入口） ----
+            Column() {
+              SettingRow({
+                iconRes: $r('app.media.settings_data_management'),
+                iconColor: SettingsIconColors.dataManagement,
+                label: '数据管理',
+                badge: this.migrationStatus === 'partial' || this.migrationStatus === 'failed' ? '!' : '',
+                onAction: () => {
+                  routerStore.navigateActivity(Screen.dataManagement())
                 }
               })
             }

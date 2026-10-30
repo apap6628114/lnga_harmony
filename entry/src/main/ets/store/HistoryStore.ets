@@ -7,6 +7,18 @@ import { PostInfo } from '../model/PostInfo'
 import { KEY_BROWSE_HISTORY_VERSION } from '../common/constants/AppStorageKeys'
 import { bumpAppStorageVersion } from '../common/utils/AppStorageVersion'
 import { READ_BASELINE_UNKNOWN, READ_BASELINE_UNREAD } from '../common/utils/TopicReadPolicy'
+import { DomainIds, PersistenceCatalog } from '../common/persistence/PersistenceCatalog'
+import { DomainSpec } from '../common/persistence/PersistenceTypes'
+
+/**
+ * 返回浏览历史域的 Preferences 键（统一命名空间 `v2.history`，与账号无关）。
+ *
+ * @returns 键名；域未登记时为空串
+ */
+function historyDomainKey(): string {
+  const spec: DomainSpec | null = PersistenceCatalog.byId(DomainIds.HISTORY)
+  return spec === null ? '' : spec.fullKey()
+}
 
 /** 浏览历史条目 */
 export class BrowseHistoryEntry {
@@ -41,17 +53,21 @@ export class BrowseHistoryEntry {
 export const HISTORY_MAX_COUNT: number = 500
 
 /**
- * 帖子浏览历史管理。
+ * 帖子浏览历史管理（设备级数据，不再按账号物理隔离）。
  *
  * 除「浏览历史」列表外，本 Store 还是主题列表**已读台账**的来源：浏览历史天然等价于
  * 「用户打开过的帖子」，主题列表据此对看过的帖子做降权、对看过后又有新回复的帖子打标记
  * （见 `docs/TOPIC_READ_STATE_DESIGN.md`）。为此这里额外维护一份**同步可查**的内存索引
  * `readBaselines`——列表行是在 `build()` 里逐行渲染的，不能对每一行发起异步查询。
+ *
+ * 取消账号隔离后：键固定为 `v2.history`，`loaded` 标志表示"本进程是否已从磁盘加载"；
+ * public 方法上的 `uid` 参数仅为兼容既有调用点保留，函数体内不再使用。
  */
 export class HistoryStore extends BaseStore<Object> {
   override state: Object = new Object()
   private historyItems: BrowseHistoryEntry[] = []
-  private historyLoadedUid: string = ''
+  /** 是否已从持久化加载过（设备级数据只加载一次，不再因 uid 变化重载）。 */
+  private loaded: boolean = false
   /**
    * tid → 读到该帖时的服务端回复数（已读台账基线）。
    *
@@ -68,7 +84,7 @@ export class HistoryStore extends BaseStore<Object> {
   /** 重置缓存（登出时调用） */
   reset(): void {
     this.historyItems = []
-    this.historyLoadedUid = ''
+    this.loaded = false
     this.readBaselines.clear()
     // 台账被清空同样是"台账变化"：发布版本号，使仍在屏的主题列表行回到"没看过"的外观
     // （正常路径下登出会销毁面板、下次登录重新载入并 bump，这里只是不让外观依赖销毁时序）
@@ -76,21 +92,24 @@ export class HistoryStore extends BaseStore<Object> {
     super.reset()
   }
 
-  private historyKey(uid: string): string {
-    return `history_${uid}`
-  }
-
+  /**
+   * 读取浏览历史（首次调用时从持久化加载，之后直接返回内存快照）。
+   *
+   * @param uid - **仅为兼容既有调用点保留**：浏览历史是设备级数据，不再按账号隔离
+   * @returns 历史条目数组快照
+   */
   async getBrowseHistory(uid: string): Promise<BrowseHistoryEntry[]> {
-    if (this.historyLoadedUid !== uid) {
+    if (!this.loaded) {
       const gen: number = this.generationGuard.current()
-      const saved = await this.store.getJSON<BrowseHistoryEntry[]>(this.historyKey(uid))
-      // 加载期间已登出（reset 推进代际）或已有其他账号的数据回写：放弃本次，避免跨账号污染
-      if (!this.generationGuard.isCurrent(gen) ||
-        (this.historyLoadedUid !== '' && this.historyLoadedUid !== uid)) {
+      const key: string = historyDomainKey()
+      const saved: BrowseHistoryEntry[] | null =
+        key.length === 0 ? null : await this.store.getJSON<BrowseHistoryEntry[]>(key)
+      // 加载期间已登出（reset 推进代际）：放弃本次，避免把过时数据写回内存
+      if (!this.generationGuard.isCurrent(gen)) {
         return []
       }
       this.historyItems = saved ?? []
-      this.historyLoadedUid = uid
+      this.loaded = true
       this.rebuildReadBaselines()
       /* 载入即「已读台账可用」：必须在**首次载入完成**时发布版本，否则在台账落地前已渲染的
          主题列表行会一直停在「没看过」的外观（列表先于本 Store 载入完成时必然发生）。
@@ -105,19 +124,16 @@ export class HistoryStore extends BaseStore<Object> {
   }
 
   /**
-   * 预载指定账号的浏览历史（即已读台账）。
+   * 预载浏览历史（即已读台账）。
    *
    * **不改动任何数据**：已载入时 `getBrowseHistory` 直接返回内存快照；仅在**首次载入**完成时
    * 发布一次 `browseHistoryVersion`（这是 UI 刷新信号，不是数据写入，见 `getBrowseHistory`）。
    * 由 `AppStore.loadUserData` 在冷启动 / 登录后调用，使主题列表的「已读 / 有新回复」标记在
    * **首帧**就正确，而不是等列表渲染完再逐个刷新（那会表现为整屏标记闪一下）。
    *
-   * @param uid - 用户 uid
+   * @param uid - **仅为兼容既有调用点保留**（设备级数据）
    */
   async preload(uid: string): Promise<void> {
-    if (uid.length === 0) {
-      return
-    }
     await this.getBrowseHistory(uid)
   }
 
@@ -187,17 +203,16 @@ export class HistoryStore extends BaseStore<Object> {
    * 是"未知"（0），却**不能**当成基线 0——那会把每个刚看过的帖子都标成"有新回复"
    * （见 `READ_BASELINE_UNKNOWN`）。
    *
-   * @param uid - 当前用户 uid
+   * @param uid - **仅为兼容既有调用点保留**（设备级数据）
    * @param entry - 待写入条目
    * @param baseline - 已读基线（读到该帖时的回复数，或 READ_BASELINE_UNKNOWN）
    */
   private async insertHistory(uid: string, entry: BrowseHistoryEntry, baseline: number): Promise<void> {
-    if (uid.length === 0) return
     const gen: number = this.generationGuard.current()
-    if (this.historyLoadedUid !== uid) {
+    if (!this.loaded) {
       await this.getBrowseHistory(uid)
     }
-    // 加载期间已登出（reset 推进代际）：中止写入，避免旧会话数据写入新账号
+    // 加载期间已登出（reset 推进代际）：中止写入，避免旧会话数据写入新上下文
     if (!this.generationGuard.isCurrent(gen)) {
       return
     }
@@ -223,7 +238,7 @@ export class HistoryStore extends BaseStore<Object> {
     /* 索引与列表同源重建：被 LRU 淘汰的条目基线一并消失（淘汰即回到"没看过"），
        本次条目的基线则从刚落盘的 `entry.replies` 读出，无需另行覆盖 */
     this.rebuildReadBaselines()
-    this.persistBrowseHistory(uid)
+    this.persistBrowseHistory()
   }
 
   /**
@@ -265,10 +280,10 @@ export class HistoryStore extends BaseStore<Object> {
 
   async removeBrowseHistory(uid: string, tid: string): Promise<void> {
     const gen: number = this.generationGuard.current()
-    if (this.historyLoadedUid !== uid) {
+    if (!this.loaded) {
       await this.getBrowseHistory(uid)
     }
-    // 加载期间已登出（reset 推进代际）：中止删除，避免误清新账号数据
+    // 加载期间已登出（reset 推进代际）：中止删除，避免误清数据
     if (!this.generationGuard.isCurrent(gen)) {
       return
     }
@@ -281,19 +296,22 @@ export class HistoryStore extends BaseStore<Object> {
     this.historyItems = filtered
     /* 同步已读台账：删掉历史即回到"没看过"（含更新标记一并消失） */
     this.readBaselines.delete(tid)
-    this.persistBrowseHistory(uid)
+    this.persistBrowseHistory()
   }
 
   async clearBrowseHistory(uid: string): Promise<void> {
     this.historyItems = []
     this.readBaselines.clear()
-    this.persistBrowseHistory(uid)
+    this.persistBrowseHistory()
   }
 
-  private persistBrowseHistory(uid: string): void {
+  private persistBrowseHistory(): void {
+    const key: string = historyDomainKey()
+    if (key.length === 0) {
+      return
+    }
     this.writeQueue.enqueue(async (): Promise<void> => {
-      if (!this.uidGuard()) return
-      await this.store.putJSON(this.historyKey(uid), this.historyItems, false)
+      await this.store.putJSON(key, this.historyItems, false)
       bumpAppStorageVersion(KEY_BROWSE_HISTORY_VERSION)
       this.store.scheduleFlush()
     })

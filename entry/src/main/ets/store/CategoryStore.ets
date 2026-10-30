@@ -9,8 +9,20 @@ import { KEY_CAT_VERSION } from '../common/constants/AppStorageKeys'
 import { bumpAppStorageVersion } from '../common/utils/AppStorageVersion'
 
 import { Logger, DOMAIN_STORE } from '../common/utils/Logger'
+import { DomainIds, PersistenceCatalog } from '../common/persistence/PersistenceCatalog'
+import { DomainSpec } from '../common/persistence/PersistenceTypes'
 
 const logger = new Logger(DOMAIN_STORE, 'CategoryStore')
+
+/**
+ * 返回板块分类缓存域的 Preferences 键（统一命名空间 `v2.categories`）。
+ *
+ * @returns 键名；域未登记时为空串
+ */
+function categoriesKey(): string {
+  const spec: DomainSpec | null = PersistenceCatalog.byId(DomainIds.CATEGORIES)
+  return spec === null ? '' : spec.fullKey()
+}
 
 /**
  * 论坛分类缓存管理
@@ -39,7 +51,11 @@ export class CategoryStore extends BaseStore<Object> {
   // ============== Cache ==============
 
   private async loadCachedCategories(): Promise<void> {
-    const saved = await this.store.getJSON<Category[]>('cached_categories')
+    const key: string = categoriesKey()
+    if (key.length === 0) {
+      return
+    }
+    const saved = await this.store.getJSON<Category[]>(key)
     if (saved && saved.length > 0) {
       this.cachedCategories = saved
       this.bumpCategoriesVersion()
@@ -52,8 +68,12 @@ export class CategoryStore extends BaseStore<Object> {
   }
 
   private persistCategories(): void {
+    const key: string = categoriesKey()
+    if (key.length === 0) {
+      return
+    }
     this.writeQueue.enqueue(async (): Promise<void> => {
-      await this.store.putJSON('cached_categories', this.cachedCategories, false)
+      await this.store.putJSON(key, this.cachedCategories, false)
       this.store.scheduleFlush()
     })
   }

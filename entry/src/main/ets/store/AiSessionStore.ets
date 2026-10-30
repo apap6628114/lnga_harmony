@@ -3,13 +3,13 @@
  *
  * 职责边界：
  * - **只管存取**：不做裁剪策略之外的业务判断（任务是否存在、气泡怎么渲染都在页面侧）；
- * - **按账号隔离**：复用 `CacheEnvelopeStore`（键 `ai_sessions_<uid>`），信封里带 uid 与
- *   结构版本，换账号读到上一个账号的信封会被判为非法，整体丢弃；
+ * - **设备级数据**：复用 `CacheEnvelopeStore`（键 `v2.ai_sessions`），取消账号物理隔离——
+ *   本机会话是所有账号共享的情节记忆，信封内不再做 owner 校验；
  * - **写盘延迟**：`putString(flush=false)` + `scheduleFlush`，与通知/动态缓存同一套节流，
  *   避免每轮对话都同步刷盘。
  *
  * 为什么不做「会话内的滑动窗口」：那是请求侧的事（`ContextBudget`）。这里只维持
- * 「单会话最多 N 条、单账号最多 M 个」两个硬上限，防止持久化体积无限膨胀。
+ * 「单会话最多 N 条、单设备最多 M 个」两个硬上限，防止持久化体积无限膨胀。
  */
 
 import { BaseStore } from './BaseStore'
@@ -17,9 +17,9 @@ import { CacheEnvelopeStore } from '../common/infra/CacheEnvelopeStore'
 import { PreferencesStore } from '../common/infra/PreferencesStore'
 import { SerialQueue } from '../common/infra/SerialQueue'
 import { Logger, DOMAIN_STORE, formatError } from '../common/utils/Logger'
+import { DomainIds } from '../common/persistence/PersistenceCatalog'
 import {
   AI_SESSION_ROLE_USER,
-  AI_SESSION_SCHEMA_VERSION,
   AiSession,
   MAX_AI_SESSIONS,
   cloneAiSession,
@@ -32,9 +32,6 @@ import {
 } from '../model/AiSession'
 import type { AuthState } from './AuthStore'
 
-/** 会话缓存键前缀（最终键形如 `ai_sessions_<uid>`）。 */
-const AI_SESSION_KEY_PREFIX: string = 'ai_sessions'
-
 const logger: Logger = new Logger(DOMAIN_STORE, 'AiSessionStore')
 
 /**
@@ -44,26 +41,17 @@ export class AiSessionStore extends BaseStore<Object> {
   /** BaseStore 状态占位对象（会话列表不走 @Observed 状态，页面通过方法读取）。 */
   override state: Object = new Object()
 
-  /** 当前账号的会话列表（按最后更新倒序）。 */
+  /** 本机会话列表（按最后更新倒序）。 */
   private sessions: AiSession[] = []
 
-  /**
-   * 当前会话列表所属账号。
-   *
-   * 用于挡住「账号 A 的页面在切到 B 之后继续 persist」：页面生命周期可能
-   * 长于认证切换，不校验归属会把 A 的对话写进 B 的历史。
-   */
-  private ownerUid: string = ''
-
-  /** 按账号隔离的信封工具（校验 / 加载 / 落盘统一封装）。 */
+  /** 设备级域信封工具（键与版本取自域注册表）。 */
   private envelope: CacheEnvelopeStore<AiSession> = new CacheEnvelopeStore<AiSession>(
-    AI_SESSION_SCHEMA_VERSION,
-    AI_SESSION_KEY_PREFIX,
+    DomainIds.AI_SESSIONS,
     (value: Object): boolean => isValidAiSession(value)
   )
 
   /**
-   * 注入依赖并加载当前账号的会话。
+   * 注入依赖并加载本机会话（设备级，未登录也加载）。
    *
    * @param store - 偏好存储
    * @param queue - 串行写队列
@@ -72,34 +60,24 @@ export class AiSessionStore extends BaseStore<Object> {
   async init(store: PreferencesStore, queue: SerialQueue, auth: AuthState): Promise<void> {
     this.setDeps(store, queue, auth)
     this.sessions = []
-    this.ownerUid = ''
-    const uid: string = auth.uid
-    if (!uid) {
-      return
-    }
     const generation: number = this.generationGuard.current()
-    await this.load(uid)
+    await this.load()
     /*
-     * 加载期间账号可能已经切换 / 登出：把上一个账号的会话带进当前账号是
-     * 最严重的串数据形态（用户会看到别人的对话）。代际与 uid 任一不一致
-     * 都整体丢弃。
+     * 加载期间 Store 可能已被 reset（登出/切号会推进代际）：代际不一致时整体丢弃，
+     * 避免把过时读取结果带进新一轮状态。
      */
-    if (!this.isCurrent(generation) || this.auth.uid !== uid) {
+    if (!this.isCurrent(generation)) {
       this.sessions = []
-      return
     }
-    this.ownerUid = uid
   }
 
   /**
    * 清空内存中的会话（登出 / 切号）。
    *
-   * 磁盘上的记录**保留**：登出只是当前会话结束，重新登录同一账号应能看到之前的对话。
-   * 另一个账号读到的是另一个键，且信封 uid 校验会拒绝错配。
+   * 磁盘上的记录**保留**：会话是设备级记忆，重新登录（任意账号）仍能看到之前的对话。
    */
   reset(): void {
     this.sessions = []
-    this.ownerUid = ''
     super.reset()
   }
 
@@ -139,9 +117,7 @@ export class AiSessionStore extends BaseStore<Object> {
    * @returns 新会话
    */
   createSession(presetId: string, presetName: string): AiSession {
-    const session: AiSession = createAiSession(presetId, presetName)
-    session.ownerUid = this.ownerUid
-    return session
+    return createAiSession(presetId, presetName)
   }
 
   /**
@@ -150,25 +126,13 @@ export class AiSessionStore extends BaseStore<Object> {
    * 会补齐标题、裁剪消息数、按上限淘汰最旧会话，然后落盘。
    * 消息为空时视为"用户开了会话但没说话"，直接忽略（不产生空记录）。
    *
+   * 设备级语义：不再校验会话/账号归属（旧版 `ownerUid` 仅作为历史字段保留，
+   * 迁移器已把存量条目的该字段清空）。
+   *
    * @param session - 待保存的会话
    */
   saveSession(session: AiSession): void {
     if (session.id.length === 0 || session.messages.length === 0) {
-      return
-    }
-    /*
-     * 归属校验：页面生命周期可能长于认证切换（A 的对话页在切到 B 之后才
-     * 返回/切换任务），不校验就会把 A 的会话写进 B 的历史。
-     */
-    const uid: string = this.auth ? this.auth.uid : ''
-    if (uid.length === 0 || uid !== this.ownerUid) {
-      return
-    }
-    if (session.ownerUid.length === 0) {
-      /* 旧版本会话没有归属字段：首次保存时补上当前账号 */
-      session.ownerUid = uid
-    } else if (session.ownerUid !== uid) {
-      /* 这个会话属于上一个账号：页面还没销毁也不能写进当前账号 */
       return
     }
     const beforeCount: number = session.messages.length
@@ -237,7 +201,7 @@ export class AiSessionStore extends BaseStore<Object> {
     this.persist()
   }
 
-  /** 清空当前账号的全部会话记录。 */
+  /** 清空全部会话记录（设备级：清空本机全部对话）。 */
   clearAllSessions(): void {
     if (this.sessions.length === 0) {
       return
@@ -247,18 +211,16 @@ export class AiSessionStore extends BaseStore<Object> {
   }
 
   /**
-   * 从磁盘加载当前账号的会话。
-   *
-   * @param uid - 当前账号 ID
+   * 从磁盘加载本机会话（设备级，与当前账号无关）。
    */
-  private async load(uid: string): Promise<void> {
+  private async load(): Promise<void> {
     try {
       /*
        * 宽容加载：一条坏会话不应该让其余 19 条一起消失（严格信封会让
        * 整封判非法，下一次 persist 再把空列表写回，数据永久丢失）。
-       * 信封级非法（版本/账号/items 非数组）仍返回 null。
+       * 信封级非法（结构/items 非数组）仍返回 null。
        */
-      const items: AiSession[] | null = await this.envelope.loadTolerant(this.store, uid)
+      const items: AiSession[] | null = await this.envelope.loadTolerant(this.store, this.auth ? this.auth.uid : '')
       if (items === null) {
         this.sessions = []
         return
@@ -285,14 +247,9 @@ export class AiSessionStore extends BaseStore<Object> {
     }
   }
 
-  /** 落盘当前会话列表（未登录 / 账号不匹配时跳过：会话按账号隔离）。 */
+  /** 落盘会话列表（设备级：未登录也可写）。 */
   private persist(): void {
-    const uid: string = this.auth ? this.auth.uid : ''
-    if (uid.length === 0 || uid !== this.ownerUid) {
-      logger.verbose('skip persist ai sessions: no uid or owner mismatch')
-      return
-    }
-    this.envelope.persist(uid, this.sessions, this.store, this.writeQueue)
+    this.envelope.persist(this.auth ? this.auth.uid : '', this.sessions, this.store, this.writeQueue)
   }
 }
 

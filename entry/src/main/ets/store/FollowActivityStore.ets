@@ -17,12 +17,10 @@ import {
   mergeActivities
 } from '../common/utils/FollowActivityPolicy'
 import { Logger, DOMAIN_STORE, formatError } from '../common/utils/Logger'
+import { DomainIds } from '../common/persistence/PersistenceCatalog'
 import type { FollowedActivity } from '../model/Follow'
 import type { FollowedActivityListResult } from '../model/Follow'
 import type { AuthState } from './AuthStore'
-
-/** 动态缓存结构版本。 */
-const ACTIVITY_CACHE_SCHEMA_VERSION: number = 2
 
 /**
  * 本地最多保留的动态数量（与通知缓存上限保持一致）。
@@ -51,7 +49,8 @@ const logger: Logger = new Logger(DOMAIN_STORE, 'FollowActivityStore')
  * - 定时抓取：前台 300s 轮询（PollingController 调度）
  * - 条件抓取：非强制刷新受 30s 最小成功间隔约束，并发调用复用同一请求
  *   （runGuardedRefresh 统一协调）
- * - 缓存：按账号隔离的偏好持久化信封（CacheEnvelopeStore，schemaVersion=2），
+ * - 缓存：账号镜像域信封（`CacheEnvelopeStore`，键 `v2.activities`，信封内 `ownerUid`
+ *   软隔离——切号后旧账号的镜像判非法并重建），
  *   仅保存 displayActivities 前 200 条窗口快照；分页追加的后续页仅内存持有
  * - 红点：unreadActivityCount 写入 AppStorage，供入口角标/徽章展示
  * - 有效性：请求回写前做 generation/uid/token 四重校验（BaseStore.isRequestCurrent）
@@ -82,7 +81,7 @@ export class FollowActivityStore extends BaseStore<Object> {
   private loadingMore: boolean = false
   /** 前台轮询调度器（start 立即刷新一次 + 定时重复，普通刷新自带节流与并发复用）。 */
   private pollingController!: PollingController
-  /** 按账号隔离的缓存信封工具（校验 / 加载 / 落盘统一封装）。 */
+  /** 账号镜像域信封工具（校验 / 加载 / 落盘统一封装，键与版本取自域注册表）。 */
   private cacheEnvelope!: CacheEnvelopeStore<FollowedActivity>
 
   constructor() {
@@ -91,8 +90,7 @@ export class FollowActivityStore extends BaseStore<Object> {
       this.refreshActivities(false)
     })
     this.cacheEnvelope = new CacheEnvelopeStore<FollowedActivity>(
-      ACTIVITY_CACHE_SCHEMA_VERSION,
-      'cached_activities',
+      DomainIds.ACTIVITIES,
       (value: Object): boolean => isValidCachedActivity(value)
     )
   }
@@ -361,8 +359,11 @@ export class FollowActivityStore extends BaseStore<Object> {
   }
 
   /**
-   * 加载动态缓存；旧格式或非法缓存直接覆盖为空。
+   * 加载动态缓存。
+   *
    * 启动时无分页：displayActivities 以缓存窗口为起点，loadedPages=1、totalPages=0。
+   * 读失败（ownerUid 不符 / 版本非法 / 损坏）时**只清内存、不写空盘**（同 NotificationStore，
+   * 防止把上一账号快照立即销毁；下一次成功刷新会覆盖）。
    */
   private async loadCachedActivities(): Promise<void> {
     const items: FollowedActivity[] | null = await this.cacheEnvelope.load(this.store, this.auth.uid)
@@ -372,7 +373,6 @@ export class FollowActivityStore extends BaseStore<Object> {
       this.loadedPages = 1
       this.totalPages = 0
       this.publishUnreadOnly()
-      this.persistCachedActivities()
       return
     }
 

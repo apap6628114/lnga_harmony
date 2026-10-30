@@ -7,6 +7,8 @@ import { SerialQueue } from '../../../common/infra/SerialQueue'
 import { isPageLoaded } from '../../../common/infra/PageLifecycle'
 
 import { Logger, DOMAIN_SETTINGS, formatError } from '../../../common/utils/Logger'
+import { DomainIds, PersistenceCatalog } from '../../../common/persistence/PersistenceCatalog'
+import { DomainSpec } from '../../../common/persistence/PersistenceTypes'
 
 const logger = new Logger(DOMAIN_SETTINGS, 'ThemeSettings')
 
@@ -16,22 +18,30 @@ class ThemePersist {
 }
 
 /**
+ * 返回主题域的 Preferences 键（统一命名空间 `v2.theme`）。
+ *
+ * @returns 键名；域未登记时为空串
+ */
+function themeKey(): string {
+  const spec: DomainSpec | null = PersistenceCatalog.byId(DomainIds.THEME)
+  return spec === null ? '' : spec.fullKey()
+}
+
+/**
  * 主题设置域子 store。
  *
- * 主题是全局设置，不随账号（uid）隔离：未登录用户同样可持久化并跨冷启动生效。
- * 持久化 key 与 uid 无关（GLOBAL_THEME_KEY），由 SettingsStore.initTheme 在
+ * 主题是设备级设置，不随账号（uid）隔离：未登录用户同样可持久化并跨冷启动生效。
+ * 持久化键为统一命名空间的 `v2.theme`，由 SettingsStore.initTheme 在
  * AppStore 初始化阶段无条件加载（设计记录见 docs/THEME_DESIGN.md）。
  *
- * theme 内存真源为本实例私有字段，不进入 uid 隔离的 SettingsState——
- * settings_${uid} 的持久化数据中不含主题，不存在旧数据兼容/迁移需求。
+ * theme 内存真源为本实例私有字段，不进入 SettingsState——
+ * `v2.settings` 的持久化数据中不含主题，不存在旧数据兼容/迁移需求。
  */
 export class ThemeSettings {
-  /** 全局主题持久化 key：刻意不携带 uid，登出/切号不丢失。 */
-  private static readonly GLOBAL_THEME_KEY: string = 'nga_theme'
   private ctx: SettingsContext
   private store?: PreferencesStore
   private writeQueue?: SerialQueue
-  /** 主题内存真源（全局设置，与 uid 无关）。 */
+  /** 主题内存真源（设备级设置，与 uid 无关）。 */
   private theme: string = 'light'
 
   constructor(ctx: SettingsContext) {
@@ -46,8 +56,9 @@ export class ThemeSettings {
 
   /** 从全局存储加载主题（冷启动 / 登出恢复的统一入口）。 */
   async loadGlobal(): Promise<void> {
-    if (!this.store) return
-    const saved = await this.store.getJSON<ThemePersist>(ThemeSettings.GLOBAL_THEME_KEY)
+    const key: string = themeKey()
+    if (!this.store || key.length === 0) return
+    const saved = await this.store.getJSON<ThemePersist>(key)
     if (saved && this.isValidTheme(saved.theme)) {
       this.theme = saved.theme
     }
@@ -125,15 +136,16 @@ export class ThemeSettings {
     }
   }
 
-  /** 持久化主题到全局 key（与账号无关；未登录用户同样生效）。 */
+  /** 持久化主题到设备级域键（`v2.theme`；未登录用户同样生效）。 */
   private persistGlobal(): void {
     const store = this.store
     const queue = this.writeQueue
-    if (!store || !queue) return
+    const key: string = themeKey()
+    if (!store || !queue || key.length === 0) return
     const snapshot: ThemePersist = new ThemePersist()
     snapshot.theme = this.theme
     queue.enqueue(async (): Promise<void> => {
-      await store.putJSON(ThemeSettings.GLOBAL_THEME_KEY, snapshot, false)
+      await store.putJSON(key, snapshot, false)
       store.scheduleFlush()
     })
   }

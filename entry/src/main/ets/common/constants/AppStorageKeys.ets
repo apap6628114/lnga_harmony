@@ -146,3 +146,18 @@ export const KEY_COLUMN_BOARD_RATIO_LG: string = 'columnBoardRatioLg'
  * `@StorageProp` 才能可靠地跟随状态变化。
  */
 export const KEY_CREDENTIAL_DEGRADED: string = 'credentialDegraded'
+
+/**
+ * 本地数据迁移状态（`MigrationStatus` 字符串值；纯内存发布）。
+ *
+ * 真实源是 `v2.meta` 里的迁移报告；本键只用于让 MainPage 以 `@StorageProp` 感知
+ * 「本次启动是否发生了迁移 / 是否有失败」，从而决定是否弹出一次性提醒。
+ */
+export const KEY_MIGRATION_STATUS: string = 'migrationStatus'
+
+/**
+ * 数据治理 UI 刷新版本号（迁移完成 / 导入导出 / 撤销 / 清理后 +1）。
+ *
+ * 数据管理页与设置页入口徽标用它驱动刷新，避免各页面直接轮询存储层。
+ */
+export const KEY_DATA_MANAGEMENT_VERSION: string = 'dataManagementVersion'

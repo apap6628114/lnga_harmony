@@ -1,6 +1,8 @@
 import { PreferencesStore } from '../common/infra/PreferencesStore'
 import { SerialQueue } from '../common/infra/SerialQueue'
 import { BaseStore } from './BaseStore'
+import { DomainIds, PersistenceCatalog } from '../common/persistence/PersistenceCatalog'
+import { DomainSpec } from '../common/persistence/PersistenceTypes'
 
 const TAG = 'VoteStore'
 
@@ -13,18 +15,42 @@ class VoteRecord {
 const VOTE_MAX_ENTRIES: number = 200
 
 /**
- * 帖子投票记录持久化管理
+ * 返回点赞/踩记录域的 Preferences 键（统一命名空间 `v2.votes`，与账号无关）。
  *
- * 两类记录（均按 uid 隔离）：
- * - 点赞/踩：votes_<uid> → { tid: { upPids, downPids, ts } }
- * - 投票帖已投：pollVoted_<uid> → { tid: 时间戳 }（提交成功后标记，重进页面恢复"已投"状态）
+ * @returns 键名；域未登记时为空串
+ */
+function votesDomainKey(): string {
+  const spec: DomainSpec | null = PersistenceCatalog.byId(DomainIds.VOTES)
+  return spec === null ? '' : spec.fullKey()
+}
+
+/**
+ * 返回投票已投记录域的 Preferences 键（统一命名空间 `v2.poll_voted`，与账号无关）。
+ *
+ * @returns 键名；域未登记时为空串
+ */
+function pollVotedDomainKey(): string {
+  const spec: DomainSpec | null = PersistenceCatalog.byId(DomainIds.POLL_VOTED)
+  return spec === null ? '' : spec.fullKey()
+}
+
+/**
+ * 帖子投票记录持久化管理（设备级数据，不再按账号物理隔离）
+ *
+ * 两类记录：
+ * - 点赞/踩：`v2.votes` → { tid: { upPids, downPids, ts } }
+ * - 投票帖已投：`v2.poll_voted` → { tid: 时间戳 }（提交成功后标记，重进页面恢复"已投"状态）
+ *
+ * public 方法上的 `uid` 参数仅为兼容既有调用点保留，函数体内不再使用。
  */
 export class VoteStore extends BaseStore<Object> {
   override state: Object = new Object()
   private voteCache: Record<string, VoteRecord> = {}
-  private voteLoadedUid: string = ''
+  /** 点赞记录是否已从持久化加载（设备级：只加载一次）。 */
+  private voteLoaded: boolean = false
   private pollCache: Record<string, number> = {}
-  private pollLoadedUid: string = ''
+  /** 投票已投记录是否已从持久化加载（设备级：只加载一次）。 */
+  private pollLoaded: boolean = false
 
   init(store: PreferencesStore, queue: SerialQueue): void {
     this.setDeps(store, queue)
@@ -33,34 +59,37 @@ export class VoteStore extends BaseStore<Object> {
   /** 重置缓存（登出时调用） */
   reset(): void {
     this.voteCache = {}
-    this.voteLoadedUid = ''
+    this.voteLoaded = false
     this.pollCache = {}
-    this.pollLoadedUid = ''
+    this.pollLoaded = false
     super.reset()
   }
 
-  private voteKey(uid: string): string {
-    return `votes_${uid}`
-  }
-
-  private pollKey(uid: string): string {
-    return `pollVoted_${uid}`
+  /**
+   * 懒加载点赞记录（设备级：只加载一次，不再因 uid 变化重载）。
+   *
+   * @returns 加载是否可用（代际已失效时返回 false）
+   */
+  private async ensureVoteLoaded(): Promise<boolean> {
+    if (this.voteLoaded) {
+      return true
+    }
+    const gen: number = this.generationGuard.current()
+    const key: string = votesDomainKey()
+    const saved: Record<string, VoteRecord> | null =
+      key.length === 0 ? null : await this.store.getJSON<Record<string, VoteRecord>>(key)
+    // 加载期间已登出（reset 推进代际）：放弃本次，避免把过时数据写回内存
+    if (!this.generationGuard.isCurrent(gen)) {
+      return false
+    }
+    this.voteCache = saved ?? {}
+    this.voteLoaded = true
+    return true
   }
 
   async loadVoteRecord(uid: string, tid: string): Promise<Set<string>[]> {
-    if (uid.length === 0) {
+    if (!(await this.ensureVoteLoaded())) {
       return [new Set<string>(), new Set<string>()]
-    }
-    if (this.voteLoadedUid !== uid) {
-      const gen: number = this.generationGuard.current()
-      const saved = await this.store.getJSON<Record<string, VoteRecord>>(this.voteKey(uid))
-      // 加载期间已登出（reset 推进代际）或已有其他账号的数据回写：放弃本次，避免跨账号污染
-      if (!this.generationGuard.isCurrent(gen) ||
-        (this.voteLoadedUid !== '' && this.voteLoadedUid !== uid)) {
-        return [new Set<string>(), new Set<string>()]
-      }
-      this.voteCache = saved ?? {}
-      this.voteLoadedUid = uid
     }
     const upSet = new Set<string>()
     const downSet = new Set<string>()
@@ -77,17 +106,9 @@ export class VoteStore extends BaseStore<Object> {
   }
 
   async saveVoteRecord(uid: string, tid: string, upPids: Set<string>, downPids: Set<string>): Promise<void> {
-    if (uid.length === 0 || tid.length === 0) return
-    if (this.voteLoadedUid !== uid) {
-      const gen: number = this.generationGuard.current()
-      const saved = await this.store.getJSON<Record<string, VoteRecord>>(this.voteKey(uid))
-      // 加载期间已登出（reset 推进代际）或已有其他账号的数据回写：放弃本次，避免跨账号污染
-      if (!this.generationGuard.isCurrent(gen) ||
-        (this.voteLoadedUid !== '' && this.voteLoadedUid !== uid)) {
-        return
-      }
-      this.voteCache = saved ?? {}
-      this.voteLoadedUid = uid
+    if (tid.length === 0) return
+    if (!(await this.ensureVoteLoaded())) {
+      return
     }
     const record = new VoteRecord()
     const upArr: string[] = []
@@ -99,25 +120,12 @@ export class VoteStore extends BaseStore<Object> {
     record.ts = Date.now()
     this.voteCache[tid] = record
     this.evictVotesIfNeeded()
-    this.writeQueue.enqueue(async (): Promise<void> => {
-      if (!this.uidGuard()) return
-      await this.store.putJSON(this.voteKey(uid), this.voteCache, false)
-      this.store.scheduleFlush()
-    })
+    this.persistVotes()
   }
 
   async removeVoteRecord(uid: string, tid: string): Promise<void> {
-    if (uid.length === 0) return
-    if (this.voteLoadedUid !== uid) {
-      const gen: number = this.generationGuard.current()
-      const saved = await this.store.getJSON<Record<string, VoteRecord>>(this.voteKey(uid))
-      // 加载期间已登出（reset 推进代际）或已有其他账号的数据回写：放弃本次，避免跨账号污染
-      if (!this.generationGuard.isCurrent(gen) ||
-        (this.voteLoadedUid !== '' && this.voteLoadedUid !== uid)) {
-        return
-      }
-      this.voteCache = saved ?? {}
-      this.voteLoadedUid = uid
+    if (!(await this.ensureVoteLoaded())) {
+      return
     }
     const newCache: Record<string, VoteRecord> = {}
     const cacheKeys = Object.keys(this.voteCache)
@@ -127,21 +135,40 @@ export class VoteStore extends BaseStore<Object> {
       }
     }
     this.voteCache = newCache
-    this.writeQueue.enqueue(async (): Promise<void> => {
-      if (!this.uidGuard()) return
-      await this.store.putJSON(this.voteKey(uid), this.voteCache, false)
-      this.store.scheduleFlush()
-    })
+    this.persistVotes()
   }
 
   async clearVoteRecords(uid: string): Promise<void> {
     this.voteCache = {}
-    this.voteLoadedUid = uid
+    this.voteLoaded = true
+    this.persistVotes()
+  }
+
+  /** 把点赞记录快照写入设备级域键。 */
+  private persistVotes(): void {
+    const key: string = votesDomainKey()
+    if (key.length === 0) {
+      return
+    }
+    const snapshot: Record<string, VoteRecord> = this.copyVoteCache()
     this.writeQueue.enqueue(async (): Promise<void> => {
-      if (!this.uidGuard()) return
-      await this.store.putJSON(this.voteKey(uid), this.voteCache, false)
+      await this.store.putJSON(key, snapshot, false)
       this.store.scheduleFlush()
     })
+  }
+
+  /**
+   * 复制点赞缓存的浅快照（入队前捕获，避免执行时读到"未来态"）。
+   *
+   * @returns 缓存副本
+   */
+  private copyVoteCache(): Record<string, VoteRecord> {
+    const snapshot: Record<string, VoteRecord> = {}
+    const keys: string[] = Object.keys(this.voteCache)
+    for (let i: number = 0; i < keys.length; i++) {
+      snapshot[keys[i]] = this.voteCache[keys[i]]
+    }
+    return snapshot
   }
 
   private evictVotesIfNeeded(): void {
@@ -171,65 +198,72 @@ export class VoteStore extends BaseStore<Object> {
     this.voteCache = newCache
   }
 
-  private pollLoaded(uid: string): Promise<void> {
+  /**
+   * 懒加载投票已投记录（设备级：只加载一次）。
+   *
+   * @returns 加载是否可用（代际已失效时返回 false）
+   */
+  private async ensurePollLoaded(): Promise<boolean> {
+    if (this.pollLoaded) {
+      return true
+    }
     const gen: number = this.generationGuard.current()
-    return this.store.getJSON<Record<string, number>>(this.pollKey(uid)).then((saved: Record<string, number> | null) => {
-      // 加载期间已登出（reset 推进代际）或已有其他账号的数据回写：放弃本次，避免跨账号污染
-      if (!this.generationGuard.isCurrent(gen) ||
-        (this.pollLoadedUid !== '' && this.pollLoadedUid !== uid)) {
-        return
-      }
-      this.pollCache = saved ?? {}
-      this.pollLoadedUid = uid
-    })
+    const key: string = pollVotedDomainKey()
+    const saved: Record<string, number> | null =
+      key.length === 0 ? null : await this.store.getJSON<Record<string, number>>(key)
+    // 加载期间已登出（reset 推进代际）：放弃本次，避免把过时数据写回内存
+    if (!this.generationGuard.isCurrent(gen)) {
+      return false
+    }
+    this.pollCache = saved ?? {}
+    this.pollLoaded = true
+    return true
   }
 
   /**
-   * 读取当前用户已投过票的帖子 tid 列表。
+   * 读取已投过票的帖子 tid 列表。
    *
-   * @param uid 用户 ID
+   * @param uid **仅为兼容既有调用点保留**（设备级数据）
    * @returns 已投帖子 tid 字符串列表
    */
   async loadPollVoted(uid: string): Promise<string[]> {
-    if (uid.length === 0) {
+    if (!(await this.ensurePollLoaded())) {
       return []
-    }
-    if (this.pollLoadedUid !== uid) {
-      await this.pollLoaded(uid)
     }
     return Object.keys(this.pollCache)
   }
 
   /**
-   * 记录当前用户对某投票帖已投票（幂等）。
+   * 记录对某投票帖已投票（幂等）。
    *
-   * @param uid 用户 ID
+   * @param uid **仅为兼容既有调用点保留**（设备级数据）
    * @param tid 帖子 ID
    */
   async markPollVoted(uid: string, tid: string): Promise<void> {
-    if (uid.length === 0 || tid.length === 0) {
+    if (tid.length === 0) {
       return
     }
-    if (this.pollLoadedUid !== uid) {
-      await this.pollLoaded(uid)
+    if (!(await this.ensurePollLoaded())) {
+      return
     }
     if (this.pollCache[tid] !== undefined) {
       return
     }
     this.pollCache[tid] = Date.now()
     this.evictPollsIfNeeded()
-    // 写闭包捕获当前缓存快照：执行时若 cache 已因登出/换号被替换，仍写回发起时的数据，
-    // 避免把其他账号的缓存或空缓存写入旧 uid 的 key
+    // 写闭包捕获当前缓存快照：执行时若 cache 已因登出被替换，仍写回发起时的数据，
+    // 避免把空缓存写入域键
     const snapshot: Record<string, number> = {}
     const cacheKeys: string[] = Object.keys(this.pollCache)
     for (let i: number = 0; i < cacheKeys.length; i++) {
       snapshot[cacheKeys[i]] = this.pollCache[cacheKeys[i]]
     }
+    const key: string = pollVotedDomainKey()
+    if (key.length === 0) {
+      return
+    }
     this.writeQueue.enqueue(async (): Promise<void> => {
-      if (!this.uidGuard()) {
-        return
-      }
-      await this.store.putJSON(this.pollKey(uid), snapshot, false)
+      await this.store.putJSON(key, snapshot, false)
       this.store.scheduleFlush()
     })
   }

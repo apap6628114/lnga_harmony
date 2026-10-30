@@ -193,7 +193,8 @@ export default function historyReadLedgerUnitTest(): void {
       badReplies.subject = '回复数非法'
       badReplies.replies = Number.NaN
       corrupted.push(badReplies)
-      await preferences.putJSON(`history_${TEST_UID}`, corrupted, false)
+      // 取消账号隔离后浏览历史使用统一命名空间键（v2.history），不再是 history_<uid>
+      await preferences.putJSON('v2.history', corrupted, false)
 
       const store: HistoryStore = new HistoryStore()
       store.init(preferences, queue)

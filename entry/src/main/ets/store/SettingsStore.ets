@@ -20,6 +20,8 @@ import type { AiProviderProfile } from '../model/AiConfig'
 import type { AiSearchProfile } from '../model/AiSearchConfig'
 import type { AiToolSettings } from '../model/AiToolConfig'
 import type { AiAgentPreset } from '../model/AiAgentPreset'
+import { DomainIds, PersistenceCatalog } from '../common/persistence/PersistenceCatalog'
+import { DomainSpec } from '../common/persistence/PersistenceTypes'
 import {
   KEY_SHOW_SIGNATURE,
   KEY_IMAGE_LOAD_STRATEGY,
@@ -34,6 +36,17 @@ import {
   KEY_COLUMN_SIDEBAR_LG,
   KEY_COLUMN_BOARD_RATIO_LG,
 } from '../common/constants/AppStorageKeys'
+
+
+/**
+ * 返回设置域的 Preferences 键（统一命名空间 `v2.settings`，与账号无关）。
+ *
+ * @returns 键名；域未登记时为空串
+ */
+function settingsDomainKey(): string {
+  const spec: DomainSpec | null = PersistenceCatalog.byId(DomainIds.SETTINGS)
+  return spec === null ? '' : spec.fullKey()
+}
 
 
 /**
@@ -72,9 +85,9 @@ export class SettingsStore extends BaseStore<SettingsState> {
   }
 
   /**
-   * 初始化主题（全局设置，无条件执行，与账号无关）。
+   * 初始化主题（设备级设置，无条件执行，与账号无关）。
    *
-   * 主题持久化在全局 key（nga_theme）而非 settings_${uid}：未登录用户同样
+   * 主题持久化在设备级域键（`v2.theme`）而非 `v2.settings`：未登录用户同样
    * 可保存主题并跨冷启动生效。须在 AppStore 初始化阶段、applyCurrentTheme
    * 之前调用（设计记录见 docs/THEME_DESIGN.md）。
    */
@@ -89,9 +102,7 @@ export class SettingsStore extends BaseStore<SettingsState> {
     this.context = ctx
     this.ctx.auth = auth
     this.ctx.context = ctx
-    if (auth.uid) {
-      await this.loadUserSettings()
-    }
+    await this.loadUserSettings()
   }
 
   /** 重置为用户默认设置（切换/登出时调用） */
@@ -118,22 +129,26 @@ export class SettingsStore extends BaseStore<SettingsState> {
   // ============== Persist ==============
 
   private settingsKey(): string {
-    return `settings_${this.auth.uid}`
+    return settingsDomainKey()
   }
 
   persistSettings(): void {
-    if (!this.auth.uid) return
+    const key: string = this.settingsKey()
+    if (key.length === 0) {
+      return
+    }
     this.writeQueue.enqueue(async (): Promise<void> => {
-      await this.store.putJSON(this.settingsKey(), this.state, false)
+      await this.store.putJSON(key, this.state, false)
       this.store.scheduleFlush()
     })
   }
 
   private async loadUserSettings(): Promise<void> {
-    if (!this.auth.uid) return
-    const saved = await this.store.getJSON<SettingsState>(this.settingsKey())
+    const key: string = this.settingsKey()
+    const saved: SettingsState | null =
+      key.length === 0 ? null : await this.store.getJSON<SettingsState>(key)
     if (saved) {
-      // 主题已全局化（nga_theme key），不随用户设置持久化，此处不再读取
+      // 主题已设备级化（v2.theme key），不随用户设置持久化，此处不再读取
       this.displaySettings.load(saved)
       this.mediaSettings.load(saved)
       this.readingSettings.load(saved)
@@ -171,7 +186,7 @@ export class SettingsStore extends BaseStore<SettingsState> {
    * `loadUserSettings` 都要**无条件**重写一遍，避免下一个账号继承上一个账号的布局。
    *
    * 「列占比模式」开关一并在此归零：它是**纯内存态**的临时调整模式，不随账号、
-   * 也不跨会话保留 —— 重新登录后从头开始（此时占比本身照常从 `settings_${uid}` 恢复）。
+   * 也不跨会话保留 —— 重新登录后从头开始（此时占比本身照常从 `v2.settings` 恢复）。
    */
   private syncColumnLayoutStorage(): void {
     AppStorage.setOrCreate(KEY_COLUMN_RATIO_MODE, false)

@@ -7,7 +7,8 @@
  * 本模块把草稿落成结构化文件，为懒重传（见 `DRAFT_MEDIA_PLAN.md` 阶段 3）提供对应物。
  *
  * ## 落盘形态
- * `filesDir/drafts/<草稿键>.json`，内容为 {@link EditorDraft} 的 JSON 序列化。
+ * `filesDir/v2/drafts/<草稿键>.json`（目录由 `PersistenceCatalog` 的 `drafts` 域给出），
+ * 内容为 {@link EditorDraft} 的 JSON 序列化。
  * 采用 `SavedThreadStore` 已验证的「临时文件 + 重命名」原子替换：写失败不会截断旧草稿。
  *
  * ## 为什么不用 PersistentStorage
@@ -22,6 +23,9 @@
  * 无关——模式开关不改变草稿归属，若把模式并进键，一次编辑会话会在两个键之间漂移，
  * 而媒体副本目录是绑在键上的（见 `DRAFT_MEDIA_PLAN.md` §9.1）。
  *
+ * （统一持久化治理后目录迁到 `filesDir/v2/drafts`，键规则暂不变——既有磁盘文件名由
+ * 迁移器搬运，本次改造只换目录。）
+ *
  * ## 读写都是同步的
  * 草稿体积小（正文 + 媒体清单，KB 级），且在编辑器构建期（`aboutToAppear`）与关闭期
  * 各读写一次，同步 IO 的量级可忽略；换来的是调用方无需把 `loadDraft` 改成异步。
@@ -32,11 +36,21 @@
 import { fileIo } from '@kit.CoreFileKit'
 import { Context } from '@kit.AbilityKit'
 import { Logger, DOMAIN_STORE, formatError } from '../utils/Logger'
+import { DomainIds, PersistenceCatalog } from '../persistence/PersistenceCatalog'
+import { DomainSpec } from '../persistence/PersistenceTypes'
 
 const logger = new Logger(DOMAIN_STORE, 'DraftStore')
 
-/** 草稿目录名（位于应用 `filesDir` 下，持久区，系统不回收）。 */
-export const DRAFT_DIR_NAME: string = 'drafts'
+/**
+ * 返回草稿域的目录绝对路径（统一命名空间 `filesDir/v2/drafts`，取自域注册表）。
+ *
+ * @param filesDir - 应用沙箱持久目录（`Context.filesDir`）
+ * @returns 目录绝对路径；域未登记时为空串
+ */
+function draftDomainDir(filesDir: string): string {
+  const spec: DomainSpec | null = PersistenceCatalog.byId(DomainIds.DRAFTS)
+  return spec === null ? '' : spec.dirPath(filesDir)
+}
 
 /**
  * 草稿 JSON 的保留期（天）。**这是 `maxAgeDays` 的唯一语义**。
@@ -228,7 +242,11 @@ export class DraftStore {
    */
   async init(context: Context): Promise<void> {
     this.context = context
-    this.dirPath = context.filesDir + '/' + DRAFT_DIR_NAME
+    this.dirPath = draftDomainDir(context.filesDir)
+    if (this.dirPath.length === 0) {
+      logger.error('init failed: draft domain not registered')
+      return
+    }
     try {
       if (!fileIo.accessSync(this.dirPath)) {
         fileIo.mkdirSync(this.dirPath, true)
@@ -614,7 +632,7 @@ export class DraftStore {
     this.items = new Map<string, EditorDraft>()
     this.endAllSessions()
     this.cleanupCursor = ''
-    if (this.context === null) {
+    if (this.context === null || this.dirPath.length === 0) {
       return
     }
     try {

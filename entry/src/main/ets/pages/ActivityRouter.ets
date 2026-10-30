@@ -18,6 +18,7 @@ import { AiSettingsPanel } from './ai/AiSettingsPanel'
 import { FontSizeSettingsPanel } from './FontSizeSettingsPanel'
 import { FavoriteFoldersPanel } from './FavoriteFoldersPanel'
 import { FavoriteSavedPanel } from './FavoriteSavedPanel'
+import { DataManagementPanel } from './DataManagementPanel'
 import { TtsPlayer } from '../common/media/TtsPlayer'
 
 @Component
@@ -103,6 +104,8 @@ export struct ActivityRouter {
             FavoriteFoldersPanel({ topicId: entry.screen.favoriteTopicId })
           } else if (entry.screen.type === 'favoriteSaved') {
             FavoriteSavedPanel()
+          } else if (entry.screen.type === 'dataManagement') {
+            DataManagementPanel()
           } else if (entry.screen.type === 'profile') {
             ProfilePanel({ uid: entry.screen.uid })
           } else if (entry.screen.type === 'ttsSettings') {

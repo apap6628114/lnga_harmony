@@ -459,14 +459,26 @@ struct LoginPage {
 
       this.importing = true
 
-      const file = fileIo.openSync(uris[0], fileIo.OpenMode.READ_ONLY)
+      /*
+       * 文件体积上限：凭证文件正常 < 10KB。外部文件不可信，超大文件直接拒绝，
+       * 避免 stat.size 驱动的 ArrayBuffer 分配打爆内存（EXPORT_IMPORT_RESEARCH.md 安全清单）。
+       */
       const stat = fileIo.statSync(uris[0])
-      const buffer = new ArrayBuffer(stat.size)
-      const readLen = fileIo.readSync(file.fd, buffer)
-      fileIo.closeSync(file)
+      if (stat.size <= 0 || stat.size > 4 * 1024 * 1024) {
+        this.error = '凭证文件大小异常'
+        return
+      }
 
-      const textDecoder = util.TextDecoder.create('utf-8')
-      const content = textDecoder.decodeToString(new Uint8Array(buffer, 0, readLen))
+      const file = fileIo.openSync(uris[0], fileIo.OpenMode.READ_ONLY)
+      let content = ''
+      try {
+        const buffer = new ArrayBuffer(stat.size)
+        const readLen = fileIo.readSync(file.fd, buffer)
+        const textDecoder = util.TextDecoder.create('utf-8')
+        content = textDecoder.decodeToString(new Uint8Array(buffer, 0, readLen))
+      } finally {
+        fileIo.closeSync(file)
+      }
 
       if (!isEncryptedCredentialExport(content)) {
         this.error = '文件格式无效，请导入 .ngacred 加密凭证文件'

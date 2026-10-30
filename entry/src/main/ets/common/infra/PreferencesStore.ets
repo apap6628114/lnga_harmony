@@ -73,6 +73,61 @@ export class PreferencesStore {
     }
   }
 
+  /**
+   * 删除一个键（持久化数据统一治理的迁移/清理路径使用）。
+   *
+   * @param key - 键名
+   * @param flush - 是否立即刷盘（默认 true）
+   * @returns 是否实际删除（键不存在时返回 false）
+   */
+  async deleteKey(key: string, flush: boolean = true): Promise<boolean> {
+    if (!this.pref) return false
+    try {
+      if (!(await this.pref.has(key))) {
+        return false
+      }
+      await this.pref.delete(key)
+      if (flush) {
+        await this.pref.flush()
+      }
+      return true
+    } catch (e) {
+      logger.error( 'deleteKey failed: %{public}s', key)
+      return false
+    }
+  }
+
+  /**
+   * 判断键是否存在。
+   *
+   * @param key - 键名
+   * @returns 是否存在
+   */
+  async hasKey(key: string): Promise<boolean> {
+    if (!this.pref) return false
+    try {
+      return await this.pref.has(key)
+    } catch (e) {
+      return false
+    }
+  }
+
+  /**
+   * 返回全部键值快照（迁移检测与数据管理页统计使用）。
+   *
+   * @returns 键 → 原始值（本项目全部以 string 落盘，值类型按 Object 返回以兼容旧数据）
+   */
+  async getAll(): Promise<Record<string, Object>> {
+    if (!this.pref) return {}
+    try {
+      const all: Object = await this.pref.getAll()
+      return all as Record<string, Object>
+    } catch (e) {
+      logger.error( 'getAll failed')
+      return {}
+    }
+  }
+
   scheduleFlush(delay: number = 500): void {
     clearTimeout(this.flushTimer)
     this.flushTimer = setTimeout(async (): Promise<void> => {

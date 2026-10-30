@@ -23,6 +23,8 @@ import { ApiResult, FavoriteFolderListResult, TopicFavoriteResult } from '../mod
 import type { AuthState } from './AuthStore'
 import { Logger, DOMAIN_STORE, formatError } from '../common/utils/Logger'
 import { AuthScope } from './AuthScope'
+import { DomainIds, PersistenceCatalog } from '../common/persistence/PersistenceCatalog'
+import { DomainEnvelope, DomainSpec } from '../common/persistence/PersistenceTypes'
 
 /**
  * 收藏系统日志实例。
@@ -30,27 +32,11 @@ import { AuthScope } from './AuthScope'
 const logger: Logger = new Logger(DOMAIN_STORE, 'FavoriteStore')
 
 /**
- * 收藏关系缓存结构版本。
+ * 收藏关系缓存的域内载荷（与迁移器产出的新载荷同形）。
+ *
+ * 落盘时由统一域信封包裹：`{ schemaVersion, domain, updatedAt, ownerUid, payload }`。
  */
-const FAVORITE_MEMBERSHIP_CACHE_SCHEMA_VERSION: number = 1
-
-/**
- * 收藏关系缓存键前缀。
- */
-const FAVORITE_MEMBERSHIP_CACHE_KEY_PREFIX: string = 'favorite_topic_membership_v1_'
-
-/**
- * 账号级收藏关系提示缓存。
- */
-class FavoriteMembershipCacheEnvelope {
-  /**
-   * 缓存结构版本。
-   */
-  schemaVersion: number = FAVORITE_MEMBERSHIP_CACHE_SCHEMA_VERSION
-  /**
-   * 缓存所属 NGA 用户 ID。
-   */
-  uid: string = ''
+class FavoriteMembershipPayload {
   /**
    * 每个主题已确认收藏的收藏夹 ID。
    */
@@ -59,6 +45,80 @@ class FavoriteMembershipCacheEnvelope {
    * 每个主题已确认状态的收藏夹 ID。
    */
   knownFolderIds: Record<string, string[]> = {}
+}
+
+/**
+ * 把任意值归一化为 `主题 ID → 收藏夹 ID 数组` 的映射。
+ *
+ * @param value - 待归一化值
+ * @returns 归一化后的映射（非法输入返回空映射）
+ */
+function normalizeIdListRecord(value: Object | undefined): Record<string, string[]> {
+  const result: Record<string, string[]> = {}
+  if (value === undefined || value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return result
+  }
+  const record: Record<string, Object> = value as Record<string, Object>
+  const keys: string[] = Object.keys(record)
+  for (let i: number = 0; i < keys.length; i++) {
+    const raw: Object | undefined = record[keys[i]]
+    if (!Array.isArray(raw)) {
+      continue
+    }
+    const items: Object[] = raw as Object[]
+    const list: string[] = []
+    for (let j: number = 0; j < items.length; j++) {
+      const element: Object = items[j]
+      if (element === null || element === undefined) {
+        continue
+      }
+      const id: string = String(element)
+      if (id.length > 0) {
+        list.push(id)
+      }
+    }
+    result[keys[i]] = list
+  }
+  return result
+}
+
+/**
+ * 从落盘对象解析收藏关系载荷（兼容新信封 / 迁移后的裸载荷）。
+ *
+ * @param saved - 落盘对象
+ * @param uid - 当前账号（账号镜像域归属校验）
+ * @returns 载荷；结构非法或归属不符返回 null
+ */
+function parseMembershipPayload(saved: Object, uid: string): FavoriteMembershipPayload | null {
+  if (saved === null || saved === undefined || typeof saved !== 'object' || Array.isArray(saved)) {
+    return null
+  }
+  const record: Record<string, Object> = saved as Record<string, Object>
+  const payloadObject: Object | undefined = record['payload']
+  const payload: FavoriteMembershipPayload = new FavoriteMembershipPayload()
+  if (payloadObject !== undefined && payloadObject !== null && typeof payloadObject === 'object' &&
+    !Array.isArray(payloadObject)) {
+    // ---- 新信封 ----
+    const domain: string = String(record['domain'] ?? '')
+    if (domain.length > 0 && domain !== DomainIds.FAVORITE_MEMBERSHIP) {
+      return null
+    }
+    const ownerUid: string = String(record['ownerUid'] ?? '')
+    if (ownerUid.length > 0 && ownerUid !== uid) {
+      return null
+    }
+    const inner: Record<string, Object> = payloadObject as Record<string, Object>
+    payload.favoredFolderIds = normalizeIdListRecord(inner['favoredFolderIds'])
+    payload.knownFolderIds = normalizeIdListRecord(inner['knownFolderIds'])
+    return payload
+  }
+  // ---- 兼容：迁移器搬运的裸载荷 {favoredFolderIds, knownFolderIds} ----
+  payload.favoredFolderIds = normalizeIdListRecord(record['favoredFolderIds'])
+  payload.knownFolderIds = normalizeIdListRecord(record['knownFolderIds'])
+  if (Object.keys(payload.favoredFolderIds).length === 0 && Object.keys(payload.knownFolderIds).length === 0) {
+    return null
+  }
+  return payload
 }
 
 /**
@@ -867,30 +927,45 @@ export class FavoriteStore extends BaseStore<Object> {
   }
 
   /**
-   * 构建当前账号收藏关系缓存键。
+   * 返回收藏关系缓存所属域元数据。
    *
-   * @param uid - NGA 用户 ID
-   * @returns 偏好存储键
+   * @returns 域元数据；未登记返回 null
    */
-  private membershipCacheKey(uid: string): string {
-    return `${FAVORITE_MEMBERSHIP_CACHE_KEY_PREFIX}${uid}`
+  private membershipSpec(): DomainSpec | null {
+    return PersistenceCatalog.byId(DomainIds.FAVORITE_MEMBERSHIP)
   }
 
   /**
-   * 加载当前账号的收藏关系提示缓存。
+   * 构建收藏关系缓存键（统一命名空间 `v2.favorite_membership`，不再拼 uid）。
    *
-   * @param uid - NGA 用户 ID
+   * @returns 偏好存储键；域未登记时为空串
+   */
+  private membershipCacheKey(): string {
+    const spec: DomainSpec | null = this.membershipSpec()
+    return spec === null ? '' : spec.fullKey()
+  }
+
+  /**
+   * 加载当前账号的收藏关系提示缓存（账号镜像域：信封 ownerUid 与当前账号不符即忽略）。
+   *
+   * @param uid - NGA 用户 ID（账号镜像归属校验用）
    */
   private async loadMembershipCache(uid: string): Promise<void> {
-    const scope: AuthScope = AuthScope.capture(this.auth, this.generationGuard.current())
-    const saved: FavoriteMembershipCacheEnvelope | null =
-      await this.store.getJSON<FavoriteMembershipCacheEnvelope>(this.membershipCacheKey(uid))
-    if (!scope.isCurrent(this.auth, this.generationGuard.current()) || saved === null ||
-      saved.schemaVersion !== FAVORITE_MEMBERSHIP_CACHE_SCHEMA_VERSION || saved.uid !== uid) {
+    const key: string = this.membershipCacheKey()
+    if (key.length === 0) {
       return
     }
-    const knownRecord: Record<string, string[]> = saved.knownFolderIds ?? {}
-    const favoredRecord: Record<string, string[]> = saved.favoredFolderIds ?? {}
+    const scope: AuthScope = AuthScope.capture(this.auth, this.generationGuard.current())
+    const saved: Object | null = await this.store.getJSON<Object>(key)
+    if (!scope.isCurrent(this.auth, this.generationGuard.current()) || saved === null) {
+      return
+    }
+    const payload: FavoriteMembershipPayload | null = parseMembershipPayload(saved, uid)
+    if (payload === null) {
+      return
+    }
+    const knownRecord: Record<string, string[]> = payload.knownFolderIds
+    const favoredRecord: Record<string, string[]> = payload.favoredFolderIds
     const topicIds: string[] = Object.keys(knownRecord)
     for (let i = 0; i < topicIds.length; i++) {
       const knownIds: string[] = knownRecord[topicIds[i]] ?? []
@@ -907,16 +982,20 @@ export class FavoriteStore extends BaseStore<Object> {
   }
 
   /**
-   * 将当前账号收藏关系提示写入既有偏好存储队列。
+   * 将当前账号收藏关系提示写入统一域信封（账号镜像域）。
    */
   private persistMembershipCache(): void {
     if (!this.auth || !this.auth.isAuthenticated || this.auth.uid.length === 0) {
       return
     }
+    const key: string = this.membershipCacheKey()
+    const spec: DomainSpec | null = this.membershipSpec()
+    if (key.length === 0 || spec === null) {
+      return
+    }
     const uid: string = this.auth.uid
     const scope: AuthScope = AuthScope.capture(this.auth, this.generationGuard.current())
-    const envelope: FavoriteMembershipCacheEnvelope = new FavoriteMembershipCacheEnvelope()
-    envelope.uid = uid
+    const payload: FavoriteMembershipPayload = new FavoriteMembershipPayload()
     const topicIds: string[] = Array.from(this.topicFolderStates.keys())
     for (let i = 0; i < topicIds.length; i++) {
       const states: Map<string, boolean> | undefined = this.topicFolderStates.get(topicIds[i])
@@ -931,14 +1010,20 @@ export class FavoriteStore extends BaseStore<Object> {
           favoredIds.push(folderId)
         }
       })
-      envelope.knownFolderIds[topicIds[i]] = knownIds
-      envelope.favoredFolderIds[topicIds[i]] = favoredIds
+      payload.knownFolderIds[topicIds[i]] = knownIds
+      payload.favoredFolderIds[topicIds[i]] = favoredIds
     }
+    const envelope: DomainEnvelope = new DomainEnvelope()
+    envelope.schemaVersion = spec.schemaVersion
+    envelope.domain = DomainIds.FAVORITE_MEMBERSHIP
+    envelope.updatedAt = Date.now()
+    envelope.ownerUid = uid
+    envelope.payload = payload
     this.writeQueue.enqueue(async (): Promise<void> => {
       if (!scope.isCurrent(this.auth, this.generationGuard.current())) {
         return
       }
-      await this.store.putJSON(this.membershipCacheKey(uid), envelope, false)
+      await this.store.putJSON(key, envelope, false)
       this.store.scheduleFlush()
     })
   }

@@ -10,11 +10,23 @@ import type { ProfileData } from '../model/User'
 import type { AuthState } from './AuthStore'
 
 import { Logger, DOMAIN_STORE } from '../common/utils/Logger'
+import { DomainIds, PersistenceCatalog } from '../common/persistence/PersistenceCatalog'
+import { DomainSpec } from '../common/persistence/PersistenceTypes'
 
 const logger = new Logger(DOMAIN_STORE, 'ProfileStore')
 
 /**
- * 用户资料 LRU 缓存管理
+ * 返回用户资料缓存域的 Preferences 键（统一命名空间 `v2.profiles`）。
+ *
+ * @returns 键名；域未登记时为空串
+ */
+function profilesDomainKey(): string {
+  const spec: DomainSpec | null = PersistenceCatalog.byId(DomainIds.PROFILES)
+  return spec === null ? '' : spec.fullKey()
+}
+
+/**
+ * 用户资料 LRU 缓存管理（设备级：资料缓存与查看者账号无关，未登录也加载）
  */
 export class ProfileStore extends BaseStore<Object> {
   override state: Object = new Object()
@@ -24,9 +36,7 @@ export class ProfileStore extends BaseStore<Object> {
 
   async init(store: PreferencesStore, queue: SerialQueue, auth: AuthState): Promise<void> {
     this.setDeps(store, queue, auth)
-    if (auth.uid) {
-      await this.loadCachedProfiles()
-    }
+    await this.loadCachedProfiles()
   }
 
   /** 重置缓存（登出时调用） */
@@ -38,13 +48,12 @@ export class ProfileStore extends BaseStore<Object> {
 
   // ============== Cache ==============
 
-  private profilesKey(): string {
-    return `cached_profiles_v2_${this.auth.uid}`
-  }
-
   private async loadCachedProfiles(): Promise<void> {
-    if (!this.auth.uid) return
-    const saved = await this.store.getJSON<Record<string, ProfileData>>(this.profilesKey())
+    const key: string = profilesDomainKey()
+    if (key.length === 0) {
+      return
+    }
+    const saved = await this.store.getJSON<Record<string, ProfileData>>(key)
     if (saved) {
       const keys = Object.keys(saved)
       for (let i = 0; i < keys.length; i++) {
@@ -58,7 +67,10 @@ export class ProfileStore extends BaseStore<Object> {
   }
 
   private persistProfiles(): void {
-    if (!this.auth.uid) return
+    const key: string = profilesDomainKey()
+    if (key.length === 0) {
+      return
+    }
     const snapshot: Record<string, ProfileData> = {}
     const keys: string[] = this.cache.keys()
     for (let i = 0; i < keys.length; i++) {
@@ -68,7 +80,7 @@ export class ProfileStore extends BaseStore<Object> {
       }
     }
     this.writeQueue.enqueue(async (): Promise<void> => {
-      await this.store.putJSON(this.profilesKey(), snapshot, false)
+      await this.store.putJSON(key, snapshot, false)
       this.store.scheduleFlush()
     })
   }

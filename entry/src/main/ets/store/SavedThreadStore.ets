@@ -1,7 +1,8 @@
 /**
  * 保存帖子存储 - 文件系统持久化（不按账号区分）。
  *
- * 存档目录为应用沙箱 `filesDir/saved_threads`，每个帖子一个 `<tid>.json` 文件，
+ * 存档目录为应用沙箱 `filesDir/v2/saved_threads`（目录由 `PersistenceCatalog` 的
+ * `saved_threads` 域给出），每个帖子一个 `<tid>.json` 文件，
  * 内容为 SavedThread 的 JSON 序列化（含每页同形状原始 JSON）。内存缓存按保存
  * 时间（savedAt）降序维护，与查看页的排序口径一致。导入冲突按覆盖处理
  * （同 tid 直接覆盖）。
@@ -15,6 +16,8 @@ import { Context } from '@kit.AbilityKit'
 import { bumpAppStorageVersion } from '../common/utils/AppStorageVersion'
 import { KEY_SAVED_THREAD_VERSION } from '../common/constants/AppStorageKeys'
 import { Logger, DOMAIN_STORE, formatError } from '../common/utils/Logger'
+import { DomainIds, PersistenceCatalog } from '../common/persistence/PersistenceCatalog'
+import { DomainSpec } from '../common/persistence/PersistenceTypes'
 import {
   SavedThread,
   SavedThreadExportFile,
@@ -23,8 +26,16 @@ import {
 
 const logger = new Logger(DOMAIN_STORE, 'SavedThreadStore')
 
-/** 存档子目录名（相对 filesDir）。 */
-const SAVED_THREAD_DIR_NAME: string = 'saved_threads'
+/**
+ * 返回离线存档域的目录绝对路径（统一命名空间 `filesDir/v2/saved_threads`）。
+ *
+ * @param filesDir - 应用沙箱持久目录
+ * @returns 目录绝对路径；域未登记时为空串
+ */
+function savedThreadDomainDir(filesDir: string): string {
+  const spec: DomainSpec | null = PersistenceCatalog.byId(DomainIds.SAVED_THREADS)
+  return spec === null ? '' : spec.dirPath(filesDir)
+}
 
 /**
  * 校验 tid 是否可安全用于存档文件名。
@@ -66,10 +77,15 @@ export class SavedThreadStore {
 
   async init(context: Context): Promise<void> {
     this.context = context
-    this.dirPath = context.filesDir + '/' + SAVED_THREAD_DIR_NAME
+    this.dirPath = savedThreadDomainDir(context.filesDir)
+    if (this.dirPath.length === 0) {
+      logger.error('init failed: saved_threads domain not registered')
+      return
+    }
     try {
       if (!fileIo.accessSync(this.dirPath)) {
-        fileIo.mkdirSync(this.dirPath)
+        // 路径多了一层 `v2/` 命名空间目录：必须递归建（父目录可能不存在）
+        fileIo.mkdirSync(this.dirPath, true)
       }
     } catch (e) {
       logger.error('init mkdir failed: %{public}s', formatError(e))

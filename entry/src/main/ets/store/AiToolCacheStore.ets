@@ -7,15 +7,15 @@
  * 搜索结果全部消失。用户第二天打开同一个帖子追问，模型会**重新**读一遍同样的页面——
  * 既慢，又白白多一次论坛请求（还可能撞上风控）。
  *
- * 持久化后，同一账号在 TTL 内重进对话可以直接命中本地结果，模型拿到的内容不变，
+ * 持久化后，同一设备在 TTL 内重进对话可以直接命中本地结果，模型拿到的内容不变，
  * 但首字延迟和上游压力都降下来了。
  *
  * ## 边界
  *
  * - **只持久化成功且未过期的条目**：失败 / 空结果不落盘（同内存缓存语义）；
- * - **按账号隔离**：键 `ai_tool_cache_<uid>`，信封带 schemaVersion 与 uid 校验；
+ * - **设备级数据**：键 `v2.ai_tool_cache`（统一命名空间），不再按账号物理隔离；
+ *   缓存键本身仍含 uid 桶片段（`tool|uid|指纹|参数`），跨账号不会互相命中；
  * - **容量与体积双上限**：最多 80 条 / 约 1.2M 字符，超出按"最旧优先"丢弃；
- * - **未登录不落盘**：anon 桶只活在内存，避免把未归属的数据写到磁盘；
  * - **写盘节流**：每次工具执行后只标脏，800ms 合并写一次，不阻塞 Agent 循环。
  */
 
@@ -24,6 +24,7 @@ import { CacheEnvelopeStore } from '../common/infra/CacheEnvelopeStore'
 import { PreferencesStore } from '../common/infra/PreferencesStore'
 import { SerialQueue } from '../common/infra/SerialQueue'
 import { Logger, DOMAIN_STORE, formatError } from '../common/utils/Logger'
+import { DomainIds } from '../common/persistence/PersistenceCatalog'
 import { AiToolCard, AiToolResult, AiToolSource } from '../service/ai/tools/AiToolAdapter'
 import {
   ToolCacheSnapshot,
@@ -31,12 +32,6 @@ import {
 } from '../service/ai/tools/ToolResultCache'
 import { bindToolCacheAccount } from '../service/ai/tools/ToolRegistry'
 import type { AuthState } from './AuthStore'
-
-/** 缓存信封结构版本。 */
-const TOOL_CACHE_SCHEMA_VERSION: number = 1
-
-/** 缓存键前缀（最终键形如 `ai_tool_cache_<uid>`）。 */
-const TOOL_CACHE_KEY_PREFIX: string = 'ai_tool_cache'
 
 /** 最多持久化的条目数。 */
 const MAX_PERSISTED_ENTRIES: number = 80
@@ -56,11 +51,10 @@ export class AiToolCacheStore extends BaseStore<Object> {
   /** BaseStore 状态占位对象（缓存不走 @Observed 状态）。 */
   override state: Object = new Object()
 
-  /** 按账号隔离的信封工具。 */
+  /** 设备级域信封工具（键与版本取自域注册表）。 */
   private envelope: CacheEnvelopeStore<ToolCacheSnapshot> =
     new CacheEnvelopeStore<ToolCacheSnapshot>(
-      TOOL_CACHE_SCHEMA_VERSION,
-      TOOL_CACHE_KEY_PREFIX,
+      DomainIds.AI_TOOL_CACHE,
       (value: Object): boolean => isValidSnapshot(value)
     )
 
@@ -68,10 +62,10 @@ export class AiToolCacheStore extends BaseStore<Object> {
   private saveTimer: number = -1
 
   /**
-   * 注入依赖并恢复当前账号的缓存。
+   * 注入依赖并恢复本机缓存（设备级，未登录也恢复）。
    *
    * 先清空内存缓存再加载：`init` 会在账号切换 / 重新登录时再次调用，
-   * 不先清会让上一个账号的结果参与当前账号的命中。
+   * 不先清会让上一轮的残留参与当前命中。
    *
    * @param store - 偏好存储
    * @param queue - 串行写队列
@@ -85,23 +79,18 @@ export class AiToolCacheStore extends BaseStore<Object> {
     aiToolResultCache.setChangeListener((): void => {
       this.scheduleSave()
     })
-    const uid: string = auth.uid
-    if (!uid) {
-      bindToolCacheAccount('')
-      return
-    }
     const generation: number = this.generationGuard.current()
-    await this.load(uid)
+    await this.load()
     /*
-     * 加载期间账号可能已经切换 / 登出：把 A 的缓存 hydrate 后再 bind 成 B，
-     * 会让 B 命中 A 的帖子 / 资料。代际与 uid 任一不一致都整体丢弃。
+     * 加载期间 Store 可能已被 reset（登出/切号会推进代际）：不一致时整体丢弃，
+     * 避免把过时读取结果带进新一轮状态。
      */
-    if (!this.isCurrent(generation) || this.auth.uid !== uid) {
+    if (!this.isCurrent(generation)) {
       aiToolResultCache.invalidateAll()
       bindToolCacheAccount('')
       return
     }
-    bindToolCacheAccount(uid)
+    bindToolCacheAccount(auth.uid)
   }
 
   /**
@@ -126,23 +115,19 @@ export class AiToolCacheStore extends BaseStore<Object> {
   }
 
   /**
-   * 从磁盘恢复当前账号的缓存。
-   *
-   * @param uid - 当前账号
+   * 从磁盘恢复本机缓存（所有账号桶的条目；命中仍由带 uid 的缓存键决定）。
    */
-  private async load(uid: string): Promise<void> {
+  private async load(): Promise<void> {
     try {
-      const items: ToolCacheSnapshot[] | null = await this.envelope.loadTolerant(this.store, uid)
+      const items: ToolCacheSnapshot[] | null =
+        await this.envelope.loadTolerant(this.store, this.auth ? this.auth.uid : '')
       if (items === null || items.length === 0) {
         return
       }
       const normalized: ToolCacheSnapshot[] = []
-      const marker: string = '|' + uid + '|'
       for (let i: number = 0; i < items.length; i++) {
         const item: ToolCacheSnapshot = normalizeSnapshot(items[i])
-        /* 只恢复当前账号桶的键：防止历史错误写入的跨账号条目占内存 / 命中 */
-        if (item.key.indexOf(marker) >= 0 && item.key.length > 0 &&
-          item.result.content.length > 0 && item.result.success) {
+        if (item.key.length > 0 && item.result.content.length > 0 && item.result.success) {
           normalized.push(item)
         }
       }
@@ -175,24 +160,12 @@ export class AiToolCacheStore extends BaseStore<Object> {
   }
 
   /**
-   * 把当前缓存快照写入当前账号的键。
+   * 把当前缓存快照写入本机域键（设备级）。
    */
   private save(): void {
-    const uid: string = this.auth ? this.auth.uid : ''
-    if (uid.length === 0) {
-      return
-    }
     try {
-      const snapshots: ToolCacheSnapshot[] = aiToolResultCache.snapshot()
-      const marker: string = '|' + uid + '|'
-      const own: ToolCacheSnapshot[] = []
-      for (let i: number = 0; i < snapshots.length; i++) {
-        if (snapshots[i].key.indexOf(marker) >= 0) {
-          own.push(snapshots[i])
-        }
-      }
-      const kept: ToolCacheSnapshot[] = limitSnapshots(own)
-      this.envelope.persist(uid, kept, this.store, this.writeQueue)
+      const kept: ToolCacheSnapshot[] = limitSnapshots(aiToolResultCache.snapshot())
+      this.envelope.persist(this.auth ? this.auth.uid : '', kept, this.store, this.writeQueue)
     } catch (e) {
       /* 缓存持久化是旁路能力：失败只记日志，不能让工具执行 / 刷盘流程失败 */
       logger.warn('save tool cache failed: %{public}s', formatError(e))

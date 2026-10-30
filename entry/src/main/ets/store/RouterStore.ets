@@ -70,6 +70,7 @@ export type ScreenType =
   | 'fontSizeSettings'
   | 'favoriteFolders'
   | 'favoriteSaved'
+  | 'dataManagement'
 
 /**
  * 帖子路由来源。
@@ -262,6 +263,17 @@ export class Screen {
     return s
   }
 
+  /**
+   * 创建「数据管理」页面路由（导出/导入/迁移状态/存储统计）。
+   *
+   * @returns 数据管理页面路由
+   */
+  static dataManagement(): Screen {
+    const s = new Screen()
+    s.type = 'dataManagement'
+    return s
+  }
+
   static topicList(
     name: string, fid: number = 0,
     authorid: string = '', favor: string = '',
@@ -297,6 +309,7 @@ export class Screen {
       case 'fontSizeSettings': return '字体大小'
       case 'favoriteFolders': return this.favoriteTopicId.length > 0 ? '收藏到…' : '收藏夹'
       case 'favoriteSaved': return '收藏、保存与跟踪'
+      case 'dataManagement': return '数据管理'
       default: return ''
     }
   }

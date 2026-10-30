@@ -1,6 +1,8 @@
 import { PreferencesStore } from '../common/infra/PreferencesStore'
 import { SerialQueue } from '../common/infra/SerialQueue'
 import { BaseStore } from './BaseStore'
+import { DomainIds, PersistenceCatalog } from '../common/persistence/PersistenceCatalog'
+import { DomainSpec } from '../common/persistence/PersistenceTypes'
 
 /** 单帖阅读进度条目 */
 export class ReadingProgressEntry {
@@ -18,15 +20,28 @@ export class ReadingProgressEntry {
 const PROGRESS_MAX_COUNT: number = 200
 
 /**
- * 帖子阅读进度管理。
+ * 返回阅读进度域的 Preferences 键（统一命名空间 `v2.reading_progress`，与账号无关）。
+ *
+ * @returns 键名；域未登记时为空串
+ */
+function progressDomainKey(): string {
+  const spec: DomainSpec | null = PersistenceCatalog.byId(DomainIds.READING_PROGRESS)
+  return spec === null ? '' : spec.fullKey()
+}
+
+/**
+ * 帖子阅读进度管理（设备级数据，不再按账号物理隔离）。
  *
  * 记录每个帖子最近一次阅读到的楼层位置（页码 + 锚点楼层 pid），
- * 下次进入帖子时用于楼层级定位恢复。按账号（uid）隔离存储，持久化到 Preferences。
+ * 下次进入帖子时用于楼层级定位恢复。持久化到统一命名空间的 `v2.reading_progress`。
+ *
+ * public 方法上的 `uid` 参数仅为兼容既有调用点保留，函数体内不再使用。
  */
 export class ReadingProgressStore extends BaseStore<Object> {
   override state: Object = new Object()
   private progressMap: Map<string, ReadingProgressEntry> = new Map()
-  private progressLoadedUid: string = ''
+  /** 是否已从持久化加载过（设备级数据只加载一次）。 */
+  private loaded: boolean = false
 
   init(store: PreferencesStore, queue: SerialQueue): void {
     this.setDeps(store, queue)
@@ -35,26 +50,21 @@ export class ReadingProgressStore extends BaseStore<Object> {
   /** 重置缓存（登出/切换账号时调用） */
   reset(): void {
     this.progressMap.clear()
-    this.progressLoadedUid = ''
+    this.loaded = false
     super.reset()
   }
 
-  private progressKey(uid: string): string {
-    return `reading_progress_${uid}`
-  }
-
   /**
-   * 懒加载指定账号的进度缓存；账号切换时重新加载。
-   *
-   * @param uid - 用户 uid
+   * 懒加载进度缓存（设备级：只加载一次，不再因 uid 变化重载）。
    */
-  private async ensureLoaded(uid: string): Promise<void> {
-    if (this.progressLoadedUid === uid) return
+  private async ensureLoaded(): Promise<void> {
+    if (this.loaded) return
     const gen: number = this.generationGuard.current()
-    const saved = await this.store.getJSON<ReadingProgressEntry[]>(this.progressKey(uid))
-    // 加载期间已登出（reset 推进代际）或已有其他账号的数据回写：放弃本次，避免跨账号污染
-    if (!this.generationGuard.isCurrent(gen) ||
-      (this.progressLoadedUid !== '' && this.progressLoadedUid !== uid)) {
+    const key: string = progressDomainKey()
+    const saved: ReadingProgressEntry[] | null =
+      key.length === 0 ? null : await this.store.getJSON<ReadingProgressEntry[]>(key)
+    // 加载期间已登出（reset 推进代际）：放弃本次，避免把过时数据写回内存
+    if (!this.generationGuard.isCurrent(gen)) {
       return
     }
     this.progressMap.clear()
@@ -63,19 +73,19 @@ export class ReadingProgressStore extends BaseStore<Object> {
         this.progressMap.set(saved[i].tid, saved[i])
       }
     }
-    this.progressLoadedUid = uid
+    this.loaded = true
   }
 
   /**
    * 读取指定帖子的阅读进度。
    *
-   * @param uid - 用户 uid
+   * @param uid - **仅为兼容既有调用点保留**（设备级数据）
    * @param tid - 主题 tid
    * @returns 进度条目；无记录或参数无效时返回 null
    */
   async getProgress(uid: string, tid: string): Promise<ReadingProgressEntry | null> {
-    if (uid.length === 0 || tid.length === 0) return null
-    await this.ensureLoaded(uid)
+    if (tid.length === 0) return null
+    await this.ensureLoaded()
     const entry = this.progressMap.get(tid)
     return entry !== undefined ? entry : null
   }
@@ -85,14 +95,14 @@ export class ReadingProgressStore extends BaseStore<Object> {
    *
    * 同帖只保留最新一条；条目数超过上限时按最近阅读时间淘汰最早记录。
    *
-   * @param uid - 用户 uid
+   * @param uid - **仅为兼容既有调用点保留**（设备级数据）
    * @param entry - 进度条目（tid 必须非空）
    */
   async setProgress(uid: string, entry: ReadingProgressEntry): Promise<void> {
-    if (uid.length === 0 || entry.tid.length === 0) return
+    if (entry.tid.length === 0) return
     const gen: number = this.generationGuard.current()
-    await this.ensureLoaded(uid)
-    // 加载期间已登出（reset 推进代际）：中止写入，避免旧会话数据写入新账号
+    await this.ensureLoaded()
+    // 加载期间已登出（reset 推进代际）：中止写入，避免旧会话数据写入新上下文
     if (!this.generationGuard.isCurrent(gen)) {
       return
     }
@@ -111,17 +121,20 @@ export class ReadingProgressStore extends BaseStore<Object> {
         this.progressMap.delete(oldestKey)
       }
     }
-    this.persistProgress(uid)
+    this.persistProgress()
   }
 
-  private persistProgress(uid: string): void {
+  private persistProgress(): void {
+    const key: string = progressDomainKey()
+    if (key.length === 0) {
+      return
+    }
     this.writeQueue.enqueue(async (): Promise<void> => {
-      if (!this.uidGuard()) return
       const items: ReadingProgressEntry[] = []
       this.progressMap.forEach((value: ReadingProgressEntry): void => {
         items.push(value)
       })
-      await this.store.putJSON(this.progressKey(uid), items, false)
+      await this.store.putJSON(key, items, false)
       this.store.scheduleFlush()
     })
   }
