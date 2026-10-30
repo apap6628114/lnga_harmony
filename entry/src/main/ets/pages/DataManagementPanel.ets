@@ -6,13 +6,13 @@
  * 2. 展示域健康问题（读取/写入失败、坏条目）；
  * 3. 展示各域存储占用估算；
  * 4. 导出：选择域 + 可选加密 → 生成容器文本 → 系统 picker 保存；
- * 5. 导入：选文件 → 解析（必要时口令）→ 导入计划确认 → 应用 → 可撤销；
+ * 5. 导入：选文件 → 解析（必要时口令）→ 导入计划确认 → 应用；
  * 6. 危险区：清空全部可清空数据（输入「清空」二次确认）。
  *
  * 数据来源全部走 `appStore.*` 门面：
  * - `appStore.migrationReport / migrationSettled / migrationFailedCount / retryMigration / cleanupLegacyData`
  * - `appStore.persistence.estimateAll / health.problems`
- * - `appStore.dataTransfer.exportBackup / parseBackup / buildImportPlan / applyImport / undoImport / hasUndoSnapshot`
+ * - `appStore.dataTransfer.exportBackup / parseBackup / buildImportPlan / applyImport`
  *
  * 设计见 `docs/PERSISTENCE_UNIFICATION_DESIGN.md` §6.7；交互风格对齐
  * `FontSizeSettingsPanel`（标题栏滚动联动 + 92% 卡片）。
@@ -41,15 +41,16 @@ import {
   BackupExportResult,
   ImportPlan,
   ImportPlanEntry,
-  ImportResult,
-  UndoResult
+  ImportResult
 } from '../common/transfer/TransferTypes'
 import { ParseOutcome } from '../common/transfer/DataTransferService'
 import {
   PickedDocument,
+  ReadTextResult,
   pickDocumentToRead,
   pickDocumentToSave,
   readTextFromUri,
+  readTextFromUriDetailed,
   writeTextToUri
 } from '../common/utils/FilePickUtils'
 import { resolveKeyboardAppearance } from '../common/utils/KeyboardAppearanceUtils'
@@ -159,12 +160,13 @@ export struct DataManagementPanel {
   @State importPlanSummary: string = ''
   /** 导入口令。 */
   @State importPassword: string = ''
-
-  // ---- 撤销 ----
-  /** 是否有可撤销快照。 */
-  @State undoAvailable: boolean = false
-  /** 是否正在撤销。 */
-  @State undoing: boolean = false
+  /**
+   * 是否恢复缓存类数据（通知/动态/资料/分类/收藏关系/工具缓存）。
+   *
+   * **默认开启（跟随导出选择）**：备份里出现某个域，说明用户导出时主动勾选了它，
+   * 导入就应当恢复；关闭后这些域按策略跳过（显示跳过原因）。
+   */
+  @State restoreCacheDomains: boolean = true
 
   // ---- 清空 ----
   /** 清空确认输入。 */
@@ -178,6 +180,8 @@ export struct DataManagementPanel {
   private pendingContent: string = ''
   /** 待确认的导入计划（计划确认弹窗 → 应用）。 */
   private pendingPlan: ImportPlan | null = null
+  /** 最近解析成功的容器（切换「恢复缓存类数据」时重新构建计划用）。 */
+  private pendingContainer: BackupContainer | null = null
 
   /** 导出弹窗控制器。 */
   exportDialogController?: CustomDialogController
@@ -232,12 +236,11 @@ export struct DataManagementPanel {
 
   // ============== 刷新 ==============
 
-  /** 刷新整页数据（迁移状态 / 健康 / 存储 / 撤销可用性）。 */
+  /** 刷新整页数据（迁移状态 / 健康 / 存储）。 */
   private refreshAll(): void {
     this.refreshMigration()
     this.refreshHealth()
     this.refreshStorage()
-    this.refreshUndo()
   }
 
   /** 刷新迁移状态与旧数据清理信息。 */
@@ -353,15 +356,6 @@ export struct DataManagementPanel {
       this.totalSizeText = '统计失败'
     } finally {
       this.loadingSizes = false
-    }
-  }
-
-  /** 刷新「撤销导入」可用性。 */
-  private async refreshUndo(): Promise<void> {
-    try {
-      this.undoAvailable = await appStore.dataTransfer.hasUndoSnapshot()
-    } catch (e) {
-      this.undoAvailable = false
     }
   }
 
@@ -538,6 +532,16 @@ export struct DataManagementPanel {
         appStore.showToast('写入文件失败，请重试')
         return
       }
+      /*
+       * 写入后立即回读校验：真机曾出现"写入返回成功但文件内容不完整"，
+       * 若不做回读，用户会拿到一个无法导入的备份文件（且原数据可能已清空）。
+       */
+      this.exportProgressText = '正在校验文件…'
+      const readBack: string | null = readTextFromUri(uri, 0)
+      if (readBack === null || readBack !== result.content) {
+        appStore.showToast('备份文件写入不完整（校验失败），请重试或更换保存位置')
+        return
+      }
       this.exportDialogController?.close()
       appStore.showToast('已导出 ' + String(result.domainCount) + ' 个数据域'
         + (result.encrypted ? '（已加密）' : '（未加密）') + ' · ' + this.formatSize(result.bytes))
@@ -566,11 +570,13 @@ export struct DataManagementPanel {
       if (picked.length === 0) {
         return
       }
-      const content: string | null = readTextFromUri(picked[0].uri, MAX_BACKUP_BYTES)
-      if (content === null) {
-        appStore.showToast('读取文件失败，或文件超过 64MB 上限')
+      const readResult: ReadTextResult =
+        readTextFromUriDetailed(picked[0].uri, MAX_BACKUP_BYTES, context.cacheDir)
+      if (!readResult.ok) {
+        appStore.showToast('读取文件失败：' + readResult.error)
         return
       }
+      const content: string = readResult.content
       if (content.length === 0) {
         appStore.showToast('文件为空')
         return
@@ -580,6 +586,10 @@ export struct DataManagementPanel {
       this.pendingContent = content
       const outcome: ParseOutcome = await appStore.dataTransfer.parseBackup(content, '')
       if (outcome.ok && outcome.container !== null) {
+        if (outcome.warning.length > 0) {
+          // 非阻断警告（如 checksum 不一致）：提示后继续走导入计划
+          appStore.showToast(outcome.warning)
+        }
         await this.buildPlanAndShow(outcome.container)
         return
       }
@@ -645,14 +655,51 @@ export struct DataManagementPanel {
    * @param container - 解析出的明文容器
    */
   private async buildPlanAndShow(container: BackupContainer): Promise<void> {
-    const plan: ImportPlan = await appStore.dataTransfer.buildImportPlan(container)
+    this.pendingContainer = container
+    const plan: ImportPlan =
+      await appStore.dataTransfer.buildImportPlan(container, this.restoreCacheDomains)
     if (!plan.ok) {
       appStore.showToast(plan.error.length > 0 ? plan.error : '没有可导入的数据')
       return
     }
-    this.importPlanSummary = '备份导出于 ' + this.formatDate(plan.exportedAt)
+    this.importPlanSummary = this.buildPlanSummary(plan)
+    this.importPlanLines = this.buildPlanLines(plan)
+    this.pendingPlan = plan
+    this.openImportPlanDialog()
+  }
+
+  /**
+   * 切换「恢复缓存类数据」后重新构建导入计划（不关闭弹窗）。
+   */
+  private async rebuildImportPlan(): Promise<void> {
+    const container: BackupContainer | null = this.pendingContainer
+    if (container === null) {
+      return
+    }
+    try {
+      const plan: ImportPlan =
+        await appStore.dataTransfer.buildImportPlan(container, this.restoreCacheDomains)
+      if (!plan.ok) {
+        appStore.showToast(plan.error.length > 0 ? plan.error : '没有可导入的数据')
+        return
+      }
+      this.importPlanSummary = this.buildPlanSummary(plan)
+      this.importPlanLines = this.buildPlanLines(plan)
+      this.pendingPlan = plan
+    } catch (e) {
+      appStore.showToast('重建导入计划失败：' + formatError(e))
+    }
+  }
+
+  /** 计划摘要文案。 */
+  private buildPlanSummary(plan: ImportPlan): string {
+    return '备份导出于 ' + this.formatDate(plan.exportedAt)
       + ' · 应用版本 ' + (plan.appVersionName.length > 0 ? plan.appVersionName : '未知')
       + ' · 可导入域 ' + String(plan.changedDomainCount()) + ' 个'
+  }
+
+  /** 把计划条目转成展示行。 */
+  private buildPlanLines(plan: ImportPlan): ImportPlanLine[] {
     const lines: ImportPlanLine[] = []
     const entries: ImportPlanEntry[] = plan.entries
     for (let i: number = 0; i < entries.length; i++) {
@@ -670,9 +717,7 @@ export struct DataManagementPanel {
       }
       lines.push(line)
     }
-    this.importPlanLines = lines
-    this.pendingPlan = plan
-    this.openImportPlanDialog()
+    return lines
   }
 
   /** 打开导入计划确认弹窗。 */
@@ -714,11 +759,9 @@ export struct DataManagementPanel {
       }
       if (result.ok) {
         appStore.showToast('导入完成：应用 ' + String(result.appliedDomains) + ' 个域，新增 '
-          + String(result.added) + ' 条，更新 ' + String(result.updated) + ' 条'
-          + (result.undoAvailable ? '，10 分钟内可撤销' : ''))
+          + String(result.added) + ' 条，更新 ' + String(result.updated) + ' 条')
       } else {
-        appStore.showToast('导入未全部成功：' + (result.error.length > 0 ? result.error : '未知错误')
-          + (result.undoAvailable ? '（可撤销）' : ''))
+        appStore.showToast('导入未全部成功：' + (result.error.length > 0 ? result.error : '未知错误'))
       }
       this.refreshAll()
     } catch (e) {
@@ -729,29 +772,7 @@ export struct DataManagementPanel {
     }
   }
 
-  // ============== 撤销 / 清空 ==============
-
-  /** 撤销最近一次导入。 */
-  private async handleUndo(): Promise<void> {
-    if (this.undoing) {
-      return
-    }
-    this.undoing = true
-    try {
-      const result: UndoResult = await appStore.dataTransfer.undoImport()
-      if (result.ok) {
-        await appStore.reloadAfterImport()
-        appStore.showToast('已撤销导入，恢复 ' + String(result.restoredDomains) + ' 个数据域')
-      } else {
-        appStore.showToast('撤销失败：' + (result.error.length > 0 ? result.error : '未知错误'))
-      }
-      this.refreshAll()
-    } catch (e) {
-      appStore.showToast('撤销失败：' + formatError(e))
-    } finally {
-      this.undoing = false
-    }
-  }
+  // ============== 清空 ==============
 
   /** 打开清空确认弹窗。 */
   private openClearDialog(): void {
@@ -913,9 +934,6 @@ export struct DataManagementPanel {
             }
             this.StorageSection()
             this.ActionSection()
-            if (this.undoAvailable) {
-              this.UndoSection()
-            }
             this.DangerSection()
           }
           .width('100%').alignItems(HorizontalAlign.Center).padding({ bottom: 32 })
@@ -1089,7 +1107,7 @@ export struct DataManagementPanel {
     .alignItems(HorizontalAlign.Start)
   }
 
-  // ============== 区块：导出 / 导入 / 撤销 ==============
+  // ============== 区块：导出 / 导入 ==============
 
   @Builder
   ActionSection() {
@@ -1140,36 +1158,6 @@ export struct DataManagementPanel {
     .alignItems(HorizontalAlign.Start)
   }
 
-  @Builder
-  UndoSection() {
-    Column() {
-      Row() {
-        Column() {
-          Text('撤销导入').fontSize(15).fontColor(AppColors.textPrimary)
-          Text('恢复本次导入前的数据（导入后 10 分钟内有效）').fontSize(12)
-            .fontColor(AppColors.textTertiary).margin({ top: 2 })
-        }
-        .layoutWeight(1).alignItems(HorizontalAlign.Start)
-
-        Button(this.undoing ? '撤销中…' : '撤销')
-          .fontSize(14).height(32)
-          .backgroundColor(AppColors.bgSecondary).fontColor(AppColors.textPrimary)
-          .enabled(!this.undoing)
-          .onClick((): void => {
-            this.handleUndo()
-          })
-      }
-      .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
-      .alignItems(VerticalAlign.Center)
-    }
-    .width('92%')
-    .backgroundColor(AppColors.bgTertiary)
-    .borderRadius(12)
-    .padding({ top: 2, bottom: 2 })
-    .margin({ top: 12 })
-    .alignItems(HorizontalAlign.Start)
-  }
-
   // ============== 区块：危险区 ==============
 
   @Builder
@@ -1209,12 +1197,13 @@ export struct DataManagementPanel {
       Row() {
         Text('已选 ' + String(this.exportSelectedIds.length) + ' / '
           + String(this.exportDomainIds.length) + ' 个数据域')
-          .fontSize(12).fontColor(AppColors.textTertiary).layoutWeight(1)
+          .fontSize(12).fontColor(UIMaterialManager.adaptiveSecondaryForeground).layoutWeight(1)
         Text('全选').fontSize(13).fontColor(AppColors.primary)
           .onClick((): void => {
             this.exportSelectedIds = this.exportDomainIds.slice()
           })
-        Text('全不选').fontSize(13).fontColor(AppColors.textTertiary).margin({ left: 12 })
+        Text('全不选').fontSize(13).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+          .margin({ left: 12 })
           .onClick((): void => {
             this.exportSelectedIds = []
           })
@@ -1234,9 +1223,11 @@ export struct DataManagementPanel {
                 })
 
               Column() {
-                Text(this.exportLabelOf(id)).fontSize(14).fontColor(AppColors.textPrimary)
+                Text(this.exportLabelOf(id)).fontSize(14)
+                  .fontColor(UIMaterialManager.adaptiveForeground)
                   .width('100%')
-                Text(this.exportNoteOf(id)).fontSize(11).fontColor(AppColors.textTertiary)
+                Text(this.exportNoteOf(id)).fontSize(11)
+                  .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
                   .width('100%').maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
                   .margin({ top: 1 })
               }
@@ -1253,8 +1244,9 @@ export struct DataManagementPanel {
 
       Row() {
         Column() {
-          Text('加密导出').fontSize(14).fontColor(AppColors.textPrimary)
-          Text('未加密文件包含隐私内容').fontSize(11).fontColor(AppColors.textTertiary).margin({ top: 1 })
+          Text('加密导出').fontSize(14).fontColor(UIMaterialManager.adaptiveForeground)
+          Text('未加密文件包含隐私内容（浏览历史、AI 对话、AI API Key 等），建议保持加密')
+            .fontSize(11).fontColor(UIMaterialManager.adaptiveSecondaryForeground).margin({ top: 1 })
         }
         .layoutWeight(1).alignItems(HorizontalAlign.Start)
 
@@ -1312,9 +1304,14 @@ export struct DataManagementPanel {
       }
 
       if (this.exportProgressText.length > 0) {
-        Text(this.exportProgressText).fontSize(12).fontColor(AppColors.textTertiary)
+        Text(this.exportProgressText).fontSize(12)
+          .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
           .width('100%').margin({ top: 8 })
       }
+
+      Text('注：草稿中的图片/视频副本不包含在备份内（体积大、路径不可移植），恢复草稿后需在编辑器中重新选择。')
+        .fontSize(11).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .width('100%').margin({ top: 6 })
 
       Row() {
         Button('取消')
@@ -1363,15 +1360,37 @@ export struct DataManagementPanel {
   @Builder
   ImportPlanContent() {
     Column() {
+      Row() {
+        Column() {
+          Text('恢复备份中的缓存类数据')
+            .fontSize(14).fontColor(UIMaterialManager.adaptiveForeground)
+          Text('通知/动态/资料/分类/收藏关系/工具缓存（默认恢复，关闭则跳过这些域）')
+            .fontSize(11).fontColor(UIMaterialManager.adaptiveSecondaryForeground).margin({ top: 1 })
+        }
+        .layoutWeight(1).alignItems(HorizontalAlign.Start)
+
+        Toggle({ type: ToggleType.Switch, isOn: this.restoreCacheDomains })
+          .selectedColor(AppColors.primary)
+          .onChange((isOn: boolean): void => {
+            this.restoreCacheDomains = isOn
+            this.rebuildImportPlan()
+          })
+      }
+      .width('100%').padding({ top: 4, bottom: 4 }).alignItems(VerticalAlign.Center)
+
+      Divider().color(AppColors.separator).margin({ top: 2, bottom: 6 })
+
       Scroll() {
         Column() {
           ForEach(this.importPlanLines, (line: ImportPlanLine) => {
             Row() {
               Column() {
                 Text(line.label).fontSize(14)
-                  .fontColor(line.willSkip ? AppColors.textTertiary : AppColors.textPrimary)
+                  .fontColor(line.willSkip ? UIMaterialManager.adaptiveSecondaryForeground :
+                    UIMaterialManager.adaptiveForeground)
                   .width('100%')
-                Text(line.detail).fontSize(11).fontColor(AppColors.textTertiary)
+                Text(line.detail).fontSize(11)
+                  .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
                   .width('100%').margin({ top: 1 })
               }
               .layoutWeight(1).alignItems(HorizontalAlign.Start)
@@ -1381,7 +1400,7 @@ export struct DataManagementPanel {
         }
         .width('100%')
       }
-      .height(280).width('100%').scrollBar(BarState.Off).align(Alignment.Top)
+      .height(236).width('100%').scrollBar(BarState.Off).align(Alignment.Top)
 
       Divider().color(AppColors.separator).margin({ top: 6, bottom: 6 })
 

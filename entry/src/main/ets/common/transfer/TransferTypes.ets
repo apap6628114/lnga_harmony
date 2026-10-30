@@ -103,8 +103,6 @@ export class ImportPlanEntry {
   total: number = 0
   /** 合并后的载荷（应用阶段直接使用，避免重复合并）。 */
   mergedPayload: Object = new Object()
-  /** 导入前的本机载荷（用于 undo 快照）。 */
-  localPayload: Object | null = null
 }
 
 /**
@@ -156,24 +154,10 @@ export class ImportResult {
   skippedDomains: number = 0
   /** 失败信息（首个错误）。 */
   error: string = ''
-  /** 是否可撤销（写了 undo 快照）。 */
-  undoAvailable: boolean = false
 
   /**
    * 构造导入结果。
    */
   constructor() {
   }
-}
-
-/**
- * 撤销结果。
- */
-export class UndoResult {
-  /** 是否成功。 */
-  ok: boolean = false
-  /** 恢复的域数量。 */
-  restoredDomains: number = 0
-  /** 错误信息。 */
-  error: string = ''
 }

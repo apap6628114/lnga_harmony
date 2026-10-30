@@ -155,6 +155,14 @@ struct MainPage {
       return
     }
     this.migrationNoticeShown = true
+    /*
+     * 只有"本次启动真正执行了迁移且未提示过"才提醒（AppStore.migrationNoticePending）。
+     * 迁移报告会长期停在 meta 里（数据管理页要用），拿它当判断依据会让每次冷启动
+     * 都重复弹"本地数据已升级"——真机实测反馈的体验问题，已在 meta 中加一次性标记修复。
+     */
+    if (!appStore.migrationNoticePending) {
+      return
+    }
     const report: MigrationReport | null = appStore.migrationReport
     if (report === null) {
       return
@@ -163,10 +171,16 @@ struct MainPage {
     const migrated: number = report.count(MigrationDomainStatus.MIGRATED)
     if (failed > 0) {
       this.showMigrationFailedDialog(failed)
+      appStore.acknowledgeMigrationNotice().catch((e: Error): void => {
+        logger.warn('acknowledge migration notice failed: %{public}s', e.message)
+      })
       return
     }
     if (migrated > 0) {
       appStore.showToast('本地数据已升级为统一格式（' + String(migrated) + ' 项）')
+      appStore.acknowledgeMigrationNotice().catch((e: Error): void => {
+        logger.warn('acknowledge migration notice failed: %{public}s', e.message)
+      })
     }
   }
 

@@ -659,6 +659,14 @@ EntryAbility.onCreate
 `aboutToAppear` 中读）。**阻断性全失败未做专门降级**：迁移异常时报告 `status=failed`、`domains=[]`，
 MainPage 不弹窗，只有设置页徽标 '!' 与数据管理页红字提示（列为 §13.5 未实现项）。
 
+**提醒只提示一次（2026-10-30 真机反馈修复）**：
+- 旧实现拿 `migrationReport` 直接判断 `migrated > 0` 就 Toast，但报告会长期留在 `v2.meta` 里 →
+  **每次冷启动都重复弹"本地数据已升级"**。
+- 现在 `AppStore.migrationNoticePending` 满足两个条件才为 true：① 本次启动真的执行了迁移
+  （`inspection.pending` 且 `run` 产生了 MIGRATED/FAILED 结果）；② meta 的
+  `migrationNoticeAcknowledged` 为 false。展示后 `acknowledgeMigrationNotice()` 把该标记写回 meta，
+  以后启动不再提示；迁移报告本身仍保留供数据管理页查看。
+
 **为什么不弹在 Index 页**：Index 处于冷启动 loading 态，任何弹窗都会与"跳转后立即销毁"竞争；
 MainPage 才是用户停留的稳定上下文。
 
@@ -788,20 +796,36 @@ MainPage 才是用户停留的稳定上下文。
 | `votes` / `poll_voted` | 按 tid 取 `ts` 较新；截断 200 | — |
 | `tracked_threads` | 按 `tid` 取 `lastCheckAt`（回退 `createdAt`）较新；按 50 条截断 | 较旧条目丢弃 |
 | `ai_sessions` | 按 id：两边都有取 `updatedAt` 较新；总数超上限淘汰最旧 | 会话消息不合并（整条取新） |
-| `drafts` | 按草稿键覆盖（同键以导入文件为准） | 键内 uid 哈希段保留导入值：**跨账号导入后当前账号按新哈希找不到旧草稿**（`DraftStore.draftUidPart` 用 FNV-1a 短哈希），需在导入时按当前 uid 重算键（Phase 4 实现，`DataTransferService` 已预留 `applyFileDomain` 的键处理点） |
+| `drafts` | 按草稿键覆盖（同键以导入文件为准）；**导入时把键末尾的账号哈希改写为当前账号**（跨账号导入也能"找回"草稿，见 §13.3） | 键内 uid 哈希段由 `DraftKeyUtils.rewriteDraftKeyUidPart` 重写 |
 | `draft_media` | 按草稿键：导入文件中的媒体副本**不包含**（媒体体积大且涉及沙箱路径不可移植） | 仅导入草稿正文，媒体由用户在编辑器重选（UI 明示） |
 | `saved_threads` | 按 tid 覆盖（沿用现有 `importContent` 语义） | 已有实现 |
-| `categories` / `profiles` / `notifications` / `activities` / `favorite_membership` / `ai_tool_cache` | 跳过（`ImportPolicy.SKIP`） | 提示"该域为缓存/账号镜像，导入已跳过" |
+| `categories` / `profiles` / `notifications` / `activities` / `favorite_membership` / `ai_tool_cache` | **默认恢复（跟随导出选择）**：备份里出现即按导入值覆盖（镜像域写入时标记为当前账号的 `ownerUid`）；导入计划页可关闭「恢复缓存类数据」改为跳过 | 关闭时提示"缓存类数据，默认跳过（可开启「恢复缓存类数据」）"；`ImportPolicy.SKIP` 仅表示"默认不恢复"，不再是无条件丢弃 |
 | `auth` / `sessions` | 永不导入（凭证走独立加密导入流程） | — |
 
-**撤销（undo）**：导入前把每个将被修改的域的当前值复制到 `v2.<domain>.undo`（含 `undoAt`），
-导入成功后保留 10 分钟（数据管理页显示「撤销导入」）；用户点撤销则写回 undo 快照并重载各 Store。
-文件域的键为 `v2.<domainId>.undo`（不能用 `fullKey()`——文件域 fullKey 为空，草稿与存档会撞键）；
-撤销文件域时**先清空目录再回写快照**（导入新增的文件必须删除才算还原）。
+> **设计修正（2026-10-30 真机反馈）**：早期实现把缓存/镜像域无条件 `SKIP`，而导出时它们又是可勾选项——
+> 用户导出勾选后导入却被静默跳过，备份失去意义。现在改为"**跟随导出选择**"：备份里有的域默认都恢复，
+> 用户可显式关闭；`SKIP` 语义从"永不禁入"改为"默认不主动恢复"。
 
-快照生命周期：导入成功后启动 10 分钟定时清理、每次启动清理过期快照、「清空本地数据」一并删除。
-**已知取舍**：settings 快照包含明文 AI API Key（undo 需要恢复原密钥），因此保留期严格限制在 10 分钟，
-不做脱敏；接受这一短暂驻留风险（已在 §13.3 记录）。
+**校验和降级**：checksum 不匹配只记警告并继续导入（截断由 `JSON.parse` 捕获；跨版本序列化差异不应阻断恢复）。
+**尾部截断修复**：明文容器 JSON 解析失败时，尝试提取 `domains` 数组中的最后一个完整域并重建容器
+（`repairTruncatedContainer`），成功则提示"已恢复 N 个完整数据域"；失败才报"不是有效的 JSON"。
+
+**导出完整性清单（哪些内容不进备份、为什么）**：
+
+| 内容 | 是否导出 | 原因 / 替代 |
+| --- | --- | --- |
+| `auth` / `sessions`（登录凭证） | 永不 | 安全边界；换机/重装用「凭证导出（.ngacred，独立加密）」或重新登录 |
+| `draft_media`（草稿图片/视频副本） | 永不 | 体积大（最多 128MB）、沙箱绝对路径不可移植；导出弹窗已提示，恢复草稿后在编辑器重选 |
+| `moving_photo_cache`（动态照片缓存） | 永不 | 可从服务端重建 |
+| `categories` / `profiles` / `notifications` / `activities` / `favorite_membership` / `ai_tool_cache` | 默认不勾选，可手动勾选后导出 | 缓存/镜像类（隐私与体积）；导入默认恢复（可关闭） |
+| `ai_sessions` | 默认不勾选，可手动勾选 | 隐私（AI 对话可能引用私信内容） |
+| 账号镜像域中**其他账号**的缓存 | 导出时跳过 | 归属校验（防跨账号数据外带） |
+| AI API Key | **原样导出**（2026-10-30 起） | 备份完整性优先；加密默认开启，用户关闭加密即自担明文风险 |
+
+**撤销导入已移除（2026-10-30 产品决策）**：导入后 10 分钟内可撤销的功能整体下线——它引入的
+`v2.<domain>.undo` 明文快照（含 settings 的 AI API Key、会话等）长期驻留是隐私风险，实际使用价值低。
+新版本不再写 undo 快照；启动时与「清空本地数据」时调用 `clearLegacyUndoSnapshots()` 清理旧版本残留。
+导入失败时用户可重新导入或从自己的备份恢复（导出文件是可靠回滚手段）。
 
 ### 6.5 兼容性
 
@@ -819,9 +843,11 @@ MainPage 才是用户停留的稳定上下文。
 2. **导出前隐私提示**：勾选 AI 会话/浏览历史时在底部提示"包含敏感内容"；`ai_sessions` 默认**不勾选**
    （`ExportPolicy.OPTIONAL`）。
 3. **加密默认开启**，AAD 隔离凭证与数据两条链路（`nga-oh-data-backup-v1` vs `nga-oh-credential-export-v2`）。
-4. **AI API Key 脱敏**：`settings` 域的 `aiProfiles[].apiKey`、`aiProfiles[].toolsApiKey`、
-   `aiSearchProfiles[].apiKey` 在**导出副本**中清空（内存/磁盘真实配置不动）；导入时若包内该字段为空，
-   保留本机同 id 配置的密钥（避免"导入设置后 AI 不能用"）。
+4. **AI API Key 不脱敏（2026-10-30 产品决策修正）**：早期实现把 `settings` 的
+   `aiProfiles[].apiKey` / `toolsApiKey` / `aiSearchProfiles[].apiKey` 在导出副本中清空，
+   导致"导出→导入后 AI 配置丢失"，与备份目的矛盾。现**原样导出**；安全责任边界为：
+   加密默认开启（用户可关闭，关闭即自担明文风险，UI 明确提示"含 AI API Key 等隐私"）。
+   导入侧仍保留 `restoreLocalSecrets` 兼容旧备份（旧包中密钥为空时用本机同 id 配置回填）。
 5. **文件路径**：导入只从 `picker` 返回的 URI 读取，不拼接用户输入路径；存档 tid / 草稿键校验沿用
    （`isSafeDomainFileName` 拒绝 `/`、`\`、`..`）。
 6. **解析防护**：JSON 解析失败不抛到 UI（统一转错误提示）；域数 ≤64、重复域 ID 去重、
@@ -1152,7 +1178,7 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
 | **P1 基础设施** | `PersistenceCatalog`、`PersistenceHub`、`StorageBackends`、`PersistenceMetaStore`、`DomainHealth`、`MigrationEngine` + `DomainMigrators`、`AppScheduler`、`TransferTypes`/`TransferCrypto`/`DomainMergers`、`BuiltinTasks` | `common/persistence/*`、`common/scheduler/*`、`common/transfer/*` | ✅ 完成（编译 + 单测） |
 | **P2 域接入** | 21 个域登记；15 个 Store 统一键/加载门禁；`AppStore.init` 编排迁移；迁移报告发布 | `PersistenceCatalog`、17 个 Store 文件、`AppStore` | ✅ 完成（替代原"adapter"方案，见 §8.4） |
 | **P3 生命周期改造** | `clearAuth` 拆分（设备级域不 reset）、镜像域重载、未登录可用 | `AppStore`、各 store | ✅ 完成（直接放开，未走保守版） |
-| **P4 导出导入** | `DataTransferService`（容器/校验/脱敏/撤销）、域合并器、`DataManagementPanel`、`FilePickUtils`、`reloadAfterImport` | `common/transfer/*`、`pages/DataManagementPanel.ets`、`AppStore` | ✅ 完成 |
+| **P4 导出导入** | `DataTransferService`（容器/校验/合并/加密）、域合并器、`DataManagementPanel`、`FilePickUtils`、`reloadAfterImport` | `common/transfer/*`、`pages/DataManagementPanel.ets`、`AppStore` | ✅ 完成（撤销导入已移除、AI Key 不脱敏） |
 | **P5 调度器接入** | 7 个内置任务注册；`EntryAbility`/`AppStore` 接线；回前台请求风暴收敛 | `BuiltinTasks`、`AppStore`、`EntryAbility` | ✅ 完成 |
 | **P6 收尾** | 旧键清理任务、数据健康、体积统计、文档、遗留 TODO | 各文件 | ✅ 完成（已知遗留见 §13.3） |
 
@@ -1232,7 +1258,7 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
   entry/src/main/ets/common/scheduler/BuiltinTasks.ets            // 7 个内置任务注册
   entry/src/main/ets/common/transfer/TransferTypes.ets            // 容器/计划/结果类型
   entry/src/main/ets/common/transfer/TransferCrypto.ets           // 加密容器（PBKDF2+AES-GCM，独立 AAD）
-  entry/src/main/ets/common/transfer/DataTransferService.ets      // 导出/导入/脱敏/撤销
+  entry/src/main/ets/common/transfer/DataTransferService.ets      // 导出/导入/合并/加密
   entry/src/main/ets/common/transfer/DomainMergers.ets            // 各域导入合并器
   entry/src/main/ets/common/utils/FilePickUtils.ets               // picker 封装 + URI 读写
   entry/src/main/ets/pages/DataManagementPanel.ets                // 数据管理页
@@ -1274,8 +1300,8 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
 - **2026-10-30 设计定稿 + Phase 1 基础设施**：
   - 完成本设计文档；三份并行调研完成（[盘点](research/PERSISTENCE_INVENTORY.md)、
     [调度](research/SCHEDULER_RESEARCH.md)、[导出导入](research/EXPORT_IMPORT_RESEARCH.md)），
-    其结论（picker API 纠偏、apiKey 脱敏、ai_sessions 隐私降级、draft_media 排除、iterations 校验、
-    fd 泄漏、回前台请求风暴）已并入本文。
+    其结论（picker API 纠偏、ai_sessions 隐私降级、draft_media 排除、iterations 校验、
+    fd 泄漏、回前台请求风暴）已并入本文；原"apiKey 脱敏"结论已于 2026-10-30 产品决策推翻（见 §6.6）。
   - 基础设施落地：`PersistenceTypes` / `PersistenceCatalog`（21 域）/ `StorageBackends` /
     `PersistenceMetaStore` / `DomainHealth` / `PersistenceHub` / `DomainMigrators` / `MigrationEngine` /
     `TransferTypes` / `DataTransferService` / `SchedulerTypes` / `AppScheduler` / `TransferCrypto` /
@@ -1309,11 +1335,11 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
       ② `TransferCrypto` 的加密用例在 Previewer 环境无法加载 `libcryptoframework_napi.dll`，
       导致整个测试页崩溃——加密用例已从 Local Test 移除，加密链路改为真机手动验证
       （见 `DataTransferUnit.test.ets` 文件头）。
-  - **遗留（见 §10 P6 与 R5）**：草稿跨账号导入的 uid 哈希重算未实现；`credential.recheck`
+  - **遗留（见 §10 P6 与 R5）**：`credential.recheck`
     保留 AppStore 既有退避定时器（未迁入调度器，降低回归风险）；`notifications/activities` 的
     `loaded` 语义（登录后重载）沿用既有 init 调用路径。
   - 导入后内存重载已实现：`AppStore.reloadAfterImport()`（设备级域重新 init、懒加载域 reset 后按需重读、
-    文件域重扫、镜像域重载），数据管理页在 applyImport / undoImport 成功后调用，导入数据无需重启即生效。
+    文件域重扫、镜像域重载），数据管理页在 applyImport 成功后调用，导入数据无需重启即生效。
 - **2026-10-30 交付后自检（文档 ↔ 代码一致性 + 运行时路径审查）**：
   - 修复 5 个代码缺陷：① 迁移器信封域未按业务键去重/截断（多账号旧键会叠加重复条目、突破 Store 上限），
     现按 `notificationId/id/tid` 去重、时间取新、按域上限（200/200/50/20）截断；② `Catalog` 的
@@ -1349,6 +1375,67 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
     明文 API Key（10 分钟 TTL 兜底）；数据健康「修复」按钮、调度状态区、导出域级进度/分组、
     草稿跨账号提示均为**未实现的文档承诺**（本文档已逐处标注）。
   - 复验：全量编译 + Hypium 见顶部验证记录（修复后重跑）。
+- **2026-10-30 真机实测「导出→清空→导入」失败修复**（用户真机反馈：迁移完成后导出未加密备份，
+  清空数据再导入提示解析失败）：
+  - 根因排查与修复三处：
+    ① `FilePickUtils.readTextFromUri` 依赖 `statSync(documentUri)` 做前置大小判断——真机上
+    `statSync(uri)` 可能抛错或返回 0，把合法备份误判为"读取失败/文件为空"；改为直接
+    `fileIo.readTextSync(uri)`（工程既有 `FavoriteSavedPanel` 验证过的写法），读出后按 UTF-8
+    字节数校验 64MB 上限；
+    ② `FilePickUtils.writeTextToUri` 忽略 `writeSync` 返回值——单次调用不保证写完整个字符串，
+    数 MB 的备份会被截断，导入必然在 `JSON.parse` 阶段失败；改为 UTF-8 编码后按 64KB 分块
+    循环写并校验每次写入长度；
+    ③ `parseBackup` 的 checksum 不匹配直接拒绝导入——不同 ArkTS 版本的对象键序/数字格式差异
+    会阻断合法数据恢复；改为**降级为警告继续导入**（截断仍由 `JSON.parse` 捕获），UI 展示警告。
+  - 防御性增强：导出写入后**回读校验**（读回内容与生成内容不一致即提示重试，避免产生坏备份）；
+    解析失败文案带内容字符数（"共 N 字符"）便于判断文件是否截断；`parseBackup` 增加诊断日志
+    （字符数/是否加密/是否带口令，不含业务内容）。
+  - 复验：编译 + Hypium 683 用例全绿。
+- **2026-10-30 真机第二轮反馈修复（导入/导出闭环 + 重复提醒）**：
+  - ① **`parseBackup` 判定 bug（P0）**：`normalizeContainer` 成功时不设置 `outcome.ok`，而调用方
+    用 `container === null || !outcome.ok` 判断 → **所有明文备份都被判"容器非法"**（错误信息为空，
+    UI 只显示"解析失败"）。修复为只判断 `container === null`。该 bug 存在于初版实现，因缺少
+    `parseBackup` 测试覆盖而未暴露——本轮新增 `DataTransferParseUnit.test.ets`（5 用例：
+    合法明文、尾部截断修复、非备份 JSON、加密需口令、空内容）。
+  - ② **文件域目录路径不一致**：`DomainSpec.dirPath` 曾拼成 `filesDir/v2.<dir>`（命名空间带点），
+    迁移器写的是 `filesDir/v2/<dir>` → 迁移后的草稿/存档读不到。修复 `dirPath` 为 `v2/<dir>`，
+    并在 Hub 启动时把遗留 `v2.<dir>` 目录整体改名到正确路径（`renameDirIfAbsent`）。
+  - ③ **缓存域导入策略**：改为"跟随导出选择"（默认恢复备份中的全部域，可关闭），镜像域写入
+    带当前账号 `ownerUid`，导入后内存重载补齐分类域。
+  - ④ **迁移提醒每次冷启动重复弹**：报告长期存在 meta 中，旧逻辑只要 `migrated > 0` 就提示。
+    修复：`migrationNoticePending` 只在本启动真正执行迁移且有结果时为 true，展示后写
+    `meta.migrationNoticeAcknowledged = true`，以后不再提示。
+  - ⑤ **读取/写入链路加固**（真机导出→导入失败的根因排查）：读取改 `openSync + 分块 readSync`
+    （带 readTextSync 与 cache 复制两级兜底），写入改 UTF-8 分块循环写 + 导出后回读校验；
+    checksum 不匹配降级为警告。
+  - 复验：编译 + Hypium **688 用例全绿**（新增 5 个解析回归）。
+- **2026-10-30 第三轮产品反馈（导出弹窗可视性 / 撤销移除 / AI Key 不脱敏）**：
+  - ① **导出弹窗可视性**：弹窗内文字色原先用页面级 `AppColors.textPrimary/textTertiary`，
+    在系统材质背板上对比度不足。改为材质语义前景色：主文字 `UIMaterialManager.adaptiveForeground`
+    （`sys.color.font_primary`）、次要文字 `adaptiveSecondaryForeground`（`sys.color.font_secondary`）；
+    导出弹窗与导入计划弹窗统一处理。
+  - ② **移除「撤销导入」**：删除 `undoImport`/`hasUndoSnapshot`/`writeUndoSnapshot`/到期定时器/
+    `UndoResult`/`ImportResult.undoAvailable`/`importPlanEntry.localPayload`/UI 撤销区块与刷新逻辑；
+    保留 `clearLegacyUndoSnapshots()` 仅用于清理旧版本遗留的明文 `v2.<domain>.undo` 快照
+    （启动时 + 清空数据时调用）。动机：undo 明文快照含 API Key/会话，隐私风险高、实用价值低。
+  - ③ **AI API Key 不脱敏**：删除 `redactSettingsPayload` 与相关常量，导出时原样携带 AI 配置密钥。
+    安全边界：加密默认开启；用户选择不加密即自担明文风险，UI 明确提示"含 AI API Key 等隐私"。
+    导入侧保留 `restoreLocalSecrets` 兼容旧备份（旧包密钥为空时回填本机同 id 配置）。
+  - 复验：编译 + Hypium 688 用例全绿 + 行尾自检。
+- **2026-10-30 导出完整性复查（回答"还有哪些因安全/隐私脱敏导致导入不完整"）**：
+  - 全仓库排查结论：此前**只有** AI API Key 一处数据脱敏（已移除）；其余"导出缺失"均属**设计边界**，
+    已在 §6.4 增加"导出完整性清单"逐项说明（凭证走独立加密导出、draft_media 不导出且 UI 提示、
+    缓存域默认不勾选但可勾选并在导入时恢复）。
+  - 本轮修复的两个真实缺口：
+    ① **跨账号导入草稿丢失**：草稿键末尾是导出账号的 uid 短哈希，导入到另一账号后编辑器按当前哈希
+    查找不到 → 新增 `common/utils/DraftKeyUtils.ets`（零依赖，`DraftStore` 改为委托同一实现），
+    导入草稿时把键末尾改写为当前账号片段（`rewriteDraftKeyUidPart`）；新增 6 个单测锁定哈希算法
+    与键改写行为；
+    ② **未登录时恢复账号镜像缓存等于白导入**：未登录 uid 为空 → 写入的 `ownerUid` 为空 →
+    `CacheEnvelopeStore` 归属校验判非法。现在导入计划对镜像域显式跳过并提示"未登录，请登录后重新导入"。
+  - 顺带修正：导出弹窗增加"草稿图片/视频不包含在备份内"提示；`DataTransferService` 文件头与
+    `restoreLocalSecrets` 注释去掉已废弃的"脱敏"表述。
+  - 复验：编译 + Hypium（新增 6 用例，688 → 694）+ 安装真机 + 行尾自检。
 
 ### 13.5 遗留清单（文档承诺但未实现 / 需真机验证）
 
@@ -1358,7 +1445,9 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
 | 数据管理页「调度状态」折叠区 | 未实现（仅 `snapshot()` API 与日志） |
 | 导出域级进度、4MB 预警、六组分类、每域体积 | 未实现（平铺列表 + 运行中文案） |
 | 草稿跨账号一次性提示（马甲场景） | 未实现（仅键内 uid 哈希隔离） |
-| 草稿跨账号导入的 uid 哈希重算 | 未实现（导入到其他账号后旧草稿不可见） |
+| 草稿跨账号导入的 uid 哈希重算 | **已实现**（`DraftKeyUtils.rewriteDraftKeyUidPart`，导入时改写为当前账号片段） |
+| 草稿媒体（图片/视频）不随备份导出 | 设计如此（体积大、路径不可移植）；导出弹窗已明确提示 |
+| 未登录时恢复账号镜像缓存 | 导入计划显式跳过并说明（写空 ownerUid 会读不到，等于白导入） |
 | `credential.recheck` 迁入调度器 | 有意保留 AppStore 既有退避定时器 |
 | 文件域迁移预算/断点续跑 | 已实现（逐文件检查 deadline，超时 DEFERRED） |
 | 加密容器/checksum 往返、系统备份恢复、投票入口语义 | 需真机/模拟器实测（Local Test 无法覆盖 crypto 与真实恢复） |

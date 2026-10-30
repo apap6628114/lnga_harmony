@@ -38,6 +38,7 @@ import { Context } from '@kit.AbilityKit'
 import { Logger, DOMAIN_STORE, formatError } from '../utils/Logger'
 import { DomainIds, PersistenceCatalog } from '../persistence/PersistenceCatalog'
 import { DomainSpec } from '../persistence/PersistenceTypes'
+import { draftUidPart as draftUidPartImpl, shortHash36 as shortHash36Impl } from '../utils/DraftKeyUtils'
 
 const logger = new Logger(DOMAIN_STORE, 'DraftStore')
 
@@ -100,9 +101,8 @@ export function isValidDraftKey(key: string): boolean {
 /**
  * 计算字符串的 FNV-1a 32 位短哈希（36 进制）。
  *
- * 用于把登录 uid 带进草稿键：草稿文件不按账号分目录，键里没有 uid 时"换账号后在同一个
- * 帖子回复"会读到上一个账号的草稿。与官方 `ActionCheck.buildActionId = uid + "/" + fid + ...`
- * 同构，取哈希只是为了不让 uid 明文出现在文件名里。
+ * 实现见 `common/utils/DraftKeyUtils.ets`（与导入器共用、零依赖模块）；此处保留同名导出
+ * 是为了既有调用方（`ReplyManager`/`NewTopicManager`）与测试的 import 路径不变。
  *
  * 结果用 **`>>> 0` 转无符号**再转 36 进制。不要写 `if (hash < 0) hash = -hash`：符号位为 1
  * 时取绝对值会把 `0x80000000` 映射到 `0`（标准 `Math.abs` 陷阱），两个不同 uid 撞到同一个
@@ -112,12 +112,7 @@ export function isValidDraftKey(key: string): boolean {
  * @returns 36 进制短哈希（非负）
  */
 export function shortHash36(value: string): string {
-  let hash: number = 0x811c9dc5
-  for (let i: number = 0; i < value.length; i++) {
-    hash = hash ^ value.charCodeAt(i)
-    hash = (hash * 0x01000193) | 0
-  }
-  return (hash >>> 0).toString(36)
+  return shortHash36Impl(value)
 }
 
 /**
@@ -127,7 +122,7 @@ export function shortHash36(value: string): string {
  * @returns 文件名安全的账号片段
  */
 export function draftUidPart(uid: string): string {
-  return uid.length > 0 ? shortHash36(uid) : 'anon'
+  return draftUidPartImpl(uid)
 }
 
 /**

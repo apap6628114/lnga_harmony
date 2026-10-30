@@ -136,57 +136,214 @@ export async function pickDocumentToSave(context: Context, fileName: string,
 }
 
 /**
- * 读取 URI 的文本内容（UTF-8）。
+ * 读取 URI 文本的结果（带可诊断错误）。
+ */
+export class ReadTextResult {
+  /** 是否读取成功。 */
+  ok: boolean = false
+  /** 读取到的文本。 */
+  content: string = ''
+  /** 失败原因（用户可见，含底层错误信息）。 */
+  error: string = ''
+}
+
+/**
+ * 读取 URI 的文本内容（UTF-8），失败时返回 null。
  *
  * @param uri - 文档 URI（picker 返回值或沙箱路径）
  * @param maxBytes - 大小上限（字节；<= 0 表示不限制）
  * @returns 文本；读取失败或超过上限时返回 null
  */
 export function readTextFromUri(uri: string, maxBytes: number): string | null {
-  const size: number = fileSizeOfUri(uri)
-  if (size < 0) {
-    return null
-  }
-  if (maxBytes > 0 && size > maxBytes) {
-    return null
-  }
-  if (size === 0) {
-    return ''
+  const result: ReadTextResult = readTextFromUriDetailed(uri, maxBytes)
+  return result.ok ? result.content : null
+}
+
+/**
+ * 读取 URI 的文本内容（UTF-8），带可诊断错误。
+ *
+ * ## 为什么不用 `statSync(uri)` / `readTextSync(uri)`
+ *
+ * 真机实测反馈：导出成功的备份（200KB 量级）导入时提示"读取文件失败"。
+ * 前一版实现先 `statSync(uri)` 判断大小（真机对 picker 的 document URI 可能抛错/返回 0），
+ * 改用 `readTextSync(uri)` 后同样失败。最终采用与**写入侧完全同源**的
+ * `openSync(uri, READ_ONLY)` + 分块 `readSync` 循环——写入侧正是用 `openSync(uri)` 成功的，
+ * 因此这条路径对 picker URI 的兼容性最好；同时不依赖任何 `stat` 结果。
+ *
+ * @param uri - 文档 URI
+ * @param maxBytes - 大小上限（字节；<= 0 表示不限制）
+ * @returns 读取结果（成功文本或失败原因）
+ */
+export function readTextFromUriDetailed(uri: string, maxBytes: number,
+  cacheDir: string = ''): ReadTextResult {
+  const result: ReadTextResult = new ReadTextResult()
+  if (uri.length === 0) {
+    result.error = '文件 URI 为空'
+    return result
   }
   let file: fileIo.File | null = null
   try {
     file = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY)
-    const buffer: ArrayBuffer = new ArrayBuffer(size)
-    const readLen: number = fileIo.readSync(file.fd, buffer)
-    if (readLen <= 0) {
-      return ''
-    }
-    const decoder = util.TextDecoder.create('utf-8')
-    return decoder.decodeToString(new Uint8Array(buffer, 0, readLen))
   } catch (e) {
-    return null
-  } finally {
-    if (file !== null) {
-      try {
-        fileIo.closeSync(file)
-      } catch (e) {
-        // 关闭失败不影响已读出的内容
+    result.error = '无法打开文件（' + describeError(e) + '）'
+    // 兜底 1：某些 URI 只支持封装 API
+    try {
+      const fallback: string = fileIo.readTextSync(uri)
+      if (maxBytes > 0 && utf8ByteLength(fallback) > maxBytes) {
+        result.error = '文件超过大小上限'
+        return result
+      }
+      result.ok = true
+      result.content = fallback
+      return result
+    } catch (e2) {
+      // 兜底 2：复制到应用缓存（沙箱路径必定可读）
+      if (cacheDir.length > 0) {
+        const copied: ReadTextResult = readViaCacheCopy(uri, maxBytes, cacheDir)
+        if (copied.ok) {
+          return copied
+        }
+        result.error = result.error + '；' + copied.error
+      }
+      return result
+    }
+  }
+  try {
+    const chunks: Uint8Array[] = []
+    let total: number = 0
+    const chunkSize: number = 64 * 1024
+    const buffer: ArrayBuffer = new ArrayBuffer(chunkSize)
+    while (true) {
+      const readLen: number = fileIo.readSync(file.fd, buffer)
+      if (readLen <= 0) {
+        break
+      }
+      // 复制出本块数据（buffer 会被下一次 readSync 覆盖）
+      const copy: Uint8Array = new Uint8Array(readLen)
+      const view: Uint8Array = new Uint8Array(buffer, 0, readLen)
+      for (let i: number = 0; i < readLen; i++) {
+        copy[i] = view[i]
+      }
+      chunks.push(copy)
+      total += readLen
+      if (maxBytes > 0 && total > maxBytes) {
+        result.error = '文件超过大小上限'
+        return result
       }
     }
+    if (total === 0) {
+      result.ok = true
+      result.content = ''
+      return result
+    }
+    const merged: Uint8Array = new Uint8Array(total)
+    let offset: number = 0
+    for (let i: number = 0; i < chunks.length; i++) {
+      merged.set(chunks[i], offset)
+      offset += chunks[i].length
+    }
+    const decoder: util.TextDecoder = util.TextDecoder.create('utf-8')
+    result.content = decoder.decodeToString(merged)
+    result.ok = true
+    return result
+  } catch (e) {
+    result.error = '读取文件失败（' + describeError(e) + '）'
+    return result
+  } finally {
+    try {
+      fileIo.closeSync(file)
+    } catch (e) {
+      // 关闭失败不影响已读出的内容
+    }
+  }
+}
+
+/**
+ * 把异常转成简短可读文案。
+ *
+ * @param e - 捕获的异常
+ * @returns 错误描述
+ */
+function describeError(e: Object): string {
+  const record: Record<string, Object> = e as Record<string, Object>
+  const rawMessage: Object | undefined = record['message']
+  const message: string = typeof rawMessage === 'string' ? rawMessage as string : String(e)
+  const rawCode: Object | undefined = record['code']
+  if (typeof rawCode === 'number') {
+    return 'code=' + String(rawCode as number) + ' ' + message
+  }
+  return message
+}
+
+/**
+ * 兜底读取：把 URI 复制到应用缓存目录（沙箱路径），再从沙箱读取。
+ *
+ * 用于 picker URI 无法直接 open 的机型/位置（如部分文件管理器的 provider URI）。
+ *
+ * @param uri - 源文档 URI
+ * @param maxBytes - 大小上限（字节；<= 0 不限制）
+ * @param cacheDir - 应用缓存目录（`context.cacheDir`）
+ * @returns 读取结果
+ */
+function readViaCacheCopy(uri: string, maxBytes: number, cacheDir: string): ReadTextResult {
+  const result: ReadTextResult = new ReadTextResult()
+  const tmpPath: string = cacheDir + '/import_backup_' + String(Date.now()) + '.tmp'
+  try {
+    fileIo.copyFileSync(uri, tmpPath)
+  } catch (e) {
+    result.error = '复制文件到缓存失败（' + describeError(e) + '）'
+    return result
+  }
+  try {
+    const content: string = fileIo.readTextSync(tmpPath)
+    if (maxBytes > 0 && utf8ByteLength(content) > maxBytes) {
+      result.error = '文件超过大小上限'
+      return result
+    }
+    result.ok = true
+    result.content = content
+    return result
+  } catch (e) {
+    result.error = '从缓存读取文件失败（' + describeError(e) + '）'
+    return result
+  } finally {
+    try {
+      fileIo.unlinkSync(tmpPath)
+    } catch (e) {
+      // 临时文件清理失败不影响已读出的内容
+    }
+  }
+}
+
+/**
+ * 计算字符串的 UTF-8 字节数。
+ *
+ * @param text - 文本
+ * @returns 字节数（编码失败时按 3 倍长度保守估算）
+ */
+function utf8ByteLength(text: string): number {
+  try {
+    return util.TextEncoder.create().encodeInto(text).length
+  } catch (e) {
+    return text.length * 3
   }
 }
 
 /**
  * 把文本写入 URI 指向的文件（覆盖写）。
  *
+ * ## 为什么必须分块循环写
+ *
+ * `fileIo.writeSync(fd, content)` 的返回值是**实际写入的字节数**，单次调用不保证写完整个字符串；
+ * 真机导出较大的备份（数 MB）时未写完就返回，文件尾部被截断——随后导入必然解析失败。
+ * 这里先把文本编码为 UTF-8 字节，再按 64KB 分块循环写，直到全部写完，任何一块写失败立即返回 false。
+ *
  * 修复既有凭证导出链路的 fd 泄漏：无论写入是否成功都 `finally` 关闭句柄。
- * 系统 Picker 默认会预创建目标文件（`DocumentSaveOptions.autoCreateEmptyFile` 默认 true），
- * 因此这里用 `CREATE|TRUNC` 兼容"未预创建"的情况，写失败时文件可能被截断为 0 字节——
- * 调用方应先完成内容生成再写入，避免把加密/序列化失败留成空文件。
+ * 系统 Picker 默认会预创建目标文件，因此这里用 `CREATE|TRUNC` 兼容"未预创建"的情况。
  *
  * @param uri - 目标文档 URI
  * @param content - 待写入文本（UTF-8）
- * @returns 是否写入成功
+ * @returns 是否完整写入成功
  */
 export async function writeTextToUri(uri: string, content: string): Promise<boolean> {
   if (uri.length === 0) {
@@ -196,7 +353,18 @@ export async function writeTextToUri(uri: string, content: string): Promise<bool
   try {
     file = fileIo.openSync(uri,
       fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC)
-    fileIo.writeSync(file.fd, content)
+    const bytes: Uint8Array = util.TextEncoder.create().encodeInto(content)
+    const chunkSize: number = 64 * 1024
+    let offset: number = 0
+    while (offset < bytes.length) {
+      const end: number = Math.min(offset + chunkSize, bytes.length)
+      const chunk: Uint8Array = bytes.slice(offset, end)
+      const written: number = fileIo.writeSync(file.fd, chunk.buffer)
+      if (written <= 0) {
+        return false
+      }
+      offset += written
+    }
     return true
   } catch (e) {
     return false
@@ -213,6 +381,8 @@ export async function writeTextToUri(uri: string, content: string): Promise<bool
 
 /**
  * 读取 URI 指向文件的大小。
+ *
+ * 仅用于展示/统计；**不要**用它作为"能否读取"的前置判断（见 {@link readTextFromUri} 说明）。
  *
  * @param uri - 文档 URI
  * @returns 字节数；无法读取时返回 -1

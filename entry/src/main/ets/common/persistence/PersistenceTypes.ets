@@ -92,6 +92,9 @@ export enum MigrationDomainStatus {
 /** 新版 Preferences 键的命名空间前缀（与全局数据版本对齐）。 */
 export const PERSISTENCE_KEY_NAMESPACE: string = 'v2.'
 
+/** 文件域命名空间目录名（相对 filesDir；不带点，与键前缀 `v2.` 区分）。 */
+export const FILE_NAMESPACE_DIR: string = 'v2'
+
 /** 当前全局数据版本（跨代升级时递增；见设计文档 §5.1）。 */
 export const PERSISTENCE_DATA_VERSION: number = 2
 
@@ -121,9 +124,6 @@ export const BACKUP_MAX_FILE_BYTES: number = 64 * 1024 * 1024
 
 /** 单域体积告警阈值（字节）。 */
 export const DOMAIN_SIZE_WARN_BYTES: number = 4 * 1024 * 1024
-
-/** 导入撤销快照保留时间（毫秒）。 */
-export const IMPORT_UNDO_TTL_MS: number = 10 * 60 * 1000
 
 /**
  * 域元数据 — 数据域的静态声明。
@@ -247,7 +247,15 @@ export class DomainSpec {
       // 沿用旧布局：filesDir/<名称>（见 dirName 字段注释）
       return filesDir + '/' + this.dirName.substring(1)
     }
-    return filesDir + '/' + PERSISTENCE_KEY_NAMESPACE + this.dirName
+    /*
+     * 文件域根目录固定为 `filesDir/v2/`：命名空间目录名是 `v2`（不带点），
+     * 与 Preferences 键前缀 `v2.`（带点）刻意区分。
+     *
+     * ⚠️ 历史 bug 回归点：早期实现是 `filesDir + '/' + PERSISTENCE_KEY_NAMESPACE + dirName`
+     * （`v2.` 带点）→ 生成 `filesDir/v2.drafts/`，而迁移器写的是 `filesDir/v2/drafts/`，
+     * 两边路径不一致导致迁移后的草稿/存档读不到。Store 与迁移器现在都以本方法为准。
+     */
+    return filesDir + '/' + FILE_NAMESPACE_DIR + '/' + this.dirName
   }
 }
 
@@ -350,6 +358,13 @@ export class PersistenceMeta {
   appVersionCode: number = 0
   /** 最近一次迁移报告（可能为空报告）。 */
   migration: MigrationReport = new MigrationReport()
+  /**
+   * 迁移完成提醒是否已向用户展示（只提示一次的持久化标记）。
+   *
+   * 迁移报告本身会长期留在 meta 里（数据管理页展示用），不能作为"是否提示"的依据——
+   * 否则每次冷启动都会重复弹"本地数据已升级"，真机实测已确认该体验问题。
+   */
+  migrationNoticeAcknowledged: boolean = false
 }
 
 /**

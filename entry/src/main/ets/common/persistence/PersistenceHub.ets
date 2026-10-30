@@ -30,6 +30,7 @@ import {
   DomainSpec,
   MigrationStatus,
   PERSISTENCE_DATA_VERSION,
+  PERSISTENCE_KEY_NAMESPACE,
   StorageKind
 } from './PersistenceTypes'
 
@@ -69,7 +70,32 @@ export class PersistenceHub {
     // 启动自检：清理上次进程中断遗留的 `.pending` 临时键（设计文档 §4.5）
     const specs: DomainSpec[] = PersistenceCatalog.byStorage(StorageKind.PREFERENCES)
     await this.prefBackend.cleanupPending(specs)
+    // 兼容修复：早期实现把文件域目录拼成 `filesDir/v2.<dir>`（见 DomainSpec.dirPath），
+    // 若遗留目录已有数据则整体改名到正确路径 `filesDir/v2/<dir>`，否则 Store 读不到。
+    this.migrateLegacyFileNamespace()
     logger.info('initialized (filesDir=%{public}s)', filesDir)
+  }
+
+  /**
+   * 把遗留的 `filesDir/v2.<dir>` 目录改名到 `filesDir/v2/<dir>`（仅当新目录不存在）。
+   */
+  private migrateLegacyFileNamespace(): void {
+    const backend: JsonFileBackend | null = this.fileBackend
+    if (backend === null) {
+      return
+    }
+    const specs: DomainSpec[] = PersistenceCatalog.byStorage(StorageKind.JSON_FILES)
+    for (let i: number = 0; i < specs.length; i++) {
+      const spec: DomainSpec = specs[i]
+      if (spec.dirName.startsWith('!')) {
+        continue
+      }
+      const legacyDir: string = this.filesDir + '/' + PERSISTENCE_KEY_NAMESPACE + spec.dirName
+      const newDir: string = spec.dirPath(this.filesDir)
+      if (backend.renameDirIfAbsent(legacyDir, newDir)) {
+        logger.info('migrated legacy file namespace dir: %{public}s', spec.id)
+      }
+    }
   }
 
   /** 是否已初始化。 */

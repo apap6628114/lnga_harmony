@@ -167,7 +167,19 @@ function normalizeMeta(raw: Record<string, Object>): PersistenceMeta {
   meta.appVersionName = readString(raw['appVersionName'])
   meta.appVersionCode = readNumber(raw['appVersionCode'], 0)
   meta.migration = normalizeReport(raw['migration'])
+  meta.migrationNoticeAcknowledged = readBoolean(raw['migrationNoticeAcknowledged'], false)
   return meta
+}
+
+/**
+ * 防御性读取布尔值。
+ *
+ * @param value - 原始值
+ * @param fallback - 非法时的兜底值
+ * @returns 布尔值
+ */
+function readBoolean(value: Object | undefined, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value as boolean : fallback
 }
 
 /**

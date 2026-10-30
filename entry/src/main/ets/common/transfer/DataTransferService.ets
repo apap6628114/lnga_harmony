@@ -3,8 +3,8 @@
  *
  * 设计见 `docs/PERSISTENCE_UNIFICATION_DESIGN.md` §6。职责：
  * 1. 导出：按域从 `PersistenceHub` 读载荷 → 组装容器 → 计算校验和 → 可选加密；
- * 2. 导入：识别容器（明文/加密/旧存档）→ 逐域合并计划 → 用户确认后写盘 → 可撤销；
- * 3. 脱敏：settings 域的 AI API Key 导出时剥离、导入时保留本机值（见 §6.6 安全清单）；
+ * 2. 导入：识别容器（明文/加密/旧存档）→ 逐域合并计划 → 用户确认后写盘；
+ * 3. 安全：凭证域永不进入数据包；未加密导出由用户显式确认（加密默认开启）；
  * 4. 文件域（草稿/离线存档）逐文件转换为数组载荷，与 Preferences 域统一处理。
  *
  * 依赖约定：
@@ -26,7 +26,6 @@ import {
   DomainScope,
   DomainSpec,
   ExportPolicy,
-  IMPORT_UNDO_TTL_MS,
   ImportPolicy,
   PERSISTENCE_DATA_VERSION,
   PERSISTENCE_KEY_NAMESPACE,
@@ -39,11 +38,11 @@ import {
   BackupExportResult,
   ImportPlan,
   ImportPlanEntry,
-  ImportResult,
-  UndoResult
+  ImportResult
 } from './TransferTypes'
 import { decryptBackup, encryptBackup, isEncryptedBackup } from './TransferCrypto'
 import { mergePayload, MergeResult } from './DomainMergers'
+import { draftUidPart, rewriteDraftKeyUidPart } from '../utils/DraftKeyUtils'
 
 const logger = new Logger(DOMAIN_STORE, 'DataTransferService')
 
@@ -71,10 +70,6 @@ const CREDENTIAL_EXPORT_MAGIC: string = 'NGA_CREDENTIAL_EXPORT'
  */
 const MAX_DOMAIN_PAYLOAD_CHARS: number = 8 * 1024 * 1024
 
-/** settings 域导出时脱敏的数组字段 → 需要清空的敏感字段名。 */
-const SETTINGS_PROFILE_ARRAY_FIELDS: string[] = ['aiProfiles', 'aiSearchProfiles']
-const SENSITIVE_KEY_FIELDS: string[] = ['apiKey', 'toolsApiKey']
-
 /**
  * 容器解析结果。
  */
@@ -87,6 +82,10 @@ export class ParseOutcome {
   container: BackupContainer | null = null
   /** 错误信息。 */
   error: string = ''
+  /**
+   * 非阻断警告（如 checksum 不匹配）：解析成功但内容可疑，调用方应提示用户后继续。
+   */
+  warning: string = ''
 }
 
 /**
@@ -97,10 +96,6 @@ export class DataTransferService {
   private store: PreferencesStore | null = null
   private appVersionName: string = ''
   private appVersionCode: number = 0
-  /** 最近一次成功导入的时间（撤销窗口判定）。 */
-  private lastImportAt: number = 0
-  /** 撤销快照到期清理定时器（-1 = 无待执行）。 */
-  private undoCleanupTimer: number = -1
   /** 当前登录 uid 提供者（账号镜像域导出归属校验用；未注入时视为未登录）。 */
   private uidProvider: () => string = (): string => ''
 
@@ -108,7 +103,7 @@ export class DataTransferService {
    * 注入依赖（AppStore.init 时调用）。
    *
    * @param hub - 持久化中心
-   * @param store - 偏好存储（撤销快照旁路键）
+   * @param store - 偏好存储（历史撤销快照清理用）
    * @param appVersionName - 应用版本名
    * @param appVersionCode - 应用版本号
    * @param uidProvider - 当前登录 uid 提供者（可选；用于排除他人账号的镜像缓存导出）
@@ -238,9 +233,6 @@ export class DataTransferService {
     if (payload === null || payload === undefined) {
       return null
     }
-    if (spec.id === 'settings') {
-      payload = redactSettingsPayload(payload)
-    }
     const entry: BackupDomainEntry = new BackupDomainEntry()
     entry.id = spec.id
     entry.label = spec.label
@@ -293,6 +285,12 @@ export class DataTransferService {
    */
   async parseBackup(content: string, password: string): Promise<ParseOutcome> {
     const outcome: ParseOutcome = new ParseOutcome()
+    /*
+     * 诊断日志：真机导入失败时可用 `hdc hilog | grep DataTransferService` 定位阶段
+     * （字符数/加密标志/是否旧存档/结构识别/checksum）。不打印任何业务内容。
+     */
+    logger.info('parseBackup: chars=%{public}d encrypted=%{public}s hasPassword=%{public}s',
+      content.length, String(isEncryptedBackup(content)), String(password.length > 0))
     if (content.length === 0) {
       outcome.error = '文件为空'
       return outcome
@@ -326,21 +324,71 @@ export class DataTransferService {
     try {
       parsed = JSON.parse(plaintext) as Object
     } catch (e) {
-      outcome.error = '文件不是有效的 JSON（可能已损坏）'
+      /*
+       * 尾部截断的文件仍可能包含大量完整数据域（导出写入未写完时，前面已写入的域是完整的）。
+       * 先尝试文本级修复：截取到最后一个完整的域对象、补齐容器尾部，再按正常流程导入。
+       * 修复成功时给用户明确警告（并跳过 checksum）。
+       */
+      const repaired: string | null = repairTruncatedContainer(plaintext)
+      if (repaired !== null) {
+        try {
+          const repairedParsed: Object = JSON.parse(repaired) as Object
+          const repairedOutcome: ParseOutcome = new ParseOutcome()
+          const repairedContainer: BackupContainer | null =
+            normalizeContainer(repairedParsed, repairedOutcome)
+          if (repairedContainer !== null) {
+            logger.warn('parseBackup repaired truncated container: domains=%{public}d',
+              repairedContainer.domains.length)
+            repairedContainer.checksum = ''
+            outcome.ok = true
+            outcome.container = repairedContainer
+            outcome.warning = '备份文件尾部不完整（可能导出未写完），已恢复其中 '
+              + String(repairedContainer.domains.length) + ' 个完整数据域；建议恢复后重新导出'
+            return outcome
+          }
+        } catch (e2) {
+          // 修复失败：继续走原错误提示
+        }
+      }
+      /*
+       * 诊断：JSON.parse 的错误信息带出错位置（V8 语义），配合头部/尾部片段可判断
+       * "文件尾部截断"还是"结构被改"。前 48 / 后 48 字符只用于判断是否 NGA_OH_BACKUP 容器，
+       * 不含业务内容（magic/formatVersion/checksum）。
+       */
+      const tail: string = plaintext.length > 48 && plaintext.length - 48 > 48 ?
+        plaintext.substring(plaintext.length - 48) : plaintext
+      logger.warn('parseBackup json fail: len=%{public}d err=%{public}s head=%{public}s tail=%{public}s',
+        plaintext.length,
+        e instanceof Error ? e.message : 'unknown',
+        plaintext.substring(0, Math.min(48, plaintext.length)),
+        tail)
+      outcome.error = '文件不是有效的 JSON（可能导出未写完或文件已损坏，共 '
+        + String(plaintext.length) + ' 字符）'
       return outcome
     }
     const container: BackupContainer | null = normalizeContainer(parsed, outcome)
-    if (container === null || !outcome.ok) {
+    /*
+     * ⚠️ 不能写成 `|| !outcome.ok`：`normalizeContainer` 成功时只返回容器、**不会**设置
+     * `outcome.ok`（`ParseOutcome.ok` 默认 false），加上 `!outcome.ok` 会让**所有明文备份**
+     * 都被误判为"容器非法"（错误信息为空 → UI 只显示"解析失败"）。
+     * 真机实测踩坑：备份文件完整、读取成功，却每次都提示解析失败，根因就是这里。
+     */
+    if (container === null) {
+      logger.warn('parseBackup container invalid: %{public}s', outcome.error)
       return outcome
     }
     // 校验和（旧文件可能没有 checksum，跳过）
     if (container.checksum.length > 0) {
       const actual: string = await sha256Hex(JSON.stringify(container.domains))
       if (actual !== container.checksum) {
-        outcome.ok = false
-        outcome.container = null
-        outcome.error = '文件校验和不匹配（内容可能被修改或损坏）'
-        return outcome
+        /*
+         * **降级为警告，不阻断导入**：checksum 只用于检测手改/截断，而截断在 JSON.parse 阶段
+         * 已会失败；不同 ArkTS 版本对对象键序/数字格式的序列化差异不应让用户数据无法恢复。
+         * （真机导出→导入实测反馈：严格校验会把合法备份挡在门外。）
+         */
+        logger.warn('backup checksum mismatch: expected=%{public}s actual=%{public}s',
+          container.checksum, actual)
+        outcome.warning = '文件校验和与内容不一致（可能跨版本导出或被编辑），已按文件内容继续导入'
       }
     }
     outcome.ok = true
@@ -353,10 +401,16 @@ export class DataTransferService {
   /**
    * 构建导入计划（逐域合并、统计变更，供用户确认）。
    *
+   * 默认恢复备份中的**全部**域（`restoreCacheDomains = true`）——备份里出现某个域，
+   * 说明用户在导出时主动勾选了它，导入时就应当恢复（"跟随导出选择"）。
+   * 调用方只在用户明确关闭「恢复缓存类数据」时传 false。
+   *
    * @param container - 已解析容器
+   * @param restoreCacheDomains - 是否恢复缓存类域（默认 true）
    * @returns 导入计划
    */
-  async buildImportPlan(container: BackupContainer): Promise<ImportPlan> {
+  async buildImportPlan(container: BackupContainer,
+    restoreCacheDomains: boolean = true): Promise<ImportPlan> {
     const plan: ImportPlan = new ImportPlan()
     plan.formatVersion = container.formatVersion
     plan.dataVersion = container.dataVersion
@@ -393,9 +447,25 @@ export class DataTransferService {
         plan.entries.push(entry)
         continue
       }
-      if (spec.importPolicy === ImportPolicy.SKIP) {
+      /*
+       * 账号镜像域（通知/动态/收藏关系）恢复时必须带当前账号归属；未登录（uid 为空）时写入的
+       * ownerUid 为空，Store 读取会按归属校验判为非法——等于"导入成功但看不到数据"。
+       * 因此未登录时直接跳过并说明，等登录后重新导入（或由服务端重建）。
+       */
+      if (spec.scope === DomainScope.ACCOUNT_MIRROR && this.uidProvider().length === 0) {
         entry.willSkip = true
-        entry.reason = '缓存类数据，导入已跳过'
+        entry.reason = '未登录：账号镜像缓存需按账号归属恢复，请登录后重新导入'
+        plan.entries.push(entry)
+        continue
+      }
+      if (spec.importPolicy === ImportPolicy.SKIP && !restoreCacheDomains) {
+        /*
+         * 缓存类域默认跳过（它们可从服务端重建，覆盖本机缓存有风险）。
+         * 但用户既然在导出时选择了它们，就必须给出"恢复"的入口——由 import 计划页的
+         * 「恢复缓存类数据」开关把 restoreCacheDomains 传成 true，走下面的覆盖恢复分支。
+         */
+        entry.willSkip = true
+        entry.reason = '缓存类数据，默认跳过（可开启「恢复缓存类数据」）'
         plan.entries.push(entry)
         continue
       }
@@ -407,11 +477,6 @@ export class DataTransferService {
       }
       try {
         const local: Object | null = await this.readDomainPayload(spec)
-        entry.localPayload = local
-        /*
-         * settings 的 AI API Key 在导出时被脱敏为空（§6.6），导入前必须把本机同 id 配置的密钥
-         * 还原回去，否则"导入设置后 AI 配置不可用"。还原只影响合并输入，不改变导入文件本身。
-         */
         const incomingPayload: Object = spec.id === DomainIds.SETTINGS
           ? restoreLocalSecrets(local, incoming.payload)
           : incoming.payload
@@ -421,6 +486,15 @@ export class DataTransferService {
         entry.updated = merged.updated
         entry.total = merged.added + merged.updated
         entry.willSkip = false
+        if (spec.importPolicy === ImportPolicy.SKIP) {
+          /*
+           * 缓存域走 mergePayload 的透传分支（整体覆盖），不会产生 added/updated；
+           * 这里用备份内的条目数展示，让用户明确"恢复了多少条"。
+           */
+          entry.added = countPayloadEntries(merged.merged)
+          entry.updated = 0
+          entry.total = entry.added
+        }
         plan.entries.push(entry)
       } catch (e) {
         entry.willSkip = true
@@ -453,7 +527,6 @@ export class DataTransferService {
       result.error = plan.error.length > 0 ? plan.error : '导入计划不可执行'
       return result
     }
-    const undoAt: number = Date.now()
     let failed: string = ''
     for (let i: number = 0; i < plan.entries.length; i++) {
       const entry: ImportPlanEntry = plan.entries[i]
@@ -467,8 +540,6 @@ export class DataTransferService {
         continue
       }
       try {
-        // 撤销快照（本机导入前载荷）
-        await this.writeUndoSnapshot(spec, entry.localPayload, undoAt)
         if (spec.storage === StorageKind.JSON_FILES) {
           const fileResult: FileApplyResult = this.applyFileDomain(spec, entry.mergedPayload)
           if (fileResult.failed > 0) {
@@ -476,7 +547,12 @@ export class DataTransferService {
             throw new Error('文件写入失败 ' + String(fileResult.failed) + ' 个：' + spec.id)
           }
         } else {
-          const ok: boolean = await this.hub.writePayload(spec, entry.mergedPayload, '', true)
+          /*
+           * 账号镜像域写入时必须带当前 uid 作为信封 ownerUid：否则恢复出来的镜像域
+           * ownerUid 为空，CacheEnvelopeStore 的归属校验会把它判为非法（等于白恢复）。
+           */
+          const ownerUid: string = spec.scope === DomainScope.ACCOUNT_MIRROR ? this.uidProvider() : ''
+          const ok: boolean = await this.hub.writePayload(spec, entry.mergedPayload, ownerUid, true)
           if (!ok) {
             throw new Error('写盘失败：' + spec.id)
           }
@@ -492,12 +568,8 @@ export class DataTransferService {
       }
     }
     await this.hub.flush()
-    this.lastImportAt = undoAt
-    /* 撤销窗口到期后立即清理快照（否则明文隐私数据会驻留 Preferences 直到下次冷启动） */
-    this.scheduleUndoCleanup()
     result.ok = failed.length === 0
     result.error = failed
-    result.undoAvailable = result.appliedDomains > 0
     logger.info('import ok=%{public}s domains=%{public}d added=%{public}d updated=%{public}d',
       String(result.ok), result.appliedDomains, result.added, result.updated)
     return result
@@ -528,175 +600,31 @@ export class DataTransferService {
         continue
       }
       const record: Record<string, Object> = item as Record<string, Object>
-      const key: string = spec.id === 'saved_threads' ? readString(record['tid']) : readString(record['key'])
+      let key: string = spec.id === 'saved_threads' ? readString(record['tid']) : readString(record['key'])
+      if (spec.id === 'drafts') {
+        /*
+         * 草稿键末尾是**导出账号**的 uid 短哈希（`draft_..._<uidPart>`）。导入到另一个账号时，
+         * 编辑器用当前账号哈希构建键 → 找不到旧草稿（看起来"草稿丢失"）。
+         * 导入时把末尾片段改写为当前账号哈希（未登录则用 `anon`），实现跨账号找回。
+         */
+        const currentUidPart: string = draftUidPart(this.uidProvider())
+        const rewritten: string = rewriteDraftKeyUidPart(key, currentUidPart)
+        if (rewritten !== key) {
+          record['key'] = rewritten
+          key = rewritten
+        }
+      }
       if (!isSafeDomainFileName(key)) {
         result.failed++
         continue
       }
-      if (this.hub.files.writeFileAtomic(spec, key + '.json', JSON.stringify(item))) {
+      if (this.hub.files.writeFileAtomic(spec, key + '.json', JSON.stringify(record))) {
         result.written++
       } else {
         result.failed++
       }
     }
     return result
-  }
-
-  /**
-   * 写入撤销快照（`v2.<domain>.undo`）。
-   *
-   * @param spec - 域元数据
-   * @param localPayload - 本机导入前载荷（null 表示原先无数据）
-   * @param undoAt - 快照时间
-   */
-  private async writeUndoSnapshot(spec: DomainSpec, localPayload: Object | null, undoAt: number): Promise<void> {
-    if (this.store === null) {
-      return
-    }
-    const snapshot: Record<string, Object> = {}
-    snapshot['undoAt'] = undoAt
-    snapshot['payload'] = localPayload !== null ? localPayload : new Object()
-    snapshot['hadData'] = localPayload !== null
-    const key: string = this.undoKey(spec)
-    await this.store.putString(key, JSON.stringify(snapshot), false)
-  }
-
-  /**
-   * 撤销最近一次导入（10 分钟内有效）。
-   *
-   * @returns 撤销结果
-   */
-  async undoImport(): Promise<UndoResult> {
-    const result: UndoResult = new UndoResult()
-    if (this.hub === null || this.store === null) {
-      result.error = '存储未就绪'
-      return result
-    }
-    const now: number = Date.now()
-    const specs: DomainSpec[] = PersistenceCatalog.all()
-    let restored: number = 0
-    for (let i: number = 0; i < specs.length; i++) {
-      const spec: DomainSpec = specs[i]
-      if (spec.importPolicy === ImportPolicy.NEVER || spec.importPolicy === ImportPolicy.SKIP) {
-        continue
-      }
-      const key: string = this.undoKey(spec)
-      const raw: string = await this.store.getString(key, '')
-      if (raw.length === 0) {
-        continue
-      }
-      try {
-        const parsed: Object = JSON.parse(raw)
-        const record: Record<string, Object> = parsed as Record<string, Object>
-        const undoAt: number = readNumber(record['undoAt'], 0)
-        if (now - undoAt > IMPORT_UNDO_TTL_MS) {
-          // 过期快照：清理，不恢复
-          await this.store.deleteKey(key, false)
-          continue
-        }
-        const payload: Object | undefined = record['payload']
-        const hadData: boolean = record['hadData'] === true
-        if (payload !== undefined && payload !== null) {
-          if (spec.storage === StorageKind.JSON_FILES) {
-            /*
-             * 文件域撤销：先清空目录再回写快照。导入可能新增了本机原本没有的文件，
-             * 只做"覆盖写"会留下导入产物，撤销不彻底。
-             */
-            this.hub.files.clearDir(spec)
-            this.applyFileDomain(spec, payload)
-          } else {
-            await this.hub.writePayload(spec, payload, '', true)
-          }
-          restored++;
-        }
-        if (!hadData) {
-          // 导入前本机无数据：撤销等价于清空（文件域已在上面清空，这里兜底 Preferences 域）
-          if (spec.storage !== StorageKind.JSON_FILES) {
-            await this.hub.removeDomain(spec)
-          }
-        }
-        await this.store.deleteKey(key, false)
-      } catch (e) {
-        logger.warn('撤销域失败 domain=%{public}s: %{public}s', spec.id, formatError(e))
-      }
-    }
-    await this.store.flush()
-    result.ok = true
-    result.restoredDomains = restored
-    if (restored === 0) {
-      result.error = '没有可撤销的导入记录（已超过 10 分钟或未执行过导入）'
-    }
-    return result
-  }
-
-  /**
-   * 是否存在可撤销快照（数据管理页按钮可见性）。
-   *
-   * @returns 是否存在
-   */
-  async hasUndoSnapshot(): Promise<boolean> {
-    if (this.store === null) {
-      return false
-    }
-    const now: number = Date.now()
-    const specs: DomainSpec[] = PersistenceCatalog.all()
-    for (let i: number = 0; i < specs.length; i++) {
-      const raw: string = await this.store.getString(this.undoKey(specs[i]), '')
-      if (raw.length === 0) {
-        continue
-      }
-      try {
-        const parsed: Object = JSON.parse(raw)
-        const record: Record<string, Object> = parsed as Record<string, Object>
-        const undoAt: number = readNumber(record['undoAt'], 0)
-        if (now - undoAt <= IMPORT_UNDO_TTL_MS) {
-          return true
-        }
-      } catch (e) {
-        // 坏快照忽略
-      }
-    }
-    return false
-  }
-
-  /**
-   * 清理过期撤销快照（启动维护任务调用）。
-   *
-   * @returns 清理的键数
-   */
-  async cleanupExpiredUndo(): Promise<number> {
-    if (this.store === null) {
-      return 0
-    }
-    const now: number = Date.now()
-    let removed: number = 0
-    const specs: DomainSpec[] = PersistenceCatalog.all()
-    for (let i: number = 0; i < specs.length; i++) {
-      const key: string = this.undoKey(specs[i])
-      const raw: string = await this.store.getString(key, '')
-      if (raw.length === 0) {
-        continue
-      }
-      try {
-        const parsed: Object = JSON.parse(raw)
-        const record: Record<string, Object> = parsed as Record<string, Object>
-        const undoAt: number = readNumber(record['undoAt'], 0)
-        // 超过撤销窗口（10 分钟）即失效并清理：快照含明文隐私数据，不应长期驻留
-        if (now - undoAt > IMPORT_UNDO_TTL_MS) {
-          if (await this.store.deleteKey(key, false)) {
-            removed++;
-          }
-        }
-      } catch (e) {
-        if (await this.store.deleteKey(key, false)) {
-          removed++;
-        }
-      }
-    }
-    if (removed > 0) {
-      await this.store.flush()
-    }
-    return removed
   }
 
   /**
@@ -716,11 +644,14 @@ export class DataTransferService {
   }
 
   /**
-   * 撤销快照键。
+   * 历史撤销快照键（仅用于清理旧版本残留）。
+   *
+   * 撤销导入功能已移除：新版本不再写入 `v2.<domain>.undo`，但旧版本可能留下明文快照，
+   * 启动时与「清空本地数据」时统一删除（隐私残留清理）。
    *
    * ⚠️ 不能用 `spec.fullKey()`：文件域（drafts/saved_threads）的 `fullKey()` 返回空串，
-   * 两个文件域会共用同一个 `.undo` 键、互相覆盖——撤销时用错误域的快照恢复会**清空本机草稿**
-   * （clearDir 后写 0 个文件）。文件域必须用域 ID 生成独立键。
+   * 两个文件域会共用同一个 `.undo` 键，删除时无区别——清理场景下只求把所有残留键删干净，
+   * 仍按域 ID 生成独立键以覆盖全部可能的历史键。
    *
    * @param spec - 域元数据
    * @returns 键名
@@ -733,28 +664,11 @@ export class DataTransferService {
   }
 
   /**
-   * 安排一次撤销快照到期清理（导入成功后调用；重复导入会重置定时器）。
-   */
-  private scheduleUndoCleanup(): void {
-    if (this.undoCleanupTimer >= 0) {
-      clearTimeout(this.undoCleanupTimer)
-    }
-    this.undoCleanupTimer = setTimeout((): void => {
-      this.undoCleanupTimer = -1
-      this.cleanupExpiredUndo().catch((): void => {})
-    }, IMPORT_UNDO_TTL_MS + 60 * 1000)
-  }
-
-  /**
-   * 清理全部撤销快照（「清空本地数据」时调用；快照含明文隐私内容，不能残留）。
+   * 清理全部历史撤销快照（旧版本残留；启动时与「清空本地数据」时调用）。
    *
    * @returns 删除的键数
    */
-  async clearAllUndoSnapshots(): Promise<number> {
-    if (this.undoCleanupTimer >= 0) {
-      clearTimeout(this.undoCleanupTimer)
-      this.undoCleanupTimer = -1
-    }
+  async clearLegacyUndoSnapshots(): Promise<number> {
     if (this.store === null) {
       return 0
     }
@@ -770,6 +684,30 @@ export class DataTransferService {
     }
     return removed
   }
+}
+
+/**
+ * 统计载荷条目数（用于缓存域"覆盖恢复"的展示；透传合并不会产生 added/updated）。
+ *
+ * @param payload - 合并后载荷
+ * @returns 条目数（数组长度 / 信封 items 长度 / 对象键数）
+ */
+function countPayloadEntries(payload: Object): number {
+  if (payload === null || payload === undefined) {
+    return 0
+  }
+  if (Array.isArray(payload)) {
+    return (payload as Object[]).length
+  }
+  if (typeof payload === 'object') {
+    const record: Record<string, Object> = payload as Record<string, Object>
+    const items: Object | undefined = record['items']
+    if (items !== undefined && items !== null && Array.isArray(items)) {
+      return (items as Object[]).length
+    }
+    return Object.keys(record).length
+  }
+  return 1
 }
 
 /**
@@ -872,6 +810,97 @@ function normalizeContainer(parsed: Object, outcome: ParseOutcome): BackupContai
 }
 
 /**
+ * 尝试修复"尾部被截断"的明文备份容器。
+ *
+ * 导出写入未写完时，文件尾部缺失（可能缺少 `]}` 或 checksum 字段），但**前面已写入的域对象
+ * 是完整 JSON**。本函数从 `"domains":[` 开始做括号级扫描，取到最后一个完整域对象结束位置，
+ * 重建容器文本（`checksum` 置空以跳过校验）。无法修复时返回 null（调用方按原错误提示）。
+ *
+ * 只处理**合法头部 + 尾部截断**，不做任意内容猜测：头部必须是 `{"magic":"NGA_OH_BACKUP"`。
+ *
+ * @param text - 原始明文文本
+ * @returns 修复后的容器文本；无法修复返回 null
+ */
+function repairTruncatedContainer(text: string): string | null {
+  if (!text.startsWith('{"magic":"NGA_OH_BACKUP"')) {
+    return null
+  }
+  const domainsKey: string = '"domains":'
+  const keyIndex: number = text.indexOf(domainsKey)
+  if (keyIndex < 0) {
+    return null
+  }
+  let cursor: number = keyIndex + domainsKey.length
+  while (cursor < text.length) {
+    const c: string = text.charAt(cursor)
+    if (c !== ' ' && c !== '\n' && c !== '\r' && c !== '\t') {
+      break
+    }
+    cursor++
+  }
+  if (cursor >= text.length || text.charAt(cursor) !== '[') {
+    return null
+  }
+  const arrayStart: number = cursor
+  let depth: number = 0
+  let inString: boolean = false
+  let escaped: boolean = false
+  let lastCompleteEnd: number = -1
+  let arrayClosedEnd: number = -1
+  let sawObject: boolean = false
+  for (let i: number = arrayStart + 1; i < text.length; i++) {
+    const c: string = text.charAt(i)
+    if (inString) {
+      if (escaped) {
+        escaped = false
+      } else if (c === '\\') {
+        escaped = true
+      } else if (c === '"') {
+        inString = false
+      }
+      continue
+    }
+    if (c === '"') {
+      inString = true
+      continue
+    }
+    if (c === '{' || c === '[') {
+      depth++
+      continue
+    }
+    if (c === '}') {
+      depth--
+      if (depth === 0) {
+        lastCompleteEnd = i + 1
+        sawObject = true
+      }
+      continue
+    }
+    if (c === ']') {
+      if (depth === 0) {
+        // domains 数组完整闭合，但容器尾部（checksum/}）缺失：记录位置并重建
+        arrayClosedEnd = i
+        break
+      }
+      depth--
+    }
+  }
+  let domainsEnd: number = arrayClosedEnd
+  if (domainsEnd < 0) {
+    if (!sawObject || lastCompleteEnd < 0) {
+      return null
+    }
+    domainsEnd = lastCompleteEnd
+  }
+  const domainsJson: string = text.substring(arrayStart + 1, domainsEnd).trim()
+  if (domainsJson.length === 0) {
+    return null
+  }
+  const head: string = text.substring(0, arrayStart)
+  return head + '[' + domainsJson + '],"checksum":""}'
+}
+
+/**
  * 尝试把旧版离线存档导出文件（`SavedThreadExportFile`，无 magic）转换为容器。
  *
  * @param content - 文件文本
@@ -910,49 +939,6 @@ function tryConvertLegacySavedThreadExport(content: string): BackupContainer | n
   } catch (e) {
     return null
   }
-}
-
-/**
- * settings 导出脱敏：清空 AI 配置中的 API Key（文件可能被分享/明文保存）。
- *
- * 注意：只改导出副本，不动内存与磁盘上的真实配置。
- *
- * @param payload - settings 载荷
- * @returns 脱敏后的副本
- */
-function redactSettingsPayload(payload: Object): Object {
-  let copy: Object
-  try {
-    copy = JSON.parse(JSON.stringify(payload))
-  } catch (e) {
-    return payload
-  }
-  if (copy === null || copy === undefined || Array.isArray(copy) || typeof copy !== 'object') {
-    return payload
-  }
-  const record: Record<string, Object> = copy as Record<string, Object>
-  for (let i: number = 0; i < SETTINGS_PROFILE_ARRAY_FIELDS.length; i++) {
-    const field: string = SETTINGS_PROFILE_ARRAY_FIELDS[i]
-    const raw: Object | undefined = record[field]
-    if (raw === undefined || raw === null || !Array.isArray(raw)) {
-      continue
-    }
-    const items: Object[] = raw as Object[]
-    for (let j: number = 0; j < items.length; j++) {
-      const item: Object = items[j]
-      if (item === null || item === undefined || Array.isArray(item) || typeof item !== 'object') {
-        continue
-      }
-      const profile: Record<string, Object> = item as Record<string, Object>
-      for (let k: number = 0; k < SENSITIVE_KEY_FIELDS.length; k++) {
-        const keyField: string = SENSITIVE_KEY_FIELDS[k]
-        if (profile[keyField] !== undefined) {
-          profile[keyField] = ''
-        }
-      }
-    }
-  }
-  return copy
 }
 
 /**
@@ -1056,11 +1042,11 @@ function asRecord(value: Object | undefined | null): Record<string, Object> | nu
 }
 
 /**
- * settings 导入前还原本机敏感字段（AI API Key）。
+ * 导入前还原本机 AI API Key（**兼容旧备份**）。
  *
- * 导出链路把 `aiProfiles[].apiKey` / `.toolsApiKey` / `aiSearchProfiles[].apiKey` 脱敏为空
- * （设计文档 §6.6）；导入时若照抄空值，会把本机可用的密钥清掉、AI 功能直接不可用。
- * 规则：**导入条目该字段为空、且本机同 id 条目非空时，保留本机值**；导入条目自带密钥则不覆盖。
+ * 2026-10-30 前的版本导出时会把 `aiProfiles[].apiKey` / `.toolsApiKey` / `aiSearchProfiles[].apiKey`
+ * 脱敏为空；现在的版本已原样导出（用户可对加密文件负责）。保留本函数用于兼容旧备份文件：
+ * 规则是"导入条目该字段为空、且本机同 id 条目非空时，保留本机值"；导入条目自带密钥则不覆盖。
  *
  * @param localPayload - 本机 settings 载荷（可能为 null）
  * @param incomingPayload - 导入的 settings 载荷

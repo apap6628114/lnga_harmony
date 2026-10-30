@@ -140,6 +140,8 @@ class AppStoreClass {
   private migrationEngine: MigrationEngine | null = null
   /** 本次启动的迁移报告（真实源副本，UI/日志可查）。 */
   private startupMigrationReport: MigrationReport | null = null
+  /** 本次启动是否有待展示的迁移提醒（见 migrationNoticePending 注释）。 */
+  private migrationNoticePendingFlag: boolean = false
   /** 应用版本信息（迁移/导出容器的诊断字段）。 */
   private appVersionName: string = ''
   private appVersionCode: number = 0
@@ -303,6 +305,16 @@ class AppStoreClass {
       if (inspection.pending) {
         const plan: MigrationPlan = await engine.buildPlan(currentUid, await persistenceHub.metaStore.load())
         report = await engine.run(plan, currentUid)
+        /*
+         * 只有本次启动真正执行了迁移、且产生了用户关心的结果（成功转换/失败），
+         * 才需要提醒；且 meta 里已提示过的永不再弹。旧数据"已迁移"的报告会长期留在 meta，
+         * 不能拿它当提示依据（否则每次冷启动都弹"本地数据已升级"，真机实测问题）。
+         */
+        const metaAfter: PersistenceMeta | null = await persistenceHub.metaStore.load()
+        const acknowledged: boolean = metaAfter !== null && metaAfter.migrationNoticeAcknowledged
+        const hasOutcome: boolean = report.count(MigrationDomainStatus.MIGRATED) > 0 ||
+          report.count(MigrationDomainStatus.FAILED) > 0
+        this.migrationNoticePendingFlag = hasOutcome && !acknowledged
       } else {
         const meta = await persistenceHub.metaStore.load()
         if (meta === null) {
@@ -318,7 +330,8 @@ class AppStoreClass {
       // 导入导出服务依赖 Hub/Store 与版本信息，迁移后即可用（数据管理页生命周期内有效）
       dataTransferService.init(persistenceHub, this.store, this.appVersionName, this.appVersionCode,
         (): string => this.authStore.state.uid)
-      await dataTransferService.cleanupExpiredUndo()
+      // 撤销导入功能已移除：清理旧版本可能残留的明文 undo 快照（隐私残留）
+      await dataTransferService.clearLegacyUndoSnapshots()
     } catch (e) {
       // 迁移异常不得让应用停在"初始化失败"：记录并继续用现有数据启动
       logger.error('启动迁移异常: %{public}s', formatError(e))
@@ -1110,6 +1123,37 @@ class AppStoreClass {
     return this.startupMigrationReport
   }
 
+  /**
+   * 是否需要向用户展示"本地数据已升级"提醒。
+   *
+   * 只有**本次启动真正执行了迁移且产生了结果**（成功转换或失败）才为 true，
+   * 且 meta 中未标记已提示——迁移报告会长期留在 meta 里，不能拿它当"是否提示"的依据，
+   * 否则每次冷启动都会重复弹（真机实测问题）。
+   */
+  get migrationNoticePending(): boolean {
+    return this.migrationNoticePendingFlag
+  }
+
+  /**
+   * 标记迁移提醒已展示（持久化到 meta，保证只提示一次）。
+   */
+  async acknowledgeMigrationNotice(): Promise<void> {
+    if (!this.migrationNoticePendingFlag) {
+      return
+    }
+    this.migrationNoticePendingFlag = false
+    try {
+      const meta: PersistenceMeta | null = await persistenceHub.metaStore.load()
+      if (meta === null) {
+        return
+      }
+      meta.migrationNoticeAcknowledged = true
+      await persistenceHub.metaStore.save(meta)
+    } catch (e) {
+      logger.warn('acknowledge migration notice failed: %{public}s', formatError(e))
+    }
+  }
+
   /** 迁移是否已完成（含"无需迁移"）。 */
   get migrationSettled(): boolean {
     const report: MigrationReport | null = this.startupMigrationReport
@@ -1231,8 +1275,8 @@ class AppStoreClass {
     this.aiToolCacheStore.reset()
     draftStore.reloadAfterClear()
     this.savedThreadStore.reload()
-    /* 撤销快照（`v2.<domain>.undo`）含明文隐私内容，清空本地数据时必须一并清理 */
-    await dataTransferService.clearAllUndoSnapshots()
+    /* 旧版撤销快照（`v2.<domain>.undo`）含明文隐私内容，清空本地数据时一并清理 */
+    await dataTransferService.clearLegacyUndoSnapshots()
     await persistenceHub.flush()
     bumpAppStorageVersion(KEY_DATA_MANAGEMENT_VERSION)
     return cleared
@@ -1252,6 +1296,7 @@ class AppStoreClass {
       await this.settingsStore.init(this.store, this.writeQueue, this.authStore.state, this.context)
       /* 主题是独立全局域（v2.theme），导入可能写了它：必须重新加载内存真源 */
       await this.settingsStore.initTheme(this.store, this.writeQueue, this.context)
+      await this.categoryStore.init(this.store, this.writeQueue, this.authStore.state)
       await this.profileStore.init(this.store, this.writeQueue, this.authStore.state)
       await this.trackedThreadStore.init(this.store, this.writeQueue, this.authStore.state)
       await this.aiSessionStore.init(this.store, this.writeQueue, this.authStore.state)

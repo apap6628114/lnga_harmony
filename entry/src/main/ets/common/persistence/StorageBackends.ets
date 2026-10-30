@@ -181,6 +181,37 @@ export class JsonFileBackend {
   }
 
   /**
+   * 把遗留的错误命名空间目录整体改名到正确路径（不存在目标目录时才执行）。
+   *
+   * 背景：早期实现把文件域目录拼成 `filesDir/v2.<dir>`（点号来自键命名空间），
+   * 正确路径是 `filesDir/v2/<dir>`。升级后若旧目录已有数据（用户迁移后新建的草稿/存档），
+   * 需要搬移到新路径，否则 Store 读不到。
+   *
+   * @param legacyDir - 遗留目录绝对路径
+   * @param newDir - 目标目录绝对路径
+   * @returns 是否执行了搬移
+   */
+  renameDirIfAbsent(legacyDir: string, newDir: string): boolean {
+    try {
+      if (!fileIo.accessSync(legacyDir) || fileIo.accessSync(newDir)) {
+        return false
+      }
+      const parentIndex: number = newDir.lastIndexOf('/')
+      if (parentIndex > 0) {
+        const parent: string = newDir.substring(0, parentIndex)
+        if (!fileIo.accessSync(parent)) {
+          fileIo.mkdirSync(parent, true)
+        }
+      }
+      fileIo.renameSync(legacyDir, newDir)
+      return true
+    } catch (e) {
+      logger.warn('renameDirIfAbsent failed: %{public}s', formatError(e))
+      return false
+    }
+  }
+
+  /**
    * 列出域目录下的文件名（不含子目录）。
    *
    * @param spec - 文件域元数据
