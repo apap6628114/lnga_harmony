@@ -1,5 +1,7 @@
 import { describe, expect, it } from '@ohos/hypium'
 import { classifyAuthFailure, verdictFromIfloginResponse, SessionCheckResult, SessionVerdict } from '../main/ets/service/api/AuthErrors'
+import { buildBlockedResponse } from '../main/ets/service/NgaClient'
+import { parseNgaError } from '../main/ets/parser/ErrorParser'
 import { SessionGuard } from '../main/ets/store/SessionGuard'
 import { selectRecoveryCredential, RecoveryCredential } from '../main/ets/store/SessionRecovery'
 import type { Session } from '../main/ets/store/SessionRegistry'
@@ -61,10 +63,15 @@ function makeResult(verdict: SessionVerdict): SessionCheckResult {
 }
 
 /**
- * 鉴权错误识别 / iflogin 三态归一 / SessionGuard 去抖与处置的回归测试。
+ * 鉴权错误识别 / iflogin 三态归一 / SessionGuard 去抖、降级与自愈的回归测试。
  *
  * 判定矩阵来自 2026-10 对 NGA 真实接口的实测（坏 cid 场景）与 nga-hack 官方客户端逆向
  * （`NetProviderImpl.checkHttpResult` 的判据：code==12 或未登录文案）。
+ *
+ * 处置契约已从「确认失效 → 清登录态 + 跳登录页」改为「确认失效 → 进入降级态」：
+ * 本地凭证与全部 Store 保留，读能力照常尝试，写能力由网络层门禁拦截。原因是实测
+ * NGA 各接口的会话校验强度不一致（`read.php` 弱于 `nuke.php`），服务端局部异常期间
+ * 完全可能「帖子能读、iflogin 报失效」——用最严格接口的结论清空一切会误杀有效凭证。
  */
 export default function sessionUnitTest(): void {
   describe('sessionAuth', (): void => {
@@ -87,6 +94,20 @@ export default function sessionUnitTest(): void {
       expect(classifyAuthFailure(resp('{"code":2048,"msg":"参数错误"}'))).assertNull()
       expect(classifyAuthFailure(resp('{"code":521,"html":"<html></html>"}'))).assertNull()
       expect(classifyAuthFailure(resp('{"__parseError":true}'))).assertNull()
+      // 本地写门禁合成的失败响应不是服务端信号：识别成未登录会与降级态形成信号回环
+      expect(classifyAuthFailure(resp('{"error":{"0":"请先登录后再操作"},"__localBlocked":true}'))).assertNull()
+    })
+
+    it('blockedResponseFailsEveryConsumerContract', 0, (): void => {
+      // 本地门禁合成的失败响应必须同时满足三类调用方的判读方式，否则会把"被拦下"误判成成功：
+      // 签到用的是 `Number(raw['code'] ?? 0) === 0` 即成功，缺 `code` 就会报"签到成功"。
+      const blocked: Record<string, Object> = buildBlockedResponse('登录状态异常，请点击顶部提示重新登录后再试')
+      expect(Number(blocked['code'])).assertEqual(1)
+      expect(String(blocked['msg'])).assertEqual('登录状态异常，请点击顶部提示重新登录后再试')
+      // 按 error['0'] 取文案的通道（网页错误页形态 / readAppError 的兜底分支）
+      expect(parseNgaError(blocked)).assertEqual('登录状态异常，请点击顶部提示重新登录后再试')
+      // 不能被当成服务端的未登录信号，否则降级态会被自己的拦截反复确认
+      expect(classifyAuthFailure(blocked)).assertNull()
     })
 
     it('verdictFromIfloginResponseIsThreeState', 0, (): void => {
@@ -96,13 +117,17 @@ export default function sessionUnitTest(): void {
       expect(valid.verdict).assertEqual(SessionVerdict.VALID)
       expect(valid.uid).assertEqual('1001')
 
-      // 凭证错配：code=0 但 uid 是另一个账号
-      expect(verdictFromIfloginResponse(resp('{"code":0,"result":{"uid":"2002"}}'), '1001').verdict)
-        .assertEqual(SessionVerdict.INVALID)
+      // 凭证错配：code=0 但 uid 是另一个账号 —— 必须与普通失效区分开（上层要清态重登）
+      const mismatch: SessionCheckResult =
+        verdictFromIfloginResponse(resp('{"code":0,"result":{"uid":"2002"}}'), '1001')
+      expect(mismatch.verdict).assertEqual(SessionVerdict.INVALID)
+      expect(mismatch.mismatched).assertTrue()
 
       // 明确失效
       expect(verdictFromIfloginResponse(resp('{"code":1,"msg":"SESSION TIMEOUT OR FAIL"}'), '1001').verdict)
         .assertEqual(SessionVerdict.INVALID)
+      expect(verdictFromIfloginResponse(resp('{"code":1,"msg":"SESSION TIMEOUT OR FAIL"}'), '1001').mismatched)
+        .assertFalse()
       expect(verdictFromIfloginResponse(resp('{"code":12,"msg":"未登录"}'), '1001').verdict)
         .assertEqual(SessionVerdict.INVALID)
 
@@ -131,48 +156,104 @@ export default function sessionUnitTest(): void {
       expect(checked).assertEqual(0)
     })
 
-    it('confirmedInvalidTriggersExpiredOnce', 0, async (): Promise<void> => {
+    it('confirmedInvalidEntersDegradedAfterSilentRecheck', 0, async (): Promise<void> => {
       const guard: SessionGuard = new SessionGuard()
       guard.bindSessionResolver((): Session | null => makeSession())
+      // 跳过 2 秒静默复验等待（业务常量不变，只压缩测试时长）
+      guard.bindConfirmDelayMs(0)
       let checked: number = 0
       guard.bindCheckFn(async (uid: string, cid: string): Promise<SessionCheckResult> => {
         checked++
         return makeResult(SessionVerdict.INVALID)
       })
-      let expired: number = 0
-      let navigated: number = 0
-      guard.bindExpiredHandler((): boolean => {
-        expired++
-        return true
-      })
-      guard.attachNavigator((): void => { navigated++ })
+      let degraded: number = 0
+      let recovered: number = 0
+      guard.bindDegradedHandler((reason: string): void => { degraded++ })
+      guard.bindRecoveredHandler((): void => { recovered++ })
 
       await guard.onUnauthorizedSignal('未登录')
-      expect(checked).assertEqual(1)
-      expect(expired).assertEqual(1)
-      expect(navigated).assertEqual(1)
+      // 首次判定 + 静默复验各一次；确认后进入降级（不清态、不导航）
+      expect(checked).assertEqual(2)
+      expect(degraded).assertEqual(1)
+      expect(recovered).assertEqual(0)
+      expect(guard.isDegraded()).assertTrue()
 
-      // 60s 去抖：第二次信号不再校验、不再重复清态
+      // 60s 去抖：第二次信号不再校验、不再重复触发
       await guard.onUnauthorizedSignal('未登录')
-      expect(checked).assertEqual(1)
-      expect(expired).assertEqual(1)
+      expect(checked).assertEqual(2)
+      expect(degraded).assertEqual(1)
     })
 
-    it('unknownDoesNotLogout', 0, async (): Promise<void> => {
+    it('silentRecheckCancelsTransientFailure', 0, async (): Promise<void> => {
+      const guard: SessionGuard = new SessionGuard()
+      guard.bindSessionResolver((): Session | null => makeSession())
+      guard.bindConfirmDelayMs(0)
+      let checked: number = 0
+      guard.bindCheckFn(async (uid: string, cid: string): Promise<SessionCheckResult> => {
+        checked++
+        // 首次报失效、复验通过：典型的服务端瞬时抖动
+        return makeResult(checked === 1 ? SessionVerdict.INVALID : SessionVerdict.VALID)
+      })
+      let degraded: number = 0
+      guard.bindDegradedHandler((reason: string): void => { degraded++ })
+
+      await guard.onUnauthorizedSignal('未登录')
+      expect(checked).assertEqual(2)
+      // 抖动被静默复验挡在降级之外：用户完全无感
+      expect(degraded).assertEqual(0)
+      expect(guard.isDegraded()).assertFalse()
+    })
+
+    it('reverifyRecoversFromDegraded', 0, async (): Promise<void> => {
+      const guard: SessionGuard = new SessionGuard()
+      guard.bindSessionResolver((): Session | null => makeSession())
+      guard.bindConfirmDelayMs(0)
+      let invalid: boolean = true
+      guard.bindCheckFn(async (uid: string, cid: string): Promise<SessionCheckResult> => {
+        return makeResult(invalid ? SessionVerdict.INVALID : SessionVerdict.VALID)
+      })
+      let degraded: number = 0
+      let recovered: number = 0
+      guard.bindDegradedHandler((reason: string): void => { degraded++ })
+      guard.bindRecoveredHandler((): void => { recovered++ })
+
+      await guard.onUnauthorizedSignal('未登录')
+      expect(guard.isDegraded()).assertTrue()
+
+      // 服务端恢复：强制复验应自动治愈（横幅靠这条链路消失）
+      invalid = false
+      expect(await guard.reverify()).assertEqual(SessionVerdict.VALID)
+      expect(recovered).assertEqual(1)
+      expect(guard.isDegraded()).assertFalse()
+    })
+
+    it('verifyDoesNotDegradeOnItsOwn', 0, async (): Promise<void> => {
+      // 主动校验只提供结论，INVALID 的处置由调用方（启动页/主页面）决定：
+      // 它们在"无本地凭证"与"有凭证但服务端不认"两种 INVALID 上要走不同分支。
+      const guard: SessionGuard = new SessionGuard()
+      guard.bindSessionResolver((): Session | null => makeSession())
+      guard.bindCheckFn(async (uid: string, cid: string): Promise<SessionCheckResult> => {
+        return makeResult(SessionVerdict.INVALID)
+      })
+      let degraded: number = 0
+      guard.bindDegradedHandler((reason: string): void => { degraded++ })
+
+      expect(await guard.verify()).assertEqual(SessionVerdict.INVALID)
+      expect(degraded).assertEqual(0)
+      expect(guard.isDegraded()).assertFalse()
+    })
+
+    it('unknownDoesNotDegrade', 0, async (): Promise<void> => {
       const guard: SessionGuard = new SessionGuard()
       guard.bindSessionResolver((): Session | null => makeSession())
       guard.bindCheckFn(async (uid: string, cid: string): Promise<SessionCheckResult> => {
         return makeResult(SessionVerdict.UNKNOWN)
       })
-      let expired: number = 0
-      guard.bindExpiredHandler((): boolean => {
-        expired++
-        return true
-      })
-      guard.attachNavigator((): void => { expired++ })
+      let degraded: number = 0
+      guard.bindDegradedHandler((reason: string): void => { degraded++ })
 
       await guard.onUnauthorizedSignal('SESSION TIMEOUT OR FAIL')
-      expect(expired).assertEqual(0)
+      expect(degraded).assertEqual(0)
     })
 
     it('validSignalKeepsSession', 0, async (): Promise<void> => {
@@ -181,15 +262,23 @@ export default function sessionUnitTest(): void {
       guard.bindCheckFn(async (uid: string, cid: string): Promise<SessionCheckResult> => {
         return makeResult(SessionVerdict.VALID)
       })
-      let expired: number = 0
-      guard.bindExpiredHandler((): boolean => {
-        expired++
-        return true
-      })
-      guard.attachNavigator((): void => { expired++ })
+      let degraded: number = 0
+      guard.bindDegradedHandler((reason: string): void => { degraded++ })
 
       await guard.onUnauthorizedSignal('未登录')
-      expect(expired).assertEqual(0)
+      expect(degraded).assertEqual(0)
+    })
+
+    it('degradedHandlerIsOptional', 0, async (): Promise<void> => {
+      // 未注入任何回调时不得抛错（AppStore 尚未完成初始化的窗口期）
+      const guard: SessionGuard = new SessionGuard()
+      guard.bindSessionResolver((): Session | null => makeSession())
+      guard.bindConfirmDelayMs(0)
+      guard.bindCheckFn(async (uid: string, cid: string): Promise<SessionCheckResult> => {
+        return makeResult(SessionVerdict.INVALID)
+      })
+      await guard.onUnauthorizedSignal('未登录')
+      expect(guard.isDegraded()).assertTrue()
     })
 
     it('foregroundVerifyIsThrottled', 0, async (): Promise<void> => {
@@ -231,7 +320,7 @@ export default function sessionUnitTest(): void {
       expect(checked).assertEqual(2)
     })
 
-    it('genericCodeOneStaysUnknownAndNeverLogsOut', 0, (): void => {
+    it('genericCodeOneStaysUnknownAndNeverDegrades', 0, (): void => {
       // code=1 是通用业务失败码（官方也用它表示 ACTION NOT FOUND），
       // 只有文案命中会话类措辞才判失效——否则本次修复会把登录态误杀回来。
       expect(verdictFromIfloginResponse(
@@ -268,7 +357,7 @@ export default function sessionUnitTest(): void {
       expect(calls).assertEqual(1)
     })
 
-    it('timeoutIsUnknownAndNeverLogsOut', 0, async (): Promise<void> => {
+    it('timeoutIsUnknownAndNeverDegrades', 0, async (): Promise<void> => {
       const guard: SessionGuard = new SessionGuard()
       guard.bindSessionResolver((): Session | null => makeSession())
       guard.bindTimeoutMs(30)
@@ -276,13 +365,10 @@ export default function sessionUnitTest(): void {
       guard.bindCheckFn((): Promise<SessionCheckResult> => {
         return new Promise<SessionCheckResult>((resolve: (value: SessionCheckResult) => void): void => {})
       })
-      let expired: number = 0
-      guard.bindExpiredHandler((): boolean => {
-        expired++
-        return true
-      })
+      let degraded: number = 0
+      guard.bindDegradedHandler((reason: string): void => { degraded++ })
       expect(await guard.verify()).assertEqual(SessionVerdict.UNKNOWN)
-      expect(expired).assertEqual(0)
+      expect(degraded).assertEqual(0)
     })
 
     it('clearedSessionIsInvalidWithoutReuse', 0, async (): Promise<void> => {
@@ -302,19 +388,140 @@ export default function sessionUnitTest(): void {
       expect(calls).assertEqual(1)
     })
 
-    it('declinedExpiredHandlerSkipsNavigation', 0, async (): Promise<void> => {
+    it('noSessionNeverDegrades', 0, async (): Promise<void> => {
+      // 真未登录（本地无会话）不是降级：必须原样交给登录流程，不能被标成降级态
       const guard: SessionGuard = new SessionGuard()
-      guard.bindSessionResolver((): Session | null => makeSession())
+      guard.bindSessionResolver((): Session | null => null)
+      guard.bindConfirmDelayMs(0)
       guard.bindCheckFn(async (uid: string, cid: string): Promise<SessionCheckResult> => {
         return makeResult(SessionVerdict.INVALID)
       })
-      let navigated: number = 0
-      // 未登录/页面销毁窗口：AppStore 早退返回 false，此时不应再跳登录页
-      guard.bindExpiredHandler((): boolean => false)
-      guard.attachNavigator((): void => { navigated++ })
+      let degraded: number = 0
+      guard.bindDegradedHandler((reason: string): void => { degraded++ })
 
       await guard.onUnauthorizedSignal('未登录')
-      expect(navigated).assertEqual(0)
+      expect(degraded).assertEqual(0)
+      expect(guard.isDegraded()).assertFalse()
+    })
+
+    it('resetForNewSessionClearsDegradedState', 0, async (): Promise<void> => {
+      const guard: SessionGuard = new SessionGuard()
+      guard.bindSessionResolver((): Session | null => makeSession())
+      guard.bindConfirmDelayMs(0)
+      guard.bindCheckFn(async (uid: string, cid: string): Promise<SessionCheckResult> => {
+        return makeResult(SessionVerdict.INVALID)
+      })
+      await guard.onUnauthorizedSignal('未登录')
+      expect(guard.isDegraded()).assertTrue()
+
+      // 重新登录：守卫必须复位，否则之后任何成功校验都不会触发恢复回调，横幅会一直挂着
+      guard.resetForNewSession()
+      expect(guard.isDegraded()).assertFalse()
+      // 信号去抖窗口同时复位：新会话立刻失效也要能被识别
+      let checked: number = 0
+      guard.bindCheckFn(async (uid: string, cid: string): Promise<SessionCheckResult> => {
+        checked++
+        return makeResult(SessionVerdict.INVALID)
+      })
+      await guard.onUnauthorizedSignal('未登录')
+      expect(checked).assertEqual(2)
+    })
+
+    it('markDegradedIsExposedAndResettable', 0, (): void => {
+      // 启动页/主页面直接判定 INVALID 时不经过 notifyDegraded，必须显式同步这个标志：
+      // 它决定前台恢复探针的节流间隔（降级态 1 分钟 / 正常态 10 分钟）。
+      const guard: SessionGuard = new SessionGuard()
+      expect(guard.isDegraded()).assertFalse()
+      guard.markDegraded()
+      expect(guard.isDegraded()).assertTrue()
+      guard.resetForNewSession()
+      expect(guard.isDegraded()).assertFalse()
+    })
+
+    it('abandonsConfirmWhenSessionClearedDuringWait', 0, async (): Promise<void> => {
+      // 静默复验的 2 秒窗口里用户可能已经主动退出登录。
+      // 用非 0 的等待时长真正走进那个分支（bindConfirmDelayMs(0) 会整块跳过）。
+      const guard: SessionGuard = new SessionGuard()
+      let session: Session | null = makeSession()
+      guard.bindSessionResolver((): Session | null => session)
+      guard.bindConfirmDelayMs(1)
+      guard.bindCheckFn(async (uid: string, cid: string): Promise<SessionCheckResult> => {
+        session = null
+        return makeResult(SessionVerdict.INVALID)
+      })
+      let degraded: number = 0
+      guard.bindDegradedHandler((reason: string): void => { degraded++ })
+
+      await guard.onUnauthorizedSignal('未登录')
+      // 等待结束时会话已不存在：这次判定失去对象，不得降级
+      expect(degraded).assertEqual(0)
+      expect(guard.isDegraded()).assertFalse()
+    })
+
+    it('secondRecheckUnknownDoesNotDegrade', 0, async (): Promise<void> => {
+      const guard: SessionGuard = new SessionGuard()
+      guard.bindSessionResolver((): Session | null => makeSession())
+      guard.bindConfirmDelayMs(0)
+      let calls: number = 0
+      guard.bindCheckFn(async (uid: string, cid: string): Promise<SessionCheckResult> => {
+        calls++
+        // 首次明确失效、复验无法判定：证据不足，不能据此降级
+        return makeResult(calls === 1 ? SessionVerdict.INVALID : SessionVerdict.UNKNOWN)
+      })
+      let degraded: number = 0
+      guard.bindDegradedHandler((reason: string): void => { degraded++ })
+
+      await guard.onUnauthorizedSignal('未登录')
+      expect(calls).assertEqual(2)
+      expect(degraded).assertEqual(0)
+      expect(guard.isDegraded()).assertFalse()
+    })
+
+    it('externalMarkDegradedStillRecoversOnNextValidCheck', 0, async (): Promise<void> => {
+      // 启动页/主页面直接标记降级时，守卫内部 degraded 仍为 false。
+      // 之后的成功校验必须照样触发恢复回调，否则横幅永远不消失。
+      const guard: SessionGuard = new SessionGuard()
+      guard.bindSessionResolver((): Session | null => makeSession())
+      guard.bindCheckFn(async (uid: string, cid: string): Promise<SessionCheckResult> => {
+        return makeResult(SessionVerdict.VALID)
+      })
+      let recovered: number = 0
+      guard.bindRecoveredHandler((): void => { recovered++ })
+
+      guard.markDegraded()
+      expect(await guard.verify()).assertEqual(SessionVerdict.VALID)
+      expect(recovered).assertEqual(1)
+      expect(guard.isDegraded()).assertFalse()
+    })
+
+    it('lateVerifyResultCannotOverrideNewerOne', 0, async (): Promise<void> => {
+      // 降级态下用户点「重试」时，信号路径可能还有一个更早发出的校验在途。
+      // 若不做序号判定，迟到的 VALID 会把刚落地的 INVALID 撤销 —— 表现为横幅闪一下又回来。
+      const guard: SessionGuard = new SessionGuard()
+      guard.bindSessionResolver((): Session | null => makeSession())
+      const pending: Array<(result: SessionCheckResult) => void> = []
+      guard.bindCheckFn((uid: string, cid: string): Promise<SessionCheckResult> => {
+        return new Promise<SessionCheckResult>((resolve: (value: SessionCheckResult) => void): void => {
+          pending.push(resolve)
+        })
+      })
+      let degraded: number = 0
+      let recovered: number = 0
+      guard.bindDegradedHandler((reason: string): void => { degraded++ })
+      guard.bindRecoveredHandler((): void => { recovered++ })
+
+      const first: Promise<SessionVerdict> = guard.reverify()
+      const second: Promise<SessionVerdict> = guard.reverify()
+      // 后发先至：第二次校验先返回 INVALID，降级生效
+      pending[1](makeResult(SessionVerdict.INVALID))
+      expect(await second).assertEqual(SessionVerdict.INVALID)
+      expect(guard.isDegraded()).assertTrue()
+
+      // 更早发出的第一次迟到返回 VALID：必须被作废（归一为 UNKNOWN），不得撤销降级
+      pending[0](makeResult(SessionVerdict.VALID))
+      expect(await first).assertEqual(SessionVerdict.UNKNOWN)
+      expect(recovered).assertEqual(0)
+      expect(guard.isDegraded()).assertTrue()
     })
   })
 

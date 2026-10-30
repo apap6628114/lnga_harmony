@@ -9,6 +9,26 @@ import { Logger, DOMAIN_STORE } from '../common/utils/Logger'
 
 const logger = new Logger(DOMAIN_STORE, 'AuthStore')
 
+/**
+ * 凭证的服务端确认状态。
+ *
+ * 与 `AuthState.isAuthenticated` 是**两个正交维度**，不可合并：
+ * - `isAuthenticated` 表达「本地是否持有完整凭证」，全工程 30+ 处功能门禁
+ *   （轮询启停 / 受控刷新 / 收藏 / 关注 / 通知 / AI 工具 / 阅读历史）读的是它。
+ *   若把它改成「服务端已确认」，服务端一抖动这些功能会集体停摆，故障面反而被放大。
+ * - `CredentialState` 只表达「服务端最近一次认不认这份凭证」，用于降级提示与写操作拦截。
+ *
+ * 降级**不清态、不跳页**：NGA 各接口的会话校验强度并不一致（`read.php` 弱于 `nuke.php`），
+ * 服务端局部异常期间完全可能「帖子能读、iflogin 报失效」。因此单点判定只关闭"需要强确认"
+ * 的能力，不否定整个登录态。
+ */
+export enum CredentialState {
+  /** 本地凭证存在，且最近一次校验未被服务端拒绝（或尚未校验）。 */
+  VALID = 0,
+  /** 本地凭证仍在，但服务端已明确拒绝 —— 降级态。 */
+  DEGRADED = 1,
+}
+
 /** 认证状态 */
 @Observed
 export class AuthState {
@@ -18,6 +38,12 @@ export class AuthState {
   avatarUrl: string = ''
   isAuthenticated: boolean = false
   initialized: boolean = false
+  /**
+   * 凭证的服务端确认状态（见 {@link CredentialState}）。
+   *
+   * 纯内存态，不落盘：每次启动重新校验，避免陈旧结论挡住"服务端已恢复"。
+   */
+  credentialState: CredentialState = CredentialState.VALID
   /**
    * 本次启动是否从本地凭证重建了会话（供启动页提示一次）。
    *
@@ -75,6 +101,8 @@ export class AuthStore extends BaseStore<AuthState> {
     this.state.isAuthenticated = true
     this.state.initialized = true
     this.state.sessionRestored = false
+    // 新会话一律从"未被拒绝"开始：旧账号的降级态不得跟到新账号上
+    this.state.credentialState = CredentialState.VALID
     this.persistedCid = this.readSessionCid(token)
     this.persistAuth()
     // 登录态必须在返回前真正落盘：此前写入只 flush 于 500ms 后的定时器，
@@ -96,6 +124,8 @@ export class AuthStore extends BaseStore<AuthState> {
     this.state.isAuthenticated = false
     this.state.initialized = true
     this.state.sessionRestored = false
+    // 已是"真未登录"，降级态失去意义；不复位会让下次登录前一直带着异常标记
+    this.state.credentialState = CredentialState.VALID
     this.persistedCid = ''
     this.persistAuth()
   }

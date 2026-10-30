@@ -5,7 +5,7 @@
  * 附件上传使用 post/check 返回的 attach_url 和官方 multipart 字段。
  */
 
-import { ngaClient } from '../NgaClient';
+import { ngaClient, getWriteBlockReason } from '../NgaClient';
 import { ngaUploadFile, ngaUploadVideoFile } from './NgaUploader';
 import { appStore } from '../../store/AppStore';
 import { parseNgaError, formatUploadErrorCode } from '../../parser/ErrorParser';
@@ -575,6 +575,14 @@ export async function uploadAttachment(token: string, auth: string, fid: number,
     result.error = '未登录';
     return result;
   }
+  // 附件上传是独立的 multipart 请求，不经过 `postSigned` 的写门禁，必须在这里补同一层判断：
+  // 编辑器可能早已缓存了 `post/check` 的 auth（`ReplyManager.cachedAuth`），降级后才点上传，
+  // 否则这一路会绕过门禁把二进制真的传到服务端。
+  const blocked: string | null = getWriteBlockReason();
+  if (blocked !== null) {
+    result.error = blocked;
+    return result;
+  }
 
   try {
     const rawText: string = await ngaUploadFile(
@@ -609,6 +617,12 @@ export async function uploadVideoAttachment(token: string, auth: string, fid: nu
   const session = appStore.getSession(token);
   if (!session) {
     result.error = '未登录';
+    return result;
+  }
+  // 与图片上传同因：独立 multipart 通道不经过 `postSigned` 的写门禁
+  const blocked: string | null = getWriteBlockReason();
+  if (blocked !== null) {
+    result.error = blocked;
     return result;
   }
 

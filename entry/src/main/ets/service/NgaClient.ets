@@ -349,6 +349,72 @@ function emitAuthFailure(raw: object): void {
   }
 }
 
+// ============== 写操作本地门禁 ==============
+
+/**
+ * 写操作本地门禁（由 AppStore 在启动时注册）。
+ *
+ * 只在**写接口**上生效（判定复用 `NgaThrottleSignals.isWritableOperation` 的读写白名单，
+ * 默认「不在只读清单里的一律按写处理」）：返回 null 表示放行，返回非空串表示拦截原因。
+ *
+ * 为什么放在网络层而不是各个 UI 入口：写操作入口散落在多个面板与三个编辑器管理器里
+ * （回复/发帖/贴条/编辑/赞踩/投票/收藏/关注/私信/签到/子版块订阅），逐个加检查必然漏改；
+ * 而所有写请求都要经过本通道，一处拦截即可全覆盖。被拦下的请求**不会真正发出**，
+ * 避免在服务端异常期间制造无效请求、叠加风控计数。
+ */
+type WriteGuard = () => string | null
+
+let writeGuard: WriteGuard | null = null
+
+/**
+ * 注册写操作本地门禁（幂等；重复注册覆盖）。
+ *
+ * @param guard - 返回拦截原因的回调；传 null 取消注册
+ */
+export function setWriteGuard(guard: WriteGuard | null): void {
+  writeGuard = guard
+}
+
+/**
+ * 构造"被本地门禁拦截"的失败响应。
+ *
+ * 形状必须**同时**覆盖三类调用方的判读方式，缺一类就会把拦截误判成成功：
+ * - 按 `code` 判定的（如签到 `Number(raw['code'] ?? 0) === 0` 即成功）→ 必须给非 0 的 `code`；
+ * - 按 `msg` 取文案的（`readAppError` 在 code 非 0 时读 `msg`）；
+ * - 按 `error['0']` 取文案的（`parseNgaError`、网页通道形态）。
+ *
+ * 另带 `__localBlocked` 标记，让 `classifyAuthFailure` 不把它误当成服务端的未登录信号
+ * （否则降级态会被自己的拦截反复"确认"，形成信号回环）。
+ *
+ * @param message - 拦截原因（面向用户）
+ * @returns 失败响应对象
+ */
+export function buildBlockedResponse(message: string): Record<string, Object> {
+  const errorMap: Record<string, string> = {};
+  errorMap['0'] = message;
+  const result: Record<string, Object> = {};
+  result['code'] = 1 as Object;
+  result['msg'] = message as Object;
+  result['error'] = errorMap as Object;
+  result['__localBlocked'] = true as Object;
+  return result;
+}
+
+/**
+ * 读取当前写操作门禁的拦截原因（供不走 `postSigned` 的写通道复用）。
+ *
+ * 附件上传（`NgaUploader`）是独立的 multipart 请求，不经过 `postSigned`，因此拿不到
+ * 上面的拦截；它的调用方在 `ThreadWriteApi.uploadAttachment` 等处用本函数补同一层判断。
+ *
+ * @returns 拦截原因；放行时返回 null
+ */
+export function getWriteBlockReason(): string | null {
+  if (writeGuard === null) {
+    return null;
+  }
+  return writeGuard();
+}
+
 // ============== NGA 核心 ==============
 
 /**
@@ -718,6 +784,15 @@ const client: INgaClient = {
     params: Record<string, string>, cookies: Cookies | undefined,
     signParams: string, output: string, includeClientChecksum: boolean = false,
     inchst: string = 'utf-8', signalAuthFailure: boolean = true): Promise<object> {
+    // 写操作本地门禁：降级态（服务端已明确拒绝当前凭证）下不再把写请求发出去。
+    // 读接口不受影响 —— NGA 各接口的会话校验强度不一致，读能力要留给服务端回答。
+    if (writeGuard !== null && isWritableOperation(lib, act)) {
+      const blocked: string | null = writeGuard();
+      if (blocked !== null) {
+        logger.verbose('[NGA][GUARD] 写操作被本地门禁拦截: %{public}s/%{public}s', lib, act);
+        return buildBlockedResponse(blocked);
+      }
+    }
     const raw: object = await ngaPostSigned(path, lib, act, params, cookies, signParams, output,
       includeClientChecksum, inchst);
     // 轮询类调用（通知/关注动态）显式传 false：后台轮询撞上未登录不应打断用户。

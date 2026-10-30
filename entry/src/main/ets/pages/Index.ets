@@ -1,6 +1,11 @@
 /**
  * Index 页面 - 应用启动页
  * 等待 AppStore 初始化完成后，根据认证状态跳转到 LoginPage 或 MainPage
+ *
+ * **只有"本地没有凭证"才去登录页**。本地有凭证、但服务端校验明确拒绝时，按降级处理：
+ * 照常进主界面并挂上顶部横幅（`CredentialBanner`），不清登录态、不要求重新输入密码。
+ * 依据：NGA 各接口的会话校验强度并不一致，服务端局部异常期间完全可能「帖子能读、
+ * iflogin 报失效」；此时把用户踢回登录页，既没有解决任何问题，又抹掉了他正在看的内容。
  */
 
 import { appStore } from '../store/AppStore'
@@ -33,15 +38,22 @@ struct Index {
       return
     }
     if (appStore.auth.isAuthenticated) {
-      // 三态校验（5s 超时）：只有服务端**明确**判失效才清态回登录页；无法判定（离线/服务端异常）
-      // 时保留登录态进主界面，由各页面自己呈现加载失败——这是"状态不会因一次网络抖动丢失"的关键。
+      // 三态校验（5s 超时）：服务端**明确**判失效时也不清态，只标记降级。
+      // 无法判定（离线/服务端异常）时同样保留登录态 —— 这是"状态不会因一次网络抖动丢失"的关键。
       const verdict: SessionVerdict = await appStore.sessionGuard.verify()
       if (verdict === SessionVerdict.INVALID) {
-        // 自愈成功但凭证已被服务端判失效：不再提示"已恢复"，直接告知失效
+        // 自愈成功但凭证已被服务端判失效：不再提示"已恢复"
         appStore.auth.sessionRestored = false
-        await appStore.clearAuthAndFlush()
-        appStore.showToast('登录状态已失效，请重新登录')
-        try { this.getUIContext().getRouter().replaceUrl({ url: 'pages/LoginPage' }) } catch (e) { logger.error('route to LoginPage failed: %{public}s', (e as Error).message) }
+        // 降级而不是清态：本地凭证与全部 Store 原样保留，照常进主界面。
+        // 写操作会被门禁拦下；服务端恢复后，后台探针会让横幅自行消失。
+        appStore.markCredentialDegraded('启动校验未通过')
+        if (!appStore.auth.isAuthenticated) {
+          // 异常分支：凭证与账号错配时 `markCredentialDegraded` 会直接清态，
+          // 此时不能进主界面 —— 继续用会以别人的身份读数据。
+          try { this.getUIContext().getRouter().replaceUrl({ url: 'pages/LoginPage' }) } catch (e) { logger.error('route to LoginPage failed: %{public}s', (e as Error).message) }
+          return
+        }
+        try { this.getUIContext().getRouter().replaceUrl({ url: 'pages/MainPage' }) } catch (e) { logger.error('route to MainPage failed: %{public}s', (e as Error).message) }
         return
       }
       // 本地会话被自愈（token 悬空但 uid/cid 仍在）时明确告知一次：用户不需要重新输入，

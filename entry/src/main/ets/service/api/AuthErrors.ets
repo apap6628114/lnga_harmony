@@ -36,6 +36,14 @@ export class SessionCheckResult {
   uid: string = ''
   /** 诊断文案（服务端原文或本地原因；不含任何凭证）。 */
   message: string = ''
+  /**
+   * 凭证与本地账号**错配**：服务端把这个 cid 解析成了另一个 uid。
+   *
+   * 与普通的"服务端不认这份凭证"（可降级保留）性质不同：错配意味着后续读接口会以
+   * 另一个账号的身份返回数据（私信、通知、收藏都可能是别人的），必须清态重登，
+   * 不能让降级机制把它掩盖过去。
+   */
+  mismatched: boolean = false
 }
 
 /**
@@ -84,6 +92,11 @@ export function classifyAuthFailure(raw: object): string | null {
   }
   const data: Record<string, Object> = raw as Record<string, Object>
   if (data['__parseError'] !== undefined) {
+    return null
+  }
+  // 本地门禁合成的失败响应（`__localBlocked`）不是服务端信号：把它当"未登录"上报会让
+  // 降级态反复自我确认，形成信号回环。
+  if (data['__localBlocked'] !== undefined) {
     return null
   }
 
@@ -180,6 +193,7 @@ export function verdictFromIfloginResponse(raw: object, expectedUid: string): Se
     }
     if (expectedUid.length > 0 && uid !== expectedUid) {
       result.verdict = SessionVerdict.INVALID
+      result.mismatched = true
       result.message = 'credential belongs to another account'
       return result
     }

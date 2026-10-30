@@ -133,3 +133,16 @@ export const KEY_COLUMN_SIDEBAR_LG: string = 'columnSidebarWidthLg'
 
 /** lg 断点板块列在内容区（窗口 − 侧边栏）中的占比。默认 0.4。 */
 export const KEY_COLUMN_BOARD_RATIO_LG: string = 'columnBoardRatioLg'
+
+/**
+ * 凭证是否处于「降级态」：true = 本地凭证仍在，但服务端明确拒绝。
+ *
+ * 这是**纯内存态、不落盘**的 UI 信号：降级与否每次启动都会重新校验，
+ * 持久化旧结论只会让"服务端已恢复"被陈旧状态挡住。
+ *
+ * 为什么走 AppStorage 而不是让组件观察 `AuthState.credentialState`：
+ * `AuthState` 虽被 `@Observed` 装饰，但消费方用 `@State` 持有它时
+ * **嵌套属性变化不驱动刷新**（V1 状态管理）。横幅必须用 AppStorage 键 +
+ * `@StorageProp` 才能可靠地跟随状态变化。
+ */
+export const KEY_CREDENTIAL_DEGRADED: string = 'credentialDegraded'

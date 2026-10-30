@@ -42,6 +42,7 @@ import { ActivityRouter } from './ActivityRouter'
 import { BoardRouter } from './BoardRouter'
 import { SidebarComponent } from '../common/components/SidebarComponent'
 import { CommunityPanel } from './CommunityPanel'
+import { CredentialBanner } from '../common/components/CredentialBanner'
 import { FloatingLayerComponent } from '../common/components/FloatingLayerComponent'
 import { EmptyHint } from '../common/components/EmptyHint'
 import { TtsProgressIndicator } from '../common/components/TtsProgressIndicator'
@@ -130,9 +131,6 @@ struct MainPage {
   aboutToAppear(): void {
     // 登录进入主页面后保持屏幕常亮（不息屏），离开主页面时恢复自动息屏
     enableKeepScreenOn()
-    // 会话守卫在网络层确认失效后需要有人跳登录页：store 层不持有 UIContext，
-    // 由本页注入路由动作（MainPage 是登录后的常驻页面，浮层页面都叠在它上面）。
-    appStore.sessionGuard.attachNavigator((): void => { this.routeToLoginPage() })
     this.checkAuth().catch((e: Error): void => {
       logger.error('checkAuth failed: %{public}s', (e as Error).message)
     })
@@ -141,10 +139,14 @@ struct MainPage {
   aboutToDisappear(): void {
     disableKeepScreenOn()
     this.clearReadoutBarTimer()
-    appStore.sessionGuard.detachNavigator()
   }
 
-  /** 跳登录页（路由失败只记日志：此时用户已经确认失效，不应再卡在当前页）。 */
+  /**
+   * 跳登录页（路由失败只记日志）。
+   *
+   * 只用于「本地已无凭证」这一种情形。服务端校验失败的降级态**不走这里** ——
+   * 那类情形由顶部横幅提供「重试 / 重新登录」，不打断用户当前浏览。
+   */
   private routeToLoginPage(): void {
     try {
       this.getUIContext().getRouter().replaceUrl({ url: 'pages/LoginPage' })
@@ -319,6 +321,10 @@ struct MainPage {
         this.ColumnHandle(HANDLE_SIDEBAR)
         this.ColumnHandle(HANDLE_BOARD)
       }
+
+      // 凭证降级横幅：只在服务端明确拒绝当前凭证时出现。压在标题栏正下方，
+      // 与列占比读数标尺同一层（不参与列布局、不遮系统浮层）。
+      CredentialBanner()
 
       FloatingLayerComponent({ currentBreakpoint: this.currentBreakpoint })
       // 注：Toast 已迁到系统浮层（PromptAction.openCustomDialog），不再挂在页面根 Stack。
@@ -651,20 +657,24 @@ struct MainPage {
 
   private async checkAuth(): Promise<void> {
     if (!appStore.auth.isAuthenticated) {
+      // 本地无凭证：本客户端坚持"登录才能使用"
       this.routeToLoginPage()
       return
     }
 
-    // 三态：只有服务端明确判失效才清态；UNKNOWN（离线/服务端异常）保留登录态继续加载，
-    // 否则一次网络抖动就会把用户踢回登录页。30s 内复用启动页刚做过的结论，避免重复请求。
+    // 三态：服务端**明确**判失效时也不清态、不跳页，只标记降级。
+    // 30s 内复用启动页刚做过的结论，避免重复请求。
     const verdict: SessionVerdict = await appStore.sessionGuard.verifyIfStale(30 * 1000)
     if (verdict === SessionVerdict.INVALID) {
-      await appStore.clearAuthAndFlush()
-      appStore.showToast('登录状态已失效，请重新登录')
-      this.routeToLoginPage()
-      return
-    }
-    if (verdict === SessionVerdict.UNKNOWN) {
+      appStore.markCredentialDegraded('进入主页面校验未通过')
+      if (!appStore.auth.isAuthenticated) {
+        // 凭证与账号错配：`markCredentialDegraded` 已清态，必须回登录页
+        this.routeToLoginPage()
+        return
+      }
+      // 继续往下走：读能力仍可能可用（NGA 各接口的会话校验强度不一致，
+      // 实测服务端异常期间 read.php 仍可读），写能力由门禁拦截
+    } else if (verdict === SessionVerdict.UNKNOWN) {
       logger.warn('进入主页面时会话校验无法判定，保留登录态')
     }
 

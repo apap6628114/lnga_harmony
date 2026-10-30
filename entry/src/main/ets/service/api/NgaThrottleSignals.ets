@@ -76,6 +76,17 @@ export function looksLikeThrottle(text: string): boolean {
 const READ_ONLY_OPERATIONS: string[] = [
   // 发帖辅助：取分类（post 族里仅这个是读；recommend 是推荐/反对的状态变更，属于写）
   'post/titletype',
+  /**
+   * 发帖/回帖前的鉴权信息（auth / attach_url / 引用块 / 原标题）。
+   *
+   * 它是**读**：不产生任何服务端副作用，且幂等（同一 action+fid+tid+pid 恒返回同一份
+   * 鉴权参数），因此重试安全。
+   *
+   * **必须登记**：写门禁以本白名单判定"是不是写操作"，漏登记会让降级态下的编辑器
+   * （编辑、引用）在预取阶段就失败 —— 用户看得见编辑框、写得进正文，点提交才被拒。
+   * 本名单同时服务于"是否允许自动重试"，两条语义在这里恰好一致。
+   */
+  'post/check',
   // 主题列表 / 搜索
   'subject/topped',
   'subject/hot',

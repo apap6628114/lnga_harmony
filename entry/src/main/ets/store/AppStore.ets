@@ -24,8 +24,10 @@ import { AiSessionStore } from './AiSessionStore'
 import { AiToolCacheStore } from './AiToolCacheStore'
 import { floatingLayerStore } from './FloatingLayerStore'
 import { SessionGuard, sessionGuard as globalSessionGuard } from './SessionGuard'
-import { setAuthFailureHandler } from '../service/NgaClient'
+import { setAuthFailureHandler, setWriteGuard } from '../service/NgaClient'
 import { ToastManager } from '../common/feedback/ToastManager'
+import { CredentialState } from './AuthStore'
+import { KEY_CREDENTIAL_DEGRADED } from '../common/constants/AppStorageKeys'
 
 import type { AuthState } from './AuthStore'
 import type { Session } from './SessionRegistry'
@@ -82,6 +84,19 @@ const DRAFT_CLEANUP_BATCH: number = 8
 const DRAFT_CLEANUP_MAX_ROUNDS: number = 4
 
 /**
+ * 降级后自动复验的退避序列（ms）。
+ *
+ * 为什么不是"只探一次"：降级是"服务端暂时不认"，而 NGA 的异常通常以分钟计。若只探一次，
+ * 用户在降级期间一直前台读帖时，**不存在任何自动触发点** —— 读请求成功不产生"未登录"
+ * 信号，写操作被本地门禁拦下更不会产生（门禁直接返回、不经过网络层）。服务端早已恢复，
+ * 横幅却会一直挂着，直到用户手动点「重试」或切后台再回来。
+ *
+ * 退避的意义：短时抖动靠前两次（3s / 15s）快速自愈；真失效时慢慢降频到 1 分钟一次，
+ * 不会对服务端形成轮询压力。每次成功后由 `clearCredentialDegraded` 取消后续探针。
+ */
+const CREDENTIAL_RECHECK_DELAYS_MS: number[] = [3000, 15000, 30000, 60000]
+
+/**
  * AppStore — 全局状态管理 Facade
  *
  * 各领域职责已拆分到独立 Store，AppStore 只做编排和委托。
@@ -101,6 +116,10 @@ class AppStoreClass {
   private pollingParticipants: PollingParticipant[] = []
   /** 草稿清理链是否在跑（`init` 可能被重入，见 `initDraftCleanup`）。 */
   private draftCleanupRunning: boolean = false
+  /** 降级后的自动复验定时器（-1 = 无待执行）。 */
+  private credentialRecheckTimer: number = -1
+  /** 已排过的复验轮次（决定下一次的退避档位）。 */
+  private credentialRecheckAttempt: number = 0
 
   constructor() {
     this.pollingParticipants = [
@@ -285,28 +304,172 @@ class AppStoreClass {
    */
   private bindSessionGuard(): void {
     globalSessionGuard.bindSessionResolver((): Session | null => this.getSession(this.auth.token))
-    globalSessionGuard.bindExpiredHandler((): boolean => this.onSessionExpired())
+    globalSessionGuard.bindDegradedHandler((reason: string): void => {
+      this.markCredentialDegraded(reason)
+    })
+    globalSessionGuard.bindRecoveredHandler((): void => {
+      this.clearCredentialDegraded()
+    })
     setAuthFailureHandler((message: string): void => {
-      // 网络层只上报；确认与处置都在 SessionGuard 内完成（60s 去抖 + 单飞 + iflogin 复核），
-      // 避免单个业务错误（如 code=1 的"未定义服务"）把用户踢下线。
+      // 网络层只上报；确认与处置都在 SessionGuard 内完成（60s 去抖 + 单飞 + iflogin 复核 +
+      // 静默复验），避免单个业务错误（如 code=1 的"未定义服务"）把用户踢下线。
       globalSessionGuard.onUnauthorizedSignal(message).catch((): void => {})
+    })
+    setWriteGuard((): string | null => {
+      // 写操作本地门禁：未登录 / 降级态一律不发写请求。
+      // 读请求故意不拦 —— NGA 各接口的会话校验强度不一致，服务端异常期间读能力可能仍然可用，
+      // 由服务端自己回答；写操作失败会留下副作用，必须先本地兜住。
+      if (!this.auth.isAuthenticated) {
+        return '请先登录后再操作'
+      }
+      if (this.auth.credentialState === CredentialState.DEGRADED) {
+        // 文案不绑定具体控件：横幅在 MainPage 底部，而用户很可能是在回复/发帖编辑器
+        // （半模态或全屏浮层）里撞到这条拦截，那里看不到横幅
+        return '登录状态异常，发帖回复等操作已暂停，可稍后重试或回到主界面重新登录'
+      }
+      return null
     })
   }
 
+  // ============== 凭证降级态 ==============
+
   /**
-   * 会话已确认失效：清本地登录态并提示；跳登录页由 MainPage 注入的 navigator 完成。
+   * 把凭证标记为降级态：服务端明确拒绝，但**本地凭证与全部 Store 原样保留**。
    *
-   * @returns 是否真的处置了（未登录时返回 false，调用方据此决定是否导航）
+   * 这是本方案的核心取舍。现状是"确认失效 → `clearAuth()` → 清空 15 个数据域 + 跳登录页"，
+   * 而实测 NGA 各接口的会话校验强度并不一致（`read.php` 弱于 `nuke.php`）：服务端局部异常
+   * 期间完全可能「帖子能读、iflogin 报失效」。用最严格接口的结论清空一切，会把用户的浏览
+   * 位置、已加载内容、草稿上下文一并抹掉，而这份凭证往往下一秒就又能用了。
+   *
+   * 降级只做两件事：① 把状态同步给 UI（顶部横幅 + 写操作门禁）；② 安排一次延迟自动复验。
+   * **不清态、不清 Store、不导航** —— 这三件事只在用户主动退出登录时发生。
+   *
+   * @param reason - 诊断文案（写入日志，不直接展示给用户）
    */
-  private onSessionExpired(): boolean {
+  markCredentialDegraded(reason: string): void {
     if (!this.auth.isAuthenticated) {
-      return false
+      // 真未登录（本地无凭证）：降级没有对象，交给登录流程处理
+      return
     }
-    this.clearAuth()
-    this.showToast('登录状态已失效，请重新登录')
-    // 清态写入是异步的：补一次 flush，缩小"清态后立刻杀进程 → 冷启动又变回已登录"的窗口
-    this.flushAll().catch((): void => {})
-    return true
+    if (this.sessionGuard.isCredentialMismatched()) {
+      /*
+       * 凭证与账号错配：服务端把这个 cid 解析成了**另一个 uid**。
+       *
+       * 这与"服务端暂时不认这份凭证"性质不同，不能降级保留 —— 读接口一旦继续放行，
+       * 私信 / 通知 / 收藏都会以别人的身份返回数据，显示在当前账号下。
+       * 必须清态重登；调用方（启动页 / 主页面）据 `isAuthenticated` 变为 false 决定跳登录页。
+       */
+      logger.warn('凭证与账号错配，清登录态：%{public}s', reason)
+      this.clearAuthAndFlush().catch((): void => {})
+      this.showToast('登录凭证异常，请重新登录')
+      return
+    }
+    if (this.auth.credentialState === CredentialState.DEGRADED) {
+      // 已降级：确保探针仍在跑。探针在后台会被跳过，回到前台后靠这条路径重新拉起。
+      this.scheduleCredentialRecheck()
+      return
+    }
+    this.auth.credentialState = CredentialState.DEGRADED
+    // 同步守卫内部的降级标志：它决定前台恢复探针的节流间隔（降级态 1 分钟 / 正常态 10 分钟）。
+    // 启动页与主页面是直接调用本方法的（不经过守卫的 notifyDegraded），不同步会让恢复白白变慢。
+    this.sessionGuard.markDegraded()
+    this.publishCredentialState()
+    logger.warn('凭证进入降级态（服务端拒绝，本地凭证保留）：%{public}s', reason)
+    this.showToast('登录状态异常，发帖回复等操作已暂停')
+    this.credentialRecheckAttempt = 0
+    this.scheduleCredentialRecheck()
+  }
+
+  /**
+   * 清除降级态（服务端重新认可当前凭证）。
+   *
+   * 由会话守卫在任意一次通过校验时回调，也由用户点横幅「重试」成功时触发。
+   */
+  clearCredentialDegraded(): void {
+    if (this.auth.credentialState !== CredentialState.DEGRADED) {
+      return
+    }
+    this.auth.credentialState = CredentialState.VALID
+    this.publishCredentialState()
+    logger.info('凭证已从降级态恢复')
+    this.showToast('登录状态已恢复')
+  }
+
+  /**
+   * 强制复验当前凭证（横幅「重试」）。
+   *
+   * 走 `SessionGuard.reverify()`：不复用旧结论，成功会经恢复回调自动清掉降级态。
+   */
+  async retryCredential(): Promise<void> {
+    await this.sessionGuard.reverify()
+  }
+
+  /**
+   * 把凭证状态同步到 AppStorage。
+   *
+   * 只维护**一个**键：横幅是唯一的消费方，`@StorageProp` 订阅它即可。
+   * （不要额外维护一个"状态版本号"：没有订阅者的版本键只是看似有刷新信号的死代码。）
+   */
+  private publishCredentialState(): void {
+    AppStorage.setOrCreate(KEY_CREDENTIAL_DEGRADED, this.auth.credentialState === CredentialState.DEGRADED)
+  }
+
+  /**
+   * 降级后的自动复验（有界退避，见 `CREDENTIAL_RECHECK_DELAYS_MS`）。
+   *
+   * 三条约束：
+   * - **幂等**：已有在途定时器时直接返回，不打断 —— 否则每次失效信号都会把倒计时清零，
+   *   退避探针永远等不到触发；
+   * - **只在前台跑**：后台不发请求（定时器可能被系统挂起，行为不确定），回到前台由
+   *   `setForegroundActive` / `verifyOnForeground` 重新拉起；
+   * - **成功后自停**：`clearCredentialDegraded` 会经 `resetCredentialState` 取消定时器。
+   */
+  private scheduleCredentialRecheck(): void {
+    if (this.credentialRecheckTimer !== -1) {
+      return
+    }
+    const attempt: number = this.credentialRecheckAttempt
+    const index: number = Math.min(attempt, CREDENTIAL_RECHECK_DELAYS_MS.length - 1)
+    this.credentialRecheckTimer = setTimeout((): void => {
+      this.credentialRecheckTimer = -1
+      if (!this.auth.isAuthenticated || this.auth.credentialState !== CredentialState.DEGRADED) {
+        return
+      }
+      if (!this.foregroundActive) {
+        // 后台不发：回到前台会重新拉起（见 setForegroundActive 与 markCredentialDegraded）
+        return
+      }
+      this.credentialRecheckAttempt = attempt + 1
+      this.sessionGuard.reverify().then((): void => {
+        if (this.auth.credentialState === CredentialState.DEGRADED) {
+          this.scheduleCredentialRecheck()
+        }
+      }).catch((): void => {
+        if (this.auth.credentialState === CredentialState.DEGRADED) {
+          this.scheduleCredentialRecheck()
+        }
+      })
+    }, CREDENTIAL_RECHECK_DELAYS_MS[index])
+  }
+
+  /**
+   * 重置凭证状态（新登录 / 退出登录时调用）：取消待执行的复验并清掉降级标记。
+   *
+   * **同时复位会话守卫**：守卫内部还留着一份 `degraded` 标志（决定前台探针的节流间隔）。
+   * 不复位的话，退出登录后它仍是 true，登录页期间的前台探针会一直按 1 分钟空转，
+   * 直到下一次 `setAuth` 才恢复 —— 双真源就必须在任何一处状态转换上同时改两边。
+   *
+   * **不弹 Toast**：退出登录时提示"已恢复"是噪音，新登录时横幅本就不该出现。
+   */
+  private resetCredentialState(): void {
+    if (this.credentialRecheckTimer !== -1) {
+      clearTimeout(this.credentialRecheckTimer)
+      this.credentialRecheckTimer = -1
+    }
+    this.credentialRecheckAttempt = 0
+    this.authStore.state.credentialState = CredentialState.VALID
+    this.sessionGuard.resetForNewSession()
+    AppStorage.setOrCreate(KEY_CREDENTIAL_DEGRADED, false)
   }
 
   /**
@@ -362,8 +525,10 @@ class AppStoreClass {
       await this.loadUserData()
       this.settingsStore.applyCurrentTheme()
     }
-    // 新会话：复位"未登录信号"的去抖窗口，避免登录后立刻失效被上一轮窗口吞掉
-    globalSessionGuard.resetSignalThrottle()
+    // 新会话：复位"未登录信号"去抖窗口与降级标记，避免登录后立刻失效被上一轮窗口吞掉，
+    // 也避免上一个账号的降级结论跟到新账号上
+    globalSessionGuard.resetForNewSession()
+    this.resetCredentialState()
     this.reconcilePolling()
   }
 
@@ -390,6 +555,8 @@ class AppStoreClass {
     this.aiToolCacheStore.reset()
     floatingLayerStore.clear()
     routerStore.reset()
+    // 真未登录：降级态失去意义，顺带取消待执行的自动复验
+    this.resetCredentialState()
     // 与 setAuth 对称：退出后统一协调轮询状态（此时未认证 → 停止轮询，幂等无害）
     this.reconcilePolling()
   }
@@ -468,11 +635,17 @@ class AppStoreClass {
   /**
    * 更新 Ability 前台状态并统一协调社交轮询（消息 / 动态）。
    *
+   * 降级态下额外拉起凭证探针：定时探针在后台会被跳过（见 `scheduleCredentialRecheck`），
+   * 回到前台必须有个明确的重新拉起点，否则用户切回来后就再也不会自愈。
+   *
    * @param active - Ability 是否处于前台
    */
   setForegroundActive(active: boolean): void {
     this.foregroundActive = active
     this.reconcilePolling()
+    if (active && this.auth.credentialState === CredentialState.DEGRADED) {
+      this.scheduleCredentialRecheck()
+    }
   }
   /**
    * 根据初始化、认证与前台状态启动或停止全部前台轮询参与者。
