@@ -116,6 +116,31 @@ export function isRenderableImgUrl(url: string): boolean {
 }
 
 /**
+ * 判断媒体 URL 是否为 NGA「GIF 动图转视频」附件（官方 `att.ext == 'gif.mp4'`）。
+ *
+ * 官方依据（`js_bbscode_core.js`）：
+ * - `ubbcode.imgGen` 的 `(a.type=='video' && (a.ext=='mp.mp4'||a.ext=='gif.mp4'))` 分支：
+ *   `a.ext == 'gif.mp4'` 时返回 `'[flash=video]' + 完整附件地址 + '[/flash]'`（不是 `<img>`）；
+ * - `ubbcode.parseFlash`：`att.ext == 'gif.mp4'` 时 `tvb = 1`，输出 `<video … muted=true
+ *   loop …>`，即「静音循环、无常驻 controls」的动图播放形态；`.mp.mp4` 为另一档（tvb=16，
+ *   通常带 controls）。
+ * NGA 没有独立的 `gif.mp4` 扩展名：服务端把 `.gif` 动图转码为同名 mp4，故以 URL path
+ * 以 `.gif.mp4` 结尾识别。
+ *
+ * @param url 媒体地址（相对或绝对均可）
+ * @returns 是否为 GIF 动图视频
+ */
+export function isAnimatedGifMediaUrl(url: string): boolean {
+  if (url.length === 0) return false
+  let path: string = url
+  const queryIndex: number = path.indexOf('?')
+  if (queryIndex >= 0) path = path.substring(0, queryIndex)
+  const hashIndex: number = path.indexOf('#')
+  if (hashIndex >= 0) path = path.substring(0, hashIndex)
+  return /\.gif\.mp4$/i.test(path)
+}
+
+/**
  * `[img]` 标签内容的解析结果（官方 `ubbcode.imgGen` 语义）。
  *
  * 官方对图片内容与非法内容返回不同东西：图片返回 `<img>` 元素，非法内容
@@ -124,8 +149,17 @@ export function isRenderableImgUrl(url: string): boolean {
 export class ImgTagResolution {
   /** 是否渲染为图片。 */
   renderable: boolean = false
-  /** 图片地址（renderable=true）或官方退化出的纯文本（renderable=false）。 */
+  /** 图片地址（renderable=true，已做图片档位后缀归一化）或官方退化出的纯文本（renderable=false）。 */
   text: string = ''
+  /**
+   * renderable=true 时的「归一化但未 strip 图片档位后缀」地址。
+   *
+   * 归一化 = 拼附件 CDN 根 / 补协议 / 旧附件域归一化 / HTML 实体解码；**不含**
+   * `stripImageSuffix` 的图片档位后缀还原。图片节点用 {@link text}（必须还原到裸名原图），
+   * 视频/音频节点必须用本字段：`stripImageSuffix` 会把 `xxx.gif.mp4` 剥成 `xxx.gif`
+   * （`.gif` 恰好命中 knownExts），媒体 URL 因此 404，播放器只能显示占位、无法播放。
+   */
+  normalizedText: string = ''
 }
 
 /**
@@ -174,9 +208,13 @@ export function resolveImgTag(raw: string): ImgTagResolution {
   resolution.renderable = true
   /*
    * 官方把地址写进 HTML 属性（`data-srclazy="…"`），浏览器解析属性时会把 `&amp;`
-   * 还原成 `&`，请求用的是解码后的地址；客户端把 src 直接交给 Image 组件，必须在此
+   * 还原成 `&`，请求用的是解码后的地址；客户端把 src 直接交给 Image/Video 组件，必须在此
    * 自行解码，否则 `…a.jpg?x=1&amp;y=2` 会带着实体字面量发出去（参数错、可能 404）。
+   *
+   * 注意两种使用方语义不同：图片节点必须再经 `stripImageSuffix` 还原到裸名原图；
+   * 视频/音频节点必须保留原扩展名（`xxx.gif.mp4` 剥成 `xxx.gif` 会 404），故两者分开保存。
    */
-  resolution.text = stripImageSuffix(decodeHtmlEntities(src))
+  resolution.normalizedText = decodeHtmlEntities(src)
+  resolution.text = stripImageSuffix(resolution.normalizedText)
   return resolution
 }

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { parseBBCode } from '../src/parser/bbcode/parser'
 import { preprocessContent } from '../src/parser/bbcode/lexer'
 import { decodeHtmlEntities } from '../src/parser/_shared/HtmlEntityCodec'
-import { resolveAttachBBCodeUrl, resolveImgTag } from '../src/parser/_shared/AttachUrl'
+import { resolveAttachBBCodeUrl, resolveImgTag, isAnimatedGifMediaUrl } from '../src/parser/_shared/AttachUrl'
 import { flattenInlineNodes, InlineRun, InlineRunKind } from '../src/common/components/bbcode/bbcode-utils'
 import { BBNode, BBNodeType } from '../src/model/BBCodeNode'
 import { loadSampleContent, isSubsequence, concatTextNodes } from './helpers'
@@ -970,6 +970,76 @@ describe('[img] 图片内容判定（对齐官方 ubbcode.imgGen）', () => {
 
     assert.equal(indexedVideo?.src, 'https://img.nga.cn/attachments/mon_202609/15/a.mp4')
     assert.equal(dottedVideo?.src, 'https://img.nga.cn/attachments/mon_202609/15/a.mp4')
+  })
+})
+
+describe('[img] 媒体地址与 GIF 动图判定（.gif.mp4 回归）', () => {
+  /*
+   * 线上事故 tid=47811794 第 1 页 0 楼：
+   * `[img]./mon_202610/30/nfQ39-l3w9XbT6wSo0-di.gif.mp4[/img]`（附件 type=app_video）。
+   * 8102edfe 起 `node.src = resolution.text` 对 VIDEO/AUDIO 也做 `stripImageSuffix`，
+   * `.gif.mp4` 被剥成 `…-di.gif`；CDN 实测 `.gif` 返回 404、`.gif.mp4` 才是 video/mp4，
+   * 表现为正文播放器 0:00、点播放无反应（附件区走 attachurl 不受影响）。
+   * 官方 `imgGen` 对 `a.ext == 'gif.mp4'` 返回 `[flash=video]` + 完整地址，故媒体节点
+   * 必须使用未做图片档位归一化的 `normalizedText`。
+   */
+
+  it('真实 0 楼样本：VIDEO src 保留完整 .gif.mp4', () => {
+    const content: string = loadSampleContent('tid47811794-lou0-gif-mp4.txt')
+    const nodes: BBNode[] = parseBBCode(content)
+    assert.equal(countType(nodes, BBNodeType.IMAGE), 0, '.gif.mp4 不应产出 IMAGE 节点')
+    assert.equal(countType(nodes, BBNodeType.VIDEO), 1)
+    const video: BBNode | undefined = findType(nodes, BBNodeType.VIDEO)
+    if (!video) assert.fail('未找到 VIDEO 节点')
+    assert.equal(video.src, 'https://img.nga.cn/attachments/mon_202610/30/nfQ39-l3w9XbT6wSo0-di.gif.mp4')
+    assert.ok(video.src.endsWith('.gif.mp4'), `视频地址被剥掉扩展名: ${video.src}`)
+    assert.equal(isAnimatedGifMediaUrl(video.src), true, '应判定为 GIF 动图视频')
+  })
+
+  it('邻近形态不回归：单扩展 mp4 / gif 图片 / gif.jpg / thumb.jpg / .1 前缀', () => {
+    // 单扩展 mp4：VIDEO，地址原样（strip 不触发）
+    const mp4Nodes: BBNode[] = parseBBCode('[img]./mon_202610/30/a.mp4[/img]')
+    const mp4Video: BBNode | undefined = findType(mp4Nodes, BBNodeType.VIDEO)
+    if (!mp4Video) assert.fail('单扩展 .mp4 应产出 VIDEO 节点')
+    assert.equal(mp4Video.src, 'https://img.nga.cn/attachments/mon_202610/30/a.mp4')
+
+    // 纯 gif 图片：IMAGE，地址原样
+    const gifNodes: BBNode[] = parseBBCode('[img]./mon_202610/30/a.gif[/img]')
+    const gifImage: BBNode | undefined = findType(gifNodes, BBNodeType.IMAGE)
+    if (!gifImage) assert.fail('.gif 应产出 IMAGE 节点')
+    assert.equal(gifImage.src, 'https://img.nga.cn/attachments/mon_202610/30/a.gif')
+
+    // 图片档位形态仍需 strip：a.gif.jpg → a.gif
+    const gifJpgNodes: BBNode[] = parseBBCode('[img]./mon_202610/30/a.gif.jpg[/img]')
+    const gifJpgImage: BBNode | undefined = findType(gifJpgNodes, BBNodeType.IMAGE)
+    if (!gifJpgImage) assert.fail('.gif.jpg 应产出 IMAGE 节点')
+    assert.equal(gifJpgImage.src, 'https://img.nga.cn/attachments/mon_202610/30/a.gif')
+
+    // 缩略档位后缀仍需 strip：a.jpg.thumb.jpg → a.jpg
+    const thumbNodes: BBNode[] = parseBBCode('[img]./mon_202610/30/a.jpg.thumb.jpg[/img]')
+    const thumbImage: BBNode | undefined = findType(thumbNodes, BBNodeType.IMAGE)
+    if (!thumbImage) assert.fail('.jpg.thumb.jpg 应产出 IMAGE 节点')
+    assert.equal(thumbImage.src, 'https://img.nga.cn/attachments/mon_202610/30/a.jpg')
+
+    // `.1/` 附件相对路径前缀的 .gif.mp4：VIDEO，完整扩展名
+    const indexedNodes: BBNode[] = parseBBCode('[img].1/mon_202610/30/a.gif.mp4[/img]')
+    const indexedVideo: BBNode | undefined = findType(indexedNodes, BBNodeType.VIDEO)
+    if (!indexedVideo) assert.fail('.1/ 前缀的 .gif.mp4 应产出 VIDEO 节点')
+    assert.equal(indexedVideo.src, 'https://img.nga.cn/attachments/mon_202610/30/a.gif.mp4')
+  })
+
+  it('isAnimatedGifMediaUrl 正反例（官方 att.ext == gif.mp4 判定）', () => {
+    assert.equal(isAnimatedGifMediaUrl('https://img.nga.cn/attachments/mon_202610/30/nfQ39-l3w9XbT6wSo0-di.gif.mp4'), true)
+    assert.equal(isAnimatedGifMediaUrl('https://img.nga.cn/attachments/mon_202610/30/a.gif.mp4?x=1'), true)
+    assert.equal(isAnimatedGifMediaUrl('https://img.nga.cn/attachments/mon_202610/30/a.gif.mp4#hash'), true)
+    assert.equal(isAnimatedGifMediaUrl('https://img.nga.cn/attachments/mon_202610/30/a.GIF.MP4'), true)
+    assert.equal(isAnimatedGifMediaUrl('./mon_202610/30/a.gif.mp4'), true)
+
+    assert.equal(isAnimatedGifMediaUrl('https://img.nga.cn/attachments/mon_202610/30/a.mp4'), false)
+    assert.equal(isAnimatedGifMediaUrl('https://img.nga.cn/attachments/mon_202610/30/a.gif'), false)
+    assert.equal(isAnimatedGifMediaUrl('https://img.nga.cn/attachments/mon_202610/30/a.gif.jpg'), false)
+    assert.equal(isAnimatedGifMediaUrl('https://img.nga.cn/attachments/mon_202610/30/a.gif.mp4.jpg'), false)
+    assert.equal(isAnimatedGifMediaUrl(''), false)
   })
 })
 

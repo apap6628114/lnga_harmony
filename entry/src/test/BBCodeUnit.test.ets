@@ -3,6 +3,7 @@ import { BBNode, BBNodeType } from '../main/ets/model/BBCodeNode'
 import { parseBBCode } from '../main/ets/parser/bbcode/parser'
 import { indexOfIgnoreCase } from '../main/ets/parser/bbcode/lexer'
 import { MAX_LIST_DEPTH } from '../main/ets/parser/bbcode/block-handlers/handleList'
+import { isAnimatedGifMediaUrl } from '../main/ets/parser/_shared/AttachUrl'
 import {
   applyInlineFormatTags,
   applyTextStyleDeclaration,
@@ -820,6 +821,85 @@ export default function bbcodeUnitTest(): void {
     expect(cell.type).assertEqual(BBNodeType.TABLE_CELL)
     expect(cell.children[0].type).assertEqual(BBNodeType.IMAGE)
     expect(cell.children[0].src).assertEqual('https://img.nga.cn/attachments/mon_202112/05/x.png')
+  })
+
+  it('keepsGifMp4VideoSrcWithFullExtension', 0, (): void => {
+    /*
+     * 线上回归 tid=47811794 第 1 页 0 楼：
+     * `[img]./mon_202610/30/nfQ39-l3w9XbT6wSo0-di.gif.mp4[/img]`（附件 type=app_video）。
+     * 解析器曾对 VIDEO/AUDIO 也做 stripImageSuffix，把 `.gif.mp4` 剥成 `.gif`（CDN 404），
+     * 表现为正文播放器 0:00、点播放无反应；媒体地址必须保留完整扩展名。
+     * 官方 imgGen：`a.ext == 'gif.mp4'` → `[flash=video]` + 完整地址。
+     */
+    const content: string =
+      '[img]./mon_202610/30/nfQ39-l3w9XbT6wSo0-di.gif.mp4[/img]<br/>据说是导火索是有人被问候家人了[s:ac:哭笑]'
+    const nodes: BBNode[] = parseBBCode(content)
+    let videoCount: number = 0
+    let videoSrc: string = ''
+    for (let i: number = 0; i < nodes.length; i++) {
+      if (nodes[i].type === BBNodeType.VIDEO) {
+        videoCount++
+        videoSrc = nodes[i].src
+      }
+    }
+
+    expect(videoCount).assertEqual(1)
+    expect(videoSrc).assertEqual('https://img.nga.cn/attachments/mon_202610/30/nfQ39-l3w9XbT6wSo0-di.gif.mp4')
+    expect(videoSrc.endsWith('.gif.mp4')).assertTrue()
+    expect(isAnimatedGifMediaUrl(videoSrc)).assertTrue()
+  })
+
+  it('keepsDotIndexGifMp4AsVideoWithFullExtension', 0, (): void => {
+    /* `.1/` 序号前缀形式同样保留完整 `.gif.mp4` 扩展名 */
+    const nodes: BBNode[] = parseBBCode('[img].1/mon_202610/30/a.gif.mp4[/img]')
+
+    expect(nodes.length).assertEqual(1)
+    expect(nodes[0].type).assertEqual(BBNodeType.VIDEO)
+    expect(nodes[0].src).assertEqual('https://img.nga.cn/attachments/mon_202610/30/a.gif.mp4')
+  })
+
+  it('keepsNeighboringImgFormsUnchanged', 0, (): void => {
+    /*
+     * 邻近形态不回归：单扩展 mp4（VIDEO、原样）、纯 gif（IMAGE、原样）；
+     * 图片档位后缀仍需 strip（a.gif.jpg → a.gif，a.jpg.thumb.jpg → a.jpg）。
+     */
+    const mp4Nodes: BBNode[] = parseBBCode('[img]./mon_202610/30/a.mp4[/img]')
+    expect(mp4Nodes.length).assertEqual(1)
+    expect(mp4Nodes[0].type).assertEqual(BBNodeType.VIDEO)
+    expect(mp4Nodes[0].src).assertEqual('https://img.nga.cn/attachments/mon_202610/30/a.mp4')
+
+    const gifNodes: BBNode[] = parseBBCode('[img]./mon_202610/30/a.gif[/img]')
+    expect(gifNodes.length).assertEqual(1)
+    expect(gifNodes[0].type).assertEqual(BBNodeType.IMAGE)
+    expect(gifNodes[0].src).assertEqual('https://img.nga.cn/attachments/mon_202610/30/a.gif')
+
+    const gifJpgNodes: BBNode[] = parseBBCode('[img]./mon_202610/30/a.gif.jpg[/img]')
+    expect(gifJpgNodes.length).assertEqual(1)
+    expect(gifJpgNodes[0].type).assertEqual(BBNodeType.IMAGE)
+    expect(gifJpgNodes[0].src).assertEqual('https://img.nga.cn/attachments/mon_202610/30/a.gif')
+
+    const thumbNodes: BBNode[] = parseBBCode('[img]./mon_202610/30/a.jpg.thumb.jpg[/img]')
+    expect(thumbNodes.length).assertEqual(1)
+    expect(thumbNodes[0].type).assertEqual(BBNodeType.IMAGE)
+    expect(thumbNodes[0].src).assertEqual('https://img.nga.cn/attachments/mon_202610/30/a.jpg')
+  })
+
+  it('detectsAnimatedGifMediaUrl', 0, (): void => {
+    expect(isAnimatedGifMediaUrl(
+      'https://img.nga.cn/attachments/mon_202610/30/nfQ39-l3w9XbT6wSo0-di.gif.mp4')).assertTrue()
+    expect(isAnimatedGifMediaUrl(
+      'https://img.nga.cn/attachments/mon_202610/30/a.gif.mp4?x=1')).assertTrue()
+    expect(isAnimatedGifMediaUrl(
+      'https://img.nga.cn/attachments/mon_202610/30/a.gif.mp4#hash')).assertTrue()
+    expect(isAnimatedGifMediaUrl(
+      'https://img.nga.cn/attachments/mon_202610/30/a.GIF.MP4')).assertTrue()
+    expect(isAnimatedGifMediaUrl(
+      'https://img.nga.cn/attachments/mon_202610/30/a.mp4')).assertFalse()
+    expect(isAnimatedGifMediaUrl(
+      'https://img.nga.cn/attachments/mon_202610/30/a.gif')).assertFalse()
+    expect(isAnimatedGifMediaUrl(
+      'https://img.nga.cn/attachments/mon_202610/30/a.gif.jpg')).assertFalse()
+    expect(isAnimatedGifMediaUrl('')).assertFalse()
   })
 
   it('parsesNumericMentionAsProfileLink', 0, (): void => {

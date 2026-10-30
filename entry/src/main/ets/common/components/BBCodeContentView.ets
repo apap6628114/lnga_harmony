@@ -13,6 +13,7 @@ import {
 } from '../media/ImageAnalyzerSession'
 import { createTextOnlyAnalyzerOptions } from '../media/ImageAnalyzerOptions'
 import { fetchVideoSize, getCachedVideoSize } from '../media/VideoSizeUtil'
+import { isAnimatedGifMediaUrl } from '../../parser/_shared/AttachUrl'
 import { shouldUsePassive } from '../utils/NetworkUtil'
 import { parsePreviewSize } from '../utils/TopicPreviewUtils'
 import { LengthMetrics } from '@kit.ArkUI'
@@ -908,7 +909,12 @@ export struct BBCodeContentView {
       this.RenderList(node, this.makeBlockCtx(node, ctx))
     } else if (node.type === BBNodeType.VIDEO) {
       if (node.src.length > 0) {
-        MutedVideo({ src: node.src, videoAspectRatio: this.getVideoAspectRatio(node.src) })
+        /* `*.gif.mp4` 按动图语义播放（静音/循环/可见自动播/无静音按钮），普通视频保持现状。 */
+        MutedVideo({
+          src: node.src,
+          videoAspectRatio: this.getVideoAspectRatio(node.src),
+          isAnimatedGif: isAnimatedGifMediaUrl(node.src)
+        })
           .margin({ top: 6, bottom: 4 })
       }
     } else if (node.type === BBNodeType.AUDIO) {

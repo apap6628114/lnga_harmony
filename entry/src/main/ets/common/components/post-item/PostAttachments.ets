@@ -6,6 +6,7 @@ import { ImageSize } from '../../media/ImageSizeUtil'
 import { fetchVideoSize, getCachedVideoSize } from '../../media/VideoSizeUtil'
 import { shouldUsePassive } from '../../utils/NetworkUtil'
 import { parsePreviewSize } from '../../utils/TopicPreviewUtils'
+import { isAnimatedGifMediaUrl } from '../../../parser/_shared/AttachUrl'
 import { PageScope } from '../../concurrency/PageScope'
 
 /** 视频附件扩展名集合 */
@@ -89,7 +90,12 @@ export struct PostAttachments {
   @Builder
   renderVideoAttach(att: PostAttachInfo) {
     if (VIDEO_EXTS.indexOf(att.ext.toLowerCase()) >= 0) {
-      MutedVideo({ src: att.attachurl, videoAspectRatio: this.getAttachVideoAspectRatio(att.attachurl) })
+      /* `*.gif.mp4` 按动图语义播放（静音/循环/可见自动播/无静音按钮），普通视频保持现状。 */
+      MutedVideo({
+        src: att.attachurl,
+        videoAspectRatio: this.getAttachVideoAspectRatio(att.attachurl),
+        isAnimatedGif: isAnimatedGifMediaUrl(att.attachurl)
+      })
         .margin({ bottom: 6 })
     }
   }
