@@ -38,7 +38,11 @@ import { Context } from '@kit.AbilityKit'
 import { Logger, DOMAIN_STORE, formatError } from '../utils/Logger'
 import { DomainIds, PersistenceCatalog } from '../persistence/PersistenceCatalog'
 import { DomainSpec } from '../persistence/PersistenceTypes'
-import { draftUidPart as draftUidPartImpl, shortHash36 as shortHash36Impl } from '../utils/DraftKeyUtils'
+import {
+  draftUidPart as draftUidPartImpl,
+  isValidDraftKey as isValidDraftKeyImpl,
+  shortHash36 as shortHash36Impl
+} from '../utils/DraftKeyUtils'
 
 const logger = new Logger(DOMAIN_STORE, 'DraftStore')
 
@@ -70,32 +74,17 @@ const DRAFT_FILE_SUFFIX: string = '.json'
 /** 原子写的临时文件后缀（临时文件不是草稿，扫描时必须排除）。 */
 const DRAFT_TMP_SUFFIX: string = '.json.tmp'
 
-/** 草稿键的最大长度（文件名安全的上界）。 */
-const MAX_DRAFT_KEY_LENGTH: number = 96
-
 /**
  * 校验草稿键是否可安全用于文件名（与 `DraftMediaStore` 的目录名校验**同一份实现**）。
  *
- * 键是内部生成的（`draft_` + 数字 + 动作 + uid 哈希），必须拒绝路径分隔符与 `..`，
- * 防止任何上游改动把路径穿越带进存档目录。
+ * 实现已抽到零依赖的 `common/utils/DraftKeyUtils.ets`（导入器也要用同一份规则），
+ * 此处保留同名导出，保证既有调用方与测试的 import 路径不变。
  *
  * @param key - 待校验的草稿键
  * @returns 是否合法
  */
 export function isValidDraftKey(key: string): boolean {
-  if (key.length === 0 || key.length > MAX_DRAFT_KEY_LENGTH) {
-    return false
-  }
-  for (let i: number = 0; i < key.length; i++) {
-    const c: string = key.charAt(i)
-    const isDigit: boolean = c >= '0' && c <= '9'
-    const isLower: boolean = c >= 'a' && c <= 'z'
-    const isUpper: boolean = c >= 'A' && c <= 'Z'
-    if (!isDigit && !isLower && !isUpper && c !== '_') {
-      return false
-    }
-  }
-  return true
+  return isValidDraftKeyImpl(key)
 }
 
 /**

@@ -642,15 +642,27 @@ export class TrackedThreadStore extends BaseStore<Object> {
   // ==================== 持久化与发布 ====================
 
   /**
-   * 加载本机跟踪缓存；信封非法时以空列表覆盖。
+   * 加载本机跟踪缓存。
+   *
+   * 信封/条目校验失败（`cacheEnvelope.load` 返回 null）时**只清内存、不写空盘**：
+   * 与 `NotificationStore` / `FollowActivityStore` 的读失败策略保持一致——磁盘快照保留到
+   * 下一次**真实写入**（用户增删/已读/检查回写）再覆盖。写空盘会把损坏前、或当前校验规则
+   * 读不懂的快照（尤其导入刚写入的数据）立即销毁，属审计 IMP-08 的静默数据丢失点。
    */
   private async loadCachedItems(): Promise<void> {
     const uid: string = this.auth ? this.auth.uid : ''
     const cached: TrackedThread[] | null = await this.cacheEnvelope.load(this.store, uid)
     if (cached === null) {
+      /*
+       * 读失败不写盘：等下一次真实写入覆盖。
+       *
+       * ⚠️ 这里**不要**调 `persist()`：用空列表写回会销毁磁盘上的旧快照（含导入刚写入、
+       * 但当前条目校验无法识别的数据），用户将永久丢失跟踪列表。旧快照的「脏」只影响
+       * 本次内存展示，不构成写回理由。
+       */
       this.items = []
       this.publishUnread()
-      this.persist()
+      logger.warn('跟踪缓存读取失败（信封/条目非法），已清内存但保留磁盘快照不写空，待下次真实写入覆盖')
       return
     }
     this.items = cached

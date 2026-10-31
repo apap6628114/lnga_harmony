@@ -47,12 +47,14 @@ export enum ExportPolicy {
 /**
  * 导入策略（导出文件 → 本机）。
  *
- * - `MERGE_FIELDS`：字段级合并（设置类，导入值优先，本机独有条目保留）；
+ * - `MERGE_FIELDS`：字段级合并/覆盖（theme 这类单字段域整体覆盖，settings 走 SPECIAL）；
  * - `MERGE_BY_KEY`：按业务键去重合并，冲突取较新（历史/进度/投票/跟踪/AI 会话）；
  * - `REPLACE_BY_KEY`：按业务键覆盖（草稿/离线存档）；
- * - `SKIP`：不导入（缓存/账号镜像，服务端可重建）；
+ * - `SKIP`：**默认不主动恢复**（缓存/账号镜像/工具缓存，服务端可重建）。注意：不再是
+ *   「永不导入」——导入计划页的「恢复缓存类数据」开关（`restoreCacheDomains`）打开时，
+ *   备份里出现的这些域会按导入值整体覆盖恢复（"跟随导出选择"，见设计稿 §6.4）；
  * - `SPECIAL`：由域自行实现（如 `settings` 内数组字段的并集语义）；
- * - `NEVER`：硬拒绝（凭证）。
+ * - `NEVER`：硬拒绝（凭证/内部元数据）。
  */
 export enum ImportPolicy {
   MERGE_FIELDS = 0,

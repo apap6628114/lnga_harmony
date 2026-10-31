@@ -11,11 +11,12 @@
  * - `settings` / `theme`：普通对象（`SettingsState` 结构）；
  * - `history` / `reading_progress`：**裸数组**；
  * - `votes` / `poll_voted`：`Record<tid, 值>`；
- * - `tracked_threads` / `ai_sessions`：`{items: T[]}` 信封形态；
+ * - `tracked_threads` / `ai_sessions`：`{items: T[]}` 信封形态（**输出强制归一为该形态**：
+ *   `CacheEnvelopeStore` 只认 `payload.items`，裸数组写回后 Store 会读成空域，见审计 IMP-09）；
  * - `drafts` / `saved_threads`：元素含业务键（`key` / `tid`）的**裸数组**。
  *
- * 数组类域对两种形态都容忍（裸数组与 `{items}`），输出形态优先跟随导入文件，
- * 因此同一份数据导入后再导出不会因形态变化而反复改键。
+ * 裸数组类域（history/reading_progress/drafts/saved_threads）对两种形态都容忍，输出形态优先
+ * 跟随导入文件，因此同一份数据导入后再导出不会因形态变化而反复改键。
  *
  * ## 安全与幂等
  * - 所有输入按**不可信**处理：逐条做类型校验，坏条目丢弃并计入 `skipped`；
@@ -137,16 +138,17 @@ export function mergePayload(domainId: string, localPayload: Object | null,
     case DomainIds.THEME:
       return mergeReplace(localPayload, incomingPayload)
     case DomainIds.HISTORY:
-      return mergeArrayPayloadByTime(localPayload, incomingPayload, 'tid', 'ts', '', HISTORY_MAX_COUNT)
+      return mergeArrayPayloadByTime(localPayload, incomingPayload, 'tid', 'ts', '', HISTORY_MAX_COUNT,
+        false)
     case DomainIds.READING_PROGRESS:
       return mergeArrayPayloadByTime(localPayload, incomingPayload, 'tid', 'ts', '',
-        READING_PROGRESS_MAX_COUNT)
+        READING_PROGRESS_MAX_COUNT, false)
     case DomainIds.TRACKED_THREADS:
       return mergeArrayPayloadByTime(localPayload, incomingPayload, 'tid', 'lastCheckAt',
-        'createdAt', TRACK_MAX_COUNT)
+        'createdAt', TRACK_MAX_COUNT, true)
     case DomainIds.AI_SESSIONS:
       return mergeArrayPayloadByTime(localPayload, incomingPayload, 'id', 'updatedAt',
-        'createdAt', MAX_AI_SESSIONS)
+        'createdAt', MAX_AI_SESSIONS, true)
     case DomainIds.VOTES:
       return mergeVotes(localPayload, incomingPayload)
     case DomainIds.POLL_VOTED:
@@ -156,7 +158,11 @@ export function mergePayload(domainId: string, localPayload: Object | null,
     case DomainIds.SAVED_THREADS:
       return mergeArrayPayloadByKey(localPayload, incomingPayload, 'tid')
     default:
-      // 缓存/账号镜像域由导入器整体跳过，不会走到这里；兜底按"导入值原样"处理。
+      /*
+       * 缓存/账号镜像域（categories/profiles/notifications/activities/favorite_membership/
+       * ai_tool_cache）：导入计划在「恢复缓存类数据」开启时按导入值整体覆盖（透传），
+       * 关闭时由计划层跳过。此处只做透传，不参与按键/按时间合并。
+       */
       return passthrough(incomingPayload)
   }
 }
@@ -272,18 +278,20 @@ function mergeReplace(localPayload: Object | null, incomingPayload: Object): Mer
  * @param timeField - 时间字段名（升序数值，越大越新）
  * @param fallbackTimeField - 时间字段为 0 时的回退字段（空串表示不回退）
  * @param maxCount - 条目上限
+ * @param forceWrapped - 是否强制输出 `{items: T[]}` 形态（ENVELOPE 域必须为 true：
+ *   `CacheEnvelopeStore` 只读 `payload.items`，写出裸数组会被 Store 判为非法并读成空域）
  * @returns 合并结果
  */
 function mergeArrayPayloadByTime(localPayload: Object | null, incomingPayload: Object,
   keyField: string, timeField: string, fallbackTimeField: string,
-  maxCount: number): MergeResult {
+  maxCount: number, forceWrapped: boolean): MergeResult {
   const result: MergeResult = new MergeResult()
   const localView: ArrayPayloadView = readArrayPayload(localPayload)
   const incomingView: ArrayPayloadView = readArrayPayload(incomingPayload)
   const outcome: ArrayMergeOutcome = mergeArrayByTime(localView.items, incomingView.items,
     keyField, timeField, fallbackTimeField, maxCount)
   const outView: ArrayPayloadView = new ArrayPayloadView()
-  outView.wrapped = incomingView.valid ? incomingView.wrapped : localView.wrapped
+  outView.wrapped = forceWrapped || (incomingView.valid ? incomingView.wrapped : localView.wrapped)
   result.merged = buildArrayPayload(outView, outcome.items)
   result.added = outcome.added
   result.updated = outcome.updated

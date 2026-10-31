@@ -327,11 +327,6 @@ class AppStoreClass {
         }
       }
       this.publishMigrationReport(report)
-      // 导入导出服务依赖 Hub/Store 与版本信息，迁移后即可用（数据管理页生命周期内有效）
-      dataTransferService.init(persistenceHub, this.store, this.appVersionName, this.appVersionCode,
-        (): string => this.authStore.state.uid)
-      // 撤销导入功能已移除：清理旧版本可能残留的明文 undo 快照（隐私残留）
-      await dataTransferService.clearLegacyUndoSnapshots()
     } catch (e) {
       // 迁移异常不得让应用停在"初始化失败"：记录并继续用现有数据启动
       logger.error('启动迁移异常: %{public}s', formatError(e))
@@ -340,6 +335,21 @@ class AppStoreClass {
       failed.finishedAt = Date.now()
       this.publishMigrationReport(failed)
     }
+    /*
+     * 导入/导出服务必须**独立于迁移成败**初始化（审计 EXP-04）：迁移抛异常时用户恰恰最需要
+     * 先导出一份现有数据；放在 catch 之后保证任何路径下「数据管理」都可用。
+     * 旧版 undo 明文快照的清理同理，不能因为迁移异常而跳过（隐私残留）。
+     */
+    this.initDataTransferService()
+    await dataTransferService.clearLegacyUndoSnapshots()
+  }
+
+  /**
+   * 注入导入/导出服务依赖（幂等：启动迁移后与「重试升级」成功后各调用一次）。
+   */
+  private initDataTransferService(): void {
+    dataTransferService.init(persistenceHub, this.store, this.appVersionName, this.appVersionCode,
+      (): string => this.authStore.state.uid)
   }
 
   /**
@@ -1170,6 +1180,22 @@ class AppStoreClass {
     return report === null ? 0 : report.count(MigrationDomainStatus.FAILED)
   }
 
+  /**
+   * 升级未完成的域数量（FAILED + DEFERRED）。
+   *
+   * 这些域的旧键数据仍留在磁盘上、尚未搬进 `v2.*` —— 导出只读新键，因此备份会缺这些域；
+   * 数据管理页在导出/清空前据此提示用户（审计 EXP-03 / DES-02）。
+   *
+   * @returns 未完成域数量
+   */
+  get migrationUnsettledCount(): number {
+    const report: MigrationReport | null = this.startupMigrationReport
+    if (report === null) {
+      return 0
+    }
+    return report.count(MigrationDomainStatus.FAILED) + report.count(MigrationDomainStatus.DEFERRED)
+  }
+
   /** 持久化中心（数据管理页读取域体积/健康用）。 */
   get persistence(): PersistenceHub {
     return persistenceHub
@@ -1196,6 +1222,11 @@ class AppStoreClass {
     const plan: MigrationPlan = await engine.buildPlan(currentUid, await persistenceHub.metaStore.load())
     const report: MigrationReport = await engine.run(plan, currentUid)
     this.publishMigrationReport(report)
+    /*
+     * 重试成功后重新注入导入/导出服务：启动迁移异常时它可能从未初始化过，
+     * 不重新注入会让用户重试成功后仍需重启才能导出（审计 EXP-04）。
+     */
+    this.initDataTransferService()
     return report
   }
 
@@ -1277,9 +1308,36 @@ class AppStoreClass {
     this.savedThreadStore.reload()
     /* 旧版撤销快照（`v2.<domain>.undo`）含明文隐私内容，清空本地数据时一并清理 */
     await dataTransferService.clearLegacyUndoSnapshots()
+    /* 旧键/旧目录已删除：同步把「待清理旧数据」清单清空，否则数据管理页会一直显示可清理（DES-09） */
+    await this.resetMigrationLegacyReport()
     await persistenceHub.flush()
     bumpAppStorageVersion(KEY_DATA_MANAGEMENT_VERSION)
     return cleared
+  }
+
+  /**
+   * 清空迁移报告里的「待清理旧数据」清单（清空本地数据后调用）。
+   *
+   * 旧键/旧目录已被 `clearAllLocalData` 一并删除，若不同步清报告，数据管理页会长期显示
+   * 「N 项旧格式数据已到期，可立即清理」，点「立即清理」又因键不存在而无效（审计 DES-09）。
+   */
+  private async resetMigrationLegacyReport(): Promise<void> {
+    try {
+      const report: MigrationReport | null = this.startupMigrationReport
+      if (report !== null) {
+        report.legacyKeys = []
+        report.legacyCleanupAt = 0
+        this.startupMigrationReport = report
+      }
+      const meta: PersistenceMeta | null = await persistenceHub.metaStore.load()
+      if (meta !== null) {
+        meta.migration.legacyKeys = []
+        meta.migration.legacyCleanupAt = 0
+        await persistenceHub.metaStore.save(meta)
+      }
+    } catch (e) {
+      logger.warn('reset migration legacy report failed: %{public}s', formatError(e))
+    }
   }
 
   /**
@@ -1289,32 +1347,80 @@ class AppStoreClass {
    * 这里按"设备级域重新 init + 懒加载域 reset 后按需重读 + 文件域重扫"的顺序刷新，
    * 账号镜像域由 `loadMirrorData` 重新加载。
    *
+   * **逐域独立容错**：任一 Store 重载抛异常不得中断后续域（审计 IMP-07）——否则部分域会停在
+   * 旧内存快照，用户随后改任一设置就把旧快照整体写回磁盘，静默覆盖刚导入的数据。
+   *
    * 注意：不做 `clearAuth` 式的全量 reset——那会清掉正在编辑的会话态。
+   *
+   * @returns 重载失败的域/组件标识（空数组表示全部成功；调用方据此提示用户）
    */
-  async reloadAfterImport(): Promise<void> {
-    try {
+  async reloadAfterImport(): Promise<string[]> {
+    const failed: string[] = []
+    await this.reloadImportStep(failed, 'settings', async (): Promise<void> => {
       await this.settingsStore.init(this.store, this.writeQueue, this.authStore.state, this.context)
-      /* 主题是独立全局域（v2.theme），导入可能写了它：必须重新加载内存真源 */
+    })
+    /* 主题是独立全局域（v2.theme），导入可能写了它：必须重新加载内存真源 */
+    await this.reloadImportStep(failed, 'theme', async (): Promise<void> => {
       await this.settingsStore.initTheme(this.store, this.writeQueue, this.context)
+    })
+    await this.reloadImportStep(failed, 'categories', async (): Promise<void> => {
       await this.categoryStore.init(this.store, this.writeQueue, this.authStore.state)
+    })
+    await this.reloadImportStep(failed, 'profiles', async (): Promise<void> => {
       await this.profileStore.init(this.store, this.writeQueue, this.authStore.state)
+    })
+    await this.reloadImportStep(failed, 'tracked_threads', async (): Promise<void> => {
       await this.trackedThreadStore.init(this.store, this.writeQueue, this.authStore.state)
+    })
+    await this.reloadImportStep(failed, 'ai_sessions', async (): Promise<void> => {
       await this.aiSessionStore.init(this.store, this.writeQueue, this.authStore.state)
+    })
+    await this.reloadImportStep(failed, 'ai_tool_cache', async (): Promise<void> => {
       await this.aiToolCacheStore.init(this.store, this.writeQueue, this.authStore.state)
+    })
+    await this.reloadImportStep(failed, 'mirror', async (): Promise<void> => {
       await this.loadMirrorData()
-      // 懒加载域：清内存后由下一次访问重新读盘（历史额外预载，保证列表首帧已读标记正确）
+    })
+    // 懒加载域：清内存后由下一次访问重新读盘（历史额外预载，保证列表首帧已读标记正确）
+    await this.reloadImportStep(failed, 'votes', async (): Promise<void> => {
       this.voteStore.reset()
+    })
+    await this.reloadImportStep(failed, 'reading_progress', async (): Promise<void> => {
       this.readingProgressStore.reset()
+    })
+    await this.reloadImportStep(failed, 'history', async (): Promise<void> => {
       this.historyStore.reset()
       await this.historyStore.preload(this.authStore.state.uid)
-      // 文件域重新扫描磁盘
+    })
+    // 文件域重新扫描磁盘
+    await this.reloadImportStep(failed, 'saved_threads', async (): Promise<void> => {
       this.savedThreadStore.reload()
+    })
+    await this.reloadImportStep(failed, 'drafts', async (): Promise<void> => {
       draftStore.reloadAfterClear()
+    })
+    await this.reloadImportStep(failed, 'apply_theme', async (): Promise<void> => {
       this.settingsStore.applyCurrentTheme()
-      bumpAppStorageVersion(KEY_DATA_MANAGEMENT_VERSION)
-      logger.info('reloaded after data import')
+    })
+    bumpAppStorageVersion(KEY_DATA_MANAGEMENT_VERSION)
+    logger.info('reloaded after data import failedSteps=%{public}d', failed.length)
+    return failed
+  }
+
+  /**
+   * 执行一个导入后重载步骤；失败只记录并把步骤名加入 `failed`，不中断后续步骤。
+   *
+   * @param failed - 失败步骤名收集数组
+   * @param name - 步骤/域标识
+   * @param step - 步骤实现
+   */
+  private async reloadImportStep(failed: string[], name: string,
+    step: () => Promise<void>): Promise<void> {
+    try {
+      await step()
     } catch (e) {
-      logger.warn('reloadAfterImport failed: %{public}s', formatError(e))
+      failed.push(name)
+      logger.warn('reloadAfterImport step failed step=%{public}s: %{public}s', name, formatError(e))
     }
   }
 

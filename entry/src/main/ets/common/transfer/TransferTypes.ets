@@ -12,6 +12,37 @@
 import { ImportPolicy } from '../persistence/PersistenceTypes'
 
 /**
+ * 被跳过（未包含 / 未导入）的数据域及原因。
+ *
+ * 「不允许静默丢弃」是导出导入闭环的红线：
+ * - 导出侧：用户勾选了某域，但该域无数据 / 读取失败 / 单域超限 / 账号归属不符 → 记入
+ *   `BackupExportResult.omitted`，UI 必须展示；
+ * - 导入侧：备份里出现的域，但解析阶段被丢弃（载荷超限 / 结构非法 / 重复）或策略/归属校验
+ *   跳过 → 记入 `ParseOutcome.droppedDomains`，再由导入计划生成「跳过」条目展示原因。
+ */
+export class SkippedDomain {
+  /** 域 ID（未知域时可能是备份里的原始 id）。 */
+  domainId: string = ''
+  /** 域名（展示用；可能为空串，UI 回退到 domainId）。 */
+  label: string = ''
+  /** 跳过原因（中文短句，直接展示给用户）。 */
+  reason: string = ''
+
+  /**
+   * 构造跳过条目。
+   *
+   * @param domainId - 域 ID
+   * @param reason - 跳过原因
+   * @param label - 域名
+   */
+  constructor(domainId: string = '', reason: string = '', label: string = '') {
+    this.domainId = domainId
+    this.reason = reason
+    this.label = label
+  }
+}
+
+/**
  * 导出容器中的一个域片段。
  */
 export class BackupDomainEntry {
@@ -21,8 +52,14 @@ export class BackupDomainEntry {
   label: string = ''
   /** 域 schema 版本。 */
   schemaVersion: number = 1
-  /** 域最后写入时间（毫秒）。 */
+  /** 域最后写入时间（毫秒；RAW 域为 0，见 `DataTransferService.buildDomainEntry`）。 */
   updatedAt: number = 0
+  /**
+   * 域归属账号（仅 ACCOUNT_MIRROR 域填充；导出时写入，导入时用于跨账号串号防护）。
+   *
+   * 旧版备份没有该字段（空串）：导入侧按「归属未知」宽容处理（仍恢复，但计划页会提示）。
+   */
+  ownerUid: string = ''
   /** 域载荷。 */
   payload: Object = new Object()
 }
@@ -79,6 +116,12 @@ export class BackupExportResult {
   bytes: number = 0
   /** 错误信息（ok=false 时）。 */
   error: string = ''
+  /**
+   * 用户勾选但**未包含**在备份中的域（无数据/读取失败/单域超限/账号归属不符）。
+   *
+   * 空数组表示勾选的域全部写入容器；非空时 UI 必须展示清单与原因（禁止静默省略）。
+   */
+  omitted: SkippedDomain[] = []
 }
 
 /**
@@ -154,6 +197,8 @@ export class ImportResult {
   skippedDomains: number = 0
   /** 失败信息（首个错误）。 */
   error: string = ''
+  /** 写入失败的域 ID 列表（`error` 只保留首个错误，明细靠这里）。 */
+  failedDomains: string[] = []
 
   /**
    * 构造导入结果。

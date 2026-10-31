@@ -19,7 +19,7 @@ import { ActionOption, CredentialPasswordContent, SelectRadioResult } from '../c
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { SettingRow, SettingToggleRow, SettingPickerRow } from '../common/components/SettingRow'
 import { serializeCredentialExport } from '../common/security/CredentialExportCrypto'
-import { picker, fileIo, storageStatistics } from '@kit.CoreFileKit'
+import { storageStatistics } from '@kit.CoreFileKit'
 import { BusinessError } from '@kit.BasicServicesKit'
 import { common, contextConstant } from '@kit.AbilityKit'
 import type { AiProviderProfile } from '../model/AiConfig'
@@ -29,6 +29,7 @@ import { movingPhotoCacheDir } from '../common/media/MovingPhotoCache'
 import { draftStore } from '../common/managers/DraftStore'
 import { draftMediaStore } from '../common/media/DraftMediaStore'
 import { removeDirRecursively } from '../common/utils/FileUtils'
+import { pickDocumentToSave, writeTextToUri } from '../common/utils/FilePickUtils'
 
 @Component
 export struct SettingsPanel {
@@ -342,27 +343,20 @@ export struct SettingsPanel {
 
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext
       const userName = session?.nickName || `User${session?.uid ?? ''}`
-      const documentSaveOptions = new picker.DocumentSaveOptions()
-      documentSaveOptions.newFileNames = [`nga_${userName}.ngacred`]
-      documentSaveOptions.fileSuffixChoices = ['NGA 凭证|.ngacred']
+      // 统一走 FilePickUtils 的保存链路：UTF-8 分块写 + try/finally 关闭 fd
+      // （凭证密文很小，但旧分支的单次 writeSync 无返回值校验，截断时无感知）
+      const uri: string = await pickDocumentToSave(context, `nga_${userName}.ngacred`,
+        'NGA 凭证|.ngacred')
 
-      const documentViewPicker = new picker.DocumentViewPicker(context)
-      const uris: string[] = await documentViewPicker.save(documentSaveOptions)
-
-      if (uris.length === 0) {
+      if (uri.length === 0) {
         return
       }
 
       const content = await serializeCredentialExport({ uid: session.uid, cid: session.cid }, password)
-      /*
-       * 文件句柄必须 try/finally 关闭：writeSync 抛错（磁盘满/权限）时若不关，fd 泄漏；
-       * picker 预创建的空文件也会残留（EXPORT_IMPORT_RESEARCH.md F1 类缺陷）。
-       */
-      const file = fileIo.openSync(uris[0], fileIo.OpenMode.READ_WRITE)
-      try {
-        fileIo.writeSync(file.fd, content)
-      } finally {
-        fileIo.closeSync(file)
+      const written: boolean = await writeTextToUri(uri, content)
+      if (!written) {
+        appStore.showToast('账号凭证导出失败，请重试')
+        return
       }
       appStore.showToast('账号凭证已加密导出')
     } catch (e) {

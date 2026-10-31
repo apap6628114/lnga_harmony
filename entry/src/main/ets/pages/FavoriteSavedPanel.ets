@@ -23,6 +23,7 @@ import { FolderNameEditorContent } from '../common/dialogs/FavoriteFolderDialogs
 import { PageScope } from '../common/concurrency/PageScope'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
 import { formatTime } from '../common/utils/Utils'
+import { pickDocumentToSave, writeTextToUri } from '../common/utils/FilePickUtils'
 import { FavoriteTopicFolder } from '../model/Favorite'
 import { ApiResult } from '../model/NgaApiResults'
 import { SavedThread } from '../model/SavedThread'
@@ -807,26 +808,24 @@ export struct FavoriteSavedPanel {
       appStore.showToast('无法获取文件保存器')
       return
     }
+    if (context === null) {
+      appStore.showToast('无法获取文件保存器')
+      return
+    }
     try {
-      const documentSaveOptions: picker.DocumentSaveOptions = new picker.DocumentSaveOptions()
-      if (threads.length === 1) {
-        documentSaveOptions.newFileNames = ['nga_' + threads[0].tid + '_saved.json']
-      } else {
-        documentSaveOptions.newFileNames = ['nga_saved_threads_' + String(Date.now()) + '.json']
-      }
-      documentSaveOptions.fileSuffixChoices = ['JSON 存档|.json']
-      const documentViewPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(context)
-      const uris: string[] = await documentViewPicker.save(documentSaveOptions)
-      if (uris.length === 0) {
+      const fileName: string = threads.length === 1
+        ? 'nga_' + threads[0].tid + '_saved.json'
+        : 'nga_saved_threads_' + String(Date.now()) + '.json'
+      // 统一走 FilePickUtils 的保存链路：UTF-8 分块写（单次 writeSync 不保证写完）+ fd 安全关闭
+      const uri: string = await pickDocumentToSave(context, fileName, 'JSON 存档|.json')
+      if (uri.length === 0) {
         return
       }
       const content: string = appStore.savedThreadStore.serializeForExport(threads)
-      const file: fileIo.File = fileIo.openSync(uris[0],
-        fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC)
-      try {
-        fileIo.writeSync(file.fd, content)
-      } finally {
-        fileIo.closeSync(file)
+      const written: boolean = await writeTextToUri(uri, content)
+      if (!written) {
+        appStore.showToast('导出失败，请重试')
+        return
       }
       appStore.showToast('已导出 ' + String(threads.length) + ' 个帖子')
     } catch (e) {

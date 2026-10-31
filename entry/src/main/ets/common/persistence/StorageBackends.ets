@@ -371,6 +371,33 @@ export class JsonFileBackend {
     }
     return total
   }
+
+  /**
+   * 返回域目录内最新文件的修改时间（毫秒；目录不存在/无文件/全部 stat 失败返回 0）。
+   *
+   * 导出容器的 `updatedAt` 对文件域取该值：文件域没有信封，逐文件 mtime 是唯一真实时间。
+   * `fileIo.Stat.mtime` 的单位是**秒**，这里统一转毫秒。
+   *
+   * @param spec - 文件域元数据
+   * @returns 最新修改时间（毫秒）
+   */
+  latestMtimeMs(spec: DomainSpec): number {
+    const files: string[] = this.listFiles(spec)
+    const dir: string = spec.dirPath(this.filesDir)
+    let latest: number = 0
+    for (let i: number = 0; i < files.length; i++) {
+      try {
+        const stat: fileIo.Stat = fileIo.statSync(dir + '/' + files[i])
+        const modified: number = stat.mtime * 1000
+        if (modified > latest) {
+          latest = modified
+        }
+      } catch (e) {
+        // 单个文件 stat 失败不影响其余
+      }
+    }
+    return latest
+  }
 }
 
 /**

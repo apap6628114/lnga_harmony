@@ -26,11 +26,14 @@ import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { CredentialPasswordContent } from '../common/dialogs/Dialogs'
 import { CustomContentDialog } from '@kit.ArkUI'
 import { common } from '@kit.AbilityKit'
-import { PersistenceCatalog } from '../common/persistence/PersistenceCatalog'
+import { DomainIds, PersistenceCatalog } from '../common/persistence/PersistenceCatalog'
 import {
+  BACKUP_FILE_SUFFIX,
+  BACKUP_MAX_FILE_BYTES,
   DomainHealthSnapshot,
   DomainSpec,
   ExportPolicy,
+  ImportPolicy,
   MigrationDomainResult,
   MigrationReport,
   MigrationStatus
@@ -41,7 +44,8 @@ import {
   BackupExportResult,
   ImportPlan,
   ImportPlanEntry,
-  ImportResult
+  ImportResult,
+  SkippedDomain
 } from '../common/transfer/TransferTypes'
 import { ParseOutcome } from '../common/transfer/DataTransferService'
 import {
@@ -57,10 +61,16 @@ import { resolveKeyboardAppearance } from '../common/utils/KeyboardAppearanceUti
 import { formatError } from '../common/utils/Logger'
 
 /** 备份文件体积上限（与 `PersistenceTypes.BACKUP_MAX_FILE_BYTES` 一致，64MB）。 */
-const MAX_BACKUP_BYTES: number = 64 * 1024 * 1024
+const MAX_BACKUP_BYTES: number = BACKUP_MAX_FILE_BYTES
 
-/** 备份文件后缀。 */
-const BACKUP_SUFFIX: string = 'ngabackup'
+/**
+ * 备份文件后缀（不含点）。
+ *
+ * 统一取自 `PersistenceTypes.BACKUP_FILE_SUFFIX`（`.ngabackup`）——此前本页另有一份
+ * `BACKUP_SUFFIX='ngabackup'` 字面量，两处定义会漂移（审计 EXP-10）。
+ */
+const BACKUP_SUFFIX: string = BACKUP_FILE_SUFFIX.startsWith('.')
+  ? BACKUP_FILE_SUFFIX.substring(1) : BACKUP_FILE_SUFFIX
 
 /** 清空确认词。 */
 const CLEAR_CONFIRM_WORD: string = '清空'
@@ -165,8 +175,12 @@ export struct DataManagementPanel {
    *
    * **默认开启（跟随导出选择）**：备份里出现某个域，说明用户导出时主动勾选了它，
    * 导入就应当恢复；关闭后这些域按策略跳过（显示跳过原因）。
+   * 每次开始一次新的导入（解析成功、生成计划前）都会重置为 true，避免上一次关闭的状态
+   * 静默影响下一次导入（审计 IMP-06）。
    */
   @State restoreCacheDomains: boolean = true
+  /** 导入计划是否可执行（全部跳过时仍展示原因，但禁用「确认导入」）。 */
+  @State importPlanApplicable: boolean = true
 
   // ---- 清空 ----
   /** 清空确认输入。 */
@@ -182,6 +196,8 @@ export struct DataManagementPanel {
   private pendingPlan: ImportPlan | null = null
   /** 最近解析成功的容器（切换「恢复缓存类数据」时重新构建计划用）。 */
   private pendingContainer: BackupContainer | null = null
+  /** 解析阶段被丢弃的域（重新构建计划时要一并传入，保证跳过原因可见）。 */
+  private pendingDroppedDomains: SkippedDomain[] = []
 
   /** 导出弹窗控制器。 */
   exportDialogController?: CustomDialogController
@@ -398,6 +414,24 @@ export struct DataManagementPanel {
 
   // ============== 导出 ==============
 
+  /**
+   * 导出弹窗副标题。
+   *
+   * 迁移未完成（FAILED/DEFERRED）时追加警示：这些域的旧键数据尚未搬进新命名空间，
+   * 导出只读新键 → 备份会缺这些域；若随后清空数据，旧键数据会被删除（审计 EXP-03/DES-02）。
+   *
+   * @returns 副标题文案
+   */
+  private exportSecondaryTitle(): string {
+    const base: string = '选择要导出的数据域。未加密文件包含浏览历史、AI 对话等隐私内容，建议保持加密。'
+    const unsettled: number = appStore.migrationUnsettledCount
+    if (unsettled > 0) {
+      return '有 ' + String(unsettled) + ' 个数据域尚未完成升级，其旧数据不会包含在备份中'
+        + '（建议先到上方「重试升级」）。\n' + base
+    }
+    return base
+  }
+
   /** 打开导出弹窗（重置勾选与口令）。 */
   private openExportDialog(): void {
     const specs: DomainSpec[] = PersistenceCatalog.exportable()
@@ -422,7 +456,7 @@ export struct DataManagementPanel {
       maskColor: UIMaterialManager.scrim,
       builder: CustomContentDialog({
         primaryTitle: '导出数据',
-        secondaryTitle: '选择要导出的数据域。未加密文件包含浏览历史、AI 对话等隐私内容，建议保持加密。',
+        secondaryTitle: this.exportSecondaryTitle(),
         contentBuilder: (): void => {
           this.ExportDialogContent()
         }
@@ -497,6 +531,16 @@ export struct DataManagementPanel {
     return true
   }
 
+  /**
+   * 当前勾选是否包含敏感数据域（AI 对话历史 / 浏览历史）。
+   *
+   * @returns 是否包含敏感域
+   */
+  private hasSensitiveSelection(): boolean {
+    return this.exportSelectedIds.indexOf(DomainIds.AI_SESSIONS) >= 0 ||
+      this.exportSelectedIds.indexOf(DomainIds.HISTORY) >= 0
+  }
+
   /** 执行导出：生成容器文本 → 选择保存位置 → 写文件。 */
   private async runExport(): Promise<void> {
     if (!this.isExportReady()) {
@@ -545,11 +589,46 @@ export struct DataManagementPanel {
       this.exportDialogController?.close()
       appStore.showToast('已导出 ' + String(result.domainCount) + ' 个数据域'
         + (result.encrypted ? '（已加密）' : '（未加密）') + ' · ' + this.formatSize(result.bytes))
+      /*
+       * 勾选了但没进备份的域必须让用户看见（审计 EXP-01/EXP-02）：无数据、读取失败、
+       * 单域超 8MB 被截断、镜像域属于其他账号……此前的实现全部静默省略，
+       * 用户会误以为备份是完整的，随后清空数据才发现丢域。
+       */
+      if (result.omitted.length > 0) {
+        this.showOmittedDomains(result.omitted)
+      }
     } catch (e) {
       appStore.showToast('导出失败：' + formatError(e))
     } finally {
       this.exportRunning = false
       this.exportProgressText = ''
+    }
+  }
+
+  /**
+   * 展示「勾选但未包含在备份中」的域清单。
+   *
+   * @param omitted - 未包含的域列表（含原因）
+   */
+  private showOmittedDomains(omitted: SkippedDomain[]): void {
+    const lines: string[] = []
+    for (let i: number = 0; i < omitted.length; i++) {
+      const item: SkippedDomain = omitted[i]
+      const name: string = item.label.length > 0 ? item.label : item.domainId
+      lines.push('· ' + name + '：' + item.reason)
+    }
+    try {
+      this.getUIContext().showAlertDialog({
+        title: '以下 ' + String(omitted.length) + ' 个数据域未包含在备份中',
+        message: lines.join('\n'),
+        primaryButton: {
+          value: '知道了',
+          action: (): void => {
+          }
+        }
+      })
+    } catch (e) {
+      appStore.showToast('有 ' + String(omitted.length) + ' 个数据域未包含在备份中（详见日志）')
     }
   }
 
@@ -587,10 +666,10 @@ export struct DataManagementPanel {
       const outcome: ParseOutcome = await appStore.dataTransfer.parseBackup(content, '')
       if (outcome.ok && outcome.container !== null) {
         if (outcome.warning.length > 0) {
-          // 非阻断警告（如 checksum 不一致）：提示后继续走导入计划
+          // 非阻断警告（如 checksum 不一致/超大域被跳过）：提示后继续走导入计划
           appStore.showToast(outcome.warning)
         }
-        await this.buildPlanAndShow(outcome.container)
+        await this.buildPlanAndShow(outcome.container, outcome.droppedDomains)
         return
       }
       if (outcome.needPassword) {
@@ -640,7 +719,10 @@ export struct DataManagementPanel {
         appStore.showToast(outcome.error.length > 0 ? outcome.error : '解密失败')
         return
       }
-      await this.buildPlanAndShow(outcome.container)
+      if (outcome.warning.length > 0) {
+        appStore.showToast(outcome.warning)
+      }
+      await this.buildPlanAndShow(outcome.container, outcome.droppedDomains)
     } catch (e) {
       appStore.showToast('解密失败：' + formatError(e))
     } finally {
@@ -653,19 +735,35 @@ export struct DataManagementPanel {
    * 生成导入计划并打开确认弹窗。
    *
    * @param container - 解析出的明文容器
+   * @param droppedDomains - 解析阶段被丢弃的域（必须在计划里可见）
    */
-  private async buildPlanAndShow(container: BackupContainer): Promise<void> {
+  private async buildPlanAndShow(container: BackupContainer,
+    droppedDomains: SkippedDomain[]): Promise<void> {
     this.pendingContainer = container
-    const plan: ImportPlan =
-      await appStore.dataTransfer.buildImportPlan(container, this.restoreCacheDomains)
-    if (!plan.ok) {
-      appStore.showToast(plan.error.length > 0 ? plan.error : '没有可导入的数据')
-      return
-    }
+    this.pendingDroppedDomains = droppedDomains
+    /* 每次新的导入都从「默认恢复缓存」开始，避免上一次关闭开关静默影响本次（审计 IMP-06） */
+    this.restoreCacheDomains = true
+    const plan: ImportPlan = await appStore.dataTransfer.buildImportPlan(container,
+      this.restoreCacheDomains, droppedDomains)
+    this.applyPlanToDialog(plan)
+    /*
+     * 即使没有可执行的变更（备份中的域全部被跳过/无变化），也要打开计划弹窗展示原因：
+     * 否则用户只看到笼统的「没有可导入的新数据」，看不到「未登录请先登录」「缓存默认跳过」
+     * 等可操作的原因（审计 IMP-04）。
+     */
+    this.openImportPlanDialog()
+  }
+
+  /**
+   * 把计划写入弹窗状态（摘要 / 行 / 是否可执行 / 待执行计划）。
+   *
+   * @param plan - 导入计划
+   */
+  private applyPlanToDialog(plan: ImportPlan): void {
     this.importPlanSummary = this.buildPlanSummary(plan)
     this.importPlanLines = this.buildPlanLines(plan)
-    this.pendingPlan = plan
-    this.openImportPlanDialog()
+    this.importPlanApplicable = plan.ok
+    this.pendingPlan = plan.ok ? plan : null
   }
 
   /**
@@ -677,25 +775,31 @@ export struct DataManagementPanel {
       return
     }
     try {
-      const plan: ImportPlan =
-        await appStore.dataTransfer.buildImportPlan(container, this.restoreCacheDomains)
-      if (!plan.ok) {
-        appStore.showToast(plan.error.length > 0 ? plan.error : '没有可导入的数据')
-        return
-      }
-      this.importPlanSummary = this.buildPlanSummary(plan)
-      this.importPlanLines = this.buildPlanLines(plan)
-      this.pendingPlan = plan
+      const plan: ImportPlan = await appStore.dataTransfer.buildImportPlan(container,
+        this.restoreCacheDomains, this.pendingDroppedDomains)
+      this.applyPlanToDialog(plan)
+      // 计划是否可执行由 applyPlanToDialog 写入；不可执行时确认按钮自动置灰，
+      // 不能保留旧计划（否则用户关掉缓存恢复后点确认仍会执行旧计划，审计 IMP-05）。
     } catch (e) {
+      // 重建失败：清空待执行计划，避免「显示旧计划 + 执行旧计划」
+      this.pendingPlan = null
+      this.importPlanApplicable = false
+      this.importPlanLines = []
+      this.importPlanSummary = ''
       appStore.showToast('重建导入计划失败：' + formatError(e))
     }
   }
 
   /** 计划摘要文案。 */
   private buildPlanSummary(plan: ImportPlan): string {
+    const changed: number = plan.changedDomainCount()
+    if (changed === 0) {
+      return plan.error.length > 0 ? plan.error
+        : '备份导出于 ' + this.formatDate(plan.exportedAt) + ' · 没有可应用的数据域（原因见列表）'
+    }
     return '备份导出于 ' + this.formatDate(plan.exportedAt)
       + ' · 应用版本 ' + (plan.appVersionName.length > 0 ? plan.appVersionName : '未知')
-      + ' · 可导入域 ' + String(plan.changedDomainCount()) + ' 个'
+      + ' · 可导入域 ' + String(changed) + ' 个'
   }
 
   /** 把计划条目转成展示行。 */
@@ -711,9 +815,16 @@ export struct DataManagementPanel {
         line.detail = entry.reason.length > 0 ? entry.reason : '跳过（缓存或策略不允许）'
       } else if (entry.added === 0 && entry.updated === 0) {
         line.willSkip = true
-        line.detail = '无变化'
+        line.detail = '无变化（不会写入）'
+      } else if (entry.policy === ImportPolicy.SKIP) {
+        // 缓存/镜像域：按备份内容整体覆盖恢复，没有「新增/更新」的合并语义
+        line.detail = '覆盖恢复 ' + String(entry.added) + ' 条（整体替换本机该缓存）'
       } else {
         line.detail = '新增 ' + String(entry.added) + ' 条 · 更新 ' + String(entry.updated) + ' 条'
+      }
+      // 非跳过条目也可能带提示（如「来源账号未知，将按当前账号恢复」）
+      if (!line.willSkip && entry.reason.length > 0) {
+        line.detail = line.detail + '（' + entry.reason + '）'
       }
       lines.push(line)
     }
@@ -754,14 +865,22 @@ export struct DataManagementPanel {
        * 只要**有域写入成功**就必须重载内存：部分失败时若只提示不重载，已写入的域仍是旧内存快照，
        * 用户随后改任一设置会把旧快照整体写回磁盘，静默覆盖刚导入的数据。
        */
+      let reloadFailed: string[] = []
       if (result.appliedDomains > 0) {
-        await appStore.reloadAfterImport()
+        reloadFailed = await appStore.reloadAfterImport()
       }
-      if (result.ok) {
+      if (result.ok && reloadFailed.length === 0) {
         appStore.showToast('导入完成：应用 ' + String(result.appliedDomains) + ' 个域，新增 '
           + String(result.added) + ' 条，更新 ' + String(result.updated) + ' 条')
+      } else if (result.ok) {
+        // 写盘成功但部分 Store 内存重载失败：提示重启，避免用户以为界面数据"没变"
+        appStore.showToast('数据已导入，但 ' + String(reloadFailed.length)
+          + ' 个模块刷新失败（' + reloadFailed.join('/') + '），建议重启应用后查看')
       } else {
-        appStore.showToast('导入未全部成功：' + (result.error.length > 0 ? result.error : '未知错误'))
+        const failedList: string = result.failedDomains.length > 0
+          ? '（失败域：' + result.failedDomains.join('、') + '）' : ''
+        appStore.showToast('导入未全部成功：' + (result.error.length > 0 ? result.error : '未知错误')
+          + failedList)
       }
       this.refreshAll()
     } catch (e) {
@@ -774,6 +893,25 @@ export struct DataManagementPanel {
 
   // ============== 清空 ==============
 
+  /**
+   * 清空弹窗副标题。
+   *
+   * 迁移未完成时明确告警：旧键里的数据尚未迁移，清空会删除旧键且不在任何备份中
+   * （审计 DES-02）。同时补充媒体缓存也会被删除的口径（DES-14）。
+   *
+   * @returns 副标题文案
+   */
+  private clearSecondaryTitle(): string {
+    const base: string = '此操作不可恢复。登录凭证不受影响，但设置、浏览历史、阅读进度、AI 会话、'
+      + '草稿、离线存档、草稿图片/视频副本与动态照片缓存将全部删除。'
+    const unsettled: number = appStore.migrationUnsettledCount
+    if (unsettled > 0) {
+      return '⚠️ 有 ' + String(unsettled) + ' 个数据域尚未完成升级：清空会连同它们的旧数据一起删除，'
+        + '且这些数据不在任何备份中。建议先「重试升级」或先导出数据。\n' + base
+    }
+    return base
+  }
+
   /** 打开清空确认弹窗。 */
   private openClearDialog(): void {
     this.clearInput = ''
@@ -783,7 +921,7 @@ export struct DataManagementPanel {
       maskColor: UIMaterialManager.scrim,
       builder: CustomContentDialog({
         primaryTitle: '清空本地数据',
-        secondaryTitle: '此操作不可恢复。登录凭证不受影响，但设置、浏览历史、阅读进度、AI 会话、草稿与离线存档将全部删除。',
+        secondaryTitle: this.clearSecondaryTitle(),
         contentBuilder: (): void => {
           this.ClearDataContent()
         }
@@ -1309,6 +1447,16 @@ export struct DataManagementPanel {
           .width('100%').margin({ top: 8 })
       }
 
+      /*
+       * 按勾选动态提示敏感域（设计稿 §6.6 #2）：固定在底部的笼统提示不足以让用户意识到
+       * 「AI 对话历史」被勾选且未加密时的暴露面（审计 EXP-09）。
+       */
+      if (this.hasSensitiveSelection() && !this.exportEncrypt) {
+        Text('⚠️ 已勾选敏感数据域（AI 对话历史/浏览历史），未加密导出会暴露这些内容。')
+          .fontSize(11).fontColor(AppColors.destructive)
+          .width('100%').margin({ top: 6 })
+      }
+
       Text('注：草稿中的图片/视频副本不包含在备份内（体积大、路径不可移植），恢复草稿后需在编辑器中重新选择。')
         .fontSize(11).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
         .width('100%').margin({ top: 6 })
@@ -1404,6 +1552,11 @@ export struct DataManagementPanel {
 
       Divider().color(AppColors.separator).margin({ top: 6, bottom: 6 })
 
+      Text('提示：草稿中的图片/视频副本不随备份恢复，导入后需在编辑器中重新选择；'
+        + '账号镜像缓存需在登录状态下恢复。')
+        .fontSize(11).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+        .width('100%').margin({ top: 2, bottom: 2 })
+
       Row() {
         Button('取消')
           .layoutWeight(1).height(44).fontSize(16)
@@ -1413,11 +1566,13 @@ export struct DataManagementPanel {
             this.importPlanController?.close()
           })
 
-        Button('确认导入')
+        Button(this.importPlanApplicable ? '确认导入' : '无可导入数据')
           .layoutWeight(1).height(44).fontSize(16)
           .margin({ left: 12 })
           .backgroundColor(AppColors.primary).fontColor(AppColors.white)
           .fontWeight(FontWeight.Bold)
+          .opacity(this.importPlanApplicable ? 1 : 0.45)
+          .enabled(this.importPlanApplicable)
           .onClick((): void => {
             this.applyPendingImport()
           })

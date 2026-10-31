@@ -42,6 +42,7 @@ import persistenceMigrationUnitTest from './PersistenceMigrationUnit.test';
 import schedulerUnitTest from './SchedulerUnit.test';
 import dataTransferUnitTest from './DataTransferUnit.test';
 import dataTransferParseUnitTest from './DataTransferParseUnit.test';
+import dataTransferDomainParityTest from './DataTransferDomainParity.test';
 import draftKeyUtilsUnitTest from './DraftKeyUtilsUnit.test';
 
 /**
@@ -92,5 +93,6 @@ export default function testsuite(): void {
   schedulerUnitTest();
   dataTransferUnitTest();
   dataTransferParseUnitTest();
+  dataTransferDomainParityTest();
   draftKeyUtilsUnitTest();
 }

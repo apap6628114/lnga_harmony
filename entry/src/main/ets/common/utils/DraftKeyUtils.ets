@@ -4,11 +4,40 @@
  * 为什么单独成文件：草稿键里的 uid 短哈希既要被 `DraftStore`（生成键）使用，也要被
  * `DataTransferService`（导入时把备份里的旧账号哈希**改写为当前账号哈希**）使用。
  * 放进 `DraftStore` 会让 `DataTransferService` 引入 Store/AppStore 依赖链（存在循环依赖风险），
- * 因此抽成零依赖工具模块。
+ * 因此抽成零依赖工具模块。同理，导入侧的草稿键合法性校验（`isValidDraftKey`）也放在这里，
+ * 由 `DraftStore` 与导入器共用同一份实现。
  *
  * ⚠️ 算法变更会改变既有草稿的键归属（旧草稿将读不到），**不要修改**：
  * FNV-1a 32 位 + 36 进制（非负）。
  */
+
+/** 草稿键最大长度（文件名安全上界，与 `DraftStore`/`DraftMediaStore` 一致）。 */
+const MAX_DRAFT_KEY_LENGTH: number = 96
+
+/**
+ * 校验草稿键是否可安全用于文件名。
+ *
+ * 键由内部生成（`draft_` + 数字 + 动作 + uid 哈希），只允许字母/数字/下划线；
+ * 必须拒绝路径分隔符、`..` 与其它字符，防止上游改动把路径穿越带进草稿目录。
+ *
+ * @param key - 待校验的草稿键
+ * @returns 是否合法
+ */
+export function isValidDraftKey(key: string): boolean {
+  if (key.length === 0 || key.length > MAX_DRAFT_KEY_LENGTH) {
+    return false
+  }
+  for (let i: number = 0; i < key.length; i++) {
+    const c: string = key.charAt(i)
+    const isDigit: boolean = c >= '0' && c <= '9'
+    const isLower: boolean = c >= 'a' && c <= 'z'
+    const isUpper: boolean = c >= 'A' && c <= 'Z'
+    if (!isDigit && !isLower && !isUpper && c !== '_') {
+      return false
+    }
+  }
+  return true
+}
 
 /**
  * FNV-1a 32 位短哈希（36 进制）。
