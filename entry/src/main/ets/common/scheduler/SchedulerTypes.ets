@@ -68,10 +68,20 @@ export class SchedulerContext {
  * 任务定义（注册时一次性描述，运行期不改）。
  *
  * 标题字段全部由注册方设置；调度器只读取，不修改任务定义。
+ *
+ * ## 为什么既有英文 `id` 又有中文 `label`
+ *
+ * `id` 是日志与排障的稳定主键（`session.verify`），**不直接展示给用户**；
+ * 数据管理页「后台任务调度」一律展示 `label`（缺失时 UI 回退 `id`），
+ * 避免用户看到一串看不懂的英文点分名。
  */
 export class ScheduledTask {
   /** 唯一 ID（日志 / 状态查询主键；重复注册会被拒绝）。 */
   id: string = ''
+  /** 用户可读的中文显示名（数据管理页展示；为空时 UI 回退英文 id）。 */
+  label: string = ''
+  /** 用户可读的一句话中文说明（展示在中文名下方；可为空）。 */
+  detail: string = ''
   /** 触发源集合：命中任一即参与本次派发。 */
   triggers: SchedulerTrigger[] = []
   /** 最小成功执行间隔（毫秒）；0 表示不节流。 */
@@ -108,8 +118,12 @@ export class ScheduledTask {
  * - `lastError`：最近一次失败的异常摘要（最多 200 字符）。
  */
 export class TaskStatus {
-  /** 任务 ID。 */
+  /** 任务 ID（排障主键，不直接展示给用户）。 */
   id: string = ''
+  /** 任务中文显示名（注册时取自 `ScheduledTask.label`；空串由 UI 回退 id）。 */
+  label: string = ''
+  /** 任务中文说明（注册时取自 `ScheduledTask.detail`；可为空串）。 */
+  detail: string = ''
   /** 最近一次实际执行完成时间（毫秒；0 = 尚未执行过）。 */
   lastRunAt: number = 0
   /** 最近一次结果（含门禁跳过）。 */

@@ -745,6 +745,38 @@ export default function schedulerUnitTest(): void {
       expect(second[0].lastError).assertEqual('')
     })
 
+    it('snapshotCarriesTaskLabelAndDetail', 0, async (): Promise<void> => {
+      const harness: Harness = new Harness()
+      const recorder: RunRecorder = new RunRecorder()
+      const task: ScheduledTask = makeTask('labeled.task', [SchedulerTrigger.TICK], recorder)
+      task.label = '登录状态检查'
+      task.detail = '回到前台或定时确认登录是否仍然有效'
+      harness.scheduler.register(task)
+      harness.start()
+
+      await harness.notifyAndWait(SchedulerTrigger.TICK)
+      const statuses: TaskStatus[] = harness.scheduler.snapshot()
+
+      expect(statuses.length).assertEqual(1)
+      expect(statuses[0].id).assertEqual('labeled.task')
+      expect(statuses[0].label).assertEqual('登录状态检查')
+      expect(statuses[0].detail).assertEqual('回到前台或定时确认登录是否仍然有效')
+      expect(statuses[0].lastOutcome).assertEqual(TaskOutcome.OK)
+    })
+
+    it('snapshotDefaultsMissingLabelAndDetailToEmpty', 0, async (): Promise<void> => {
+      const harness: Harness = new Harness()
+      const recorder: RunRecorder = new RunRecorder()
+      harness.scheduler.register(makeTask('unlabeled.task', [SchedulerTrigger.TICK], recorder))
+
+      const statuses: TaskStatus[] = harness.scheduler.snapshot()
+
+      expect(statuses.length).assertEqual(1)
+      expect(statuses[0].id).assertEqual('unlabeled.task')
+      expect(statuses[0].label).assertEqual('')
+      expect(statuses[0].detail).assertEqual('')
+    })
+
     it('rejectsDuplicateTaskId', 0, async (): Promise<void> => {
       const harness: Harness = new Harness()
       const first: RunRecorder = new RunRecorder()

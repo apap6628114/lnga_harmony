@@ -134,6 +134,27 @@ class DomainSizeRow {
 }
 
 /**
+ * 调度任务展示行（数据管理页「后台任务调度」折叠区）。
+ *
+ * 英文任务 ID 只作排障主键，不上屏；上屏一律取 `TaskStatus.label` 的中文名，
+ * 缺失时退回 ID（自绘任务未设中文名时不至于显示空白）。
+ */
+class SchedulerTaskRow {
+  /** 列表键：任务 ID + 状态指纹（状态一变即重建，避免 ForEach 复用旧文本）。 */
+  key: string = ''
+  /** 任务中文名。 */
+  name: string = ''
+  /** 状态明细（执行结果 / 上次执行 / 连续失败）。 */
+  statusText: string = ''
+  /** 最近一次失败的错误摘要（空串 = 无错误，不展示）。 */
+  errorText: string = ''
+  /** 一句话中文说明（可为空）。 */
+  hint: string = ''
+  /** 当前是否处于失败态（主行用警示色）。 */
+  failed: boolean = false
+}
+
+/**
  * 导出弹窗列表行（组标题 + 域行）。
  */
 class ExportRow {
@@ -210,8 +231,8 @@ export struct DataManagementPanel {
   @State transferHistoryLines: string[] = []
 
   // ---- 调度状态 ----
-  /** 调度任务状态行。 */
-  @State schedulerLines: string[] = []
+  /** 调度任务展示行（中文名 + 中文状态 + 说明）。 */
+  @State schedulerRows: SchedulerTaskRow[] = []
   /** 调度状态折叠区是否展开。 */
   @State schedulerExpanded: boolean = false
 
@@ -372,11 +393,15 @@ export struct DataManagementPanel {
 
   /**
    * 刷新后台任务调度状态（`AppScheduler.snapshot()`）。
+   *
+   * 面向普通用户展示：任务名取 `TaskStatus.label` 的中文名（缺失时回退英文 ID，
+   * 自绘任务不设中文名时才可能看到英文），状态与说明全部中文；英文 ID 只作为
+   * 日志 / 排障主键，不单独上屏。
    */
   private refreshScheduler(): void {
     try {
       const statuses: TaskStatus[] = appStore.scheduler.snapshot()
-      const lines: string[] = []
+      const rows: SchedulerTaskRow[] = []
       for (let i: number = 0; i < statuses.length; i++) {
         const status: TaskStatus = statuses[i]
         let outcome: string = '未运行'
@@ -395,21 +420,30 @@ export struct DataManagementPanel {
         } else if (status.lastOutcome === TaskOutcome.SKIPPED) {
           outcome = '跳过'
         }
-        let line: string = status.id + '：' + outcome
+        const row: SchedulerTaskRow = new SchedulerTaskRow()
+        row.name = status.label.length > 0 ? status.label : status.id
+        let statusText: string = outcome
         if (status.lastRunAt > 0) {
-          line += ' · ' + this.formatDate(status.lastRunAt)
+          statusText += ' · 上次 ' + this.formatShortDateTime(status.lastRunAt)
         }
         if (status.failureCount > 0) {
-          line += ' · 连续失败 ' + String(status.failureCount)
+          statusText += ' · 连续失败 ' + String(status.failureCount) + ' 次'
         }
-        if (status.lastError.length > 0) {
-          line += '（' + status.lastError + '）'
+        row.statusText = statusText
+        if (!status.running && status.lastOutcome === TaskOutcome.FAILED) {
+          row.errorText = '最近一次失败：'
+            + (status.lastError.length > 0 ? status.lastError : '原因未知')
         }
-        lines.push(line)
+        row.hint = status.detail
+        row.failed = !status.running && status.lastOutcome === TaskOutcome.FAILED
+        row.key = status.id + '|' + String(status.lastRunAt) + '|' + String(status.lastOutcome)
+          + '|' + String(status.failureCount) + '|' + (status.running ? '1' : '0')
+          + '|' + status.lastError
+        rows.push(row)
       }
-      this.schedulerLines = lines
+      this.schedulerRows = rows
     } catch (e) {
-      this.schedulerLines = []
+      this.schedulerRows = []
     }
   }
 
@@ -1389,6 +1423,23 @@ export struct DataManagementPanel {
   }
 
   /**
+   * 格式化日期时间（MM-DD HH:mm，调度状态等短文本用）。
+   *
+   * 只到分钟：调度任务间隔最短 5 分钟，展示到小时/分钟足够判断"最近是否跑过"。
+   *
+   * @param timestamp - 毫秒时间戳
+   * @returns 日期时间文案；非法值返回「—」
+   */
+  private formatShortDateTime(timestamp: number): string {
+    if (timestamp <= 0) {
+      return '—'
+    }
+    const date: Date = new Date(timestamp)
+    return this.pad2(date.getMonth() + 1) + '-' + this.pad2(date.getDate()) + ' '
+      + this.pad2(date.getHours()) + ':' + this.pad2(date.getMinutes())
+  }
+
+  /**
    * 生成导出文件名用的时间戳（YYYYMMDD-HHmmss）。
    *
    * @returns 时间戳文本
@@ -1605,18 +1656,46 @@ export struct DataManagementPanel {
         Text(this.schedulerExpanded ? '收起' : '展开').fontSize(13).fontColor(AppColors.primary)
           .onClick((): void => {
             this.schedulerExpanded = !this.schedulerExpanded
+            if (this.schedulerExpanded) {
+              /*
+               * 展开时重取一次快照：页面停留在设置页期间调度状态可能已经变化，
+               * 折叠区不该展示"打开页面那一刻"的过期状态。
+               */
+              this.refreshScheduler()
+            }
           })
       }
       .width('100%').padding({ bottom: 6 }).alignItems(VerticalAlign.Center)
 
       if (this.schedulerExpanded) {
-        if (this.schedulerLines.length === 0) {
+        Text('应用在启动、回到前台等时机自动执行的维护任务，无需手动操作；这里只展示最近一次执行情况。')
+          .fontSize(12).fontColor(AppColors.textTertiary).width('100%').lineHeight(17)
+          .padding({ bottom: 4 })
+        if (this.schedulerRows.length === 0) {
           Text('暂无任务状态').fontSize(12).fontColor(AppColors.textTertiary).width('100%')
         } else {
-          ForEach(this.schedulerLines, (line: string) => {
-            Text(line).fontSize(12).fontColor(AppColors.textTertiary)
-              .width('100%').padding({ top: 3, bottom: 3 }).lineHeight(16)
-          }, (line: string, index: number): string => line + '#' + String(index))
+          ForEach(this.schedulerRows, (row: SchedulerTaskRow) => {
+            Column() {
+              Row() {
+                Text(row.name).fontSize(13)
+                  .fontColor(row.failed ? AppColors.warning : AppColors.textPrimary)
+                Text(row.statusText).fontSize(12)
+                  .fontColor(row.failed ? AppColors.warning : AppColors.textSecondary)
+                  .textAlign(TextAlign.End).layoutWeight(1)
+              }
+              .width('100%').alignItems(VerticalAlign.Center)
+              if (row.hint.length > 0) {
+                Text(row.hint).fontSize(11).fontColor(AppColors.textTertiary)
+                  .width('100%').lineHeight(15).margin({ top: 1 })
+              }
+              if (row.errorText.length > 0) {
+                Text(row.errorText).fontSize(11).fontColor(AppColors.warning)
+                  .width('100%').lineHeight(15).margin({ top: 1 })
+              }
+            }
+            .width('100%').alignItems(HorizontalAlign.Start)
+            .padding({ top: 5, bottom: 5 })
+          }, (row: SchedulerTaskRow): string => row.key)
         }
       }
     }

@@ -86,6 +86,8 @@ class TaskEntry {
   constructor(task: ScheduledTask) {
     this.task = task
     this.status.id = task.id
+    this.status.label = task.label
+    this.status.detail = task.detail
   }
 }
 
@@ -564,6 +566,8 @@ export class AppScheduler {
   private copyStatus(source: TaskStatus): TaskStatus {
     const target: TaskStatus = new TaskStatus()
     target.id = source.id
+    target.label = source.label
+    target.detail = source.detail
     target.lastRunAt = source.lastRunAt
     target.lastOutcome = source.lastOutcome
     target.failureCount = source.failureCount

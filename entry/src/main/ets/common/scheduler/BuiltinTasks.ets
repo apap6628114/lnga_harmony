@@ -73,8 +73,11 @@ export class BuiltinTaskHost {
  */
 export function registerBuiltinTasks(scheduler: AppScheduler, host: BuiltinTaskHost): void {
   // ---- 会话校验：回前台 + 心跳驱动；10 分钟节流（与 SessionGuard 内部节流同档）----
+  // 数据管理页展示名：登录状态检查。
   const verifyTask: ScheduledTask = new ScheduledTask()
   verifyTask.id = 'session.verify'
+  verifyTask.label = '登录状态检查'
+  verifyTask.detail = '回到前台或定时确认登录是否仍然有效'
   verifyTask.triggers = [
     SchedulerTrigger.FOREGROUND,
     SchedulerTrigger.TICK,
@@ -90,8 +93,11 @@ export function registerBuiltinTasks(scheduler: AppScheduler, host: BuiltinTaskH
   scheduler.register(verifyTask)
 
   // ---- 自动签到：启动 / 回前台各检查一次（内部按日去重）----
+  // 数据管理页展示名：自动签到。
   const checkinTask: ScheduledTask = new ScheduledTask()
   checkinTask.id = 'checkin.auto'
+  checkinTask.label = '自动签到'
+  checkinTask.detail = '启动或回到前台时自动完成每日签到'
   checkinTask.triggers = [SchedulerTrigger.STARTUP, SchedulerTrigger.FOREGROUND]
   checkinTask.minIntervalMs = 0
   checkinTask.foregroundOnly = true
@@ -103,8 +109,11 @@ export function registerBuiltinTasks(scheduler: AppScheduler, host: BuiltinTaskH
   scheduler.register(checkinTask)
 
   // ---- 通知轮询 ----
+  // 数据管理页展示名：新通知检查。
   const pollNotifications: ScheduledTask = new ScheduledTask()
   pollNotifications.id = 'notifications.poll'
+  pollNotifications.label = '新通知检查'
+  pollNotifications.detail = '每 5 分钟检查一次是否有新通知'
   pollNotifications.triggers = [
     SchedulerTrigger.STARTUP,
     SchedulerTrigger.FOREGROUND,
@@ -120,8 +129,11 @@ export function registerBuiltinTasks(scheduler: AppScheduler, host: BuiltinTaskH
   scheduler.register(pollNotifications)
 
   // ---- 关注动态轮询 ----
+  // 数据管理页展示名：关注动态检查。
   const pollActivities: ScheduledTask = new ScheduledTask()
   pollActivities.id = 'activities.poll'
+  pollActivities.label = '关注动态检查'
+  pollActivities.detail = '每 5 分钟检查一次关注的人是否有新动态'
   pollActivities.triggers = [
     SchedulerTrigger.STARTUP,
     SchedulerTrigger.FOREGROUND,
@@ -137,8 +149,11 @@ export function registerBuiltinTasks(scheduler: AppScheduler, host: BuiltinTaskH
   scheduler.register(pollActivities)
 
   // ---- 跟踪帖子检查 ----
+  // 数据管理页展示名：跟踪帖子检查。
   const checkTracked: ScheduledTask = new ScheduledTask()
   checkTracked.id = 'tracked.check'
+  checkTracked.label = '跟踪帖子检查'
+  checkTracked.detail = '每 10 分钟检查一次跟踪的帖子是否有更新'
   checkTracked.triggers = [
     SchedulerTrigger.STARTUP,
     SchedulerTrigger.FOREGROUND,
@@ -154,8 +169,11 @@ export function registerBuiltinTasks(scheduler: AppScheduler, host: BuiltinTaskH
   scheduler.register(checkTracked)
 
   // ---- 草稿清理：启动后延迟 800ms（让出启动前几帧）----
+  // 数据管理页展示名：草稿清理。
   const cleanupDrafts: ScheduledTask = new ScheduledTask()
   cleanupDrafts.id = 'draft.cleanup'
+  cleanupDrafts.label = '草稿清理'
+  cleanupDrafts.detail = '启动后清理超过保留期的草稿和超量的草稿图片/视频副本'
   cleanupDrafts.triggers = [SchedulerTrigger.STARTUP]
   cleanupDrafts.minIntervalMs = 0
   cleanupDrafts.startDelayMs = DRAFT_CLEANUP_DELAY_MS
@@ -168,8 +186,11 @@ export function registerBuiltinTasks(scheduler: AppScheduler, host: BuiltinTaskH
   scheduler.register(cleanupDrafts)
 
   // ---- 旧格式数据清理：启动检查 + 每日一次（未到期内部直接返回）----
+  // 数据管理页展示名：旧数据清理。
   const cleanupLegacy: ScheduledTask = new ScheduledTask()
   cleanupLegacy.id = 'migration.legacyCleanup'
+  cleanupLegacy.label = '旧数据清理'
+  cleanupLegacy.detail = '每天检查并清理旧版本遗留的数据'
   cleanupLegacy.triggers = [SchedulerTrigger.STARTUP, SchedulerTrigger.TICK]
   cleanupLegacy.minIntervalMs = LEGACY_CLEANUP_INTERVAL_MS
   cleanupLegacy.foregroundOnly = false
