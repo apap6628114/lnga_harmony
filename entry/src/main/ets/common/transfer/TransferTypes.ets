@@ -6,7 +6,7 @@
  * - **域层**：每个域一段 `{id, schemaVersion, updatedAt, payload}`，payload 形状由域自己决定。
  *
  * 加密逻辑在 `TransferCrypto.ets`，合并逻辑在 `DomainMergers.ets`，本目录的
- * `DataTransferService.ets` 负责编排（读域 → 打包 → 解析 → 计划 → 应用 → 撤销）。
+ * `DataTransferService.ets` 负责编排（读域 → 打包 → 解析 → 计划 → 应用）。
  */
 
 import { ImportPolicy } from '../persistence/PersistenceTypes'

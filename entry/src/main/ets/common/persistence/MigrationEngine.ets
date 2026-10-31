@@ -18,6 +18,7 @@
 import { fileIo } from '@kit.CoreFileKit'
 import { PreferencesStore } from '../infra/PreferencesStore'
 import { Logger, DOMAIN_INFRA, formatError } from '../utils/Logger'
+import { writeTextFully } from '../utils/FileUtils'
 import {
   convertDomainValues,
   isMirrorDomain,
@@ -457,7 +458,7 @@ export class MigrationEngine {
        */
       if (isMirrorDomain(domainId) && ctx.currentUid.length === 0) {
         return new MigrationDomainResult(domainId, MigrationDomainStatus.SKIPPED, 0,
-          '未登录：账号镜像缓存无归属，登录后由服务端重建')
+          '未登录：账号镜像缓存无归属，登录后由服务端重建', true)
       }
       // 1) 读取全部旧值（逐键容错：单键坏数据跳过）
       const values: LegacyValue[] = []
@@ -479,8 +480,9 @@ export class MigrationEngine {
       // 2) 转换
       const converted: MigrationConvertResult = convertDomainValues(domainId, values, ctx)
       if (converted.skippedReason.length > 0 && !converted.ok) {
+        // 可重试的跳过（等登录后重试）标记 legacyRetained，导出/清空警示会统计该域
         return new MigrationDomainResult(domainId, MigrationDomainStatus.SKIPPED, 0,
-          converted.skippedReason)
+          converted.skippedReason, converted.legacyRetained)
       }
       if (!converted.ok) {
         return new MigrationDomainResult(domainId, MigrationDomainStatus.FAILED, 0,
@@ -868,7 +870,10 @@ function writeTextAtomic(dirPath: string, name: string, content: string): boolea
   try {
     file = fileIo.openSync(tmpPath,
       fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC)
-    fileIo.writeSync(file.fd, content)
+    // 旧存档单帖可达数 MB：单次 writeSync 不保证写完，截断的迁移结果会被 Store 判为坏文件
+    if (!writeTextFully(file.fd, content)) {
+      throw new Error('迁移文件写入不完整')
+    }
     fileIo.closeSync(file)
     file = null
     fileIo.renameSync(tmpPath, path)

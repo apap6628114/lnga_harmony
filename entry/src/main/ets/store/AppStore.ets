@@ -6,6 +6,8 @@ import { persistenceHub, PersistenceHub } from '../common/persistence/Persistenc
 import { MigrationEngine, MigrationInspection, MigrationPlan } from '../common/persistence/MigrationEngine'
 import { PersistenceCatalog } from '../common/persistence/PersistenceCatalog'
 import {
+  DomainScope,
+  DomainSpec,
   MigrationDomainStatus,
   MigrationReport,
   MigrationStatus,
@@ -1181,10 +1183,14 @@ class AppStoreClass {
   }
 
   /**
-   * 升级未完成的域数量（FAILED + DEFERRED）。
+   * 升级未完成的域数量（FAILED + DEFERRED + 可重试的 SKIPPED）。
    *
-   * 这些域的旧键数据仍留在磁盘上、尚未搬进 `v2.*` —— 导出只读新键，因此备份会缺这些域；
-   * 数据管理页在导出/清空前据此提示用户（审计 EXP-03 / DES-02）。
+   * 这些域的新键没有数据、旧数据仍留在磁盘上（旧键尚未搬进 `v2.*`）—— 导出只读新键，
+   * 因此备份会缺这些域；数据管理页在导出/清空前据此提示用户（审计 EXP-03 / DES-02）。
+   *
+   * 注意 `SKIPPED` 只统计 `legacyRetained=true` 的那部分（无账号匹配/未登录镜像域等，
+   * 登录后可重试）；"新键已存在""旧目录为空""旧数据不可解析"等普通 SKIPPED 不影响导出，
+   * 不在此警示（否则会对正常迁移完成的用户误报）。
    *
    * @returns 未完成域数量
    */
@@ -1193,7 +1199,7 @@ class AppStoreClass {
     if (report === null) {
       return 0
     }
-    return report.count(MigrationDomainStatus.FAILED) + report.count(MigrationDomainStatus.DEFERRED)
+    return report.countUnsettled()
   }
 
   /** 持久化中心（数据管理页读取域体积/健康用）。 */
@@ -1308,36 +1314,80 @@ class AppStoreClass {
     this.savedThreadStore.reload()
     /* 旧版撤销快照（`v2.<domain>.undo`）含明文隐私内容，清空本地数据时一并清理 */
     await dataTransferService.clearLegacyUndoSnapshots()
-    /* 旧键/旧目录已删除：同步把「待清理旧数据」清单清空，否则数据管理页会一直显示可清理（DES-09） */
-    await this.resetMigrationLegacyReport()
+    /* 旧键/旧目录已删除：同步重置迁移结果明细、待清理清单与导出/导入历史（DES-09 / 评审 R-C01） */
+    await this.resetGovernanceMetaAfterClear()
     await persistenceHub.flush()
     bumpAppStorageVersion(KEY_DATA_MANAGEMENT_VERSION)
     return cleared
   }
 
   /**
-   * 清空迁移报告里的「待清理旧数据」清单（清空本地数据后调用）。
+   * 清空本地数据后重置治理元数据：待清理旧数据清单、迁移结果明细、导出/导入历史。
    *
-   * 旧键/旧目录已被 `clearAllLocalData` 一并删除，若不同步清报告，数据管理页会长期显示
-   * 「N 项旧格式数据已到期，可立即清理」，点「立即清理」又因键不存在而无效（审计 DES-09）。
+   * 旧键/旧目录已被 `clearAllLocalData` 一并删除，若不同步重置：
+   * - "N 项旧格式数据已到期，可立即清理"会长期显示（点清理无效，审计 DES-09）；
+   * - 旧的 `FAILED`/`DEFERRED`/`SKIPPED-retained` 明细会继续被 `countUnsettled()` 统计，
+   *   导致导出/清空弹窗持续误报"有 N 个域尚未完成升级"，且**跨重启保留**
+   *   （评审 R-C01）；清空后这些旧数据已不存在，重试迁移也无意义；
+   * - 导出/导入历史会继续显示清空前的记录。
+   *
+   * 只重置迁移结果（`status = NOT_REQUIRED`、`domains = []`）；**不重置** `dataVersion` /
+   * `migratedAt` / `migrationNoticeAcknowledged` —— 避免触发重复迁移与重复提醒。
    */
-  private async resetMigrationLegacyReport(): Promise<void> {
+  private async resetGovernanceMetaAfterClear(): Promise<void> {
     try {
-      const report: MigrationReport | null = this.startupMigrationReport
-      if (report !== null) {
-        report.legacyKeys = []
-        report.legacyCleanupAt = 0
-        this.startupMigrationReport = report
-      }
+      const resetReport: MigrationReport = new MigrationReport()
+      resetReport.status = MigrationStatus.NOT_REQUIRED
+      resetReport.finishedAt = Date.now()
+      this.startupMigrationReport = resetReport
       const meta: PersistenceMeta | null = await persistenceHub.metaStore.load()
       if (meta !== null) {
-        meta.migration.legacyKeys = []
-        meta.migration.legacyCleanupAt = 0
+        meta.migration = resetReport
+        meta.transferHistory = []
         await persistenceHub.metaStore.save(meta)
       }
     } catch (e) {
-      logger.warn('reset migration legacy report failed: %{public}s', formatError(e))
+      logger.warn('reset governance meta failed: %{public}s', formatError(e))
     }
+  }
+
+  /**
+   * 修复异常域（数据管理页「数据健康 → 修复」入口）。
+   *
+   * 语义：清空该域的磁盘数据 → 全量重载各 Store 内存（复用导入后的重载路径）→ 清健康标记。
+   * 对缓存/镜像域等价于"删掉重建"（下一次服务端刷新会重新写入）；对设备级用户数据域
+   * 属于**删除数据**，UI 侧必须先二次确认。
+   *
+   * 逐域重载失败或未登录镜像域时**不能**报告"已修复"（评审 R-C02）：
+   * - 重载失败 → 磁盘已清但内存仍旧，清健康标记会掩盖问题，返回失败原因让用户重启；
+   * - 未登录镜像域 → `loadMirrorData` 不加载，内存保持旧值直到登录，需明确提示。
+   *
+   * @param domainId - 域 ID
+   * @returns 空串表示修复成功；非空为用户可读的失败/提示原因
+   */
+  async repairDomain(domainId: string): Promise<string> {
+    const spec: DomainSpec | null = PersistenceCatalog.byId(domainId)
+    if (spec === null || !spec.clearable) {
+      return '该数据域不可修复'
+    }
+    const mirrorLoggedOut: boolean = spec.scope === DomainScope.ACCOUNT_MIRROR &&
+      this.authStore.state.uid.length === 0
+    await persistenceHub.removeDomain(spec)
+    await persistenceHub.flush()
+    // 复用导入后的逐域容错重载：让内存快照与"已清空"的磁盘保持一致
+    const failedSteps: string[] = await this.reloadAfterImport()
+    bumpAppStorageVersion(KEY_DATA_MANAGEMENT_VERSION)
+    if (failedSteps.length > 0) {
+      logger.warn('repairDomain reload failed domain=%{public}s steps=%{public}d',
+        domainId, failedSteps.length)
+      return '已清空该域数据，但 ' + String(failedSteps.length) + ' 个模块刷新失败，请重启应用后查看'
+    }
+    persistenceHub.health.reset(domainId)
+    logger.info('repaired domain=%{public}s', domainId)
+    if (mirrorLoggedOut) {
+      return '缓存已清空；未登录状态下不会重新加载，登录后由服务端重建'
+    }
+    return ''
   }
 
   /**

@@ -29,7 +29,10 @@ import {
   ImportPolicy,
   PERSISTENCE_DATA_VERSION,
   PERSISTENCE_KEY_NAMESPACE,
-  StorageKind
+  PersistenceMeta,
+  StorageKind,
+  TransferHistoryEntry,
+  appendTransferHistory
 } from '../persistence/PersistenceTypes'
 import {
   BackupContainer,
@@ -44,6 +47,14 @@ import {
 import { decryptBackup, encryptBackup, isEncryptedBackup } from './TransferCrypto'
 import { mergePayload, MergeResult } from './DomainMergers'
 import { draftUidPart, isValidDraftKey, rewriteDraftKeyUidPart } from '../utils/DraftKeyUtils'
+import {
+  makeDraftsPortable,
+  normalizeDraftKeysForAccount,
+  filterDraftsForAccount,
+  DraftPortabilityResult,
+  DraftFilterResult
+} from './DraftPortability'
+import { upgradeDomainPayload, DomainUpgradeResult } from './DomainUpgraders'
 
 const logger = new Logger(DOMAIN_STORE, 'DataTransferService')
 
@@ -168,9 +179,11 @@ export class DataTransferService {
    * 生成导出内容（明文或加密文本），由 UI 负责用 picker 保存到文件。
    *
    * @param options - 导出选项
+   * @param onProgress - 可选进度回调（已完成域数、候选域总数、当前域 ID；UI 用于展示域级进度）
    * @returns 导出结果
    */
-  async exportBackup(options: BackupExportOptions): Promise<BackupExportResult> {
+  async exportBackup(options: BackupExportOptions,
+    onProgress?: (done: number, total: number, domainId: string) => void): Promise<BackupExportResult> {
     const result: BackupExportResult = new BackupExportResult()
     if (this.hub === null) {
       result.error = '存储未就绪'
@@ -198,6 +211,8 @@ export class DataTransferService {
       container.deviceTag = 'phone'
       const omitted: SkippedDomain[] = []
       const specs: DomainSpec[] = PersistenceCatalog.all()
+      const totalCandidates: number = countExportCandidates(specs, options.domainIds)
+      let done: number = 0
       for (let i: number = 0; i < specs.length; i++) {
         const spec: DomainSpec = specs[i]
         if (options.domainIds.indexOf(spec.id) < 0) {
@@ -207,6 +222,11 @@ export class DataTransferService {
           // 用户勾选了 NEVER 域（正常 UI 不会出现）：明确记入未包含清单，不静默忽略
           omitted.push(new SkippedDomain(spec.id, '该数据域按设计不参与导出（凭证/媒体缓存）', spec.label))
           continue
+        }
+        done++
+        if (onProgress !== undefined) {
+          // 域级进度由 UI 决定展示方式（当前实现为「正在收集：<域名>（k/N）」）
+          onProgress(done, totalCandidates, spec.id)
         }
         const outcome: DomainEntryOutcome = await this.buildDomainEntry(spec)
         if (outcome.entry !== null) {
@@ -244,6 +264,34 @@ export class DataTransferService {
       logger.error('导出失败: %{public}s', formatError(e))
       result.error = e instanceof Error ? e.message : '导出失败'
       return result
+    }
+  }
+
+  /**
+   * 写入一条导出/导入历史（`v2.meta.transferHistory`，只记元数据）。
+   *
+   * 由 UI 在**确认操作成功后**调用（导出=文件保存并回读校验通过后；导入=applyImport 返回后），
+   * 避免"生成成功但保存失败"也记成一次成功导出。
+   *
+   * @param entry - 历史记录
+   * @returns 是否写入成功
+   */
+  async recordTransferHistory(entry: TransferHistoryEntry): Promise<boolean> {
+    if (this.hub === null) {
+      return false
+    }
+    try {
+      const meta: PersistenceMeta | null = await this.hub.metaStore.load()
+      const base: PersistenceMeta = meta !== null ? meta : new PersistenceMeta()
+      base.transferHistory = appendTransferHistory(base.transferHistory, entry)
+      const ok: boolean = await this.hub.metaStore.save(base)
+      if (!ok) {
+        logger.warn('record transfer history: meta save failed kind=%{public}s', entry.kind)
+      }
+      return ok
+    } catch (e) {
+      logger.warn('record transfer history failed: %{public}s', formatError(e))
+      return false
     }
   }
 
@@ -296,6 +344,26 @@ export class DataTransferService {
       if (payload === null || payload === undefined) {
         outcome.reason = '无数据或读取失败（磁盘数据可能损坏）'
         return outcome
+      }
+    }
+    /*
+     * 草稿域导出前做「可移植化」：媒体副本（draft_media）永不导出，草稿 JSON 里的
+     * media[].localPath 是导出设备的沙箱绝对路径，原样写进备份会让导入端的编辑器
+     * 报「本地副本已不存在」。清空 media 引用（正文保留），用户重选后即可正常发送。
+     *
+     * 且先按当前账号过滤（评审 R-A01）：草稿目录是设备级共用的，其他账号的草稿文件
+     * 不能被当前账号的备份带出设备。
+     */
+    if (spec.id === DomainIds.DRAFTS) {
+      const filtered: DraftFilterResult = filterDraftsForAccount(payload, currentUid)
+      if (filtered.filtered > 0) {
+        logger.info('export drafts filtered other-account drafts=%{public}d', filtered.filtered)
+      }
+      const portable: DraftPortabilityResult = makeDraftsPortable(filtered.payload)
+      payload = portable.payload
+      if (portable.strippedMedia > 0) {
+        logger.info('export drafts stripped media refs drafts=%{public}d media=%{public}d',
+          portable.strippedDrafts, portable.strippedMedia)
       }
     }
     let payloadSize: number = 0
@@ -551,103 +619,44 @@ export class DataTransferService {
        * 域名一律以 Catalog 为准，不信任备份里的 label：外部文件不可信，篡改 label 会把
        * 敏感域伪装成无害域（例如把 ai_sessions 显示成「主题」）诱导用户确认导入。
        */
-      entry.label = spec.label
-      entry.policy = spec.importPolicy
-      if (spec.importPolicy === ImportPolicy.NEVER) {
-        entry.willSkip = true
-        entry.reason = '该数据域不允许导入'
-        plan.entries.push(entry)
-        continue
-      }
       /*
-       * 不可导出的媒体/缓存副本域（draft_media / moving_photo_cache）无论恢复开关如何都不导入：
-       * 它们既不参与导出，出现在备份里只可能是构造/篡改包，强行写入只会产生"写盘成功但读不到"。
+       * 域级策略判定（纯函数）：label 以 Catalog 为准、凭证/媒体拒绝、镜像域登录态与来源账号、
+       * 未登录草稿、缓存恢复开关、schemaVersion 高/低（低版本走升级器）。
        */
-      if (spec.exportPolicy === ExportPolicy.NEVER && spec.importPolicy === ImportPolicy.SKIP) {
-        entry.willSkip = true
-        entry.reason = '该数据域不参与导入（媒体/缓存副本不可移植）'
-        plan.entries.push(entry)
-        continue
-      }
-      /*
-       * 账号镜像域（通知/动态/收藏关系）恢复时必须带当前账号归属；未登录（uid 为空）时写入的
-       * ownerUid 为空，Store 读取会按归属校验判为非法——等于"导入成功但看不到数据"。
-       * 因此未登录时直接跳过并说明，等登录后重新导入（或由服务端重建）。
-       */
-      if (spec.scope === DomainScope.ACCOUNT_MIRROR) {
-        if (currentUid.length === 0) {
-          entry.willSkip = true
-          entry.reason = '未登录：账号镜像缓存需按账号归属恢复，请登录后重新导入'
-          plan.entries.push(entry)
-          continue
-        }
-        /*
-         * 跨账号串号防护（审计 DES-04）：备份条目携带导出时的来源账号。来源账号存在且与当前
-         * 账号不同时跳过——否则 A 的通知/动态会被标记成 B 的缓存直接展示（隐私串号）。
-         * 旧版备份没有该字段（空串）时按「归属未知」宽容恢复，并在计划行给出说明。
-         */
-        if (incoming.ownerUid.length > 0 && incoming.ownerUid !== currentUid) {
-          entry.willSkip = true
-          entry.reason = '该缓存来自其他登录账号的备份，已跳过（可由服务端重建）'
-          plan.entries.push(entry)
-          continue
-        }
-        if (incoming.ownerUid.length === 0) {
-          entry.reason = '来源账号未知（旧版备份），将按当前账号恢复'
-        }
-      }
-      /*
-       * 草稿键末尾是账号哈希：未登录时改写成 `anon` 后，登录后编辑器按当前 uid 哈希查找
-       * 永远读不到（"导入成功但草稿消失"）。与镜像域同理，未登录时显式跳过并说明。
-       */
-      if (spec.id === DomainIds.DRAFTS && currentUid.length === 0) {
-        entry.willSkip = true
-        entry.reason = '未登录：草稿需要当前账号标识，请登录后重新导入'
-        plan.entries.push(entry)
-        continue
-      }
-      if (spec.importPolicy === ImportPolicy.SKIP && !restoreCacheDomains) {
-        /*
-         * 缓存类域默认跳过（它们可从服务端重建，覆盖本机缓存有风险）。
-         * 但用户既然在导出时选择了它们，就必须给出"恢复"的入口——由 import 计划页的
-         * 「恢复缓存类数据」开关把 restoreCacheDomains 传成 true，走下面的覆盖恢复分支。
-         */
-        entry.willSkip = true
-        entry.reason = '缓存类数据，默认跳过（可开启「恢复缓存类数据」）'
-        plan.entries.push(entry)
-        continue
-      }
-      if (incoming.schemaVersion > spec.schemaVersion) {
-        entry.willSkip = true
-        entry.reason = '数据格式版本高于当前应用，已跳过'
-        plan.entries.push(entry)
+      const pre: DomainPreCheckResult = preEvaluateDomainImport(spec, incoming,
+        restoreCacheDomains, currentUid)
+      if (pre.skipEntry !== null) {
+        plan.entries.push(pre.skipEntry)
         continue
       }
       try {
         const local: Object | null = await this.readDomainPayload(spec)
-        const incomingPayload: Object = spec.id === DomainIds.SETTINGS
-          ? restoreLocalSecrets(local, incoming.payload)
-          : incoming.payload
-        const merged: MergeResult = mergePayload(spec.id, local, incomingPayload)
-        entry.mergedPayload = merged.merged
-        entry.added = merged.added
-        entry.updated = merged.updated
-        entry.total = merged.added + merged.updated
-        entry.willSkip = false
-        if (spec.importPolicy === ImportPolicy.SKIP) {
-          /*
-           * 缓存域走 mergePayload 的透传分支（整体覆盖），不会产生 added/updated；
-           * 这里用备份内的条目数展示，让用户明确"恢复了多少条"。
-           */
-          entry.added = countPayloadEntries(merged.merged)
-          entry.updated = 0
-          entry.total = entry.added
+        const mergedEntry: ImportPlanEntry =
+          mergeDomainImportEntry(spec, incoming, pre.payload, local)
+        /*
+         * 文件域：计划阶段用与写入阶段同一函数预演，避免"计划显示新增 N 条、实际 0 写盘/整域失败"
+         * （评审 R-A03）。无效条目数在计划行追加提示；整域条目全部无效时按合并结果展示（写入阶段会报失败）。
+         */
+        if (spec.storage === StorageKind.JSON_FILES) {
+          const writePlan: FileDomainWritePlan =
+            planFileDomainWrites(spec, mergedEntry.mergedPayload, currentUid)
+          if (writePlan.failed > 0) {
+            const invalidNote: string = '其中 ' + String(writePlan.failed) + ' 条无效条目将被跳过'
+            mergedEntry.reason = mergedEntry.reason.length > 0
+              ? mergedEntry.reason + '；' + invalidNote
+              : invalidNote
+          }
         }
-        plan.entries.push(entry)
+        plan.entries.push(mergedEntry)
       } catch (e) {
-        entry.willSkip = true
-        entry.reason = '合并失败：' + (e instanceof Error ? e.message : '未知错误')
-        plan.entries.push(entry)
+        const failedEntry: ImportPlanEntry = new ImportPlanEntry()
+        failedEntry.domainId = spec.id
+        failedEntry.label = spec.label
+        failedEntry.willSkip = true
+        failedEntry.reason = '合并失败：' + (e instanceof Error ? e.message : '未知错误')
+        // 与正常条目保持一致地带上策略（评审 R-C06）：UI/诊断按 policy 分类时不至于缺失
+        failedEntry.policy = spec.importPolicy
+        plan.entries.push(failedEntry)
       }
     }
     plan.ok = plan.changedDomainCount() > 0
@@ -681,6 +690,7 @@ export class DataTransferService {
      * 刚导入的数据（导入写盘不经队列）。此竞态窗口极短但后果是数据静默丢失。
      */
     await this.hub.flush()
+    const startedAt: number = Date.now()
     let failed: string = ''
     const failedDomains: string[] = []
     for (let i: number = 0; i < plan.entries.length; i++) {
@@ -736,8 +746,9 @@ export class DataTransferService {
     result.ok = failed.length === 0
     result.error = failed
     result.failedDomains = failedDomains
-    logger.info('import ok=%{public}s domains=%{public}d added=%{public}d updated=%{public}d failed=%{public}d',
-      String(result.ok), result.appliedDomains, result.added, result.updated, failedDomains.length)
+    logger.info('import ok=%{public}s domains=%{public}d added=%{public}d updated=%{public}d failed=%{public}d costMs=%{public}d',
+      String(result.ok), result.appliedDomains, result.added, result.updated, failedDomains.length,
+      Date.now() - startedAt)
     return result
   }
 
@@ -758,37 +769,14 @@ export class DataTransferService {
       result.failed++
       return result
     }
-    if (payload === null || payload === undefined || !Array.isArray(payload)) {
-      // 非数组载荷（如本机无数据时的空对象快照）视为 0 条，不算失败
-      return result
-    }
-    const items: Object[] = payload as Object[]
-    for (let i: number = 0; i < items.length; i++) {
-      const item: Object = items[i]
-      if (item === null || item === undefined || Array.isArray(item) || typeof item !== 'object') {
-        result.failed++
-        continue
-      }
-      const record: Record<string, Object> = item as Record<string, Object>
-      let key: string = spec.id === 'saved_threads' ? readString(record['tid']) : readString(record['key'])
-      if (spec.id === 'drafts') {
-        /*
-         * 草稿键末尾是**导出账号**的 uid 短哈希（`draft_..._<uidPart>`）。导入到另一个账号时，
-         * 编辑器用当前账号哈希构建键 → 找不到旧草稿（看起来"草稿丢失"）。
-         * 导入时把末尾片段改写为当前账号哈希（未登录计划层已跳过草稿域），实现跨账号找回。
-         */
-        const currentUidPart: string = draftUidPart(this.uidProvider())
-        const rewritten: string = rewriteDraftKeyUidPart(key, currentUidPart)
-        if (rewritten !== key) {
-          record['key'] = rewritten
-          key = rewritten
-        }
-      }
-      if (!isSafeDomainFileName(key) || !isValidFileDomainItem(spec.id, record)) {
-        result.failed++
-        continue
-      }
-      if (this.hub.files.writeFileAtomic(spec, key + '.json', JSON.stringify(record))) {
+    /*
+     * 纯函数负责「条目校验 + 草稿键改写 + 文件名/内容生成」（可单测），本方法只做写盘。
+     */
+    const plan: FileDomainWritePlan = planFileDomainWrites(spec, payload, this.uidProvider())
+    result.failed += plan.failed
+    for (let i: number = 0; i < plan.writes.length; i++) {
+      const write: FileDomainWrite = plan.writes[i]
+      if (this.hub.files.writeFileAtomic(spec, write.name, write.content)) {
         result.written++
       } else {
         result.failed++
@@ -808,7 +796,19 @@ export class DataTransferService {
       return null
     }
     if (spec.storage === StorageKind.JSON_FILES) {
-      return this.exportFileDomain(spec).payload
+      const payload: Object | null = this.exportFileDomain(spec).payload
+      /*
+       * 草稿：合并使用的"本机载荷"也只取当前账号（评审 R-A01）。否则本机其他账号的草稿
+       * 会进入合并结果，写入阶段又被统一改键为当前账号 → 等于把他账号草稿复制给当前账号。
+       */
+      if (spec.id === DomainIds.DRAFTS && payload !== null) {
+        const filtered: DraftFilterResult = filterDraftsForAccount(payload, this.uidProvider())
+        if (filtered.filtered > 0) {
+          logger.info('import drafts ignored other-account local drafts=%{public}d', filtered.filtered)
+        }
+        return filtered.payload
+      }
+      return payload
     }
     return await this.hub.readPayload(spec)
   }
@@ -1408,6 +1408,263 @@ function restoreFieldIfEmpty(
   if (localValue.length > 0) {
     incoming[field] = localValue
   }
+}
+
+// ================= 导入计划 / 文件域写入的纯逻辑（无 IO，便于单测） =================
+
+/**
+ * 导入计划前置判定结果。
+ */
+export class DomainPreCheckResult {
+  /** 非 null 表示该域在前置阶段已被跳过（不需要读取本机载荷，也不参与合并）。 */
+  skipEntry: ImportPlanEntry | null = null
+  /** 升级后的载荷（无升级时等于备份里的原载荷）。 */
+  payload: Object = new Object()
+}
+
+/**
+ * 前置策略判定（纯函数，不需要本机载荷）。
+ *
+ * 覆盖：凭证/内部域拒绝、媒体副本硬跳过、镜像域登录态与来源账号、未登录草稿、
+ * 缓存域恢复开关、域 schemaVersion 版本高/低（低版本走升级器）。
+ *
+ * @param spec - 域元数据
+ * @param incoming - 备份中的域条目
+ * @param restoreCacheDomains - 是否恢复缓存类域
+ * @param currentUid - 当前登录 uid（空串=未登录）
+ * @returns 前置结果（skipEntry 或 升级后载荷）
+ */
+export function preEvaluateDomainImport(spec: DomainSpec, incoming: BackupDomainEntry,
+  restoreCacheDomains: boolean, currentUid: string): DomainPreCheckResult {
+  const result: DomainPreCheckResult = new DomainPreCheckResult()
+  result.payload = incoming.payload
+  const entry: ImportPlanEntry = new ImportPlanEntry()
+  entry.domainId = spec.id
+  // 域名一律以 Catalog 为准，不信任备份里的 label（防冒充敏感域诱导确认）
+  entry.label = spec.label
+  entry.policy = spec.importPolicy
+  if (spec.importPolicy === ImportPolicy.NEVER) {
+    entry.willSkip = true
+    entry.reason = '该数据域不允许导入'
+    result.skipEntry = entry
+    return result
+  }
+  /*
+   * 不可导出的媒体/缓存副本域（draft_media / moving_photo_cache）无论恢复开关如何都不导入：
+   * 它们既不参与导出，出现在备份里只可能是构造/篡改包，强行写入只会产生"写盘成功但读不到"。
+   */
+  if (spec.exportPolicy === ExportPolicy.NEVER && spec.importPolicy === ImportPolicy.SKIP) {
+    entry.willSkip = true
+    entry.reason = '该数据域不参与导入（媒体/缓存副本不可移植）'
+    result.skipEntry = entry
+    return result
+  }
+  /*
+   * 账号镜像域（通知/动态/收藏关系）恢复时必须带当前账号归属：未登录时写入的 ownerUid 为空，
+   * Store 读取会按归属校验判为非法（"导入成功但看不到"）；来源账号与当前账号不同时跳过，
+   * 否则 A 的通知/动态会以 B 的缓存身份展示（隐私串号）。
+   */
+  if (spec.scope === DomainScope.ACCOUNT_MIRROR) {
+    if (currentUid.length === 0) {
+      entry.willSkip = true
+      entry.reason = '未登录：账号镜像缓存需按账号归属恢复，请登录后重新导入'
+      result.skipEntry = entry
+      return result
+    }
+    if (incoming.ownerUid.length > 0 && incoming.ownerUid !== currentUid) {
+      entry.willSkip = true
+      entry.reason = '该缓存来自其他登录账号的备份，已跳过（可由服务端重建）'
+      result.skipEntry = entry
+      return result
+    }
+  }
+  /*
+   * 草稿键末尾是账号哈希：未登录时改写成 `anon` 后，登录后编辑器按当前 uid 哈希查找
+   * 永远读不到（"导入成功但草稿消失"）。与镜像域同理，未登录时显式跳过并说明。
+   */
+  if (spec.id === DomainIds.DRAFTS && currentUid.length === 0) {
+    entry.willSkip = true
+    entry.reason = '未登录：草稿需要当前账号标识，请登录后重新导入'
+    result.skipEntry = entry
+    return result
+  }
+  /*
+   * 文件域载荷必须是条目数组：合并器会容忍 `{items: [...]}` 包裹形态并输出同形态，但写入阶段
+   * 只接受数组（否则计划显示「新增 N 条」而实际 0 写盘，评审 R-A03）。构造/异常容器直接跳过。
+   */
+  if (spec.storage === StorageKind.JSON_FILES && !Array.isArray(incoming.payload)) {
+    entry.willSkip = true
+    entry.reason = '文件域数据不是条目数组，已跳过'
+    result.skipEntry = entry
+    return result
+  }
+  if (spec.importPolicy === ImportPolicy.SKIP && !restoreCacheDomains) {
+    /* 缓存类域默认跳过；用户可用导入计划的「恢复缓存类数据」开关恢复（"跟随导出选择"） */
+    entry.willSkip = true
+    entry.reason = '缓存类数据，默认跳过（可开启「恢复缓存类数据」）'
+    result.skipEntry = entry
+    return result
+  }
+  if (incoming.schemaVersion > spec.schemaVersion) {
+    entry.willSkip = true
+    entry.reason = '数据格式版本高于当前应用，已跳过'
+    result.skipEntry = entry
+    return result
+  }
+  if (incoming.schemaVersion < spec.schemaVersion) {
+    // 旧版本备份：必须经过显式升级；无升级规则时明确跳过（不得按新结构误写）
+    const upgraded: DomainUpgradeResult =
+      upgradeDomainPayload(spec.id, incoming.schemaVersion, incoming.payload)
+    if (!upgraded.ok) {
+      entry.willSkip = true
+      entry.reason = upgraded.note
+      result.skipEntry = entry
+      return result
+    }
+    result.payload = upgraded.payload
+  }
+  /*
+   * 草稿键归一化（审计 DES-19）：计划阶段就把备份里的草稿键尾改写为当前账号，与写入阶段
+   * （`planFileDomainWrites`）保持一致；否则同目标草稿会被误计为「新增」，且内容无变化
+   * 的草稿无法被识别为「无变化」而触发无意义写盘。（未登录草稿域已在上方跳过。）
+   */
+  if (spec.id === DomainIds.DRAFTS) {
+    result.payload = normalizeDraftKeysForAccount(result.payload, currentUid).payload
+  }
+  return result
+}
+
+/**
+ * 合并型域的计划条目（纯函数，需要本机载荷）。
+ *
+ * @param spec - 域元数据
+ * @param incoming - 备份中的域条目
+ * @param incomingPayload - 前置阶段处理后的导入载荷（可能已升级）
+ * @param localPayload - 本机该域载荷（无数据为 null）
+ * @returns 计划条目（willSkip=false，含合并后的载荷与计数）
+ */
+export function mergeDomainImportEntry(spec: DomainSpec, incoming: BackupDomainEntry,
+  incomingPayload: Object, localPayload: Object | null): ImportPlanEntry {
+  const entry: ImportPlanEntry = new ImportPlanEntry()
+  entry.domainId = spec.id
+  entry.label = spec.label
+  entry.policy = spec.importPolicy
+  if (spec.scope === DomainScope.ACCOUNT_MIRROR && incoming.ownerUid.length === 0) {
+    entry.reason = '来源账号未知（旧版备份），将按当前账号恢复'
+  }
+  const payload: Object = spec.id === DomainIds.SETTINGS
+    ? restoreLocalSecrets(localPayload, incomingPayload)
+    : incomingPayload
+  const merged: MergeResult = mergePayload(spec.id, localPayload, payload)
+  entry.mergedPayload = merged.merged
+  entry.added = merged.added
+  entry.updated = merged.updated
+  entry.total = merged.added + merged.updated
+  entry.willSkip = false
+  if (spec.importPolicy === ImportPolicy.SKIP) {
+    /*
+     * 缓存域走 mergePayload 的透传分支（整体覆盖），不会产生 added/updated；
+     * 这里用备份内的条目数展示，让用户明确"覆盖恢复了多少条"。
+     */
+    entry.added = countPayloadEntries(merged.merged)
+    entry.updated = 0
+    entry.total = entry.added
+  }
+  return entry
+}
+
+/**
+ * 文件域写入计划中的单个文件。
+ */
+export class FileDomainWrite {
+  /** 文件名（含 `.json` 后缀）。 */
+  name: string = ''
+  /** 文件内容（JSON 文本）。 */
+  content: string = ''
+}
+
+/**
+ * 文件域写入计划。
+ */
+export class FileDomainWritePlan {
+  /** 待写入文件（已通过条目校验）。 */
+  writes: FileDomainWrite[] = []
+  /** 被跳过的无效条目数（字段不合法或文件名不安全）。 */
+  failed: number = 0
+}
+
+/**
+ * 生成文件域导入写入计划（纯函数，不做 IO）。
+ *
+ * 写入前做与 Store 读取侧**同一规则**的条目校验（审计 IMP-02）：条目结构不合法的记录
+ * 即使写盘成功，`SavedThreadStore.reload()` / `DraftStore.loadDraft()` 也会静默跳过，
+ * 形成"导入成功但看不到"；这里直接计入失败，由导入结果上报。
+ *
+ * @param spec - 文件域元数据
+ * @param payload - 数组载荷
+ * @param currentUid - 当前登录 uid（草稿键尾账号片段改写用）
+ * @returns 写入计划
+ */
+export function planFileDomainWrites(spec: DomainSpec, payload: Object,
+  currentUid: string): FileDomainWritePlan {
+  const plan: FileDomainWritePlan = new FileDomainWritePlan()
+  if (payload === null || payload === undefined || !Array.isArray(payload)) {
+    // 非数组载荷（如本机无数据时的空对象快照）视为 0 条，不算失败
+    return plan
+  }
+  const currentUidPart: string = draftUidPart(currentUid)
+  const items: Object[] = payload as Object[]
+  for (let i: number = 0; i < items.length; i++) {
+    const item: Object = items[i]
+    if (item === null || item === undefined || Array.isArray(item) || typeof item !== 'object') {
+      plan.failed++
+      continue
+    }
+    const source: Record<string, Object> = item as Record<string, Object>
+    const rawKey: string = spec.id === 'saved_threads' ? readString(source['tid']) : readString(source['key'])
+    /*
+     * 纯函数不得修改调用方数据（评审 R-A08）：重建记录，`key` 在原位置替换为改写后的值
+     * （保持字段顺序，供合并器的 JSON 判等与落盘形态稳定）。
+     */
+    const rewrittenKey: string = spec.id === DomainIds.DRAFTS
+      ? rewriteDraftKeyUidPart(rawKey, currentUidPart) : rawKey
+    const record: Record<string, Object> = {}
+    const fields: string[] = Object.keys(source)
+    for (let k: number = 0; k < fields.length; k++) {
+      const field: string = fields[k]
+      record[field] = field === 'key' ? rewrittenKey : source[field]
+    }
+    if (!isSafeDomainFileName(rewrittenKey) || !isValidFileDomainItem(spec.id, record)) {
+      plan.failed++
+      continue
+    }
+    const write: FileDomainWrite = new FileDomainWrite()
+    write.name = rewrittenKey + '.json'
+    write.content = JSON.stringify(record)
+    plan.writes.push(write)
+  }
+  return plan
+}
+
+/**
+ * 统计导出候选域数量（勾选且非 `ExportPolicy.NEVER`），供进度回调的 total 使用。
+ *
+ * @param specs - 全部域
+ * @param selectedIds - 用户勾选的域 ID
+ * @returns 候选数量
+ */
+function countExportCandidates(specs: DomainSpec[], selectedIds: string[]): number {
+  let total: number = 0
+  for (let i: number = 0; i < specs.length; i++) {
+    if (selectedIds.indexOf(specs[i].id) < 0) {
+      continue
+    }
+    if (specs[i].exportPolicy === ExportPolicy.NEVER) {
+      continue
+    }
+    total++
+  }
+  return total
 }
 
 /** 全局唯一数据导入导出服务。 */

@@ -16,7 +16,10 @@ import {
   MigrationStatus,
   PERSISTENCE_DATA_VERSION,
   PERSISTENCE_META_KEY,
-  PersistenceMeta
+  PersistenceMeta,
+  TRANSFER_HISTORY_MAX,
+  TransferHistoryEntry,
+  TransferHistoryKind
 } from './PersistenceTypes'
 
 const logger = new Logger(DOMAIN_INFRA, 'PersistenceMetaStore')
@@ -156,10 +159,13 @@ export class PersistenceMetaStore {
 /**
  * 把磁盘上的原始对象逐字段重建为锚点（缺字段/坏字段按默认值兜底）。
  *
+ * 导出供单测：磁盘反序列化（`legacyRetained` / `transferHistory` 等新字段的兼容读取）
+ * 是最容易回归的路径，必须能直接构造原始 JSON 对象断言（评审 R-C04）。
+ *
  * @param raw - 原始 JSON 对象
  * @returns 锚点
  */
-function normalizeMeta(raw: Record<string, Object>): PersistenceMeta {
+export function normalizeMeta(raw: Record<string, Object>): PersistenceMeta {
   const meta: PersistenceMeta = new PersistenceMeta()
   meta.dataVersion = readNumber(raw['dataVersion'], PERSISTENCE_DATA_VERSION)
   meta.createdAt = readNumber(raw['createdAt'], 0)
@@ -168,7 +174,52 @@ function normalizeMeta(raw: Record<string, Object>): PersistenceMeta {
   meta.appVersionCode = readNumber(raw['appVersionCode'], 0)
   meta.migration = normalizeReport(raw['migration'])
   meta.migrationNoticeAcknowledged = readBoolean(raw['migrationNoticeAcknowledged'], false)
+  meta.transferHistory = normalizeTransferHistory(raw['transferHistory'])
   return meta
+}
+
+/**
+ * 逐字段重建导出/导入历史（坏条目丢弃、未知类型丢弃、超出上限截断）。
+ *
+ * @param raw - 原始数组（可能缺失/类型错误）
+ * @returns 历史记录（最新在前，长度 ≤ `TRANSFER_HISTORY_MAX`）
+ */
+function normalizeTransferHistory(raw: Object | undefined): TransferHistoryEntry[] {
+  const result: TransferHistoryEntry[] = []
+  if (raw === undefined || raw === null || !Array.isArray(raw)) {
+    return result
+  }
+  const items: Object[] = raw as Object[]
+  for (let i: number = 0; i < items.length; i++) {
+    if (result.length >= TRANSFER_HISTORY_MAX) {
+      break
+    }
+    const item: Object = items[i]
+    if (item === null || item === undefined || typeof item !== 'object' || Array.isArray(item)) {
+      continue
+    }
+    const record: Record<string, Object> = item as Record<string, Object>
+    const kind: string = readString(record['kind'])
+    if (kind !== TransferHistoryKind.EXPORT && kind !== TransferHistoryKind.IMPORT) {
+      continue
+    }
+    const entry: TransferHistoryEntry = new TransferHistoryEntry()
+    entry.kind = kind
+    entry.at = readNumber(record['at'], 0)
+    entry.formatVersion = readNumber(record['formatVersion'], 0)
+    entry.dataVersion = readNumber(record['dataVersion'], 0)
+    entry.encrypted = readBoolean(record['encrypted'], false)
+    entry.domainCount = readNumber(record['domainCount'], 0)
+    entry.bytes = readNumber(record['bytes'], 0)
+    entry.added = readNumber(record['added'], 0)
+    entry.updated = readNumber(record['updated'], 0)
+    entry.skippedDomains = readNumber(record['skippedDomains'], 0)
+    entry.ok = readBoolean(record['ok'], false)
+    const note: string = readString(record['note'])
+    entry.note = note.length > 120 ? note.substring(0, 120) : note
+    result.push(entry)
+  }
+  return result
 }
 
 /**
@@ -214,6 +265,7 @@ function normalizeReport(raw: Object | undefined): MigrationReport {
       result.status = readString(entry['status'])
       result.items = readNumber(entry['items'], 0)
       result.reason = readString(entry['reason'])
+      result.legacyRetained = readBoolean(entry['legacyRetained'], false)
       if (result.domain.length > 0) {
         report.domains.push(result)
       }

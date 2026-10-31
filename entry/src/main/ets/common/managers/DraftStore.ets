@@ -36,6 +36,7 @@
 import { fileIo } from '@kit.CoreFileKit'
 import { Context } from '@kit.AbilityKit'
 import { Logger, DOMAIN_STORE, formatError } from '../utils/Logger'
+import { writeTextFully } from '../utils/FileUtils'
 import { DomainIds, PersistenceCatalog } from '../persistence/PersistenceCatalog'
 import { DomainSpec } from '../persistence/PersistenceTypes'
 import {
@@ -348,7 +349,10 @@ export class DraftStore {
       const file: fileIo.File = fileIo.openSync(tmpPath,
         fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC)
       try {
-        fileIo.writeSync(file.fd, JSON.stringify(draft))
+        // 单次 writeSync 不保证写完：草稿正文+媒体清单可达数十 KB，必须循环写满
+        if (!writeTextFully(file.fd, JSON.stringify(draft))) {
+          throw new Error('草稿写入不完整')
+        }
       } finally {
         fileIo.closeSync(file)
       }

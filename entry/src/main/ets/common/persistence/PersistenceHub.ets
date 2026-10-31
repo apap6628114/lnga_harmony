@@ -19,6 +19,7 @@
 
 import { PreferencesStore } from '../infra/PreferencesStore'
 import { SerialQueue } from '../infra/SerialQueue'
+import { util } from '@kit.ArkTS'
 import { Logger, DOMAIN_INFRA, formatError } from '../utils/Logger'
 import { DomainHealthTracker } from './DomainHealth'
 import { PersistenceCatalog } from './PersistenceCatalog'
@@ -309,7 +310,11 @@ export class PersistenceHub {
   }
 
   /**
-   * 返回域估算体积（Preferences：原始字符串长度；文件：目录大小）。
+   * 返回域估算体积（Preferences：UTF-8 字节数；文件：目录字节数）。
+   *
+   * Preferences 域原先返回字符串 `length`（UTF-16 code unit 数），与文件域的**字节数**口径不一致：
+   * 中文密集域（settings/history/ai_sessions）真实占用被低估近 1/3，导致「4MB 单域预警」漏报、
+   * 页面体积显示失真（评审 R-A04）。这里统一按 UTF-8 字节估算。
    *
    * @param spec - 域元数据
    * @returns 字节数
@@ -319,7 +324,15 @@ export class PersistenceHub {
       return this.files.dirSizeBytes(spec)
     }
     const raw: string | null = await this.preferences.readRaw(spec)
-    return raw === null ? 0 : raw.length
+    if (raw === null) {
+      return 0
+    }
+    try {
+      return util.TextEncoder.create().encodeInto(raw).length
+    } catch (e) {
+      // 编码失败按 3 倍长度保守估算（中文 UTF-8 的上界）
+      return raw.length * 3
+    }
   }
 
   /**

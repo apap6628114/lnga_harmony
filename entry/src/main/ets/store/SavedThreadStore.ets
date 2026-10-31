@@ -16,6 +16,7 @@ import { Context } from '@kit.AbilityKit'
 import { bumpAppStorageVersion } from '../common/utils/AppStorageVersion'
 import { KEY_SAVED_THREAD_VERSION } from '../common/constants/AppStorageKeys'
 import { Logger, DOMAIN_STORE, formatError } from '../common/utils/Logger'
+import { writeTextFully } from '../common/utils/FileUtils'
 import { DomainIds, PersistenceCatalog } from '../common/persistence/PersistenceCatalog'
 import { DomainSpec } from '../common/persistence/PersistenceTypes'
 import {
@@ -233,7 +234,10 @@ export class SavedThreadStore {
     try {
       file = fileIo.openSync(tmpPath,
         fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC)
-      fileIo.writeSync(file.fd, content)
+      // 单次 writeSync 不保证写完：大存档在磁盘压力下会被静默截断（之后解析失败被当坏文件）
+      if (!writeTextFully(file.fd, content)) {
+        throw new Error('存档写入不完整')
+      }
       fileIo.closeSync(file)
       file = null
       fileIo.renameSync(tmpPath, path)

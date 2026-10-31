@@ -143,6 +143,13 @@ export class MigrationConvertResult {
   error: string = ''
   /** 跳过原因（非空表示无需写入新键，按 SKIPPED 记录）。 */
   skippedReason: string = ''
+  /**
+   * 跳过时旧键是否保留、新键是否仍无数据（即"等登录/换号后重试可迁移"）。
+   *
+   * 与"旧数据本身非法/旧目录为空"这类不可重试的跳过区分开：只有可重试的跳过才会
+   * 让该域在导出时缺数据（用于「升级未完成」警示统计）。
+   */
+  legacyRetained: boolean = false
 }
 
 /**
@@ -314,6 +321,7 @@ function convertSettings(values: LegacyValue[], ctx: MigrationContext): Migratio
       picked = values[0]
     } else {
       result.skippedReason = '多账号设置旧键且无当前账号匹配（旧键保留，登录后重试）'
+      result.legacyRetained = true
       return result
     }
   }
@@ -423,6 +431,7 @@ function convertMirrorEnvelope(
   if (matchedValueCount === 0) {
     // 没有任何属于当前账号的旧值：不写新键，旧键保留（不进清理清单）等待登录后重试
     result.skippedReason = '无可归属当前账号的旧缓存（旧键保留，登录后重试）'
+    result.legacyRetained = true
     return result
   }
   if (maxCount > 0 && items.length > maxCount) {
@@ -486,6 +495,7 @@ function convertFavoriteMembership(
      * （否则 B 登录后会显示 A 的收藏夹归属）。旧键保留、不进清理清单，等 B 自己产生新缓存。
      */
     result.skippedReason = '无当前账号的旧收藏关系缓存'
+    result.legacyRetained = true
     return result
   }
   const raw: Object = picked.value

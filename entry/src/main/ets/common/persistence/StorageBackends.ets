@@ -12,6 +12,7 @@
 import { fileIo } from '@kit.CoreFileKit'
 import { PreferencesStore } from '../infra/PreferencesStore'
 import { Logger, DOMAIN_INFRA, formatError } from '../utils/Logger'
+import { writeTextFully } from '../utils/FileUtils'
 import type { DomainSpec } from './PersistenceTypes'
 
 const logger = new Logger(DOMAIN_INFRA, 'StorageBackends')
@@ -276,7 +277,10 @@ export class JsonFileBackend {
     try {
       file = fileIo.openSync(tmpPath,
         fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC)
-      fileIo.writeSync(file.fd, content)
+      // 单次 writeSync 不保证写完（真机截断缺陷同模式）：必须循环写满，否则临时文件不完整
+      if (!writeTextFully(file.fd, content)) {
+        throw new Error('文件写入不完整')
+      }
       fileIo.closeSync(file)
       file = null
       fileIo.renameSync(tmpPath, path)

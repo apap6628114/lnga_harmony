@@ -128,6 +128,19 @@ export const BACKUP_MAX_FILE_BYTES: number = 64 * 1024 * 1024
 export const DOMAIN_SIZE_WARN_BYTES: number = 4 * 1024 * 1024
 
 /**
+ * 判断单域估算体积是否超过 4MB 预警阈值（数据管理页红字预警用）。
+ *
+ * 抽成纯函数便于单测锁定阈值语义（评审 R-D08）；调用方传入的必须是**字节数**
+ * （`PersistenceHub.estimateBytes` 已统一为 UTF-8 字节口径，见评审 R-A04）。
+ *
+ * @param estimatedBytes - 估算字节数
+ * @returns 是否超限
+ */
+export function isDomainOversized(estimatedBytes: number): boolean {
+  return estimatedBytes > DOMAIN_SIZE_WARN_BYTES
+}
+
+/**
  * 域元数据 — 数据域的静态声明。
  *
  * 全工程所有持久化数据的治理口径以 `PersistenceCatalog` 中的实例为准：
@@ -291,6 +304,17 @@ export class MigrationDomainResult {
   items: number = 0
   /** 失败/跳过原因（截断到 200 字符）。 */
   reason: string = ''
+  /**
+   * 旧键是否仍保留且**新键没有数据**（该域尚未真正迁完、导出会缺该域）。
+   *
+   * 仅 `SKIPPED` 需要区分两类语义：
+   * - `true`：无当前账号匹配 / 未登录跳过账号镜像域等 —— 旧键是唯一副本，登录/换号后重试可迁移；
+   *   在此之前导出只读新键 → 该域数据不会出现在备份中（用于「升级未完成」警示统计）；
+   * - `false`：新键已存在（数据已迁完）、旧目录为空、旧数据本身不可解析等 —— 导出不受影响。
+   *
+   * `MIGRATED` / `FAILED` / `DEFERRED` 不使用该字段（后两者直接计入未完成统计）。
+   */
+  legacyRetained: boolean = false
 
   /**
    * 构造单域迁移结果。
@@ -299,12 +323,15 @@ export class MigrationDomainResult {
    * @param status - 结果状态
    * @param items - 条目数
    * @param reason - 原因
+   * @param legacyRetained - 旧键保留且新键无数据（仅 SKIPPED 有意义）
    */
-  constructor(domain: string = '', status: string = '', items: number = 0, reason: string = '') {
+  constructor(domain: string = '', status: string = '', items: number = 0, reason: string = '',
+    legacyRetained: boolean = false) {
     this.domain = domain
     this.status = status
     this.items = items
     this.reason = reason
+    this.legacyRetained = legacyRetained
   }
 }
 
@@ -342,6 +369,99 @@ export class MigrationReport {
     }
     return total;
   }
+
+  /**
+   * 统计「升级未完成」的域数量（导出/清空前警示用）。
+   *
+   * = `FAILED` + `DEFERRED` + `SKIPPED` 且 `legacyRetained`（旧键仍在、新键无数据）。
+   * 不含普通 `SKIPPED`（新键已存在/旧目录为空等，导出不受影响）。
+   *
+   * @returns 未完成域数量
+   */
+  countUnsettled(): number {
+    let total: number = 0
+    for (let i: number = 0; i < this.domains.length; i++) {
+      const domain: MigrationDomainResult = this.domains[i]
+      if (domain.status === MigrationDomainStatus.FAILED ||
+        domain.status === MigrationDomainStatus.DEFERRED ||
+        (domain.status === MigrationDomainStatus.SKIPPED && domain.legacyRetained)) {
+        total++
+      }
+    }
+    return total
+  }
+}
+
+/**
+ * 导出/导入历史保留条数上限（数据管理页只展示最近 N 次，避免 meta 无限膨胀）。
+ */
+export const TRANSFER_HISTORY_MAX: number = 10
+
+/**
+ * 导出/导入历史类型。
+ */
+export enum TransferHistoryKind {
+  /** 导出（生成备份文件并保存成功）。 */
+  EXPORT = 'export',
+  /** 导入（解析备份并应用成功/部分成功）。 */
+  IMPORT = 'import',
+}
+
+/**
+ * 一次导出/导入的历史记录（**只记元数据，不记任何业务内容**）。
+ *
+ * 写入 `v2.meta.transferHistory`（meta 是已登记域，不新增域、不参与导出/清空；
+ * 清空本地数据时一并清空该历史）。设计见 `PERSISTENCE_UNIFICATION_DESIGN.md` §0.2 / §6.7。
+ */
+export class TransferHistoryEntry {
+  /** 类型（`TransferHistoryKind` 的字符串值）。 */
+  kind: string = TransferHistoryKind.EXPORT
+  /** 完成时间（毫秒）。 */
+  at: number = 0
+  /** 容器格式版本。 */
+  formatVersion: number = 0
+  /** 容器数据版本。 */
+  dataVersion: number = 0
+  /** 是否加密（仅导出有意义）。 */
+  encrypted: boolean = false
+  /** 涉及的域数量（导出=写入容器的域数；导入=计划中的域数）。 */
+  domainCount: number = 0
+  /** 容器体积（字节；导入时按文件字符数近似）。 */
+  bytes: number = 0
+  /** 新增条目数（导入）。 */
+  added: number = 0
+  /** 更新条目数（导入）。 */
+  updated: number = 0
+  /** 跳过/未包含的域数量。 */
+  skippedDomains: number = 0
+  /** 是否全部成功。 */
+  ok: boolean = false
+  /** 结果摘要（用户可见短句，不含业务内容；截断到 120 字符）。 */
+  note: string = ''
+}
+
+/**
+ * 把一条历史记录追加到列表头部并截断到上限。
+ *
+ * 纯函数（不修改入参），供 `PersistenceMetaStore` 与单测复用。
+ *
+ * @param existing - 现有历史（最新在前）
+ * @param entry - 新记录
+ * @returns 新历史数组（最新在前，长度 ≤ `TRANSFER_HISTORY_MAX`）
+ */
+export function appendTransferHistory(existing: TransferHistoryEntry[] | null,
+  entry: TransferHistoryEntry): TransferHistoryEntry[] {
+  const next: TransferHistoryEntry[] = []
+  next.push(entry)
+  if (existing !== null) {
+    for (let i: number = 0; i < existing.length; i++) {
+      if (next.length >= TRANSFER_HISTORY_MAX) {
+        break
+      }
+      next.push(existing[i])
+    }
+  }
+  return next
 }
 
 /**
@@ -367,6 +487,12 @@ export class PersistenceMeta {
    * 否则每次冷启动都会重复弹"本地数据已升级"，真机实测已确认该体验问题。
    */
   migrationNoticeAcknowledged: boolean = false
+  /**
+   * 最近导出/导入历史（最新在前，最多 `TRANSFER_HISTORY_MAX` 条）。
+   *
+   * 只记元数据（时间/域数/体积/结果），不记任何业务内容；「清空本地数据」时一并清空。
+   */
+  transferHistory: TransferHistoryEntry[] = []
 }
 
 /**

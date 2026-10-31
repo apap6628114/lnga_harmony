@@ -83,15 +83,16 @@
 - **数据域为准的治理模型**（而非"一个巨型 JSON"）：域是治理、迁移、导出、清理的最小单位。
 - **账号隔离不是简单删除，而是"物理取消 + 语义分层"**：不再有 `_<uid>` 键，但对"服务端账号镜像"类数据
   用条目/信封级 `ownerUid` 保留语义正确性（详见 ADR-001），避免 A 账号的已读/已赞状态显示给 B。
-- **迁移的三条触发路径**：版本升级、系统备份恢复、用户导入文件，共用同一套域级升级器（**注意：导入侧的域升级器尚未实现**，当前仅做版本拒绝/跳过，见 §6.4）。
+- **迁移的三条触发路径**：版本升级、系统备份恢复、用户导入文件，共用同一套域级升级器（导入侧已落地升级器入口 `DomainUpgraders.upgradeDomainPayload`：低版本域必须显式升级；当前全部域 `schemaVersion=1`、尚无注册规则，低版本备份会跳过并提示，见 §6.4）。
 - **迁移的用户提醒分级**：成功（安静提示）/ 部分失败（明确告警 + 可重试）/ 阻断性失败（不阻塞启动，
   退化到旧数据只读并记录）。
 - **导出必须可选加密且默认建议加密**：AI 会话、浏览历史、备注属于高隐私数据；凭证域永久排除。
-- **导入是"合并"而非"覆盖"**：按域声明合并策略，保证幂等与可重复导入；导入前自动生成回滚快照。
+- **导入是"合并"而非"覆盖"**：按域声明合并策略，保证幂等与可重复导入；**不提供自动回滚快照**（撤销导入已整体下线，见 §6.4），担心导入结果可先导出当前数据备份。
 - **调度器只做应用内调度，不引入系统级后台任务**（结论见第 7.5 节，含 SDK 依据）：本应用无推送通道，
   社交数据变更在后台的价值低于耗电/审核风险；系统级能力预留扩展点而不在阶段 1 启用。
-- **持久化健康的可观测性**：域版本表、体积统计、最后写入时间、迁移报告、导出/导入历史全部集中在
-  数据管理页，且可通过日志域 `DOMAIN_STORE` 追踪。
+- **持久化健康的可观测性**：域版本表、体积统计、最后写入时间、迁移报告、导出/导入历史
+  （`v2.meta.transferHistory`，只记元数据、最新在前、上限 10 条）全部集中在数据管理页
+  （含「最近导出/导入」卡片与「后台任务调度」折叠区），且可通过日志域 `DOMAIN_STORE` 追踪。
 - **单测策略**：调度器（注入时钟）、迁移器（内存 Preferences 假实现）、导出导入（往返一致性）、
   域合并器（幂等/冲突）全部可在 Hypium Local Test 覆盖，不依赖真机。
 
@@ -209,9 +210,9 @@ export enum ExportPolicy {
   NEVER = 2,
 }
 
-/** 导入策略。 */（实际枚举有 6 个值）
+/** 导入策略。 */
 export enum ImportPolicy {
-  MERGE_FIELDS = 0,   // 字段级合并（theme 等）
+  MERGE_FIELDS = 0,   // 字段级覆盖（theme 单字段域整体覆盖）/ settings 走 SPECIAL
   MERGE_BY_KEY = 1,   // 按业务键去重合并，冲突取较新
   REPLACE_BY_KEY = 2, // 按业务键覆盖（草稿/存档）
   SKIP = 3,           // 默认不主动恢复（缓存/镜像，可由导入计划「恢复缓存类数据」开关恢复；见 §6.4）
@@ -508,7 +509,7 @@ Hub.writePayload(spec, payload, ownerUid, flush)
 | --- | --- | --- |
 | Preferences 单键长度 | 1024 B | SDK `MAX_KEY_LENGTH`（`@ohos.data.preferences.d.ts` L64） |
 | Preferences 单值长度 | 16 MB | SDK `MAX_VALUE_LENGTH`（同文件 L73） |
-| 单域体积告警阈值 | 4 MB | **未实现**（仅 `DomainHealth.isOversized` 预留，无日志/页面入口；见 §13.5） |
+| 单域体积告警阈值 | 4 MB | 数据管理页「存储占用」超限行红字 + 日志 warn（`DataManagementPanel.refreshStorage`；常量 `DOMAIN_SIZE_WARN_BYTES`） |
 | 通知缓存条数 | 200 | 现有 `MAX_CACHED_NOTIFICATIONS` |
 | 关注动态缓存条数 | 200 | 现有 `MAX_CACHED_ACTIVITIES` |
 | 跟踪任务条数 | 见 `TRACK_MAX_COUNT` | 现有 |
@@ -526,7 +527,8 @@ Hub.writePayload(spec, payload, ownerUid, flush)
 - 每次读失败/跳条数记入 `DomainHealth`（内存态）：`lastError`、`droppedItems`、`lastWriteFailed`。
   **注**：日常读写路径（各 Store 直写 Preferences）只有治理路径（迁移/导入/导出）经过 Hub，
   因此该健康数据主要反映治理路径；文档早期"所有 Store 读写都经 Hub 上报健康"的设计未采用（§8.4）。
-- 数据管理页展示"数据健康"区块：异常域高亮（「修复」按钮与 4MB 告警红字均未实现，见 §13.5 遗留）。
+- 数据管理页展示"数据健康"区块：异常域高亮 + 「修复」按钮（清空该域磁盘数据 → 重载内存 → 清健康标记；
+  二次确认；`AppStore.repairDomain`）；存储占用超过 4MB 单域预警阈值时该行红字 + warn 日志。
 - 迁移器与导入器在写盘前**先写临时键**（`v2.<domain>.pending`）→ 校验写成功 → `put` 正式键 → `delete` 临时键；
   进程在中间被杀时，下次启动检测到 pending 键则清理（丢弃半截数据，正式键仍是旧值）。
 - **写后读回校验**：`PreferencesStore.putString` 内部吞掉异常、永不抛错，因此治理写入在写完后必须
@@ -580,7 +582,7 @@ Hub.writePayload(spec, payload, ownerUid, flush)
 | --- | --- | --- | --- |
 | **P1 版本升级** | 用户从旧版本 App 升级 | `v2.meta` 缺失，但存在旧键/旧目录 | 全量迁移（枚举旧键 + 文件目录） |
 | **P2 系统备份恢复** | 用户换机/恢复出厂后从系统云备份恢复 | 同 P1（备份内容是旧版本数据目录）；额外信号：`v2.meta.migratedAt` 早于 `createdAt` 或 appVersionCode 倒退 | 同 P1；额外校验文件目录（存档/草稿）的版本 |
-| **P3 用户导入** | 导入旧格式导出文件（`.ngabackup` v1 或旧存档 JSON） | 文件头 `formatVersion` / `dataVersion` 低于当前 | **当前仅做版本校验**（高于当前拒绝/跳过）；**未实现域升级器**——格式演进时必须在导入器内补逐域升级（复用 P1 迁移器），见 §6.4 |
+| **P3 用户导入** | 导入旧格式导出文件（`.ngabackup` v1 或旧存档 JSON） | 文件头 `formatVersion` / `dataVersion` 低于当前 | **升级器入口已实现**（`common/transfer/DomainUpgraders.ets`）：导入时 `incoming.schemaVersion < spec.schemaVersion` 必须经升级器转换；当前所有域 `schemaVersion=1`、**尚无注册规则**，低版本域会「跳过并给出原因」（不再按新结构误写），高版本仍跳过。提升域 `schemaVersion` 前必须先注册升级规则，见 §6.4/§13.5 |
 
 P2 的补充说明：应用已开启 `allowToBackupRestore: true` 且 `EntryBackupAbility` 为空实现，系统会按
 "整目录快照"恢复。因此恢复后的磁盘状态等价于"旧版本 App 的数据目录"，P1 的迁移器天然覆盖。
@@ -677,7 +679,10 @@ MainPage 才是用户停留的稳定上下文。
 
 **旧数据清理提示**：`legacyCleanupAfter` 到期时在数据管理页显示「旧格式数据（N MB）将于 M 天后自动清理」
 并给「立即清理」按钮——清理是不可逆动作，必须让用户知情（呼应"清除缓存"的既有文案纪律）。
-「清空本地数据」后会同步重置该清单（`migration.legacyKeys` 清空并回写 meta），避免页面继续显示可清理旧数据。
+「清空本地数据」后会同步重置治理元数据：旧数据清单（`migration.legacyKeys`）、迁移结果明细
+（`migration.status = NOT_REQUIRED`、`domains = []`）与导出/导入历史（`transferHistory = []`），
+并回写 meta（2026-10-31 评审 R-C01）；避免页面继续显示可清理旧数据、或继续误报"有 N 个域升级未完成"。
+不重置 `dataVersion` / `migratedAt` / `migrationNoticeAcknowledged`（避免触发重复迁移与重复提醒）。
 
 ### 5.6 幂等、失败与重试
 
@@ -686,6 +691,9 @@ MainPage 才是用户停留的稳定上下文。
   - 新键已存在 → 跳过（`SKIPPED`，不覆盖）；实现中**不做**"较旧则合并"（该能力未实现，见 §13.5）；
   - 仅 **MIGRATED**（写入并读回校验通过）的域，其旧键才进入 30 天清理清单；`SKIPPED/FAILED/DEFERRED`
     的旧键全部保留，下次启动继续尝试（防"延迟/失败域旧数据 30 天后被清且从未合并"）。
+  - **导出/清空警示口径**（2026-10-31）：`FAILED` + `DEFERRED` + 旧键保留且新键无数据的 `SKIPPED`
+    （无当前账号匹配 / 未登录跳过镜像域，`legacyRetained=true`）计入 `MigrationReport.countUnsettled()`；
+    其余 `SKIPPED`（新键已存在 / 旧目录为空 / 旧数据不可解析）不影响导出、不计入。
 - **断点**：逐域落盘迁移报告（每完成一域就更新 `v2.meta`），进程被杀后下次从断点续跑；文件域逐文件
   检查启动预算，超时标记 `DEFERRED`，已复制文件在下次启动按"新目录已有同名"跳过。
 - **文件域检测以 meta 为准**：迁移报告里该文件域已 `MIGRATED` 后不再检测旧目录，避免"升级后用户删除的
@@ -738,6 +746,8 @@ MainPage 才是用户停留的稳定上下文。
   导入时校验，防止文件被截断/手改；不匹配只记警告并继续导入（见 §6.4）。缺失时视为"旧格式"，
   跳过校验并给出警告（2026-10-31 起不再静默）。
 - `deviceTag` / `appVersionName` / `appVersionCode` 仅作诊断信息，导入不消费（不参与校验或迁移决策）。
+  这三个是**容器诊断字段**，不属于导入契约；用户需求 A 所指的"多余数据"是业务数据域（16 个可导出域
+  在导入侧均有对等路径），诊断字段保留用于排障（评审 R-D07 口径说明）。
 - `updatedAt`（域级）：ENVELOPE 域取信封内 `updatedAt`；文件域取目录内最新文件 mtime；**RAW 域恒为 0**
   ——日常写入不经过 Hub（§4.3），Hub 无逐域写入时间，RAW 域没有可用的真实时间戳。
 - `ownerUid`（域级，可选）：仅 `ACCOUNT_MIRROR` 域携带（导出时的来源账号），用于导入时判断
@@ -773,20 +783,27 @@ MainPage 才是用户停留的稳定上下文。
 
 ### 6.3 选择性导出
 
-- 数据管理页「导出数据」→ 弹窗：域清单（按 `DomainSpec` 生成，**平铺列表**，未做六组分类）；
-  每项显示名称与说明；默认勾选 `ExportPolicy.INCLUDE`。
+- 数据管理页「导出数据」→ 弹窗：域清单（按 `DomainSpec` 生成，**六组分类展示**：设置与主题 / 阅读与进度 /
+  社交与跟踪 / AI / 离线存档与草稿 / 缓存与镜像，未登记域进「其它」兜底）；每项显示名称与说明，
+  并按异步统计结果展示**每域体积**；默认勾选 `ExportPolicy.INCLUDE`。
 - 顶部「全选 / 全不选」；底部「加密」开关 + 口令。
 - `ExportPolicy.NEVER` 的域（凭证/草稿媒体/动态照片缓存/**内部元数据 meta**）不出现；`OPTIONAL` 的缓存域默认不勾选。
-- 导出过程：完成后调 `picker.DocumentViewPicker.save()` 保存
+- 导出过程显示**域级进度**「正在收集：域名（k/N）」（`exportBackup(options, onProgress)`）；
+  完成后调 `picker.DocumentViewPicker.save()` 保存
   （⚠️ **纠偏**：早期草案写的 `DocumentSavePicker` 在 SDK 中不存在，权威 API 是
   `new picker.DocumentViewPicker(context).save(options)`）；
   文件命名 `nga-backup-<YYYYMMDD-HHmmss>.ngabackup`（加密则 `.ngabackup` 不变，靠 magic 区分）。
-- 大文件：导出前显示"正在生成…"文案；超过 64MB 拒绝并提示先清理缓存。
+- 大文件：超过 64MB 拒绝并提示先清理缓存。
 - 单域上限：单域载荷超过 8MB（JSON 字符数）不写入容器，并在导出结果中给出「未包含清单」
   （域名称 + 原因）；与导入侧共用同一上限（见 §6.5）。
-- 迁移未完成（状态 `FAILED` / `DEFERRED`）时，导出弹窗给出警示「有 N 个域升级未完成，
-  其旧数据不在备份中」，用户确认后才继续（见 §6.7）。
-  **未实现**：域级进度百分比、4MB 预警、分组展示、每域体积（列在 §13.5 遗留）。
+- 迁移未完成时导出弹窗给出警示「有 N 个域升级未完成，其旧数据不在备份中」，用户确认后才继续（见 §6.7）。
+  统计口径 = `FAILED` + `DEFERRED` + **旧键保留且新键无数据的 `SKIPPED`**（`MigrationReport.countUnsettled()`，
+  2026-10-31 起）：普通 `SKIPPED`（新键已存在 / 旧目录为空 / 旧数据不可解析）不影响导出，不计入，
+  避免对迁移已完成的用户误报。
+- 草稿媒体可移植化：导出 `drafts` 域时清空每条草稿的 `media` 引用（正文保留，`DraftPortability.makeDraftsPortable`），
+  避免备份里的 media 指向导出端沙箱路径；导出弹窗已提示「草稿中的图片/视频不包含在备份内」。
+- 导出成功后写入一条导出历史（`v2.meta.transferHistory`：时间/域数/体积/是否加密，不记内容，见 §6.6#11）。
+  **仍未实现**：4MB 之外的容量治理（导出体积预估/清理引导）与真机验证项（见 §13.5）。
 
 ### 6.4 导入策略与合并语义
 
@@ -795,12 +812,13 @@ MainPage 才是用户停留的稳定上下文。
 ```
 选择文件 → 识别 magic（明文/加密）→ 需要时输入口令 → 解析容器
   → 校验 formatVersion / dataVersion / checksum（高版本拒绝；checksum 不匹配降级为警告继续）
-  → 校验域 schemaVersion：高于当前 → 该域跳过；**域升级器尚未实现**（低版本域按当前结构直接导入，
-     未来提升域 schemaVersion 时必须同步实现导入升级，见本节末）
+  → 校验域 schemaVersion：高于当前 → 该域跳过；低于当前 → **必须经升级器**
+     （`DomainUpgraders.upgradeDomainPayload`；当前无注册规则 → 跳过并给出原因，不按新结构误写）
   → 生成"导入计划"：每域 新增/覆盖/跳过/合并 的条数与变更摘要，展示给用户确认
      （全跳过时也展示计划与逐域原因；单域载荷 >8MB 的域生成「跳过」条目，不再静默丢弃）
   → 用户确认 → 逐域导入（直接写盘；**撤销导入已移除**，见本节末；无变化的域不写盘）
-  → 全部成功 / 部分失败 → 逐域容错刷新各 Store → 结果提示（部分失败保留已成功域）
+  → 全部成功 / 部分失败 → 逐域容错刷新各 Store → 写入导入历史（`v2.meta.transferHistory`）
+     → 结果提示（部分失败保留已成功域）
 ```
 
 每域合并语义：
@@ -814,7 +832,7 @@ MainPage 才是用户停留的稳定上下文。
 | `votes` / `poll_voted` | 按 tid 取 `ts` 较新；截断 200 | — |
 | `tracked_threads` | 按 `tid` 取 `lastCheckAt`（回退 `createdAt`）较新；按 50 条截断；合并输出统一为 `{items: T[]}` 信封形态（ENVELOPE 域不得输出裸数组） | 较旧条目丢弃 |
 | `ai_sessions` | 按 id：两边都有取 `updatedAt` 较新；总数超上限淘汰最旧；合并输出统一为 `{items: T[]}` 信封形态 | 会话消息不合并（整条取新） |
-| `drafts` | 按草稿键覆盖（同键以导入文件为准）；**导入时把键末尾的账号哈希改写为当前账号**（跨账号导入也能"找回"草稿，见 §13.3）；文件域导入逐条校验：草稿键必须通过 `DraftKeyUtils.isValidDraftKey`（只允许字母/数字/下划线）且文件名安全，坏条目计入失败并上报（不再"写盘成功但编辑器静默跳过"） | 键内 uid 哈希段由 `DraftKeyUtils.rewriteDraftKeyUidPart` 重写 |
+| `drafts` | 按草稿键覆盖（同键以导入文件为准）；**导出与导入计划都先按当前账号过滤草稿**（`DraftPortability.filterDraftsForAccount`：草稿目录是设备级共用的，其他账号的草稿文件不得进入备份、也不参与本机合并被改键复制，2026-10-31 评审 R-A01）；**导入计划阶段就把键末尾账号哈希归一化为当前账号**（`DraftPortability.normalizeDraftKeysForAccount`），写入阶段复用 `DraftKeyUtils.rewriteDraftKeyUidPart`（幂等）——保证计划里的「新增/更新」计数与真实写盘一致、内容完全相同的草稿被识别为「无变化」而不触发写盘（2026-10-31 审计 DES-19）；跨账号导入也能"找回"草稿，见 §13.3）；文件域导入逐条校验：草稿键必须通过 `DraftKeyUtils.isValidDraftKey`（只允许字母/数字/下划线）且文件名安全，坏条目计入失败并上报（不再"写盘成功但编辑器静默跳过"）；**导出时清空每条草稿的 `media` 引用并保持字段顺序**（`DraftPortability.makeDraftsPortable`，正文保留），导入后媒体需在编辑器重新选择 | 键内 uid 哈希段由 `DraftKeyUtils.rewriteDraftKeyUidPart` 重写 |
 | `draft_media` | 硬跳过（不可恢复）：导入文件中的媒体副本**不包含**（媒体体积大且涉及沙箱路径不可移植） | 仅导入草稿正文，媒体由用户在编辑器重选（UI 明示） |
 | `saved_threads` | 按 tid 覆盖（沿用现有 `importContent` 语义）；条目级校验：`tid` 纯数字且 `rawPages` 非空，坏条目跳过并计入计划 | 已有实现 |
 | `categories` / `profiles` / `notifications` / `activities` / `favorite_membership` / `ai_tool_cache` | **默认恢复（跟随导出选择）**：备份里出现即按导入值覆盖（镜像域**导出条目携带来源 `ownerUid`**，导入时写入的 `ownerUid` = 当前账号；**来源账号与当前账号不同则跳过并提示**，防跨账号串号）；导入计划页可关闭「恢复缓存类数据」改为跳过 | 关闭时提示"缓存类数据，默认跳过（可开启「恢复缓存类数据」）"；`ImportPolicy.SKIP` 仅表示"默认不恢复"，不再是无条件丢弃 |
@@ -833,6 +851,13 @@ MainPage 才是用户停留的稳定上下文。
 - `draft_media` / `moving_photo_cache` 为硬跳过（不可恢复，计划不提供入口）；
 - 未登录时跳过 `drafts` 并提示（草稿键依赖账号哈希）；备份含 `drafts` 时提示"草稿中的图片/视频需在编辑器重新选择"。
 
+**域升级器（2026-10-31 落地）**：`common/transfer/DomainUpgraders.ets` 提供
+`upgradeDomainPayload(domainId, fromVersion, payload)`。导入计划对 `incoming.schemaVersion < spec.schemaVersion`
+的域**必须**经升级器转换；当前所有域 `schemaVersion=1`、尚无注册规则，因此低版本域会生成「跳过」计划条目并展示原因
+（用户可见，而非按新结构误写）。提升某域 `schemaVersion` 前必须先在该文件注册升级规则并补单测，否则旧备份该域会被拒绝导入。
+**导入历史**：导入完成后向 `v2.meta.transferHistory` 写入一条记录（域数/新增/更新/是否全部成功，**不记业务内容**），
+数据管理页「最近导出/导入」卡片展示；「清空本地数据」时一并清空。
+
 **校验和降级**：checksum 不匹配只记警告并继续导入（截断由 `JSON.parse` 捕获；跨版本序列化差异不应阻断恢复）。
 **尾部截断修复**：明文容器 JSON 解析失败时，尝试提取 `domains` 数组中的最后一个完整域并重建容器
 （`repairTruncatedContainer`），成功则提示"已恢复 N 个完整数据域"；失败才报"不是有效的 JSON"。
@@ -843,6 +868,7 @@ MainPage 才是用户停留的稳定上下文。
 | --- | --- | --- |
 | `auth` / `sessions`（登录凭证） | 永不 | 安全边界；换机/重装用「凭证导出（.ngacred，独立加密）」或重新登录 |
 | `draft_media`（草稿图片/视频副本） | 永不 | 体积大（最多 128MB）、沙箱绝对路径不可移植；导出弹窗已提示，恢复草稿后在编辑器重选 |
+| `drafts` 内的图片/视频引用（`media`） | 导出时清空引用（正文保留） | 媒体副本不导出（`draft_media` 永不）；导入后需在编辑器重选（`DraftPortability.makeDraftsPortable`） |
 | `moving_photo_cache`（动态照片缓存） | 永不 | 可从服务端重建 |
 | `categories` / `profiles` / `notifications` / `activities` / `favorite_membership` / `ai_tool_cache` | 默认不勾选，可手动勾选后导出 | 缓存/镜像类（隐私与体积）；导入默认恢复（可关闭） |
 | `ai_sessions` | 默认不勾选，可手动勾选 | 隐私（AI 对话可能引用私信内容） |
@@ -866,13 +892,15 @@ MainPage 才是用户停留的稳定上下文。
 | 超大文件 | **读取后**按 UTF-8 字节数校验 > 64MB → 拒绝（真机上 `fileIo.stat` 不可靠，见 §13.3 实施记录）；域数 > 64 拒绝；重复域 ID 只保留首个 |
 | 单域载荷超限 | 导出与导入共用 **8MB（JSON 字符数）** 上限：导出超限域不写入容器并列入「未包含清单」；导入超限域在解析阶段收集为 `droppedDomains`，导入计划中生成「跳过」条目（含原因），不再静默丢弃 |
 | 旧容器 `dataVersion=0` | 接受为「旧格式」（不升级），仅做域级校验；`formatVersion` 必须 ≥1 的整数，`dataVersion` 必须为 ≥0 的整数 |
+| 低版本域（`schemaVersion < 当前`） | 必须经 `DomainUpgraders.upgradeDomainPayload` 显式升级；当前无注册规则 → 该域跳过并在导入计划展示原因（不再按新结构误写；2026-10-31） |
 
 ### 6.6 安全与隐私清单
 
 1. **凭证永不进入数据包**（`ExportPolicy.NEVER` + 导入器硬拒绝 auth/sessions 域）。
-2. **导出前隐私提示**：导出弹窗顶部与加密开关旁**恒定提示**"未加密文件包含浏览历史、AI 对话、AI API Key
-   等隐私内容，建议保持加密"（实现为恒定提示、不随勾选联动，比原设计"勾选时提示"更保守）；
-   `ai_sessions` 默认**不勾选**（`ExportPolicy.OPTIONAL`）。
+2. **导出前隐私提示**：双层提示（2026-10-31 评审 R-D04 对齐实现）——
+   ① 导出弹窗顶部与加密开关旁**恒定提示**"未加密文件包含浏览历史、AI 对话、AI API Key 等隐私内容，
+   建议保持加密"；② 当用户勾选了敏感域（`ai_sessions` / `history`）**且关闭加密**时，底部追加动态警示
+   "已勾选敏感数据域，未加密导出会暴露这些内容"（EXP-09）；`ai_sessions` 默认**不勾选**（`ExportPolicy.OPTIONAL`）。
 3. **加密默认开启**，AAD 隔离凭证与数据两条链路（`nga-oh-data-backup-v1` vs `nga-oh-credential-export-v2`）。
 4. **AI API Key 不脱敏（2026-10-30 产品决策修正）**：早期实现把 `settings` 的
    `aiProfiles[].apiKey` / `toolsApiKey` / `aiSearchProfiles[].apiKey` 在导出副本中清空，
@@ -896,22 +924,29 @@ MainPage 才是用户停留的稳定上下文。
    镜像域导出条目携带来源 `ownerUid`，**导入到不同账号时该域跳过并提示**（防跨账号串号）。
 10. **历史撤销快照清理**：撤销导入已移除（2026-10-30 产品决策）；旧版本可能残留的 `v2.<domain>.undo`
     明文快照在启动时与「清空本地数据」时由 `clearLegacyUndoSnapshots()` 统一删除，不再新写 undo 快照。
-11. **审计**：导出/导入各写一条日志（域数量、总体积、是否加密、耗时），不记录内容。
+11. **审计**：导出/导入各写一条日志（域数量、总体积、是否加密、耗时），并写入 `v2.meta.transferHistory`
+    （时间/类型/域数/体积/结果摘要，**只记元数据、不记录任何业务内容**；最新在前、上限 `TRANSFER_HISTORY_MAX=10`）；
+    「清空本地数据」时一并清空。
 
 ### 6.7 UI 流程
 
 ```
 设置 → 「数据管理」 ────────────────────────────────────────────────
   [数据版本]  当前 v2 · 上次升级 2026-10-30 · 旧数据 27 天后清理   [重试升级]
-  [数据健康]  ⚠ N 个域有异常（点开看详情；「修复」按钮未实现，见 §13.5）
-  [存储占用]  设置 12 KB · 历史 88 KB · AI 会话 1.2 MB · 存档 24 MB …（估算）
+  [数据健康]  ⚠ N 个域有异常（点开看详情 / 「修复」清空该域并重建，二次确认）
+  [存储占用]  设置 12 KB · 历史 88 KB · AI 会话 1.2 MB · 存档 24 MB …（估算；
+              单域超 4MB 阈值时该行红字预警；「刷新统计」）
+  [最近导出/导入]  最近 N 次导出/导入（时间/类型/域数/体积/结果；只记元数据，清空本地数据时一并清空）
+  [后台任务调度]  折叠区：任务 ID / 上次执行 / 结果（`AppScheduler.snapshot()`）
   ────────────────────────────────────────────────
-  [导出数据]  → 选择域 + 加密开关 → 保存文件（迁移未完成时弹警示；超限域列入「未包含清单」）
-  [导入数据]  → 选择文件 → 口令（如需）→ 导入计划确认 → 执行 → 结果（含草稿时提示媒体需重选）
+  [导出数据]  → 选择域（六组分类，显示每域体积）+ 加密开关 → 保存文件
+              （域级进度「正在收集：域名（k/N）」；迁移未完成时弹警示；超限域列入「未包含清单」）
+  [导入数据]  → 选择文件 → 口令（如需）→ 导入计划确认（每域条数+跳过原因）→ 执行 → 结果
+              （导入完成后记入「最近导出/导入」；含草稿时提示媒体需重选）
   [撤销导入]  已移除（2026-10-30 产品决策；仅清理旧版残留 undo 快照）
   ────────────────────────────────────────────────
   [清空本地数据]  （危险：二次确认 + 需输入"清空"二字；保留凭证；草稿媒体/动态照片缓存与存档一并删除；
-                  迁移未完成时弹警示；清空后重置迁移报告中的旧数据清理清单）
+                  迁移未完成时弹警示；清空后重置迁移报告中的旧数据清理清单与导出/导入历史）
 ```
 
 入口位置：SettingsPanel 的 Block 3C（导出账号凭证 / 清除缓存 / 退出登录）之前新增 Block「数据管理」，
@@ -1007,7 +1042,7 @@ AppScheduler.register(task)       // 启动时一次性注册；重复 id 拒绝
 AppScheduler.start()              // 启动 60s 心跳（后台保留心跳、只停派发 TICK）
 AppScheduler.notify(trigger)      // 事件入口：匹配任务 → 排序 → 逐个串行 await
 AppScheduler.requestRun(id, force) // 用户主动触发（当前无生产调用点，供数据管理页扩展）
-AppScheduler.snapshot()           // 全部任务状态快照（当前无 UI 消费方）
+AppScheduler.snapshot()           // 全部任务状态快照（数据管理页「后台任务调度」折叠区消费）
 ```
 
 保证（与实际实现一致）：
@@ -1079,7 +1114,8 @@ iflogin 校验 + 三路轮询立即刷新（跟踪一轮最多 50 帖 × 400ms �
 
 ### 7.6 可观测性与测试
 
-- **调度状态 UI 未实现**（原计划的数据管理页「调度状态」折叠区未落地）：当前只有 `snapshot()` API 与日志。
+- **调度状态 UI 已实现**：数据管理页「后台任务调度」折叠区消费 `AppScheduler.snapshot()`
+  （任务 ID / 上次执行 / 结果）；日志仍为每次执行一条 verbose。
 - 日志：`Logger(DOMAIN_APP, 'AppScheduler')`，每次执行一条 verbose；失败一条 warn（含截断错误）。
 - 单测（`entry/src/test/SchedulerUnit.test.ets`）：注册/触发匹配、节流、单飞、退避、前台门禁、
   认证门禁、异常隔离、时钟注入（22 用例）。
@@ -1139,7 +1175,7 @@ EntryAbility.onCreate
 > 改造必须保证：① 退出后进入 LoginPage 时不会因残留状态崩溃；② 重新登录（可能换号）后界面数据正确。
 > **实际实现口径**：未采用"先保守后放开"的两步走，而是直接实现"设备级域登出后内存保留、未登录可用"
 > （`clearAuth` 只 reset 三个镜像域 + 浮层/路由运行态）；`settingsStore.reset()` 只被
-> 「清空本地数据」入口调用。风险由两件事兜住：既有 44 个 Hypium 测试全绿 + 登录/登出路径的单测
+> 「清空本地数据」入口调用。风险由两件事兜住：既有 49 个 Hypium 测试套件（742 用例）全绿 + 登录/登出路径的单测
 > （`SessionUnit` / `AuthStore` 相关）+ 代码审查。
 
 **切换账号**（A→B，不经过登出）：与登录成功同路径；`authStore.setAuth` 的 `uidChanged` 分支负责重载镜像域。
@@ -1190,14 +1226,20 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
 
 1. **数据版本**：`dataVersion` 文本、上次迁移时间、旧数据清理倒计时/「立即清理」、失败域列表、
    「重试升级」（调 `migration.retry()`）。
-2. **数据健康**：异常域列表（域 ID + 错误摘要 + 丢弃条数）+ 「修复」（清空该域并重建；**未实现**，见 §13.5）。
+2. **数据健康**：异常域列表（域 ID + 错误摘要 + 丢弃条数）+ 「修复」按钮（`AppStore.repairDomain`：
+   清空该域磁盘数据 → 全量重载 → 清健康标记；二次确认，设备级用户数据域属删除数据）。
 3. **存储占用**：按域估算体积（Preferences 用 `JSON.stringify(payload).length`，文件域用目录大小），
-   合计；「刷新统计」。
-4. **导出数据**：跳半模态（自定义 `CustomContentDialog` 或新子 Panel）显示域勾选清单 + 加密开关。
-5. **导入数据**：文件选择 → 口令 → 导入计划确认对话框（每域变更条数与跳过原因）→ 执行 → 结果。
-6. **清空本地数据**（危险区，红字，二次确认 + 输入确认词；保留凭证、无「保留存档」选项；
-   草稿媒体/动态照片缓存一并删除；迁移未完成时给出警示）。
-7. **撤销导入**：**已移除**（2026-10-30 产品决策；仅清理旧版残留 `v2.<domain>.undo`，无 UI 入口）。
+   合计；「刷新统计」；单域超过 4MB 阈值时该行红字预警 + warn 日志。
+4. **最近导出/导入**：`v2.meta.transferHistory` 最近 N 条（时间/类型/域数/体积/结果；只记元数据；
+   清空本地数据时一并清空）。
+5. **后台任务调度**：折叠区，消费 `AppScheduler.snapshot()`（任务 ID / 上次执行 / 结果）。
+6. **导出数据**：半模态显示**六组分类**域清单（含每域体积）+ 加密开关；导出时显示域级进度
+   「正在收集：域名（k/N）」。
+7. **导入数据**：文件选择 → 口令 → 导入计划确认对话框（每域变更条数/跳过原因/覆盖恢复语义）→ 执行 → 结果；
+   导入完成后写入一条导入历史。
+8. **清空本地数据**（危险区，红字，二次确认 + 输入确认词；保留凭证、无「保留存档」选项；
+   草稿媒体/动态照片缓存一并删除；迁移未完成时给出警示；同时重置迁移旧数据清单与导出/导入历史）。
+9. **撤销导入**：**已移除**（2026-10-30 产品决策；仅清理旧版残留 `v2.<domain>.undo`，无 UI 入口）。
 
 ### 9.3 迁移提醒弹窗
 
@@ -1216,9 +1258,9 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
 | **P1 基础设施** | `PersistenceCatalog`、`PersistenceHub`、`StorageBackends`、`PersistenceMetaStore`、`DomainHealth`、`MigrationEngine` + `DomainMigrators`、`AppScheduler`、`TransferTypes`/`TransferCrypto`/`DomainMergers`、`BuiltinTasks` | `common/persistence/*`、`common/scheduler/*`、`common/transfer/*` | ✅ 完成（编译 + 单测） |
 | **P2 域接入** | 21 个域登记；15 个 Store 统一键/加载门禁；`AppStore.init` 编排迁移；迁移报告发布 | `PersistenceCatalog`、17 个 Store 文件、`AppStore` | ✅ 完成（替代原"adapter"方案，见 §8.4） |
 | **P3 生命周期改造** | `clearAuth` 拆分（设备级域不 reset）、镜像域重载、未登录可用 | `AppStore`、各 store | ✅ 完成（直接放开，未走保守版） |
-| **P4 导出导入** | `DataTransferService`（容器/校验/合并/加密）、域合并器、`DataManagementPanel`、`FilePickUtils`、`reloadAfterImport` | `common/transfer/*`、`pages/DataManagementPanel.ets`、`AppStore` | ✅ 完成（撤销导入已移除、AI Key 不脱敏；**域升级器未实现**，见 §6.4/§13.5） |
+| **P4 导出导入** | `DataTransferService`（容器/校验/合并/加密）、域合并器、`DataManagementPanel`、`FilePickUtils`、`reloadAfterImport` | `common/transfer/*`、`pages/DataManagementPanel.ets`、`AppStore` | ✅ 完成（撤销导入已移除、AI Key 不脱敏；升级器入口已落地、当前无注册规则；数据管理页「六组分类/域级进度/每域体积/最近导出导入/调度状态/4MB 预警/修复」已补齐，见 §6.3/§6.7/§13.5） |
 | **P5 调度器接入** | 7 个内置任务注册；`EntryAbility`/`AppStore` 接线；回前台请求风暴收敛 | `BuiltinTasks`、`AppStore`、`EntryAbility` | ✅ 完成 |
-| **P6 收尾** | 旧键清理任务、数据健康、体积统计、文档、遗留 TODO | 各文件 | ✅ 完成（已知遗留见 §13.5） |
+| **P6 收尾** | 旧键清理任务、数据健康（含「修复」）、体积统计（含 4MB 预警）、导出/导入历史、文档、遗留 TODO | 各文件 | ✅ 完成（已知遗留见 §13.5） |
 
 > 本文档与代码同步维护：每个阶段完成后在 §10 标记状态并在文末「实施记录」补一段实测结论。
 
@@ -1229,7 +1271,7 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
 | 纯逻辑（无 IO） | Hypium Local Test | Catalog 完整性（键唯一/域 ID 唯一/scope 合法）、信封编解码容错、迁移规则选择、合并器幂等/冲突、调度器节流/退避/单飞/门禁 |
 | 域适配器 | Hypium + `MemoryPreferencesStore`（现有测试已有该假实现） | 读旧格式→升级→写新格式；损坏数据兜底；导出 payload 形状 |
 | 跨进程路径 | DevEco 编译 + 模拟器手测（用户明确要求时才启动应用） | 升级迁移提醒、导出文件保存、导入恢复、登出后数据保留、切号镜像重建 |
-| 回归 | 现有 44 个 Hypium 测试文件必须全绿 | `FavoriteUnit`/`HistoryReadLedgerUnit`/`CacheEnvelopeUnit`/`SessionUnit` 等直接受影响的用例 |
+| 回归 | 现有 49 个 Hypium 测试套件（742 用例）必须全绿 | `FavoriteUnit`/`HistoryReadLedgerUnit`/`CacheEnvelopeUnit`/`SessionUnit` 等直接受影响的用例 |
 
 新增测试文件：
 
@@ -1238,6 +1280,12 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
 - `entry/src/test/DataTransferUnit.test.ets`
 - `entry/src/test/DataTransferParseUnit.test.ets`（解析/版本/尾部截断修复）
 - `entry/src/test/DraftKeyUtilsUnit.test.ets`（草稿键 uid 哈希改写）
+- `entry/src/test/DataTransferDomainParity.test.ets`（域对等性/ENVELOPE 形态/解析防护）
+- `entry/src/test/DataTransferImportPlan.test.ets`（导入计划纯函数：策略矩阵/合并/文件域写入计划）
+- `entry/src/test/DataTransferRoundTrip.test.ets`（导出→导入容器往返 + 可导出域合并兼容）
+- `entry/src/test/MigrationUnsettled.test.ets`（升级未完成域统计口径 / legacyRetained JSON 保真）
+- `entry/src/test/DataReviewFixes.test.ets`（评审修复回归：草稿账号过滤/媒体字段顺序/文件写入计划纯函数/
+  legacyRetained 四类置位/meta 反序列化/4MB 阈值）
 - `entry/src/test/SchedulerUnit.test.ets`
 
 ## 12. 风险登记与回滚
@@ -1245,11 +1293,11 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
 | # | 风险 | 概率 | 影响 | 缓解 | 回滚 |
 | --- | --- | --- | --- | --- | --- |
 | R1 | 迁移把数据写坏 | 低 | 高 | 双键 pending 保护；旧键保留 30 天；迁移前导出一份建议 | 旧版本 App 回滚 + 旧键仍可读 |
-| R2 | 登出语义改造导致登录后数据异常 | 中 | 高 | 分两步放开（先保守版）；登录路径单测；`clearAuth` 顺序注释保持 | 恢复 reset 全量（一行开关） |
-| R3 | 导出文件泄露隐私 | 中 | 高 | 默认加密；隐私提示；不导出凭证 | 无法回滚（用户文件），文档警示 |
-| R4 | 导入覆盖用户新数据 | 中 | 中 | 导入计划确认；无变化域不写盘；镜像域跨账号跳过 | 撤销导入已移除（2026-10-30）；重新导入或从自己的备份恢复 |
-| R5 | 调度器改动导致轮询不再运行 | 中 | 中 | P5 与现状日志对照；任务表快照可见；保留旧 `PollingController` 直到验证通过 | 关闭调度器任务开关（`SchedulerTask.enabled` 常量） |
-| R6 | Preferences 16MB 上限被单域打爆 | 低 | 高 | 单域 8MB 导出/导入上限（已实现）；4MB 告警未实现（§13.5）；AI 会话/工具缓存已有上限；导出前体积检查 | 清缓存入口 |
+| R2 | 登出语义改造导致登录后数据异常 | 中 | 高 | **实际实现**直接放开"设备级域登出后内存保留、未登录可用"（未采用先保守后放开的调步）；登录路径单测；`clearAuth` 顺序注释保持 | 恢复 reset 全量（`clearAuth` 中按需把设备级 Store 加入 reset） |
+| R3 | 导出文件泄露隐私 | 中 | 高 | 默认加密；隐私提示（恒定 + 敏感域动态警示）；草稿按账号过滤；不导出凭证 | 无法回滚（用户文件），文档警示 |
+| R4 | 导入覆盖用户新数据 | 中 | 中 | 导入计划确认；无变化域不写盘；镜像域跨账号跳过；文件域计划预检 | 撤销导入已移除（2026-10-30）；重新导入或从自己的备份恢复 |
+| R5 | 调度器改动导致轮询不再运行 | 中 | 中 | P5 与现状日志对照；任务表快照在数据管理页可见；保留旧 `PollingController` 直到验证通过 | 降级：在 `BuiltinTasks.registerBuiltinTasks` 中不注册对应任务（旧 `PollingController` 代码仍在，可临时恢复直调） |
+| R6 | Preferences 16MB 上限被单域打爆 | 低 | 高 | 单域 8MB 导出/导入上限（已实现）；4MB 单域预警（数据管理页红字 + warn 日志，已实现）；AI 会话/工具缓存已有上限；导出前体积检查 | 清缓存入口 |
 | R7 | 旧键与新键并存造成双倍写入 | 低 | 低 | 迁移完成后旧键只读不写；30 天后清理 | 手动清理 |
 | R8 | 系统备份恢复旧数据但用户不知道 | 中 | 中 | P2 触发路径覆盖 + 迁移提醒 | 数据管理页可见 |
 | R9 | ArkTS 严格模式编译失败（接口/泛型） | 中 | 低 | 按 `entry/src/AGENTS.md` 约束设计（类/接口显式实现、不用索引签名） | 编译期暴露，逐项修 |
@@ -1300,6 +1348,8 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
   entry/src/main/ets/common/transfer/TransferCrypto.ets           // 加密容器（PBKDF2+AES-GCM，独立 AAD）
   entry/src/main/ets/common/transfer/DataTransferService.ets      // 导出/导入/合并/加密
   entry/src/main/ets/common/transfer/DomainMergers.ets            // 各域导入合并器
+  entry/src/main/ets/common/transfer/DomainUpgraders.ets          // 导入域升级器（旧 schemaVersion → 当前）
+  entry/src/main/ets/common/transfer/DraftPortability.ets         // 草稿媒体引用可移植化（导出时清 media）
   entry/src/main/ets/common/utils/FilePickUtils.ets               // picker 封装 + URI 读写
   entry/src/main/ets/common/utils/DraftKeyUtils.ets               // 草稿键 uid 哈希改写（跨账号导入）
   entry/src/main/ets/pages/DataManagementPanel.ets                // 数据管理页
@@ -1309,6 +1359,11 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
   entry/src/test/DataTransferUnit.test.ets
   entry/src/test/DataTransferParseUnit.test.ets
   entry/src/test/DraftKeyUtilsUnit.test.ets
+  entry/src/test/DataTransferDomainParity.test.ets
+  entry/src/test/DataTransferImportPlan.test.ets
+  entry/src/test/DataTransferRoundTrip.test.ets
+  entry/src/test/MigrationUnsettled.test.ets
+  entry/src/test/DataReviewFixes.test.ets
   entry/src/test/SchedulerUnit.test.ets
 修改
   entry/src/main/ets/store/AppStore.ets        // Hub 初始化/启动迁移/设备级与镜像域分离/clearAuth/调度接线/导入后重载
@@ -1414,10 +1469,11 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
     部分失败也重载内存；`reloadAfterImport` 补主题重载。
   - **P2 修复**：清空后主题写回、调度器 shutdown 后不可重建（init 时重建实例）、
     导出镜像域前校验 ownerUid 归属、`clearAuth` 注释如实说明 cancel/reset 不真正取消在途写。
-  - **P2 已知取舍（未改代码）**：`votes`/`poll_voted` 设备级共享——若投票帖入口依据本地记录判定
+  - **P2 已知取舍（当轮未改代码）**：`votes`/`poll_voted` 设备级共享——若投票帖入口依据本地记录判定
     "已投"并禁用投票，切换账号后可能误禁用（需真机验证，列在下方遗留）；撤销导入已移除，
-    旧版残留 `v2.<domain>.undo` 由 `clearLegacyUndoSnapshots()` 清理；数据健康「修复」按钮、
-    调度状态区、导出域级进度/分组、草稿跨账号提示均为**未实现的文档承诺**（本文档已逐处标注）。
+    旧版残留 `v2.<domain>.undo` 由 `clearLegacyUndoSnapshots()` 清理。当轮未实现的文档承诺
+    （数据健康「修复」按钮、调度状态区、导出域级进度/分组）已于 2026-10-31 第二批补齐；
+    草稿跨账号一次性提示仍未实现。
   - 复验：全量编译 + Hypium 见顶部验证记录（修复后重跑）。
 - **2026-10-30 真机实测「导出→清空→导入」失败修复**（用户真机反馈：迁移完成后导出未加密备份，
   清空数据再导入提示解析失败）：
@@ -1498,10 +1554,12 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
   - **读失败不写空盘**：`TrackedThreadStore` 读失败（信封/条目校验失败）只清内存 + 记 warn，不写回空列表。
   - **ENVELOPE 形态归一**：信封域（tracked_threads/ai_sessions 等）合并输出强制 `{items: T[]}`，避免裸数组写入。
   - **清空后重置迁移报告**：`clearAllLocalData` 同步清空 `migration.legacyKeys/legacyCleanupAt` 并写回 meta，
-    避免页面继续显示可清理旧数据。
-  - **文档同步**：本设计稿按 `docs/research/AUDIT_DESIGN_CONFLICT.md` 逐条对齐（撤销导入移除、DEVICE 16、
-    SKIP 语义、策略标签、升级器未实现、8MB 双向、镜像归属、updatedAt 口径、4MB 未实现、清空媒体文案、
-    §13.5 交叉引用等）。
+    避免页面继续显示可清理旧数据。（**已被后续批次取代**：2026-10-31 第二批把该逻辑扩展为
+    `resetGovernanceMetaAfterClear`，同时重置迁移结果明细与导出/导入历史，见 §13.3 末尾。）
+  - **文档同步（历史口径，部分已由后续批次更新）**：本设计稿按 `docs/research/AUDIT_DESIGN_CONFLICT.md`
+    逐条对齐（撤销导入移除、DEVICE 16、SKIP 语义、策略标签、升级器、8MB 双向、镜像归属、updatedAt 口径、
+    4MB、清空媒体文案、§13.5 交叉引用等）。其中"升级器未实现 / 4MB 未实现"已在 2026-10-31 第二批补齐
+    （见 §13.3 第二批记录），**当前状态以 §13.5 为准**。
   - 验证方式与结果（Lead 统一执行，2026-10-31）：
     - DevEco `assembleHap`：**BUILD SUCCESSFUL**（HAP 10.7MB，无 ERROR）；
     - Hypium Local Test（`hvigorw test -p module=entry -p coverage=false --no-daemon`）：
@@ -1509,26 +1567,122 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
       `dataTransferDomainParity` 12 用例：域对等性、8MB 超限可见、重复/缺内容域、ENVELOPE 形态归一、
       文件域条目校验、计划跳过条目）；
     - `node scripts/check-eol.mjs`：全部已跟踪文本文件为 LF。
+- **2026-10-31 第二批优化（数据管理页完善 + 历史 + 4MB 预警 + 升级器 + 草稿媒体可移植化）**：
+  - **导出/导入历史**：`PersistenceMeta.transferHistory: TransferHistoryEntry[]`（`v2.meta` 内，
+    最新在前、上限 `TRANSFER_HISTORY_MAX=10`，只记元数据不记内容）；导出（保存 + 回读校验通过后）
+    与导入（applyImport 后）各记一条；数据管理页新增「最近导出/导入」卡片；「清空本地数据」同时清空该历史
+    （`AppStore.resetGovernanceMetaAfterClear`，2026-10-31 评审后重命名并扩展为重置迁移结果明细）。
+  - **4MB 单域预警**：数据管理页存储占用行超过 `DOMAIN_SIZE_WARN_BYTES`（4MB）时红字 + 日志 warn
+    （`DataManagementPanel.refreshStorage`）。
+  - **导入域升级器**：新文件 `common/transfer/DomainUpgraders.ets`（`upgradeDomainPayload`）。导入时
+    `incoming.schemaVersion < spec.schemaVersion` 必须经过升级器；当前无注册规则（所有域 schema=1），
+    低版本域**跳过并给出原因**（不再按新结构误写）；高版本仍跳过。未来提升域 schema 前必须注册规则。
+  - **草稿媒体可移植化**：新文件 `common/transfer/DraftPortability.ets`（`makeDraftsPortable`）；导出
+    `drafts` 域时清空每条草稿的 `media` 引用（正文保留），避免导入后指向导出端沙箱路径；导出弹窗文案已更新。
+  - **导入计划/文件域写入纯函数**：`preEvaluateDomainImport` / `mergeDomainImportEntry` /
+    `planFileDomainWrites`（`DataTransferService.ets` 导出，供导入计划与单测复用；行为与上一轮一致）。
+  - **数据管理页完善**：数据健康「修复」按钮（`AppStore.repairDomain`：清空该域磁盘数据 → 全量重载 →
+    清健康标记，二次确认）；「后台任务调度」折叠区（`AppScheduler.snapshot()`）；导出域级进度
+    （`exportBackup(options, onProgress)`，文案「正在收集：域名（k/N）」）；导出弹窗六组分类
+    （设置与主题/阅读与进度/社交与跟踪/AI/离线存档与草稿/缓存与镜像，未登记域进「其它」兜底）；
+    每域体积（异步 `estimateAll`）。
+  - **离线存档/凭证导出统一写入器**：`FavoriteSavedPanel.exportThreads` 与
+    `SettingsPanel.exportEncryptedCredential` 已改为复用 `FilePickUtils` 的 `pickDocumentToSave` +
+    `writeTextToUri`（UTF-8 分块循环写 + 返回值校验 + try/finally 关 fd），消除单次 `fileIo.writeSync`
+    的大文件截断风险与 fd 泄漏分支。
+  - **文档同步**：§0.2（历史已实现、回滚快照口径）、§4.4/§4.5（4MB 已实现）、§6.3（六组分类/域级进度/
+    每域体积/草稿媒体）、§6.4（升级器/导入历史/草稿媒体）、§6.5（低版本域升级）、§6.6#11（历史即审计）、
+    §6.7/§9.2（新区块与修复按钮）、§7.6（调度状态 UI 已实现）、§10 P4/P6、§13.2（新文件）、§13.5 状态更新。
+  - 验证（Lead 统一执行，2026-10-31）：
+    - DevEco `assembleHap`：**BUILD SUCCESSFUL**（HAP 10.8MB，无 ERROR）；
+    - Hypium Local Test（`hvigorw test -p module=entry -p coverage=false --no-daemon`）：
+      **Tests run: 731, Failure: 0, Error: 0, Pass: 731, Ignore: 0**（上一批 706 + 本批新增 25：
+      `dataTransferImportPlan` 19 用例覆盖策略矩阵/合并计数/文件域写入/草稿可移植/升级器/历史截断；
+      `dataTransferRoundTrip` 6 用例覆盖 16 域容器往返解析、镜像 ownerUid、逐域合并形态、幂等、
+      重复域去重、未来格式版本宽容）；
+    - `node scripts/check-eol.mjs`：全部已跟踪文本文件为 LF。
+- **2026-10-31 数据正确性收尾（审计 DES-19 + 迁移未完成警示口径扩围）**：
+  - **草稿导入计划计数口径**：导入计划原先用备份里的键（导出账号短哈希）与本机草稿比较，同一条目标
+    草稿被误计为「新增」，而写入阶段键尾又被改写为当前账号（实际是覆盖/更新），且内容完全相同的草稿
+    无法被识别为「无变化」而触发无意义写盘。现在 `preEvaluateDomainImport` 在计划阶段就调用
+    `DraftPortability.normalizeDraftKeysForAccount` 归一化键尾（重建对象时保持原字段顺序，避免
+    `JSON.stringify` 判等因字段顺序变化误判），写入阶段复用 `rewriteDraftKeyUidPart`（幂等）。
+    结果：计划「新增/更新/无变化」与真实写盘一致。
+  - **迁移未完成警示覆盖可重试 SKIPPED**：新增 `MigrationDomainResult.legacyRetained` 与
+    `MigrationReport.countUnsettled()`；迁移引擎对「镜像域未登录跳过」「多账号设置无当前账号匹配」
+    「无当前账号的旧缓存/收藏关系」四类可重试跳过置位。`AppStore.migrationUnsettledCount` 与导出/清空
+    警示改用该口径，普通 `SKIPPED`（新键已存在/旧目录为空/旧数据不可解析）不计入，避免误报。
+  - 验证（Lead 统一执行，2026-10-31）：
+    - DevEco `assembleHap`：**BUILD SUCCESSFUL**（HAP 10.81MB，无 ERROR）；
+    - Hypium Local Test：**Tests run: 736, Failure: 0, Error: 0, Pass: 736, Ignore: 0**
+      （第二批 731 + 新增 5：`dataTransferImportPlan` 增补 2 例覆盖草稿键归一化与「同目标草稿按更新计」；
+      `migrationUnsettled` 3 例覆盖未完成域统计口径与 `legacyRetained` JSON 保真）；
+    - `node scripts/check-eol.mjs`：全部已跟踪文本文件为 LF。
+- **2026-10-31 独立评审与修复（三份 fresh-reviewer 报告：代码正确性 / 需求-文档-测试一致性 / 对抗性）**：
+  - 评审组织：3 名独立评审员只读审查本会话全部改动（`docs/research/REVIEW_CODE.md`、
+    `REVIEW_REQUIREMENTS.md`、`REVIEW_ADVERSARIAL.md`），结论均为「有条件放行」、无 P0；Lead 汇总后
+    按评审结论修复并复验（汇总见 `docs/research/REVIEW_SUMMARY.md`）。
+  - **文件域写入完整性（R-D02，P1）**：`StorageBackends.writeFileAtomic` / `SavedThreadStore` /
+    `DraftStore` / `MigrationEngine.writeTextAtomic` 四处"单次 `writeSync` 且不校验返回值"统一改为
+    `FileUtils.writeTextFully`（UTF-8 分块循环写 + 返回值校验 + 失败清理临时文件），消除大文件/磁盘压力下
+    的静默截断（与 §13.3 已确证的真机导出截断同模式）。
+  - **清空数据后迁移口径重置（R-C01/R-A05）**：`AppStore.resetGovernanceMetaAfterClear` 同时重置
+    `migration.status = NOT_REQUIRED`、`domains = []`、`legacyKeys = []` 与 `transferHistory = []`
+    （保留 `dataVersion`/`migratedAt`/`migrationNoticeAcknowledged`），避免"升级未完成"警示跨重启误报。
+  - **修复按钮结果如实（R-C02/R-A06/R-A11）**：`repairDomain` 返回可读原因（不可修复 / 重载失败 /
+    未登录镜像域），失败时不清健康标记；确认弹窗打不开时**不再**直接清盘（改为提示重试）；文案区分
+    "缓存可重建"与"用户数据删除"。
+  - **草稿跨账号外带/复制（R-A01，P1）**：新增 `DraftPortability.filterDraftsForAccount`，导出的
+    `drafts` 域与本机导入载荷都只保留当前账号（未登录按 `anon`）的草稿，其他账号草稿不进入备份、
+    也不参与合并被改键复制；跨账号"找回"语义（当前账号导入其他账号备份）保持不变。
+  - **草稿无变化判定（R-C05）**：`makeDraftsPortable` 清空媒体时**保持原字段顺序**（旧草稿补空 `media`），
+    避免 `JSON.stringify` 判等因字段顺序变化把"内容相同"误判为更新。
+  - **文件域计划预检（R-A03）**：`preEvaluateDomainImport` 拒绝非数组文件域载荷；`buildImportPlan`
+    用 `planFileDomainWrites` 预演并提示无效条目数，计划计数与真实写盘一致。
+  - **体积口径与阈值（R-A04/R-D08）**：`PersistenceHub.estimateBytes` 对 Preferences 域改用 UTF-8
+    字节数（原为 UTF-16 code unit 数，中文域漏报 4MB 预警）；阈值抽 `isDomainOversized` 纯函数并加测试。
+  - **纯函数副作用/展示细节（R-A08/R-A09/R-A10/R-C06）**：`planFileDomainWrites` 不再原地修改入参；
+    调度状态"从未执行"不再显示为"跳过"；4MB 预警文案给出清理入口；合并失败条目补齐 `policy`。
+  - **文档修正**：§2.1 编辑残留、§6.6#2 隐私提示（恒定 + 敏感域动态警示）、§12 R2/R5 与实现对齐、
+    §11/§13.2 测试清单与套件数、§13.5 增加优先级列并补登评审遗留项（测试债/ENVELOPE 条目校验/
+    资源保护/TOCTOU 等）。
+  - 验证（Lead 统一执行，2026-10-31）：`assembleHap` **BUILD SUCCESSFUL**（无 ERROR）；
+    Hypium **Tests run: 742, Failure: 0, Error: 0, Pass: 742**（新增 `dataReviewFixes` 6 用例覆盖
+    草稿账号过滤/字段顺序/写入计划纯函数/`legacyRetained` 四类置位/meta 反序列化/4MB 阈值）；
+    `node scripts/check-eol.mjs` 全部 LF。
 
 ### 13.5 遗留清单（文档承诺但未实现 / 需真机验证）
 
 > 注：本节编号为 §13.5，但按内容重要性前置于 §13.4；两节编号倒序为历史原因，阅读时以标题为准。
 
-| 项 | 状态 |
-| --- | --- |
-| 数据管理页「数据健康」的「修复」按钮 | 未实现（仅展示异常域） |
-| 数据管理页「调度状态」折叠区 | 未实现（仅 `snapshot()` API 与日志） |
-| 导出域级进度、4MB 预警、六组分类、每域体积 | 未实现（平铺列表 + 运行中文案） |
-| 导入域升级器（旧 `schemaVersion` → 当前） | 未实现（导入仅做版本拒绝/跳过；提升域 `schemaVersion` 前必须补齐，见 §6.4） |
-| 旧格式备份 checksum 缺失提示 | **已实现**（2026-10-31：缺失时给出「跳过完整性校验」警告） |
-| 草稿跨账号一次性提示（马甲场景） | 未实现（仅键内 uid 哈希隔离） |
-| 草稿跨账号导入的 uid 哈希重算 | **已实现**（`DraftKeyUtils.rewriteDraftKeyUidPart`，导入时改写为当前账号片段） |
-| 草稿媒体（图片/视频）不随备份导出 | 设计如此（体积大、路径不可移植）；导出弹窗已明确提示 |
-| 未登录时恢复账号镜像缓存 | 导入计划显式跳过并说明（写空 ownerUid 会读不到，等于白导入） |
-| 镜像域跨账号导入 | **已实现**（2026-10-31：来源 `ownerUid` 不符即跳过并提示；需真机验证） |
-| `credential.recheck` 迁入调度器 | 有意保留 AppStore 既有退避定时器 |
-| 文件域迁移预算/断点续跑 | 已实现（逐文件检查 deadline，超时 DEFERRED） |
-| 加密容器/checksum 往返、系统备份恢复、投票入口语义 | 需真机/模拟器实测（Local Test 无法覆盖 crypto 与真实恢复） |
+| 项 | 状态 | 优先级 / 来源 |
+| --- | --- | --- |
+| 数据管理页「数据健康」的「修复」按钮 | **已实现**（2026-10-31 第二批：`AppStore.repairDomain` 清盘 → 重载 → 清健康标记，二次确认） | — |
+| 数据管理页「后台任务调度」折叠区 | **已实现**（2026-10-31 第二批：消费 `AppScheduler.snapshot()`） | — |
+| 导出域级进度、六组分类、每域体积 | **已实现**（2026-10-31 第二批：域级「正在收集：域名（k/N）」/六组分类/异步 `estimateAll` 体积） | — |
+| 4MB 单域预警 | **已实现**（2026-10-31 第二批：存储占用超限行红字 + warn 日志；阈值抽 `isDomainOversized` 纯函数） | — |
+| 导出/导入历史 | **已实现**（2026-10-31 第二批：`v2.meta.transferHistory`，只记元数据、上限 10 条；清空本地数据时一并清空） | — |
+| 导入域升级器（旧 `schemaVersion` → 当前） | **入口已实现**（`DomainUpgraders.upgradeDomainPayload`，2026-10-31 第二批）；当前**无注册的域升级规则**（全部域 schema=1），低版本域会跳过并提示；提升某域 `schemaVersion` 前必须先注册规则 | P1（随域格式演进触发） |
+| 未登录时导出弹窗的镜像域置灰/前置提示 | 未实现（当前靠导出后的「未包含清单」提示"属于其他登录账号"） | P2 / EXP-05 |
+| 导入计划逐域策略标签（合并/覆盖） | 部分实现（SKIP 域显示「覆盖恢复」、无变化/跳过有原因；未展示完整 policy 标签） | P2 / IMP-12 |
+| `ai_tool_cache` 按 TTL 过滤后的可恢复条数 | 未实现（计划按备份条目数展示，`hydrate` 会丢弃过期条目） | P3 / IMP-14 |
+| 4MB 之外的容量治理（导出体积预估/清理引导） | 未实现 | P3 |
+| 草稿跨账号一次性提示（马甲场景） | 未实现（导出/导入已按当前账号过滤草稿并清媒体引用，跨账号"找回"按当前账号键恢复；仍无一次性提示） | P3 |
+| 草稿跨账号导入的 uid 哈希重算 | **已实现**（`DraftKeyUtils.rewriteDraftKeyUidPart`，导入时改写为当前账号片段；计划/写入同源归一化） | — |
+| 草稿媒体（图片/视频）不随备份导出 | 设计如此（体积大、路径不可移植）；导出时清空 `media` 引用且保持字段顺序（`DraftPortability.makeDraftsPortable`） | — |
+| 未登录时恢复账号镜像缓存 | 导入计划显式跳过并说明（写空 ownerUid 会读不到，等于白导入） | — |
+| 镜像域跨账号导入 | **已实现**（2026-10-31：来源 `ownerUid` 不符即跳过并提示；需真机验证） | 需真机 |
+| 旧格式备份 checksum 缺失提示 | **已实现**（2026-10-31：缺失时给出「跳过完整性校验」警告） | — |
+| 导出/导入编排层测试（`exportBackup` / `applyImport` / `reloadAfterImport`） | 未覆盖：`exportBackup` 无条件 SHA-256 使 Local Test 不可调用；需先引入可注入 hash + 内存 Hub 假实现（建议专项） | P1 测试债 / R-D01、T1–T3 |
+| ENVELOPE 域导入条目级校验（tracked_threads 等） | 未实现：坏条目会让整封缓存不可读（同版本备份条目合法，仅构造/跨版本包触发）；读失败已不写空盘 | P2 / R-A16 |
+| 文件域海量条目资源保护（条目数上限 / 分批让出主线程） | 未实现：受单域 8MB 与 64MB 整包限制但仍可能构造海量最小条目；旧存档兼容路径未复用 normalizeContainer 体积校验 | P2 / R-A02 |
+| 计划→执行之间的账号态变化保护（TOCTOU） | 未实现（计划生成后账号切换会把草稿按 `anon` 写入） | P3 / R-A07 |
+| 容器 `updatedAt` / `deviceTag` / `appVersionCode` | 诊断字段，导入侧不消费（属产品口径取舍，详见 §6.1；用户需求 A 所指"多余数据"是业务域） | P3 / R-D07 |
+| `__proto__` 等特殊键在合并器 Record 赋值下的语义 | 待验证（Hypium 可构造 JSON 断言） | P3 / R-A14 |
+| 64MB 边界输入的峰值内存 | 待真机/模拟器观测 | P3 / R-A15 |
+| `credential.recheck` 迁入调度器 | 有意保留 AppStore 既有退避定时器 | — |
+| 文件域迁移预算/断点续跑 | 已实现（逐文件检查 deadline，超时 DEFERRED） | — |
+| 加密容器/checksum 往返、系统备份恢复、投票入口语义 | 需真机/模拟器实测（Local Test 无法覆盖 crypto 与真实恢复） | 需真机 |
 
 ### 13.4 与既有实现的兼容策略（实施口径）
 

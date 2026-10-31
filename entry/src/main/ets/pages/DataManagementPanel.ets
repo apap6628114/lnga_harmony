@@ -36,7 +36,11 @@ import {
   ImportPolicy,
   MigrationDomainResult,
   MigrationReport,
-  MigrationStatus
+  MigrationStatus,
+  PersistenceMeta,
+  TransferHistoryEntry,
+  TransferHistoryKind,
+  isDomainOversized
 } from '../common/persistence/PersistenceTypes'
 import {
   BackupContainer,
@@ -48,6 +52,7 @@ import {
   SkippedDomain
 } from '../common/transfer/TransferTypes'
 import { ParseOutcome } from '../common/transfer/DataTransferService'
+import { TaskOutcome, TaskStatus } from '../common/scheduler/SchedulerTypes'
 import {
   PickedDocument,
   ReadTextResult,
@@ -58,7 +63,9 @@ import {
   writeTextToUri
 } from '../common/utils/FilePickUtils'
 import { resolveKeyboardAppearance } from '../common/utils/KeyboardAppearanceUtils'
-import { formatError } from '../common/utils/Logger'
+import { Logger, DOMAIN_STORE, formatError } from '../common/utils/Logger'
+
+const logger = new Logger(DOMAIN_STORE, 'DataManagementPanel')
 
 /** 备份文件体积上限（与 `PersistenceTypes.BACKUP_MAX_FILE_BYTES` 一致，64MB）。 */
 const MAX_BACKUP_BYTES: number = BACKUP_MAX_FILE_BYTES
@@ -76,15 +83,66 @@ const BACKUP_SUFFIX: string = BACKUP_FILE_SUFFIX.startsWith('.')
 const CLEAR_CONFIRM_WORD: string = '清空'
 
 /**
+ * 导出弹窗分组定义（设计稿 §6.3「六组分类」）。
+ */
+class ExportGroupDef {
+  /** 组标题。 */
+  title: string = ''
+  /** 组内域 ID（顺序即展示顺序）。 */
+  domainIds: string[] = []
+
+  /**
+   * 构造分组定义。
+   *
+   * @param title - 组标题
+   * @param domainIds - 组内域 ID
+   */
+  constructor(title: string, domainIds: string[]) {
+    this.title = title
+    this.domainIds = domainIds
+  }
+}
+
+/**
+ * 导出弹窗的分组顺序（仅可导出域；凭证/媒体域不在 `exportable()` 中）。
+ */
+const EXPORT_GROUPS: ExportGroupDef[] = [
+  new ExportGroupDef('设置与主题', [DomainIds.SETTINGS, DomainIds.THEME]),
+  new ExportGroupDef('阅读与进度', [DomainIds.HISTORY, DomainIds.READING_PROGRESS,
+    DomainIds.VOTES, DomainIds.POLL_VOTED]),
+  new ExportGroupDef('社交与跟踪', [DomainIds.TRACKED_THREADS]),
+  new ExportGroupDef('AI', [DomainIds.AI_SESSIONS, DomainIds.AI_TOOL_CACHE]),
+  new ExportGroupDef('离线存档与草稿', [DomainIds.SAVED_THREADS, DomainIds.DRAFTS]),
+  new ExportGroupDef('缓存与镜像', [DomainIds.CATEGORIES, DomainIds.PROFILES,
+    DomainIds.NOTIFICATIONS, DomainIds.ACTIVITIES, DomainIds.FAVORITE_MEMBERSHIP])
+]
+
+/**
  * 存储占用行（每域一行）。
  */
 class DomainSizeRow {
+  /** 域 ID（修复/诊断用）。 */
+  domainId: string = ''
   /** 域名。 */
   label: string = ''
   /** 格式化后的体积文案。 */
   sizeText: string = ''
   /** 体积字节数（排序用）。 */
   sizeBytes: number = 0
+  /** 是否超过 4MB 单域预警阈值。 */
+  oversized: boolean = false
+}
+
+/**
+ * 导出弹窗列表行（组标题 + 域行）。
+ */
+class ExportRow {
+  /** 行类型：`group`（组标题）/ `domain`（域行）。 */
+  kind: string = 'domain'
+  /** 展示文本（组标题；域行不使用）。 */
+  text: string = ''
+  /** 域 ID（仅 domain 行）。 */
+  domainId: string = ''
 }
 
 /**
@@ -136,6 +194,8 @@ export struct DataManagementPanel {
   // ---- 数据健康 ----
   /** 存在问题的域说明（非空才显示健康卡片）。 */
   @State healthProblemLines: string[] = []
+  /** 存在问题的域 ID（与 `healthProblemLines` 同下标，修复按钮用）。 */
+  @State healthProblemDomains: string[] = []
 
   // ---- 存储占用 ----
   /** 各域占用行（按体积降序）。 */
@@ -145,11 +205,25 @@ export struct DataManagementPanel {
   /** 是否正在刷新统计。 */
   @State loadingSizes: boolean = false
 
+  // ---- 最近导出 / 导入历史 ----
+  /** 历史记录展示行（最新在前）。 */
+  @State transferHistoryLines: string[] = []
+
+  // ---- 调度状态 ----
+  /** 调度任务状态行。 */
+  @State schedulerLines: string[] = []
+  /** 调度状态折叠区是否展开。 */
+  @State schedulerExpanded: boolean = false
+
   // ---- 导出 ----
   /** 可导出的域 ID（Catalog 顺序）。 */
   @State exportDomainIds: string[] = []
   /** 当前勾选的域 ID。 */
   @State exportSelectedIds: string[] = []
+  /** 导出弹窗列表行（六组分类 + 域行）。 */
+  @State exportRows: ExportRow[] = []
+  /** 每域体积文案（导出弹窗展示，异步加载）。 */
+  @State exportDomainSizes: Record<string, string> = {}
   /** 是否加密导出（默认加密）。 */
   @State exportEncrypt: boolean = true
   /** 加密口令。 */
@@ -252,11 +326,91 @@ export struct DataManagementPanel {
 
   // ============== 刷新 ==============
 
-  /** 刷新整页数据（迁移状态 / 健康 / 存储）。 */
+  /** 刷新整页数据（迁移状态 / 健康 / 存储 / 传输历史 / 调度状态）。 */
   private refreshAll(): void {
     this.refreshMigration()
     this.refreshHealth()
     this.refreshStorage()
+    this.refreshTransferHistory()
+    this.refreshScheduler()
+  }
+
+  /**
+   * 刷新最近导出/导入历史（`v2.meta.transferHistory`）。
+   */
+  private async refreshTransferHistory(): Promise<void> {
+    try {
+      const meta: PersistenceMeta | null = await appStore.persistence.metaStore.load()
+      const history: TransferHistoryEntry[] = meta === null ? [] : meta.transferHistory
+      const lines: string[] = []
+      for (let i: number = 0; i < history.length; i++) {
+        const entry: TransferHistoryEntry = history[i]
+        const isExport: boolean = entry.kind === TransferHistoryKind.EXPORT
+        let line: string = this.formatDate(entry.at) + ' · ' + (isExport ? '导出' : '导入')
+        if (isExport) {
+          line += ' · ' + String(entry.domainCount) + ' 域 · ' + this.formatSize(entry.bytes)
+          if (entry.encrypted) {
+            line += '（已加密）'
+          }
+        } else {
+          line += ' · ' + String(entry.domainCount) + ' 域 · 新增 '
+            + String(entry.added) + ' · 更新 ' + String(entry.updated)
+        }
+        if (!entry.ok) {
+          line += ' · 未全部成功'
+        }
+        if (entry.note.length > 0) {
+          line += ' · ' + entry.note
+        }
+        lines.push(line)
+      }
+      this.transferHistoryLines = lines
+    } catch (e) {
+      this.transferHistoryLines = []
+    }
+  }
+
+  /**
+   * 刷新后台任务调度状态（`AppScheduler.snapshot()`）。
+   */
+  private refreshScheduler(): void {
+    try {
+      const statuses: TaskStatus[] = appStore.scheduler.snapshot()
+      const lines: string[] = []
+      for (let i: number = 0; i < statuses.length; i++) {
+        const status: TaskStatus = statuses[i]
+        let outcome: string = '未运行'
+        if (status.running) {
+          outcome = '执行中'
+        } else if (status.lastRunAt === 0 && status.lastOutcome === TaskOutcome.SKIPPED) {
+          /*
+           * `TaskStatus.lastOutcome` 的默认值就是 SKIPPED：不能把"从未执行过"的任务显示成
+           * "跳过"（评审 R-A09）；只有真正执行过（lastRunAt > 0）才按结果归类。
+           */
+          outcome = '未运行'
+        } else if (status.lastOutcome === TaskOutcome.OK) {
+          outcome = '成功'
+        } else if (status.lastOutcome === TaskOutcome.FAILED) {
+          outcome = '失败'
+        } else if (status.lastOutcome === TaskOutcome.SKIPPED) {
+          outcome = '跳过'
+        }
+        let line: string = status.id + '：' + outcome
+        if (status.lastRunAt > 0) {
+          line += ' · ' + this.formatDate(status.lastRunAt)
+        }
+        if (status.failureCount > 0) {
+          line += ' · 连续失败 ' + String(status.failureCount)
+        }
+        if (status.lastError.length > 0) {
+          line += '（' + status.lastError + '）'
+        }
+        lines.push(line)
+      }
+      this.schedulerLines = lines
+    } catch (e) {
+      this.schedulerLines = []
+    }
   }
 
   /** 刷新迁移状态与旧数据清理信息。 */
@@ -291,8 +445,13 @@ export struct DataManagementPanel {
       lines.push(label + '：' + detail)
     }
     this.migrationDomainLines = lines
+    /*
+     * 可重试条件：存在失败域 / 整体 partial 或 failed，**或**仍有"旧键保留且新键无数据"的域
+     * （如未登录时跳过的账号镜像域）——后者可在登录后手动重试迁移，不能只依赖下次冷启动。
+     */
     this.canRetryMigration = appStore.migrationFailedCount > 0 ||
-      report.status === MigrationStatus.PARTIAL || report.status === MigrationStatus.FAILED
+      report.status === MigrationStatus.PARTIAL || report.status === MigrationStatus.FAILED ||
+      appStore.migrationUnsettledCount > 0
     // 旧数据清理
     const legacyCount: number = report.legacyKeys.length
     if (legacyCount === 0) {
@@ -318,6 +477,7 @@ export struct DataManagementPanel {
   private refreshHealth(): void {
     const problems: DomainHealthSnapshot[] = appStore.persistence.health.problems()
     const lines: string[] = []
+    const domains: string[] = []
     for (let i: number = 0; i < problems.length; i++) {
       const snapshot: DomainHealthSnapshot = problems[i]
       const spec: DomainSpec | null = PersistenceCatalog.byId(snapshot.domain)
@@ -337,8 +497,10 @@ export struct DataManagementPanel {
         text += '（' + snapshot.lastError + '）'
       }
       lines.push(text)
+      domains.push(snapshot.domain)
     }
     this.healthProblemLines = lines
+    this.healthProblemDomains = domains
   }
 
   /** 刷新各域存储占用估算。 */
@@ -360,9 +522,19 @@ export struct DataManagementPanel {
         }
         total += bytes
         const row: DomainSizeRow = new DomainSizeRow()
+        row.domainId = spec.id
         row.label = spec.label
         row.sizeBytes = bytes
         row.sizeText = this.formatSize(bytes)
+        /*
+         * 4MB 单域预警（设计稿 §4.4/§4.5）：Preferences 单值上限 16MB 的前哨。
+         * 页面红字提示用户优先清理该域；同时记一条 warn 日志便于排障。
+         */
+        row.oversized = isDomainOversized(bytes)
+        if (row.oversized) {
+          logger.warn('domain exceeds size warn threshold domain=%{public}s bytes=%{public}d',
+            spec.id, bytes)
+        }
         rows.push(row)
       }
       rows.sort((a: DomainSizeRow, b: DomainSizeRow): number => b.sizeBytes - a.sizeBytes)
@@ -372,6 +544,67 @@ export struct DataManagementPanel {
       this.totalSizeText = '统计失败'
     } finally {
       this.loadingSizes = false
+    }
+  }
+
+  /**
+   * 确认修复异常域（会清空该域本地数据，必须二次确认）。
+   *
+   * @param index - 健康问题行下标（与 `healthProblemDomains` 同序）
+   */
+  private confirmRepairDomain(index: number): void {
+    if (index < 0 || index >= this.healthProblemDomains.length) {
+      return
+    }
+    const domainId: string = this.healthProblemDomains[index]
+    const spec: DomainSpec | null = PersistenceCatalog.byId(domainId)
+    const label: string = spec !== null ? spec.label : domainId
+    const cacheLike: boolean = spec !== null && spec.rebuildable
+    /*
+     * 文案按域语义区分（评审 R-A11）：缓存/镜像域是"清空后由服务端重建"，用户数据域是
+     * "删除本地数据"（不会被重建），不能统一写"重建"误导用户。
+     */
+    const message: string = cacheLike
+      ? '将清空「' + label + '」的本地缓存（不可撤销）；之后由服务端重新获取/重建。'
+      : '将删除「' + label + '」的全部本地数据（不可撤销，不会自动重建），请确认。'
+    try {
+      this.getUIContext().showAlertDialog({
+        title: '修复「' + label + '」？',
+        message: message,
+        primaryButton: {
+          value: '清空',
+          action: (): void => {
+            this.repairDomain(domainId)
+          }
+        },
+        secondaryButton: {
+          value: '取消',
+          action: (): void => {
+          }
+        }
+      })
+    } catch (e) {
+      /*
+       * 弹窗不可用时**不得**直接执行清盘（评审 R-A11）：清空是破坏性操作，必须经过确认。
+       * 这里只提示用户稍后重试。
+       */
+      appStore.showToast('无法打开确认弹窗，请稍后重试')
+    }
+  }
+
+  /**
+   * 执行修复：清空该域磁盘数据 → 重载内存 → 清健康标记。
+   *
+   * @param domainId - 域 ID
+   */
+  private async repairDomain(domainId: string): Promise<void> {
+    try {
+      const message: string = await appStore.repairDomain(domainId)
+      // 空串=成功；非空是失败/提示原因（刷新失败/未登录镜像域/不可修复）
+      appStore.showToast(message.length === 0 ? '已修复该数据域' : message)
+      this.refreshAll()
+    } catch (e) {
+      appStore.showToast('修复失败：' + formatError(e))
     }
   }
 
@@ -432,7 +665,7 @@ export struct DataManagementPanel {
     return base
   }
 
-  /** 打开导出弹窗（重置勾选与口令）。 */
+  /** 打开导出弹窗（重置勾选、口令与分组列表）。 */
   private openExportDialog(): void {
     const specs: DomainSpec[] = PersistenceCatalog.exportable()
     const ids: string[] = []
@@ -446,6 +679,8 @@ export struct DataManagementPanel {
     }
     this.exportDomainIds = ids
     this.exportSelectedIds = selected
+    this.exportRows = this.buildExportRows(specs)
+    this.exportDomainSizes = {}
     this.exportEncrypt = true
     this.exportPassword = ''
     this.exportRunning = false
@@ -464,6 +699,91 @@ export struct DataManagementPanel {
       autoCancel: true
     })
     this.exportDialogController.open()
+    // 体积统计较慢（逐域读盘估价），异步填充，不阻塞弹窗打开
+    this.loadExportDomainSizes()
+  }
+
+  /**
+   * 构建导出弹窗列表（六组分类 + 未分组兜底）。
+   *
+   * @param specs - 可导出域
+   * @returns 列表行（组标题 + 域行）
+   */
+  private buildExportRows(specs: DomainSpec[]): ExportRow[] {
+    const rows: ExportRow[] = []
+    const groupedIds: string[] = []
+    for (let g: number = 0; g < EXPORT_GROUPS.length; g++) {
+      const def: ExportGroupDef = EXPORT_GROUPS[g]
+      const domainRows: ExportRow[] = []
+      for (let i: number = 0; i < def.domainIds.length; i++) {
+        const domainId: string = def.domainIds[i]
+        let exists: boolean = false
+        for (let s: number = 0; s < specs.length; s++) {
+          if (specs[s].id === domainId) {
+            exists = true
+            break
+          }
+        }
+        if (!exists) {
+          continue
+        }
+        groupedIds.push(domainId)
+        const row: ExportRow = new ExportRow()
+        row.kind = 'domain'
+        row.domainId = domainId
+        domainRows.push(row)
+      }
+      if (domainRows.length === 0) {
+        continue
+      }
+      const header: ExportRow = new ExportRow()
+      header.kind = 'group'
+      header.text = def.title
+      rows.push(header)
+      for (let r: number = 0; r < domainRows.length; r++) {
+        rows.push(domainRows[r])
+      }
+    }
+    // 兜底：新增域忘记登记分组时也不能从列表里消失（域对等性红线）
+    const others: ExportRow[] = []
+    for (let s: number = 0; s < specs.length; s++) {
+      if (groupedIds.indexOf(specs[s].id) >= 0) {
+        continue
+      }
+      const row: ExportRow = new ExportRow()
+      row.kind = 'domain'
+      row.domainId = specs[s].id
+      others.push(row)
+    }
+    if (others.length > 0) {
+      const header: ExportRow = new ExportRow()
+      header.kind = 'group'
+      header.text = '其它'
+      rows.push(header)
+      for (let r: number = 0; r < others.length; r++) {
+        rows.push(others[r])
+      }
+    }
+    return rows
+  }
+
+  /**
+   * 异步加载导出弹窗的每域体积文案（不阻塞弹窗打开）。
+   */
+  private async loadExportDomainSizes(): Promise<void> {
+    try {
+      const sizes: Record<string, number> = await appStore.persistence.estimateAll()
+      const text: Record<string, string> = {}
+      const specs: DomainSpec[] = PersistenceCatalog.all()
+      for (let i: number = 0; i < specs.length; i++) {
+        const spec: DomainSpec = specs[i]
+        const bytes: number = sizes[spec.id] ?? 0
+        text[spec.id] = bytes > 0 ? this.formatSize(bytes) : '无数据'
+      }
+      this.exportDomainSizes = text
+    } catch (e) {
+      this.exportDomainSizes = {}
+    }
   }
 
   /**
@@ -553,7 +873,12 @@ export struct DataManagementPanel {
       options.domainIds = this.exportSelectedIds.slice()
       options.encrypt = this.exportEncrypt
       options.password = this.exportPassword
-      const result: BackupExportResult = await appStore.dataTransfer.exportBackup(options)
+      const result: BackupExportResult = await appStore.dataTransfer.exportBackup(options,
+        (done: number, total: number, domainId: string): void => {
+          // 域级进度（设计稿 §6.3）：逐域更新，避免大备份长时间无反馈
+          this.exportProgressText = '正在收集：' + this.exportLabelOf(domainId)
+            + '（' + String(done) + '/' + String(total) + '）'
+        })
       if (!result.ok) {
         appStore.showToast(result.error.length > 0 ? result.error : '导出失败')
         return
@@ -589,6 +914,20 @@ export struct DataManagementPanel {
       this.exportDialogController?.close()
       appStore.showToast('已导出 ' + String(result.domainCount) + ' 个数据域'
         + (result.encrypted ? '（已加密）' : '（未加密）') + ' · ' + this.formatSize(result.bytes))
+      // 记录导出历史（只记元数据；写入文件并回读校验通过后才算一次成功导出）
+      const exportHistory: TransferHistoryEntry = new TransferHistoryEntry()
+      exportHistory.kind = TransferHistoryKind.EXPORT
+      exportHistory.at = Date.now()
+      exportHistory.encrypted = result.encrypted
+      exportHistory.domainCount = result.domainCount
+      exportHistory.bytes = result.bytes
+      exportHistory.skippedDomains = result.omitted.length
+      exportHistory.ok = true
+      exportHistory.note = result.omitted.length > 0
+        ? String(result.omitted.length) + ' 个域未包含'
+        : ''
+      await appStore.dataTransfer.recordTransferHistory(exportHistory)
+      this.refreshTransferHistory()
       /*
        * 勾选了但没进备份的域必须让用户看见（审计 EXP-01/EXP-02）：无数据、读取失败、
        * 单域超 8MB 被截断、镜像域属于其他账号……此前的实现全部静默省略，
@@ -882,6 +1221,20 @@ export struct DataManagementPanel {
         appStore.showToast('导入未全部成功：' + (result.error.length > 0 ? result.error : '未知错误')
           + failedList)
       }
+      // 记录导入历史（只记元数据：域数/新增/更新/跳过/结果）
+      const importHistory: TransferHistoryEntry = new TransferHistoryEntry()
+      importHistory.kind = TransferHistoryKind.IMPORT
+      importHistory.at = Date.now()
+      importHistory.domainCount = plan.entries.length
+      importHistory.bytes = this.pendingContent.length
+      importHistory.added = result.added
+      importHistory.updated = result.updated
+      importHistory.skippedDomains = result.skippedDomains
+      importHistory.ok = result.ok && reloadFailed.length === 0
+      importHistory.note = result.ok
+        ? (reloadFailed.length > 0 ? '部分模块刷新失败' : '')
+        : (result.error.length > 0 ? result.error : '部分失败')
+      await appStore.dataTransfer.recordTransferHistory(importHistory)
       this.refreshAll()
     } catch (e) {
       appStore.showToast('导入失败：' + formatError(e))
@@ -1071,7 +1424,9 @@ export struct DataManagementPanel {
               this.HealthSection()
             }
             this.StorageSection()
+            this.HistorySection()
             this.ActionSection()
+            this.SchedulerSection()
             this.DangerSection()
           }
           .width('100%').alignItems(HorizontalAlign.Center).padding({ bottom: 32 })
@@ -1132,7 +1487,7 @@ export struct DataManagementPanel {
           Text(line).fontSize(12).fontColor(AppColors.textTertiary)
             .width('100%').padding({ left: 16, right: 16, top: 6, bottom: 6 })
             .lineHeight(17)
-        }, (line: string, index: number): string => String(index))
+        }, (line: string, index: number): string => line + '#' + String(index))
       }
 
       if (this.migrationDomainLines.length > 0) {
@@ -1186,14 +1541,84 @@ export struct DataManagementPanel {
       Text('数据健康').fontSize(15).fontColor(AppColors.textSecondary)
         .width('100%').padding({ bottom: 10 })
 
-      Text('以下数据域最近出现读写异常，可尝试重新进入页面或清空对应数据后重试。')
+      Text('以下数据域最近出现读写异常，可尝试「修复」（清空该域并重建）或重新进入页面。')
         .fontSize(12).fontColor(AppColors.warning).width('100%').lineHeight(17)
 
-      ForEach(this.healthProblemLines, (line: string) => {
-        Text(line).fontSize(12).fontColor(AppColors.destructive)
-          .width('100%').padding({ top: 6, bottom: 6 })
-          .lineHeight(17)
-      }, (line: string, index: number): string => String(index))
+      ForEach(this.healthProblemLines, (line: string, index: number) => {
+        Column() {
+          Text(line).fontSize(12).fontColor(AppColors.destructive)
+            .width('100%').lineHeight(17)
+          Row() {
+            Button('修复')
+              .fontSize(12).height(28).padding({ left: 14, right: 14 })
+              .backgroundColor(AppColors.bgSecondary).fontColor(AppColors.textPrimary)
+              .onClick((): void => {
+                this.confirmRepairDomain(index)
+              })
+          }
+          .width('100%').justifyContent(FlexAlign.End).padding({ top: 6 })
+        }
+        .width('100%').padding({ top: 6, bottom: 6 })
+      }, (line: string, index: number): string => line + '#' + String(index))
+    }
+    .width('92%')
+    .backgroundColor(AppColors.bgTertiary)
+    .borderRadius(12)
+    .padding(12)
+    .margin({ top: 12 })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  // ============== 区块：最近导出 / 导入 ==============
+
+  @Builder
+  HistorySection() {
+    Column() {
+      Text('最近导出 / 导入').fontSize(15).fontColor(AppColors.textSecondary)
+        .width('100%').padding({ bottom: 8 })
+
+      if (this.transferHistoryLines.length === 0) {
+        Text('暂无记录（只保留最近 10 次，不记录任何数据内容）').fontSize(12)
+          .fontColor(AppColors.textTertiary).width('100%').lineHeight(17)
+      } else {
+        ForEach(this.transferHistoryLines, (line: string) => {
+          Text(line).fontSize(12).fontColor(AppColors.textTertiary)
+            .width('100%').padding({ top: 4, bottom: 4 }).lineHeight(17)
+        }, (line: string, index: number): string => line + '#' + String(index))
+      }
+    }
+    .width('92%')
+    .backgroundColor(AppColors.bgTertiary)
+    .borderRadius(12)
+    .padding(12)
+    .margin({ top: 12 })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  // ============== 区块：后台任务调度 ==============
+
+  @Builder
+  SchedulerSection() {
+    Column() {
+      Row() {
+        Text('后台任务调度').fontSize(15).fontColor(AppColors.textSecondary).layoutWeight(1)
+        Text(this.schedulerExpanded ? '收起' : '展开').fontSize(13).fontColor(AppColors.primary)
+          .onClick((): void => {
+            this.schedulerExpanded = !this.schedulerExpanded
+          })
+      }
+      .width('100%').padding({ bottom: 6 }).alignItems(VerticalAlign.Center)
+
+      if (this.schedulerExpanded) {
+        if (this.schedulerLines.length === 0) {
+          Text('暂无任务状态').fontSize(12).fontColor(AppColors.textTertiary).width('100%')
+        } else {
+          ForEach(this.schedulerLines, (line: string) => {
+            Text(line).fontSize(12).fontColor(AppColors.textTertiary)
+              .width('100%').padding({ top: 3, bottom: 3 }).lineHeight(16)
+          }, (line: string, index: number): string => line + '#' + String(index))
+        }
+      }
     }
     .width('92%')
     .backgroundColor(AppColors.bgTertiary)
@@ -1223,11 +1648,21 @@ export struct DataManagementPanel {
       } else {
         ForEach(this.domainSizeRows, (row: DomainSizeRow) => {
           Row() {
-            Text(row.label).fontSize(14).fontColor(AppColors.textPrimary).layoutWeight(1)
-            Text(row.sizeText).fontSize(13).fontColor(AppColors.textSecondary)
+            Column() {
+              Text(row.label).fontSize(14)
+                .fontColor(row.oversized ? AppColors.warning : AppColors.textPrimary)
+                .width('100%')
+              if (row.oversized) {
+                Text('⚠ 超过 4MB 单域预警阈值（可在「清除缓存」或「清空本地数据」中处理）').fontSize(11)
+                  .fontColor(AppColors.warning).width('100%').margin({ top: 1 })
+              }
+            }
+            .layoutWeight(1).alignItems(HorizontalAlign.Start)
+            Text(row.sizeText).fontSize(13)
+              .fontColor(row.oversized ? AppColors.warning : AppColors.textSecondary)
           }
           .width('100%').padding({ top: 6, bottom: 6 }).alignItems(VerticalAlign.Center)
-        }, (row: DomainSizeRow): string => row.label)
+        }, (row: DomainSizeRow): string => row.domainId + '|' + String(row.sizeBytes))
 
         Divider().color(AppColors.separator).margin({ top: 4, bottom: 4 })
         Row() {
@@ -1350,33 +1785,44 @@ export struct DataManagementPanel {
 
       Scroll() {
         Column() {
-          ForEach(this.exportDomainIds, (id: string) => {
-            Row() {
-              Checkbox({ name: id })
-                .select(this.isExportDomainSelected(id))
-                .selectedColor(AppColors.primary)
-                .width(20).height(20)
-                .onChange((value: boolean): void => {
-                  this.toggleExportDomain(id, value)
-                })
+          ForEach(this.exportRows, (row: ExportRow) => {
+            if (row.kind === 'group') {
+              Text(row.text).fontSize(12)
+                .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+                .width('100%').padding({ top: 10, bottom: 4 })
+            } else {
+              Row() {
+                Checkbox({ name: row.domainId })
+                  .select(this.isExportDomainSelected(row.domainId))
+                  .selectedColor(AppColors.primary)
+                  .width(20).height(20)
+                  .onChange((value: boolean): void => {
+                    this.toggleExportDomain(row.domainId, value)
+                  })
 
-              Column() {
-                Text(this.exportLabelOf(id)).fontSize(14)
-                  .fontColor(UIMaterialManager.adaptiveForeground)
-                  .width('100%')
-                Text(this.exportNoteOf(id)).fontSize(11)
-                  .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
-                  .width('100%').maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .margin({ top: 1 })
+                Column() {
+                  Row() {
+                    Text(this.exportLabelOf(row.domainId)).fontSize(14)
+                      .fontColor(UIMaterialManager.adaptiveForeground).layoutWeight(1)
+                    Text(this.exportDomainSizes[row.domainId] ?? '')
+                      .fontSize(11).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+                  }
+                  .width('100%').alignItems(VerticalAlign.Center)
+
+                  Text(this.exportNoteOf(row.domainId)).fontSize(11)
+                    .fontColor(UIMaterialManager.adaptiveSecondaryForeground)
+                    .width('100%').maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .margin({ top: 1 })
+                }
+                .layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ left: 8 })
               }
-              .layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ left: 8 })
+              .width('100%').padding({ top: 6, bottom: 6 }).alignItems(VerticalAlign.Top)
             }
-            .width('100%').padding({ top: 8, bottom: 8 }).alignItems(VerticalAlign.Top)
-          }, (id: string): string => id)
+          }, (row: ExportRow): string => row.kind + '|' + row.text + '|' + row.domainId)
         }
         .width('100%')
       }
-      .height(260).width('100%').scrollBar(BarState.Off).align(Alignment.Top)
+      .height(280).width('100%').scrollBar(BarState.Off).align(Alignment.Top)
 
       Divider().color(AppColors.separator).margin({ top: 6, bottom: 6 })
 
@@ -1457,7 +1903,7 @@ export struct DataManagementPanel {
           .width('100%').margin({ top: 6 })
       }
 
-      Text('注：草稿中的图片/视频副本不包含在备份内（体积大、路径不可移植），恢复草稿后需在编辑器中重新选择。')
+      Text('注：草稿中的图片/视频副本不包含在备份内（体积大、路径不可移植）；导出时会移除草稿里的媒体引用，恢复后需在编辑器中重新选择。')
         .fontSize(11).fontColor(UIMaterialManager.adaptiveSecondaryForeground)
         .width('100%').margin({ top: 6 })
 
@@ -1544,7 +1990,8 @@ export struct DataManagementPanel {
               .layoutWeight(1).alignItems(HorizontalAlign.Start)
             }
             .width('100%').padding({ top: 8, bottom: 8 })
-          }, (line: ImportPlanLine, index: number): string => String(index))
+          }, (line: ImportPlanLine, index: number): string =>
+            line.label + '#' + line.detail + '#' + String(index))
         }
         .width('100%')
       }

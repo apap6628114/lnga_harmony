@@ -43,6 +43,10 @@ import schedulerUnitTest from './SchedulerUnit.test';
 import dataTransferUnitTest from './DataTransferUnit.test';
 import dataTransferParseUnitTest from './DataTransferParseUnit.test';
 import dataTransferDomainParityTest from './DataTransferDomainParity.test';
+import dataTransferImportPlanTest from './DataTransferImportPlan.test';
+import dataTransferRoundTripTest from './DataTransferRoundTrip.test';
+import migrationUnsettledTest from './MigrationUnsettled.test';
+import dataReviewFixesTest from './DataReviewFixes.test';
 import draftKeyUtilsUnitTest from './DraftKeyUtilsUnit.test';
 
 /**
@@ -94,5 +98,9 @@ export default function testsuite(): void {
   dataTransferUnitTest();
   dataTransferParseUnitTest();
   dataTransferDomainParityTest();
+  dataTransferImportPlanTest();
+  dataTransferRoundTripTest();
+  migrationUnsettledTest();
+  dataReviewFixesTest();
   draftKeyUtilsUnitTest();
 }
