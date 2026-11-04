@@ -79,16 +79,42 @@ export interface ThreadHtmlRequest {
 }
 
 /**
+ * 官方新版帖子页「只看楼主」使用的 `opt` 位。
+ *
+ * 证据（逆向 `ArticleDetailViewModel.onAuthor()`）：只看楼主开启时按主题是否匿名分两支，
+ * 匿名支传 `uid=tAuthorId` + `opt="512"`，普通支只传 `uid=tAuthorId`、`opt` 保持原值。
+ * 同一 `opt=512` 也被「只看TA」（点击楼层作者）使用（`onPost()` 里
+ * `opt == "512"` → `onlyTa=true`），即它表达的是**服务端按 uid/authorid 过滤**，
+ * 匿名帖里 uid 恒为 `-1`，过滤结果正好是匿名楼主。
+ */
+export const ONLY_AUTHOR_OPT: string = '512'
+
+/**
+ * 匿名主题的楼主 uid 哨兵。
+ *
+ * 官方 `CurrentTopic.isAnonymity()` 的定义就是 `tAuthorId == "-1"`：匿名主题的
+ * 主题作者 id 恒为 `-1`，与楼层里逐个重排的匿名局部号（`-2`、`-5`…）不同。
+ * 侧端解析出的 `__T.authorid` 可能回退成「当页首楼的匿名局部号」，因此只看楼主
+ * 走服务端过滤时必须改用它，否则会按错误的局部号过滤。
+ */
+export const ANONYMOUS_TOPIC_AUTHOR_ID: string = '-1'
+
+/**
  * 构造官方 APP 的 Thread HTML 请求。
+ *
+ * 参数表与官方新版文章页一致（`ArticleRepository.getArticle`）：
+ * `tid / pid / topid / authorid / opt / page / __localres=1`，输出 `__output=17`。
  *
  * @param tid - 主题 ID
  * @param pid - 楼层 ID
- * @param authorid - 只看某作者的楼层
+ * @param authorid - 只看某作者的楼层（官方新版传 `tAuthorId`）
  * @param page - 页码，e 表示末页
+ * @param opt - 官方 `opt` 输出位；只看楼主（匿名主题）传 {@link ONLY_AUTHOR_OPT}，
+ *   其余场景保持空串（与官方「普通帖只看楼主不传 opt」一致）
  * @returns 固定使用 read.php 与 __output=17 的请求描述
  */
 export function buildThreadHtmlRequest(tid: string, pid: string, authorid: string,
-  page: string): ThreadHtmlRequest {
+  page: string, opt: string = ''): ThreadHtmlRequest {
   return {
     path: '/read.php',
     params: {
@@ -96,7 +122,7 @@ export function buildThreadHtmlRequest(tid: string, pid: string, authorid: strin
       'pid': pid,
       'topid': '',
       'authorid': authorid,
-      'opt': '',
+      'opt': opt,
       'page': page || '1',
       '__localres': '1',
     },
@@ -273,8 +299,8 @@ export function isMissingFloorSinglePostView(pid: string, parsed: object | null)
  */
 async function fetchAppArticleHtmlRaw(uid: string, cid: string, tid: string,
   pid: string, authorid: string, page: string,
-  throttle?: Throttler): Promise<Record<string, Object>> {
-  const request: ThreadHtmlRequest = buildThreadHtmlRequest(tid, pid, authorid, page);
+  throttle?: Throttler, opt: string = ''): Promise<Record<string, Object>> {
+  const request: ThreadHtmlRequest = buildThreadHtmlRequest(tid, pid, authorid, page, opt);
   const response: Record<string, Object> = await ngaClient.postSignedPath(request.path, request.params,
     { uid: uid, cid: cid }, request.signParams, request.output, throttle) as Record<string, Object>;
   const html: string = extractAppArticleHtml(response);
@@ -368,13 +394,15 @@ function lastPidOfPage(raw: Record<string, Object>): number {
  * @param token - 会话令牌
  * @param tid - 主题 ID（可空）
  * @param pid - 楼层 pid（可空）
- * @param authorid - 只看楼主用户 ID（可空）
+ * @param authorid - 只看楼主用户 ID（可空；匿名主题传 {@link ANONYMOUS_TOPIC_AUTHOR_ID}）
  * @param page - 页码（'e' 表示末页）
  * @param throttle - 本次请求使用的限流器（默认全站）
+ * @param opt - 官方 `opt` 输出位（只看楼主匿名主题传 {@link ONLY_AUTHOR_OPT}，其余空串）
  * @returns 取数结果
  */
 export async function fetchThreadRaw(token: string, tid: string, pid: string,
-  authorid: string, page: string, throttle?: Throttler): Promise<ThreadRawResult> {
+  authorid: string, page: string, throttle?: Throttler,
+  opt: string = ''): Promise<ThreadRawResult> {
   const session = appStore.getSession(token);
   if (!session) {
     return { raw: null, error: '未登录' };
@@ -382,7 +410,7 @@ export async function fetchThreadRaw(token: string, tid: string, pid: string,
 
   try {
     const rawObj: Record<string, Object> = await fetchAppArticleHtmlRaw(session.uid, session.cid,
-      tid || '', pid, authorid, page, throttle);
+      tid || '', pid, authorid, page, throttle, opt);
     return { raw: rawObj, error: '' };
   } catch (e) {
     const error: string = (e as Error).message ?? 'HTML 请求或解析异常';
@@ -405,12 +433,13 @@ export async function fetchThreadRaw(token: string, tid: string, pid: string,
  * @param token - 会话令牌
  * @param tid - 主题 ID
  * @param pid - 楼层 ID
- * @param authorid - 只看某作者的楼层
+ * @param authorid - 只看某作者的楼层（官方新版传主题作者 uid；匿名主题传 `-1`）
  * @param page - 页码
  * @param blacklist - 黑名单 UID
  * @param keywords - 标题屏蔽关键词
  * @param noteMap - 用户备注表
  * @param throttle - 本次请求使用的限流器（默认全站；树页批量读取传专用实例）
+ * @param opt - 官方 `opt` 输出位（匿名主题只看楼主传 {@link ONLY_AUTHOR_OPT}，其余空串）
  * @returns 帖子详情结果
  */
 export async function getThread(token: string, tid: string, pid: string,
@@ -418,7 +447,7 @@ export async function getThread(token: string, tid: string, pid: string,
   blacklist: Set<string> = new Set(),
   keywords: string[] = [],
   noteMap: Record<string, string> = {},
-  throttle?: Throttler): Promise<ThreadResult> {
+  throttle?: Throttler, opt: string = ''): Promise<ThreadResult> {
   const result = new ThreadResult();
   const session = appStore.getSession(token);
   if (!session) {
@@ -432,7 +461,7 @@ export async function getThread(token: string, tid: string, pid: string,
       return result;
     }
 
-    const fetched: ThreadRawResult = await fetchThreadRaw(token, tid, pid, authorid, page, throttle);
+    const fetched: ThreadRawResult = await fetchThreadRaw(token, tid, pid, authorid, page, throttle, opt);
     if (!fetched.raw) {
       result.error = fetched.error || '无法加载该帖子';
       return result;

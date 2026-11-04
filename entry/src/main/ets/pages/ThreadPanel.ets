@@ -8,7 +8,8 @@ import {
   PRESET_ENTRY_THREAD
 } from '../model/AiAgentPreset'
 import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
-import { getThread, THREAD_FLOOR_MISSING_ERROR } from '../service/api/ThreadApi'
+import { getThread, THREAD_FLOOR_MISSING_ERROR, ONLY_AUTHOR_OPT,
+  ANONYMOUS_TOPIC_AUTHOR_ID } from '../service/api/ThreadApi'
 import { votePost } from '../service/api/FavoriteApi'
 import { getActiveDomain } from '../service/api/MiscApi'
 import { ThreadResult } from '../model/ThreadResult'
@@ -33,6 +34,7 @@ import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
 import { replyManager, ReplyType } from '../common/managers/ReplyManager'
 import { withTimeout } from '../common/utils/TimeoutUtils'
 import { resolveKeyboardAppearance } from '../common/utils/KeyboardAppearanceUtils'
+import { ANONYMOUS_NAME_PREFIX } from '../parser/AnonymousParser'
 import { bbNodesToPlainText } from '../common/utils/Utils'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { TtsMediaMetadata } from '../common/media/TtsAvSessionController'
@@ -1210,12 +1212,24 @@ export struct ThreadPanel {
     previousPosts?: PostInfo[]
   ): Promise<ThreadResult> {
     const noteMap: Record<string, string> = appStore.settingsStore.getNoteMap()
-    // 楼主 uid 是页内局部负数时（匿名帖），服务端 authorid 过滤不可用，改为拉取后本地过滤。
-    // 过滤必须与本面板的楼主判据同源（`hasThreadAuthorKey` + `authorKey`）：只按 uid 是否为
-    // 负数决定"要不要过滤"会把两套身份空间混用——首屏落在非首页时还没有可用的稳定键，
-    // 那时若照旧过滤就会把整页筛空。缺键时不过滤（宁可多显示，也不给空列表）。
-    const isNegativeAuthor: boolean = this.authorOnly && this.threadAuthorId !== '' && Number(this.threadAuthorId) <= 0
-    const canFilterLocally: boolean = isNegativeAuthor && this.hasThreadAuthorKey
+    // 「只看楼主」的取数参数跟随官方新版文章页（ArticleDetailViewModel.onAuthor →
+    // ArticleRepository.getArticle）：
+    //   · 普通主题：authorid = 楼主 uid，opt 不传；
+    //   · 匿名主题：authorid = "-1"（官方 CurrentTopic.isAnonymity() 的哨兵值），
+    //     opt = "512"，由服务端按 authorid 过滤。
+    // 匿名帖的楼层 uid 是页内局部号（逐页重排），只有主题作者 id 恒为 -1，所以服务端
+    // 过滤必须用哨兵值；客户端不再用局部号拼参数。
+    const anonymousTopicAuthor: boolean = this.authorOnly && this.isAnonymousTopicAuthor()
+    // '0' 是解析器给「作者 id 未知」的占位值（不是真实 uid），不能作为过滤参数发出去。
+    const knownAuthorId: string = this.threadAuthorId !== '0' ? this.threadAuthorId : ''
+    const serverAuthorId: string = this.authorOnly
+      ? (anonymousTopicAuthor ? ANONYMOUS_TOPIC_AUTHOR_ID : knownAuthorId)
+      : ''
+    const serverAuthorOpt: string = anonymousTopicAuthor ? ONLY_AUTHOR_OPT : ''
+    // 官方不做客户端二次过滤；这里保留一层 authorKey 兜底（服务端若忽略过滤参数，
+    // 至少仍按楼主身份筛一遍）。服务端过滤生效时该兜底不改变结果；稳定键未知时
+    // 不过滤（宁可多显示，也不给空列表）。
+    const canFilterLocally: boolean = this.authorOnly && this.hasThreadAuthorKey
     // 来源分流：保存的帖子离线存档从本地同形状 JSON 读取并解释，与在线走同一条渲染管线；
     // 其余来源保持服务器请求模式。
     const result: ThreadResult = this.threadSource === ThreadSource.SAVED
@@ -1230,9 +1244,9 @@ export struct ThreadPanel {
       ), timeoutMs)
       : await withTimeout<ThreadResult>(getThread(
         appStore.auth.token, this.threadTid, requestPid,
-        this.authorOnly && !isNegativeAuthor ? this.threadAuthorId : '', String(targetPage),
+        serverAuthorId, String(targetPage),
         appStore.settingsStore.getBlacklistIds(), appStore.settingsStore.getEnabledKeywords(),
-        noteMap
+        noteMap, undefined, serverAuthorOpt
       ), timeoutMs)
     if (!result.ok) {
       return result
@@ -2165,6 +2179,47 @@ export struct ThreadPanel {
   }
 
   /**
+   * 当前主题是否为匿名主题（楼主身份只能靠匿名编码名识别）。
+   *
+   * 与官方 `CurrentTopic.isAnonymity()` 同一语义面：官方判 `tAuthorId == "-1"`
+   * （匿名主题的 tAuthorId 恒为该哨兵），这里用两个可用信号：
+   * - 楼主稳定标识是 `#anony_` 编码名（最可靠，来自 `__T.authorKey`）；
+   * - 楼主 uid 为负数（匿名楼的页内局部号，`-1`/`-2`…），兜底解析器未给出 authorKey 的场景。
+   *
+   * @returns 匿名主题时为 true
+   */
+  private isAnonymousTopicAuthor(): boolean {
+    if (this.threadAuthorKey.startsWith(ANONYMOUS_NAME_PREFIX)) {
+      return true
+    }
+    if (this.threadAuthorId.length === 0) {
+      return false
+    }
+    const numeric: number = Number(this.threadAuthorId)
+    return !isNaN(numeric) && numeric < 0
+  }
+
+  /**
+   * 当前是否已有可用于「只看楼主」过滤的楼主身份。
+   *
+   * 与路由初值判定 {@link hasUsableAuthorIdentityInit} 同一判据，但作用于运行态：
+   * 普通帖看 uid（`threadAuthorId`），匿名帖看稳定 `authorKey`（`hasThreadAuthorKey`）。
+   * 两者都没有时既发不出 authorid，也没有本地过滤依据，只能拒绝开启。
+   *
+   * @returns 可用时为 true
+   */
+  private hasAuthorFilterIdentity(): boolean {
+    if (this.hasThreadAuthorKey) {
+      return true
+    }
+    if (this.threadAuthorId.length === 0 || this.threadAuthorId === '0') {
+      return false
+    }
+    const numeric: number = Number(this.threadAuthorId)
+    return !isNaN(numeric)
+  }
+
+  /**
    * 当前楼层是否为主题作者（楼主）所发。
    *
    * 判据是稳定作者标识而不是 uid：匿名帖里 uid 是页内局部号（见 `PostInfo.authorKey`），
@@ -2754,6 +2809,13 @@ export struct ThreadPanel {
       label: '只看楼主',
       active: this.authorOnly,
       action: (): void => {
+        // 与官方同一前置条件：主题作者身份未知时不允许进入只看楼主（官方
+        // `onAuthor()` 在 currentTopic 为空时直接 return）。否则菜单会亮着激活态，
+        // 而请求既没有 authorid 也没有本地过滤，实际显示的仍是全部楼层。
+        if (!this.authorOnly && !this.hasAuthorFilterIdentity()) {
+          appStore.showToast('楼主身份尚未加载，请稍后重试')
+          return
+        }
         this.authorOnly = !this.authorOnly
         this.pendingTargetPid = ''
         this.singlePostFallback = false

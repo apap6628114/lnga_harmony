@@ -172,6 +172,22 @@ listPostIndex === managerPostIndex
   时以新 pid 发起整页 `REPLACE` 定位（请求不携带 pid），页内未命中再走一次单帖
   兜底；只看楼主模式下提前提示不可见。
 
+### 5.1.1 只看楼主的数据源参数（与官方新版对齐）
+
+「只看楼主」切换是 `REPLACE` 加载第 1 页，请求参数跟随官方新版文章页
+（`ArticleDetailViewModel.onAuthor` → `ArticleRepository.getArticle`，后端同为
+`read.php __output=17`）：
+
+| 主题类型 | `authorid` | `opt` | 说明 |
+| --- | --- | --- | --- |
+| 普通帖 | 楼主 uid | 空 | 服务端按 uid 过滤 |
+| 匿名帖 | `-1` | `512` | 官方 `CurrentTopic.isAnonymity()` 即 `tAuthorId == "-1"`；匿名楼 uid 是页内局部号（逐页重排），不能拿它做过滤参数 |
+| 关闭只看楼主 | 空 | 空 | 回到全帖 |
+
+官方**不做客户端二次过滤**。本工程在此基础上保留一层 `authorKey` 兜底：服务端忽略过滤参数时
+仍按楼主身份筛一遍，服务端过滤生效时该兜底不改变结果。楼主身份未知（uid 与稳定 `authorKey`
+都没有）时不允许开启——与官方 `onAuthor()` 在 `currentTopic == null` 时直接返回一致。
+
 ### 5.2 边缘加载与预取
 
 `onScrollIndex` 更新 `lastScrollStart`、`lastScrollEnd` 和中心页码，然后调用 `reconcile`：

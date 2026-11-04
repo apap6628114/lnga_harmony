@@ -3,7 +3,8 @@ import { parseThreadData } from '../main/ets/parser/ThreadParser'
 import { parseNgaError } from '../main/ets/parser/ErrorParser'
 import {
   buildThreadHtmlRequest, extractAppArticleHtml, extractHtmlErrorPageMessage, hasRawThreadRows,
-  fillThreadResult, isMissingFloorSinglePostView, THREAD_FLOOR_MISSING_ERROR
+  fillThreadResult, isMissingFloorSinglePostView, THREAD_FLOOR_MISSING_ERROR,
+  ONLY_AUTHOR_OPT, ANONYMOUS_TOPIC_AUTHOR_ID
 } from '../main/ets/service/api/ThreadApi'
 import { parseHtmlToRawJson } from '../main/ets/parser/nga/html-thread/index'
 import type { ThreadRowInfo } from '../main/ets/model/Thread'
@@ -321,6 +322,21 @@ export default function appThreadUnitTest(): void {
       expect(request.params['tid']).assertEqual('44191387')
       expect(request.params['pid']).assertEqual('824920438')
       expect(request.params['page']).assertEqual('2')
+      // 普通主题的只看楼主不传 opt（与官方 onAuthor 的普通支一致）
+      expect(request.params['opt']).assertEqual('')
+    })
+
+    it('buildsAnonymousOnlyAuthorRequest', 0, (): void => {
+      /**
+       * 官方新版匿名帖只看楼主：authorid 用主题作者哨兵 -1，opt 用 512，
+       * 由服务端按 authorid 过滤（ArticleDetailViewModel.onAuthor 匿名支）。
+       */
+      const request = buildThreadHtmlRequest('47762778', '', ANONYMOUS_TOPIC_AUTHOR_ID, '3', ONLY_AUTHOR_OPT)
+      expect(request.params['tid']).assertEqual('47762778')
+      expect(request.params['authorid']).assertEqual('-1')
+      expect(request.params['opt']).assertEqual('512')
+      expect(request.params['page']).assertEqual('3')
+      expect(request.output).assertEqual('17')
     })
 
     it('keepsMainMetadataWhenAppHtmlContainsCommentPostArg', 0, (): void => {
