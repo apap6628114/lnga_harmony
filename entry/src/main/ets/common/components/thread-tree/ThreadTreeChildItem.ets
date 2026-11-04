@@ -20,7 +20,7 @@ import { appStore } from '../../../store/AppStore'
  * ```text
  * 头像 24  用户名 [楼主] [备注]                         #当前楼层号
  * 时间 [编辑时间]
- * 回复 @被回复者 #被回复楼层号  →
+ * 回复 @被回复者 #被回复楼层号  →（仅回复更深祖先时显示）
  * 正文（已剥离引用区）
  * 附件 / 动作栏
  * ```
@@ -28,6 +28,11 @@ import { appStore } from '../../../store/AppStore'
  * 「回复 @被回复者」放在**时间行与正文之间**（不在用户信息区）：它是阅读正文前的上下文提示，
  * 与该层正文属于同一视觉段落；字号 13vp 与用户名一致（回复关系是阅读主线，不能弱化成小字），
  * `→` 可点击跳到被回复楼层，`@名字` 可点击打开资料卡。
+ *
+ * **直接回复所属根的子行不显示关系行**（`showReplyTo=false`）：缩进已经表达它是根的一级
+ * 回复，再写「回复楼主 / 回复根作者」是冗余噪音；只有跳过中间楼层、回复更深祖先的楼层
+ * 才显示（#3 直接回复 #2 不显示，#4 回复 #3 时显示）。
+ *
  * 不渲染签名、投票、贴条、热回复，保持子节点轻量。
  *
  * 引用区不再显示：树的两层关系已表达「回复了谁」，正文使用父组件传入的
@@ -93,6 +98,8 @@ export struct ThreadTreeChildItem {
   @Prop displayContent: string = ''
   /** 是否渲染正文块 */
   @Prop showContent: boolean = true
+  /** 是否显示「回复 @被回复者」关系行：直接回复所属根时为 false（缩进已表达） */
+  @Prop showReplyTo: boolean = false
   /** 是否已点赞 */
   @Prop isVotedUp: boolean = false
   /** 是否已踩 */
@@ -316,7 +323,8 @@ export struct ThreadTreeChildItem {
           }
           .margin({ top: 4 })
 
-          if (this.child.ref.targetAuthor.length > 0 || this.child.ref.targetPid > 0) {
+          if (this.showReplyTo &&
+            (this.child.ref.targetAuthor.length > 0 || this.child.ref.targetPid > 0)) {
             Row() {
               Text('回复')
                 .fontSize(CHILD_REPLY_FONT_SIZE).fontColor(AppColors.textSecondary)

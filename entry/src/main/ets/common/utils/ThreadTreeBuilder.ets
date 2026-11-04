@@ -827,6 +827,7 @@ export function flattenThreadTree(model: ThreadTreeModel): void {
       childRow.rootPid = rootPid
       childRow.childIndex = i
       childRow.ref = child.ref
+      childRow.showReplyTo = child.parentPid !== rootPid && child.parentPid !== 0
       childRow.highlighted = child.highlighted
       childRow.rev = root.rev
       rows.push(childRow)

@@ -578,6 +578,30 @@ export default function threadTreeBuilderUnitTest(): void {
       expect(expandRoot(model, 987654)).assertFalse()
     })
 
+    it('showsReplyContextOnlyForDeeperThanDirectChildren', 0, (): void => {
+      /** #3 直接回复根 #2 不显示「回复」行；#4 回复 #3（更深祖先）才显示 */
+      const model: ThreadTreeModel = buildThreadTree(createMixedPosts(), 1)
+      const directIndex: number = findRowIndexByPid(model.rows, 103)
+      expect(directIndex >= 0).assertTrue()
+      expect(model.rows[directIndex].showReplyTo).assertFalse()
+      const deepIndex: number = findRowIndexByPid(model.rows, 104)
+      expect(deepIndex >= 0).assertTrue()
+      expect(model.rows[deepIndex].showReplyTo).assertTrue()
+      expect(model.rows[0].showReplyTo).assertFalse()
+    })
+
+    it('hidesReplyContextForEveryDirectChild', 0, (): void => {
+      const model: ThreadTreeModel = buildThreadTree(createRootWithChildren(4), 1)
+      let checked: number = 0
+      for (let i: number = 0; i < model.rows.length; i++) {
+        if (model.rows[i].kind === ThreadTreeRowKind.CHILD) {
+          expect(model.rows[i].showReplyTo).assertFalse()
+          checked++
+        }
+      }
+      expect(checked).assertEqual(2)
+    })
+
     it('keepsUnchangedRowPidsStableAcrossExpand', 0, (): void => {
       const model: ThreadTreeModel = buildThreadTree(createRootWithChildren(4), 1)
       const rootRowBefore: ThreadTreeRow = model.rows[1]

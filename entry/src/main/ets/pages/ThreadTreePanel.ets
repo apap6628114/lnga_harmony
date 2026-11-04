@@ -2088,6 +2088,7 @@ export struct ThreadTreePanel {
               targetLou: this.targetLou(row.ref),
               displayContent: row.displayContent,
               showContent: row.displayContent.length > 0,
+              showReplyTo: row.showReplyTo,
               isVotedUp: this.votedUpPids.has(String(row.post.pid)),
               isVotedDown: this.votedDownPids.has(String(row.post.pid)),
               holdingHand: this.holdingStatus,

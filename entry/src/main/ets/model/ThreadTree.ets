@@ -124,6 +124,17 @@ export class ThreadTreeRow {
   /** 子节点的引用关系；`ROOT` / `MORE` 为 null。 */
   ref: ThreadTreeQuoteRef | null = null
 
+  /**
+   * 是否显示「回复 @被回复者 #楼层」关系行。
+   *
+   * 直接回复所属根的楼层不显示：缩进本身已经表达「它是这条根的一级回复」，
+   * 再写一遍「回复楼主 / 回复根作者」是冗余噪音。只有**跳过中间楼层、回复更深祖先**
+   * 的楼层才显示，用来表达它回复的不是根（`#4 回复 #3` 时 #4 显示，#3 不显示）。
+   *
+   * `ROOT` / `MORE` 行恒为 false（根行用完整楼层卡片渲染，没有这行）。
+   */
+  showReplyTo: boolean = false
+
   /** `MORE` 行：被折叠的后代数量（= `totalCount` - 已显示数）。 */
   hiddenCount: number = 0
 
