@@ -226,6 +226,8 @@ export class SettingsIconColors {
   static readonly pagePrefetch: string = '#059669'
   /** 记录阅读进度的书签天蓝色。 */
   static readonly readingProgress: string = '#0EA5E9'
+  /** 帖子阅读样式的树形青色。 */
+  static readonly threadRender: string = '#0891B2'
   /** 内置网页浏览的浏览器蓝色。 */
   static readonly internalBrowser: string = '#1D4ED8'
   /** 调试模式的终端石灰绿。 */
@@ -313,6 +315,24 @@ export class ThreadNavMode {
   static readonly SEAMLESS: string = '0'
   /** 传统翻页（通过页面跳转器切换） */
   static readonly PAGE: string = '1'
+}
+
+// ============== 帖子阅读样式 ==============
+
+/**
+ * 帖子阅读样式：决定「打开帖子时」的默认渲染方式。
+ *
+ * - `LIST`：自然楼层列表（现有连续分页窗口，`PostItem` 逐楼渲染）；
+ * - `TREE`：两层递进树（一次性抓取全帖后按回复引用关系展示）。
+ *
+ * 值为字符串（与 `ThreadNavMode` 同构），随 `SettingsState` 整体持久化；
+ * 只决定默认样式，单个帖子会话内的临时切换由 `ThreadPanel` 自行维护、不写回设置。
+ */
+export class ThreadRenderMode {
+  /** 列表（自然楼层顺序） */
+  static readonly LIST: string = '0'
+  /** 递进树（按引用关系展示） */
+  static readonly TREE: string = '1'
 }
 
 // 排序模式

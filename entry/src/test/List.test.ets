@@ -48,6 +48,7 @@ import dataTransferRoundTripTest from './DataTransferRoundTrip.test';
 import migrationUnsettledTest from './MigrationUnsettled.test';
 import dataReviewFixesTest from './DataReviewFixes.test';
 import draftKeyUtilsUnitTest from './DraftKeyUtilsUnit.test';
+import threadTreeBuilderUnitTest from './ThreadTreeBuilderUnit.test';
 
 /**
  * 注册全部本地单元测试。
@@ -103,4 +104,5 @@ export default function testsuite(): void {
   migrationUnsettledTest();
   dataReviewFixesTest();
   draftKeyUtilsUnitTest();
+  threadTreeBuilderUnitTest();
 }

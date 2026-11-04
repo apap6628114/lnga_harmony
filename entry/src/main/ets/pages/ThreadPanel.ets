@@ -2027,6 +2027,20 @@ export struct ThreadPanel {
   }
 
   /**
+   * 当前列表视口中心楼层的 pid（进入递进树页面时的初始定位锚点）。
+   *
+   * @returns 中心楼层 pid；窗口为空或主楼 pid 为 0 时返回 0（树页面定位顶部）
+   */
+  private currentListCenterPid(): number {
+    const count: number = this.mgr.posts.length
+    if (count <= 0) {
+      return 0
+    }
+    const index: number = Math.max(0, Math.min(this.lastScrollCenter, count - 1))
+    return this.mgr.posts[index].pid
+  }
+
+  /**
    * 打开「保存帖子」对话框（选择保存的页范围）。
    */
   private openSaveThreadDialog(): void {
@@ -2701,6 +2715,16 @@ export struct ThreadPanel {
         active: this.isTrackingCurrentThread(),
         action: (): void => {
           this.openTrackDialog()
+        }
+      })
+      // 递进树是独立栈页面：新页面自己抓全帖并渲染，本列表页保持原状，返回即回到这里。
+      // 只在在线来源提供：离线存档没有网络来源可供全帖抓取。
+      items.push({
+        label: '递进树阅读',
+        action: (): void => {
+          routerStore.navigateActivity(
+            Screen.threadTree(this.threadTid, true, String(this.currentListCenterPid()))
+          )
         }
       })
     }

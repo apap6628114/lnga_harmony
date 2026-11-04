@@ -281,6 +281,8 @@ export class SettingsStore extends BaseStore<SettingsState> {
 
   // --- Reading ---
   setThreadNavMode(v: string): void { this.readingSettings.setThreadNavMode(v) }
+  /** 设置帖子阅读样式（仅影响打开帖子时的默认样式，不即时作用于已打开页面） */
+  setThreadRenderMode(v: string): void { this.readingSettings.setThreadRenderMode(v) }
   setPrefetchPageCount(v: number): void { this.readingSettings.setPrefetchPageCount(v) }
   /** 设置是否记录帖子阅读进度（开启后下次进入自动恢复阅读位置） */
   setRecordReadingProgress(enabled: boolean): void { this.readingSettings.setRecordReadingProgress(enabled) }

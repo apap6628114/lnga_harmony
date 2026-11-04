@@ -1,7 +1,9 @@
-import { type NavEntry } from '../store/RouterStore'
-import { AppColors } from '../common/constants/Constants'
+import { type NavEntry, ThreadSource } from '../store/RouterStore'
+import { AppColors, ThreadRenderMode } from '../common/constants/Constants'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { ThreadPanel } from './ThreadPanel'
+import { ThreadTreePanel } from './ThreadTreePanel'
+import { appStore } from '../store/AppStore'
 import { ProfilePanel } from './ProfilePanel'
 import { NotificationPanel, TAB_PRIVATE } from './NotificationPanel'
 import { MessageDetailPanel } from './MessageDetailPanel'
@@ -56,7 +58,29 @@ export struct ActivityRouter {
       return -1
     }
     const topEntry: NavEntry = this.activityStack[this.activityStack.length - 1]
-    return topEntry.screen.type === 'thread' ? topEntry.id : -1
+    const isThreadLike: boolean = topEntry.screen.type === 'thread' ||
+      topEntry.screen.type === 'threadTree'
+    return isThreadLike ? topEntry.id : -1
+  }
+
+  /**
+   * 帖子条目是否应挂载递进树页面。
+   *
+   * 默认阅读样式为递进树时生效；以下情况仍走自然列表：
+   * - 路由显式要求列表样式（树页「列表阅读」替换出来的页面）；
+   * - 离线存档来源（树页数据需要在线抓取，存档模式无网络来源）。
+   *
+   * @param entry - 活动栈条目
+   * @returns 是否挂载递进树页面
+   */
+  private shouldUseTreeRender(entry: NavEntry): boolean {
+    if (entry.screen.threadForceList) {
+      return false
+    }
+    if (entry.screen.threadSource === ThreadSource.SAVED) {
+      return false
+    }
+    return appStore.settings.threadRenderMode === ThreadRenderMode.TREE
   }
 
   build() {
@@ -64,12 +88,29 @@ export struct ActivityRouter {
       ForEach(this.activityStack, (entry: NavEntry) => {
         Column() {
           if (entry.screen.type === 'thread') {
-            ThreadPanel({
+            // 设置「帖子默认样式」为递进树时，打开帖子直接进入独立的树阅读页
+            // （同一栈条目，返回即退出帖子；与自然列表页逐页加载互不影响）
+            if (this.shouldUseTreeRender(entry)) {
+              ThreadTreePanel({
+                threadTid: entry.screen.tid,
+                threadPid: entry.screen.pid,
+                fromListEntry: false
+              })
+            } else {
+              ThreadPanel({
+                threadTid: entry.screen.tid,
+                threadPage: entry.screen.threadPage,
+                threadPid: entry.screen.pid,
+                threadSource: entry.screen.threadSource,
+                navEntryId: entry.id
+              })
+            }
+          } else if (entry.screen.type === 'threadTree') {
+            // 从列表页菜单 push 的独立树阅读页：返回即回原列表页（列表状态自然保留）
+            ThreadTreePanel({
               threadTid: entry.screen.tid,
-              threadPage: entry.screen.threadPage,
               threadPid: entry.screen.pid,
-              threadSource: entry.screen.threadSource,
-              navEntryId: entry.id
+              fromListEntry: entry.screen.threadTreeFromList
             })
           } else if (entry.screen.type === 'browseHistory') {
             BrowseHistoryPanel()

@@ -4,8 +4,8 @@ import { SettingsState } from '../SettingsState'
 /**
  * 阅读设置域子 store。
  *
- * 承载帖子翻页模式（无缝 / 分页）、向前预加载页数，以及是否记录帖子阅读进度
- * （开启后下次进入自动恢复阅读位置）字段及其 setter。
+ * 承载帖子翻页模式（无缝 / 分页）、帖子阅读样式（列表 / 递进树）、向前预加载页数，
+ * 以及是否记录帖子阅读进度（开启后下次进入自动恢复阅读位置）字段及其 setter。
  */
 export class ReadingSettings {
   private ctx: SettingsContext
@@ -16,6 +16,12 @@ export class ReadingSettings {
 
   setThreadNavMode(v: string): void {
     this.ctx.state.threadNavMode = v
+    this.ctx.persist()
+  }
+
+  /** 设置帖子阅读样式（`ThreadRenderMode.LIST` / `ThreadRenderMode.TREE`，仅作默认值） */
+  setThreadRenderMode(v: string): void {
+    this.ctx.state.threadRenderMode = v
     this.ctx.persist()
   }
 
@@ -34,6 +40,7 @@ export class ReadingSettings {
   /** 从持久化对象加载阅读字段 */
   load(saved: SettingsState): void {
     if (saved.threadNavMode !== undefined) this.ctx.state.threadNavMode = saved.threadNavMode
+    if (saved.threadRenderMode !== undefined) this.ctx.state.threadRenderMode = saved.threadRenderMode
     if (saved.prefetchPageCount !== undefined) {
       this.ctx.state.prefetchPageCount = saved.prefetchPageCount
     }

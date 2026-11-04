@@ -1,4 +1,4 @@
-import { ImageLoadStrategy, ThreadNavMode } from '../../common/constants/Constants'
+import { ImageLoadStrategy, ThreadNavMode, ThreadRenderMode } from '../../common/constants/Constants'
 import { SIDEBAR_DEFAULT_VP, BOARD_RATIO_DEFAULT } from '../../common/utils/ColumnLayoutMath'
 import { FavBoard } from '../../model/SocialEntries'
 import type { BlacklistEntry } from '../../model/SocialEntries'
@@ -44,6 +44,13 @@ export class SettingsState {
    */
   showTopicPreview: boolean = true
   threadNavMode: string = ThreadNavMode.SEAMLESS
+  /**
+   * 帖子阅读样式（`ThreadRenderMode.LIST` / `ThreadRenderMode.TREE`）。
+   *
+   * 只决定「打开帖子时的默认样式」；单个帖子会话内的临时切换由 ThreadPanel 自行维护，
+   * 不写回本字段。持久化为字符串（与 `threadNavMode` 同构）。
+   */
+  threadRenderMode: string = ThreadRenderMode.LIST
   /** 预加载页数（0=关闭，1~5=向前预加载 N 页） */
   prefetchPageCount: number = 1
   /** 记录帖子阅读进度：开启后保存最近阅读位置，下次进入帖子时自动恢复 */

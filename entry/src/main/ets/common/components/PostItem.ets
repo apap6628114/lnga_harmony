@@ -67,6 +67,18 @@ export struct PostItem {
   isTopicAuthor: boolean = false
   /** 是否为本人的帖子，传给 PostVoteBar 决定是否显示编辑按钮 */
   isOwnPost: boolean = false
+  /**
+   * 正文显示内容覆盖（树阅读模式传入「剥离引用区后的正文」）。
+   *
+   * 空串表示不覆盖、照常渲染 `post.content`（自然列表模式走这条路径，行为不变）。
+   * 引用区已由树的两层关系 + 「回复 @作者 →」表达，树节点正文不再重复显示。
+   *
+   * 必须是 `@Prop`：树页刷新后行键值可能不变（pid + rev 相同），LazyForEach 复用
+   * 组件实例时只有 `@Prop` 会随新参数更新，普通字段会保留旧值导致正文不刷新。
+   */
+  @Prop displayContent: string = ''
+  /** 是否渲染正文块（树模式剥离引用区后无正文时传 false，避免留下空行）。 */
+  @Prop showContent: boolean = true
 
   aboutToReuse(params: Record<string, Object>): void {
     this.sigExpanded = false
@@ -101,11 +113,13 @@ export struct PostItem {
             }
           }.margin({ top: 12 })
 
-          BBCodeContentView({
-            nodes: getCachedBBNodes(this.post.content),
-            onImageClick: this.onImageClick,
-            onLinkClick: this.onLinkClick,
-          }).width('100%').margin({ top: 12 })
+          if (this.showContent) {
+            BBCodeContentView({
+              nodes: getCachedBBNodes(this.resolveDisplayContent()),
+              onImageClick: this.onImageClick,
+              onLinkClick: this.onLinkClick,
+            }).width('100%').margin({ top: 12 })
+          }
 
           if (this.post.attachs.length > 0) {
             PostAttachments({
@@ -199,6 +213,15 @@ export struct PostItem {
     const et: number | null = parseAlterinfoTs(this.post.alterinfo)
     if (et === null) return ''
     return ' [在' + formatTimestampCST(et) + '修改]'
+  }
+
+  /**
+   * 正文渲染内容：树模式传入的「剥离引用区正文」优先，未覆盖时使用原始 content。
+   *
+   * @returns 用于 BBCode 渲染的正文
+   */
+  private resolveDisplayContent(): string {
+    return this.displayContent.length > 0 ? this.displayContent : this.post.content
   }
 
   private getSignaturePreview(): string {

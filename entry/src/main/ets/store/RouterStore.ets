@@ -53,6 +53,7 @@ export class BoardSlot {
 
 export type ScreenType =
   | 'thread'
+  | 'threadTree'
   | 'profile'
   | 'notifications'
   | 'messages'
@@ -116,6 +117,20 @@ export class Screen {
   pid: string = ''
   /** 打开帖子的路由来源（ThreadSource）。 */
   threadSource: string = ''
+  /**
+   * 递进树页面：是否由自然列表页（ThreadPanel）push 进入。
+   *
+   * true 时「列表阅读」菜单项直接 `back()` 返回下层列表页（保留列表滚动位置）；
+   * false（设置默认样式直接打开树页）时改为替换当前页为列表页。
+   */
+  threadTreeFromList: boolean = false
+  /**
+   * 帖子页强制使用自然列表样式（忽略设置里的默认阅读样式）。
+   *
+   * 由递进树页的「列表阅读」生成：默认样式为递进树时，普通 `Screen.thread` 会被
+   * ActivityRouter 再次分流回树页，必须显式声明要走列表页。
+   */
+  threadForceList: boolean = false
   uid: string = ''
   mid: string = ''
   messagePage: number = 1
@@ -151,6 +166,41 @@ export class Screen {
     // 表示无楼层定位意图——ThreadPanel 无需再区分哨兵与真实 pid
     s.pid = pid === '0' ? '' : pid
     s.threadSource = source
+    return s
+  }
+
+  /**
+   * 创建**强制自然列表样式**的帖子页路由。
+   *
+   * 用于递进树页的「列表阅读」：默认阅读样式为递进树时，普通 `Screen.thread` 会被
+   * ActivityRouter 再次分流到树页；本工厂显式声明走列表页。
+   *
+   * @param tid - 主题 ID
+   * @returns 帖子页路由（强制列表样式）
+   */
+  static threadList(tid: string): Screen {
+    const s = Screen.thread(tid)
+    s.threadForceList = true
+    return s
+  }
+
+  /**
+   * 创建帖子「两层递进树」阅读页面路由。
+   *
+   * 递进树是**独立栈页面**：自己加载全帖、自己展示加载进度、自己渲染；
+   * 与自然列表页（ThreadPanel）互不共享状态，返回即回列表。
+   *
+   * @param tid - 主题 ID
+   * @param fromList - 是否由列表页 push 进入（决定「列表阅读」是 back 还是替换当前页）
+   * @param pid - 可选的初始定位楼层 pid（空串表示定位顶部）
+   * @returns 递进树页面路由
+   */
+  static threadTree(tid: string, fromList: boolean = false, pid: string = ''): Screen {
+    const s = new Screen()
+    s.type = 'threadTree'
+    s.tid = tid
+    s.threadTreeFromList = fromList
+    s.pid = pid === '0' ? '' : pid
     return s
   }
 
@@ -292,6 +342,7 @@ export class Screen {
   getTitle(): string {
     switch (this.type) {
       case 'thread': return '帖子'
+      case 'threadTree': return '递进树'
       case 'profile': return '个人主页'
       case 'notifications': return '通知'
       case 'messages': return '私信'

@@ -11,6 +11,7 @@ import {
   ImageLoadStrategy,
   SettingsIconColors,
   ThreadNavMode,
+  ThreadRenderMode,
   THEME_OPTIONS,
   ThemeOption
 } from '../common/constants/Constants'
@@ -49,6 +50,7 @@ export struct SettingsPanel {
   @State clearingCache: boolean = false
   @State imageStrategyBadge: string = '始终加载'
   @State threadNavBadge: string = '无缝加载'
+  @State private threadRenderBadge: string = '列表'
   @State prefetchPageBadge: string = '1 页'
   @State aiProviderBadge: string = '未配置 AI'
   /** 标题栏渐变模糊与偏色的滚动联动进度。 */
@@ -100,6 +102,7 @@ export struct SettingsPanel {
 
   imageStrategyDialogController?: CustomDialogController
   threadNavDialogController?: CustomDialogController
+  threadRenderDialogController?: CustomDialogController
   prefetchPageDialogController?: CustomDialogController
   exportCredentialDialogController?: CustomDialogController
   logoutDialogController?: CustomDialogController = new CustomDialogController({
@@ -173,6 +176,7 @@ export struct SettingsPanel {
     this.refreshCacheSize()
     this.imageStrategyBadge = this.imageStrategyLabel(appStore.settings.imageLoadStrategy)
     this.threadNavBadge = this.threadNavLabel(appStore.settings.threadNavMode)
+    this.threadRenderBadge = this.threadRenderLabel(appStore.settings.threadRenderMode)
     this.prefetchPageBadge = this.prefetchPageLabel(appStore.settings.prefetchPageCount)
     this.updateAiBadge()
   }
@@ -182,6 +186,7 @@ export struct SettingsPanel {
     this.logoutDialogController = undefined
     this.imageStrategyDialogController = undefined
     this.threadNavDialogController = undefined
+    this.threadRenderDialogController = undefined
     this.prefetchPageDialogController = undefined
     this.exportCredentialDialogController = undefined
   }
@@ -420,6 +425,44 @@ export struct SettingsPanel {
     this.threadNavDialogController?.open()
   }
 
+  private threadRenderLabel(mode: string): string {
+    if (mode === ThreadRenderMode.TREE) {
+      return '递进树'
+    }
+    return '列表'
+  }
+
+  private threadRenderOptions(): ActionOption[] {
+    return [
+      { label: '列表（自然楼层）', value: parseInt(ThreadRenderMode.LIST) },
+      { label: '递进树（引用关系）', value: parseInt(ThreadRenderMode.TREE) },
+    ]
+  }
+
+  private showThreadRenderPicker(): void {
+    const radio: SelectRadioResult = this.buildRadioContent(
+      this.threadRenderOptions(),
+      parseInt(appStore.settings.threadRenderMode),
+      (v: number): void => {
+        appStore.settingsStore.setThreadRenderMode(String(v))
+        this.threadRenderBadge = this.threadRenderLabel(String(v))
+      }
+    )
+    this.threadRenderDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
+      systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
+      builder: SelectDialog({
+        title: '帖子阅读样式',
+        selectedIndex: radio.selectedIndex,
+        radioContent: radio.items,
+        confirm: { value: '确定' }
+      }),
+      autoCancel: true
+    })
+    this.threadRenderDialogController?.open()
+  }
+
   private prefetchPageLabel(count: number): string {
     if (count <= 0) {
       return '关闭'
@@ -648,6 +691,16 @@ export struct SettingsPanel {
                 badgeText: this.threadNavBadge,
                 onAction: () => {
                   this.showThreadNavPicker()
+                }
+              })
+
+              Divider().margin({ left: 60 }).color(AppColors.separator)
+
+              SettingPickerRow({
+                iconRes: $r('app.media.settings_thread_tree'), iconColor: SettingsIconColors.threadRender, label: '帖子阅读样式',
+                badgeText: this.threadRenderBadge,
+                onAction: () => {
+                  this.showThreadRenderPicker()
                 }
               })
 
