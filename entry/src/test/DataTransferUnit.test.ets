@@ -29,6 +29,12 @@ class TimedEntry {
   updatedAt: number = 0
   /** 标题（内容无关，仅保证非空）。 */
   subject: string = ''
+  /** 递进树阅读进度：锚点楼层 pid。 */
+  pid: number = 0
+  /** 递进树阅读进度：锚点所属根楼层 pid。 */
+  rootPid: number = 0
+  /** 递进树阅读进度：锚点楼层所属服务端页码。 */
+  page: number = 0
 }
 
 /** 黑名单样本。 */
@@ -311,6 +317,32 @@ export default function dataTransferUnitTest(): void {
       expect(list.length).assertEqual(2)
       expect(itemString(list[0], 'tid')).assertEqual('10')
       expect(itemNumber(list[0], 'ts')).assertEqual(2000)
+      expect(result.added).assertEqual(1)
+      expect(result.updated).assertEqual(1)
+    })
+
+    it('mergeTreeReadingProgressKeepsNewer', 0, (): void => {
+      const localEntry: TimedEntry = timedEntry('10', 1000)
+      localEntry.pid = 824921217
+      localEntry.rootPid = 824921217
+      localEntry.page = 2
+      const local: Object[] = [localEntry]
+      const incomingEntry: TimedEntry = timedEntry('10', 2000)
+      incomingEntry.pid = 824921217
+      incomingEntry.rootPid = 824921217
+      incomingEntry.page = 3
+      const incoming: Object[] = [incomingEntry, timedEntry('12', 1500)]
+
+      const result = mergePayload(DomainIds.TREE_READING_PROGRESS, local, incoming)
+      const list: Object[] = asItemList(result.merged)
+
+      expect(list.length).assertEqual(2)
+      expect(itemString(list[0], 'tid')).assertEqual('10')
+      expect(itemNumber(list[0], 'ts')).assertEqual(2000)
+      // 整条 entry 必须原样保留：pid/rootPid/page 是恢复定位与切列表的关键字段
+      expect(itemNumber(list[0], 'pid')).assertEqual(824921217)
+      expect(itemNumber(list[0], 'rootPid')).assertEqual(824921217)
+      expect(itemNumber(list[0], 'page')).assertEqual(3)
       expect(result.added).assertEqual(1)
       expect(result.updated).assertEqual(1)
     })

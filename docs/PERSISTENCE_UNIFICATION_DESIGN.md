@@ -274,25 +274,26 @@ export class DomainSpec {
 | 9 | `favorite_membership` | `v2.favorite_membership` | Pref | ACCOUNT_MIRROR | 1 | 可选 | 跳过（可恢复）ᵃ | 清内存、重载镜像 |
 | 10 | `history` | `v2.history` | Pref | DEVICE | 1 | 默认 | 按键去重合并 | 保留并重载 |
 | 11 | `reading_progress` | `v2.reading_progress` | Pref | DEVICE | 1 | 默认 | 按键去重合并 | 保留并重载 |
-| 12 | `votes` | `v2.votes` | Pref | DEVICE | 1 | 默认 | 按键去重合并 | 保留并重载 |
-| 13 | `poll_voted` | `v2.poll_voted` | Pref | DEVICE | 1 | 默认 | 按键去重合并 | 保留并重载 |
-| 14 | `tracked_threads` | `v2.tracked_threads` | Pref | DEVICE | 1 | 默认 | 按键去重合并 | 保留并重载 |
-| 15 | `ai_sessions` | `v2.ai_sessions` | Pref | DEVICE | 1 | 可选（隐私） | 按键去重合并 | 保留并重载 |
-| 16 | `ai_tool_cache` | `v2.ai_tool_cache` | Pref | DEVICE | 1 | 可选 | 跳过（可恢复）ᵃ | 保留（TTL 自净） |
-| 17 | `drafts` | `v2/drafts/` | Files | DEVICE | 1 | 默认 | 按键覆盖 | 保留 |
-| 18 | `draft_media` | `draft_media/`（沿用） | Files | DEVICE | 1 | 永不（不可移植） | 跳过（硬跳过） | 保留 |
-| 19 | `saved_threads` | `v2/saved_threads/` | Files | DEVICE | 1 | 默认 | 按 tid 覆盖 | 保留 |
-| 20 | `moving_photo_cache` | `mphoto/`（沿用） | Files | DEVICE | 1 | 永不（可重建） | 跳过（硬跳过） | 保留 |
-| 21 | `meta` | `v2.meta` | Pref | DEVICE | 1 | 永不 | 拒绝 | 保留 |
+| 12 | `tree_reading_progress` | `v2.tree_reading_progress` | Pref | DEVICE | 1 | 默认 | 按键去重合并 | 保留并重载 |
+| 13 | `votes` | `v2.votes` | Pref | DEVICE | 1 | 默认 | 按键去重合并 | 保留并重载 |
+| 14 | `poll_voted` | `v2.poll_voted` | Pref | DEVICE | 1 | 默认 | 按键去重合并 | 保留并重载 |
+| 15 | `tracked_threads` | `v2.tracked_threads` | Pref | DEVICE | 1 | 默认 | 按键去重合并 | 保留并重载 |
+| 16 | `ai_sessions` | `v2.ai_sessions` | Pref | DEVICE | 1 | 可选（隐私） | 按键去重合并 | 保留并重载 |
+| 17 | `ai_tool_cache` | `v2.ai_tool_cache` | Pref | DEVICE | 1 | 可选 | 跳过（可恢复）ᵃ | 保留（TTL 自净） |
+| 18 | `drafts` | `v2/drafts/` | Files | DEVICE | 1 | 默认 | 按键覆盖 | 保留 |
+| 19 | `draft_media` | `draft_media/`（沿用） | Files | DEVICE | 1 | 永不（不可移植） | 跳过（硬跳过） | 保留 |
+| 20 | `saved_threads` | `v2/saved_threads/` | Files | DEVICE | 1 | 默认 | 按 tid 覆盖 | 保留 |
+| 21 | `moving_photo_cache` | `mphoto/`（沿用） | Files | DEVICE | 1 | 永不（可重建） | 跳过（硬跳过） | 保留 |
+| 22 | `meta` | `v2.meta` | Pref | DEVICE | 1 | 永不 | 拒绝 | 保留 |
 
 > ᵃ `ImportPolicy.SKIP` 现行语义 =「默认不主动恢复」：导入计划默认恢复备份中出现的该域（跟随导出选择），
 > 可用导入计划页的「恢复缓存类数据」开关关闭；不再是"永不导入"。`draft_media` / `moving_photo_cache`
 > 为硬跳过（不可恢复）。详见 §6.4。
 
-**域数：21。** scope 实际分布：**DEVICE 16**（settings/theme/categories/profiles/history/
-reading_progress/votes/poll_voted/tracked_threads/ai_sessions/ai_tool_cache/drafts/draft_media/
-saved_threads/moving_photo_cache/meta，共 16 个）、**ACCOUNT_MIRROR 3**（notifications/activities/
-favorite_membership）、**SECRET 2**（auth/sessions）。**21 = DEVICE 16 + ACCOUNT_MIRROR 3 + SECRET 2。**
+**域数：22。** scope 实际分布：**DEVICE 17**（settings/theme/categories/profiles/history/
+reading_progress/tree_reading_progress/votes/poll_voted/tracked_threads/ai_sessions/ai_tool_cache/
+drafts/draft_media/saved_threads/moving_photo_cache/meta，共 17 个）、**ACCOUNT_MIRROR 3**（notifications/activities/
+favorite_membership）、**SECRET 2**（auth/sessions）。**22 = DEVICE 17 + ACCOUNT_MIRROR 3 + SECRET 2。**
 早期草案的"物理隔离 14 + 全局 3"分类已被"取消 uid 物理隔离"取代（全部设备级域不再按 uid 分键）。
 
 **治理边界（未纳入 Catalog 的持久化面，独立复核要求说明）**：
@@ -399,7 +400,7 @@ filesDir/v2/<dirName>/   JSON 文件域（例：filesDir/v2/drafts/、filesDir/v
 
 | 动作 | 改造前 | 改造后 |
 | --- | --- | --- |
-| 冷启动（有凭证） | 加载当前 uid 的 15 个域 | 加载全部 21 个域（设备级 + 当前账号镜像） |
+| 冷启动（有凭证） | 加载当前 uid 的 15 个域 | 加载全部 22 个域（设备级 + 当前账号镜像） |
 | 冷启动（无凭证） | 只加载主题/分类/存档/草稿 | 加载全部设备级域；镜像域为空 |
 | 登录成功 | `loadUserData()` 加载 11 个 uid 域 | 只重载镜像域（3 个）；设备级域数据已在内存 |
 | 退出登录 | `clearAuth()` 里 reset 15 个 Store | 只清凭证 + 镜像域 + AI/社交运行态；**设备级域保留并保持可用** |
@@ -445,7 +446,7 @@ filesDir/v2/<dirName>/   JSON 文件域（例：filesDir/v2/drafts/、filesDir/v
 - `payload`：域自定义结构（目前信封域统一为 `{items: T[]}` / `{favoredFolderIds, knownFolderIds}`）。
 
 **RAW（`rawPayload=true`，存量域默认）**——settings/theme/categories/profiles/history/reading_progress/
-votes/poll_voted/auth/sessions/meta（`meta` 由 `PersistenceMetaStore` 直接读写，不套信封）：
+tree_reading_progress/votes/poll_voted/auth/sessions/meta（`meta` 由 `PersistenceMetaStore` 直接读写，不套信封）：
 
 ```json
 { "fontSize": 15, "blacklist": [], "...": "业务对象原样" }
@@ -517,6 +518,7 @@ Hub.writePayload(spec, payload, ownerUid, flush)
 | AI 工具缓存 | 80 条 / 1.2M 字符 | 现有 |
 | 浏览历史 | 500 条 | 现有 `HISTORY_MAX_COUNT` |
 | 阅读进度 | 200 条 | 现有 `PROGRESS_MAX_COUNT` |
+| 递进树阅读进度 | 200 条 | `ThreadTreeProgressStore` 内模块常量 `TREE_PROGRESS_MAX_COUNT` |
 | 投票记录 | 200 条 | 现有 `VOTE_MAX_ENTRIES` |
 | 草稿保留 | 7 天 | 现有 `DRAFT_RETENTION_DAYS` |
 | 单域载荷导出/导入上限 | 8 MB（JSON 字符数） | 本设计（导出超限域不写入容器并列入「未包含清单」；导入超限域生成「跳过」计划条目；见 §6.5） |
@@ -746,7 +748,7 @@ MainPage 才是用户停留的稳定上下文。
   导入时校验，防止文件被截断/手改；不匹配只记警告并继续导入（见 §6.4）。缺失时视为"旧格式"，
   跳过校验并给出警告（2026-10-31 起不再静默）。
 - `deviceTag` / `appVersionName` / `appVersionCode` 仅作诊断信息，导入不消费（不参与校验或迁移决策）。
-  这三个是**容器诊断字段**，不属于导入契约；用户需求 A 所指的"多余数据"是业务数据域（16 个可导出域
+  这三个是**容器诊断字段**，不属于导入契约；用户需求 A 所指的"多余数据"是业务数据域（17 个可导出域
   在导入侧均有对等路径），诊断字段保留用于排障（评审 R-D07 口径说明）。
 - `updatedAt`（域级）：ENVELOPE 域取信封内 `updatedAt`；文件域取目录内最新文件 mtime；**RAW 域恒为 0**
   ——日常写入不经过 Hub（§4.3），Hub 无逐域写入时间，RAW 域没有可用的真实时间戳。
@@ -829,6 +831,7 @@ MainPage 才是用户停留的稳定上下文。
 | `theme` | 整体覆盖（策略标签为 **MERGE_FIELDS**，实现为该对象整体替换） | — |
 | `history` | 按 tid：两边都有取 `ts` 较新；结果按 ts 降序截断 500 | 较旧版本被丢弃 |
 | `reading_progress` | 按 tid 取 `ts` 较新；截断 200 | — |
+| `tree_reading_progress` | 按 tid 取 `ts` 较新；截断 200 | — |
 | `votes` / `poll_voted` | 按 tid 取 `ts` 较新；截断 200 | — |
 | `tracked_threads` | 按 `tid` 取 `lastCheckAt`（回退 `createdAt`）较新；按 50 条截断；合并输出统一为 `{items: T[]}` 信封形态（ENVELOPE 域不得输出裸数组） | 较旧条目丢弃 |
 | `ai_sessions` | 按 id：两边都有取 `updatedAt` 较新；总数超上限淘汰最旧；合并输出统一为 `{items: T[]}` 信封形态 | 会话消息不合并（整条取新） |
@@ -1279,7 +1282,7 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
 | 阶段 | 内容 | 实际产出 | 状态 |
 | --- | --- | --- | --- |
 | **P1 基础设施** | `PersistenceCatalog`、`PersistenceHub`、`StorageBackends`、`PersistenceMetaStore`、`DomainHealth`、`MigrationEngine` + `DomainMigrators`、`AppScheduler`、`TransferTypes`/`TransferCrypto`/`DomainMergers`、`BuiltinTasks` | `common/persistence/*`、`common/scheduler/*`、`common/transfer/*` | ✅ 完成（编译 + 单测） |
-| **P2 域接入** | 21 个域登记；15 个 Store 统一键/加载门禁；`AppStore.init` 编排迁移；迁移报告发布 | `PersistenceCatalog`、17 个 Store 文件、`AppStore` | ✅ 完成（替代原"adapter"方案，见 §8.4） |
+| **P2 域接入** | 22 个域登记（原 21，新增 `tree_reading_progress`）；17 个 Store 统一键/加载门禁；`AppStore.init` 编排迁移；迁移报告发布 | `PersistenceCatalog`、18 个 Store 文件、`AppStore` | ✅ 完成（替代原"adapter"方案，见 §8.4） |
 | **P3 生命周期改造** | `clearAuth` 拆分（设备级域不 reset）、镜像域重载、未登录可用 | `AppStore`、各 store | ✅ 完成（直接放开，未走保守版） |
 | **P4 导出导入** | `DataTransferService`（容器/校验/合并/加密）、域合并器、`DataManagementPanel`、`FilePickUtils`、`reloadAfterImport` | `common/transfer/*`、`pages/DataManagementPanel.ets`、`AppStore` | ✅ 完成（撤销导入已移除、AI Key 不脱敏；升级器入口已落地、当前无注册规则；数据管理页「六组分类/域级进度/每域体积/最近导出导入/调度状态/4MB 预警/修复」已补齐，见 §6.3/§6.7/§13.5） |
 | **P5 调度器接入** | 7 个内置任务注册；`EntryAbility`/`AppStore` 接线；回前台请求风暴收敛 | `BuiltinTasks`、`AppStore`、`EntryAbility` | ✅ 完成 |
@@ -1357,7 +1360,7 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
 ```
 新增
   entry/src/main/ets/common/persistence/PersistenceTypes.ets      // 枚举/DomainSpec/DomainEnvelope/迁移报告
-  entry/src/main/ets/common/persistence/PersistenceCatalog.ets    // 21 域静态注册表（唯一真相）
+  entry/src/main/ets/common/persistence/PersistenceCatalog.ets    // 域静态注册表（当前 22 域，唯一真相）
   entry/src/main/ets/common/persistence/PersistenceHub.ets        // 治理编排器（读写/健康/统计/flush）
   entry/src/main/ets/common/persistence/StorageBackends.ets       // Preferences/JsonFile 后端
   entry/src/main/ets/common/persistence/PersistenceMetaStore.ets  // v2.meta 读写
@@ -1423,7 +1426,7 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
     [调度](research/SCHEDULER_RESEARCH.md)、[导出导入](research/EXPORT_IMPORT_RESEARCH.md)），
     其结论（picker API 纠偏、ai_sessions 隐私降级、draft_media 排除、iterations 校验、
     fd 泄漏、回前台请求风暴）已并入本文；原"apiKey 脱敏"结论已于 2026-10-30 产品决策推翻（见 §6.6）。
-  - 基础设施落地：`PersistenceTypes` / `PersistenceCatalog`（21 域）/ `StorageBackends` /
+  - 基础设施落地：`PersistenceTypes` / `PersistenceCatalog`（当前 22 域）/ `StorageBackends` /
     `PersistenceMetaStore` / `DomainHealth` / `PersistenceHub` / `DomainMigrators` / `MigrationEngine` /
     `TransferTypes` / `DataTransferService` / `SchedulerTypes` / `AppScheduler` / `TransferCrypto` /
     `DomainMergers` / `FilePickUtils`。
@@ -1580,7 +1583,7 @@ badge 规则：迁移有失败 → 红点；迁移完成且未提示过 → 无 
     避免页面继续显示可清理旧数据。（**已被后续批次取代**：2026-10-31 第二批把该逻辑扩展为
     `resetGovernanceMetaAfterClear`，同时重置迁移结果明细与导出/导入历史，见 §13.3 末尾。）
   - **文档同步（历史口径，部分已由后续批次更新）**：本设计稿按 `docs/research/AUDIT_DESIGN_CONFLICT.md`
-    逐条对齐（撤销导入移除、DEVICE 16、SKIP 语义、策略标签、升级器、8MB 双向、镜像归属、updatedAt 口径、
+    逐条对齐（撤销导入移除、DEVICE 16（历史口径，当前 17）、SKIP 语义、策略标签、升级器、8MB 双向、镜像归属、updatedAt 口径、
     4MB、清空媒体文案、§13.5 交叉引用等）。其中"升级器未实现 / 4MB 未实现"已在 2026-10-31 第二批补齐
     （见 §13.3 第二批记录），**当前状态以 §13.5 为准**。
   - 验证方式与结果（Lead 统一执行，2026-10-31）：

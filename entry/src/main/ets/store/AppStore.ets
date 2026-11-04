@@ -38,6 +38,7 @@ import {
   DraftMediaCleanupResult
 } from '../common/media/DraftMediaStore'
 import { ReadingProgressStore } from './ReadingProgressStore'
+import { ThreadTreeProgressStore } from './ThreadTreeProgressStore'
 import { AiSessionStore } from './AiSessionStore'
 import { AiToolCacheStore } from './AiToolCacheStore'
 import { floatingLayerStore } from './FloatingLayerStore'
@@ -53,6 +54,7 @@ import { routerStore } from './RouterStore'
 import type { SettingsState } from './settings/SettingsState'
 import type { BrowseHistoryEntry } from './HistoryStore'
 import type { ReadingProgressEntry } from './ReadingProgressStore'
+import type { ThreadTreeProgressEntry } from './ThreadTreeProgressStore'
 import type { ToastState } from '../common/feedback/ToastManager'
 import type { ProfileData } from '../model/User'
 import type { ThreadResult } from '../model/ThreadResult'
@@ -220,6 +222,8 @@ class AppStoreClass {
   readonly trackedThreadStore: TrackedThreadStore = new TrackedThreadStore()
   /** 帖子阅读进度（按账号隔离，用于下次进入时恢复阅读位置）。 */
   readonly readingProgressStore: ReadingProgressStore = new ReadingProgressStore()
+  /** 帖子「递进树」阅读进度（树内锚点行，与列表阅读进度分开存储）。 */
+  readonly treeProgressStore: ThreadTreeProgressStore = new ThreadTreeProgressStore()
   /** AI 对话会话（按账号隔离，提供跨页面/跨启动的对话记忆）。 */
   readonly aiSessionStore: AiSessionStore = new AiSessionStore()
   /** AI 工具结果缓存（按账号隔离，跨启动复用读帖 / 资料 / 搜索结果）。 */
@@ -261,6 +265,7 @@ class AppStoreClass {
       await this.voteStore.init(this.store, this.writeQueue)
       await this.historyStore.init(this.store, this.writeQueue)
       await this.readingProgressStore.init(this.store, this.writeQueue)
+      await this.treeProgressStore.init(this.store, this.writeQueue)
 
       // 认证 + 分类（分类为设备级缓存，不再依赖 uid）
       await this.authStore.init(this.store, this.writeQueue)
@@ -820,7 +825,8 @@ class AppStoreClass {
      *
      * 注意：此处移除 `settingsStore.reset()` / `categoryStore.reset()` / `profileStore.reset()` /
      * `voteStore.reset()` / `historyStore.reset()` / `readingProgressStore.reset()` /
-     * `trackedThreadStore.reset()` / `aiSessionStore.reset()` / `aiToolCacheStore.reset()` 是
+     * `treeProgressStore.reset()` / `trackedThreadStore.reset()` / `aiSessionStore.reset()` /
+     * `aiToolCacheStore.reset()` 是
      * **刻意**的，不是遗漏；这些数据属于设备，不属于账号。真正需要"清空一切"的入口是
      * 数据管理页的「清空本地数据」。
      */
@@ -1110,6 +1116,14 @@ class AppStoreClass {
   saveReadingProgress(uid: string, entry: ReadingProgressEntry): Promise<void> {
     return this.readingProgressStore.setProgress(uid, entry)
   }
+  /** 读取指定帖子在递进树视图中的阅读进度（无记录返回 null）。 */
+  getTreeReadingProgress(uid: string, tid: string): Promise<ThreadTreeProgressEntry | null> {
+    return this.treeProgressStore.getProgress(uid, tid)
+  }
+  /** 写入（覆盖）指定帖子的递进树阅读进度。 */
+  saveTreeReadingProgress(uid: string, entry: ThreadTreeProgressEntry): Promise<void> {
+    return this.treeProgressStore.setProgress(uid, entry)
+  }
 
   // ---------- Facade: AI Sessions（对话记忆） ----------
 
@@ -1306,6 +1320,7 @@ class AppStoreClass {
     this.voteStore.reset()
     this.historyStore.reset()
     this.readingProgressStore.reset()
+    this.treeProgressStore.reset()
     this.favoriteStore.reset()
     this.trackedThreadStore.reset()
     this.aiSessionStore.reset()
@@ -1437,6 +1452,9 @@ class AppStoreClass {
     })
     await this.reloadImportStep(failed, 'reading_progress', async (): Promise<void> => {
       this.readingProgressStore.reset()
+    })
+    await this.reloadImportStep(failed, 'tree_reading_progress', async (): Promise<void> => {
+      this.treeProgressStore.reset()
     })
     await this.reloadImportStep(failed, 'history', async (): Promise<void> => {
       this.historyStore.reset()

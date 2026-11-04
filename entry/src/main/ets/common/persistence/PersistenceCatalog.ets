@@ -38,6 +38,7 @@ export class DomainIds {
   static readonly FAVORITE_MEMBERSHIP: string = 'favorite_membership'
   static readonly HISTORY: string = 'history'
   static readonly READING_PROGRESS: string = 'reading_progress'
+  static readonly TREE_READING_PROGRESS: string = 'tree_reading_progress'
   static readonly VOTES: string = 'votes'
   static readonly POLL_VOTED: string = 'poll_voted'
   static readonly TRACKED_THREADS: string = 'tracked_threads'
@@ -117,6 +118,11 @@ function buildSpecs(): DomainSpec[] {
     'reading_progress', '阅读进度', StorageKind.PREFERENCES, 'reading_progress', '', 1,
     DomainScope.DEVICE, ExportPolicy.INCLUDE, ImportPolicy.MERGE_BY_KEY, true, false, 128,
     '每帖读到哪一楼的定位锚点。上限 200 条。'
+  ))
+  specs.push(new DomainSpec(
+    'tree_reading_progress', '递进树阅读进度', StorageKind.PREFERENCES, 'tree_reading_progress', '', 1,
+    DomainScope.DEVICE, ExportPolicy.INCLUDE, ImportPolicy.MERGE_BY_KEY, true, false, 128,
+    '每帖在递进树视图读到哪一行（锚点楼层 pid / 所属根 / 页码）。上限 200 条。'
   ))
   specs.push(new DomainSpec(
     'votes', '点赞/踩记录', StorageKind.PREFERENCES, 'votes', '', 1,

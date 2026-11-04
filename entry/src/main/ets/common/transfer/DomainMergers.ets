@@ -9,14 +9,14 @@
  *
  * ## 形态约定（与 `DomainMigrators` 的产出、`PersistenceHub` 的载荷一致）
  * - `settings` / `theme`：普通对象（`SettingsState` 结构）；
- * - `history` / `reading_progress`：**裸数组**；
+ * - `history` / `reading_progress` / `tree_reading_progress`：**裸数组**；
  * - `votes` / `poll_voted`：`Record<tid, 值>`；
  * - `tracked_threads` / `ai_sessions`：`{items: T[]}` 信封形态（**输出强制归一为该形态**：
  *   `CacheEnvelopeStore` 只认 `payload.items`，裸数组写回后 Store 会读成空域，见审计 IMP-09）；
  * - `drafts` / `saved_threads`：元素含业务键（`key` / `tid`）的**裸数组**。
  *
- * 裸数组类域（history/reading_progress/drafts/saved_threads）对两种形态都容忍，输出形态优先
- * 跟随导入文件，因此同一份数据导入后再导出不会因形态变化而反复改键。
+ * 裸数组类域（history/reading_progress/tree_reading_progress/drafts/saved_threads）对两种形态都容忍，
+ * 输出形态优先跟随导入文件，因此同一份数据导入后再导出不会因形态变化而反复改键。
  *
  * ## 安全与幂等
  * - 所有输入按**不可信**处理：逐条做类型校验，坏条目丢弃并计入 `skipped`；
@@ -35,6 +35,9 @@ const HISTORY_MAX_COUNT: number = 500
 
 /** 阅读进度上限（与 `ReadingProgressStore.PROGRESS_MAX_COUNT` 一致，200）。 */
 const READING_PROGRESS_MAX_COUNT: number = 200
+
+/** 递进树阅读进度上限（与 `ThreadTreeProgressStore` 的模块常量一致，200）。 */
+const TREE_PROGRESS_MAX_COUNT: number = 200
 
 /** 投票记录上限（与 `VoteStore.VOTE_MAX_ENTRIES` 一致，200）。 */
 const VOTE_MAX_ENTRIES: number = 200
@@ -143,6 +146,9 @@ export function mergePayload(domainId: string, localPayload: Object | null,
     case DomainIds.READING_PROGRESS:
       return mergeArrayPayloadByTime(localPayload, incomingPayload, 'tid', 'ts', '',
         READING_PROGRESS_MAX_COUNT, false)
+    case DomainIds.TREE_READING_PROGRESS:
+      return mergeArrayPayloadByTime(localPayload, incomingPayload, 'tid', 'ts', '',
+        TREE_PROGRESS_MAX_COUNT, false)
     case DomainIds.TRACKED_THREADS:
       return mergeArrayPayloadByTime(localPayload, incomingPayload, 'tid', 'lastCheckAt',
         'createdAt', TRACK_MAX_COUNT, true)

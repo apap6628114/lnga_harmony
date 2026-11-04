@@ -3,12 +3,14 @@ import { common, Context } from '@kit.AbilityKit'
 
 import { appStore } from '../store/AppStore'
 import { AiAgentPreset, PRESET_ENTRY_THREAD } from '../model/AiAgentPreset'
-import { routerStore, Screen } from '../store/RouterStore'
+import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
 import { votePost } from '../service/api/FavoriteApi'
 import { getActiveDomain } from '../service/api/MiscApi'
+import { ThreadResult } from '../model/ThreadResult'
 import type { PostReplyResult } from '../model/ThreadResult'
 import type { PostInfo } from '../model/PostInfo'
 import { VoteResult } from '../model/NgaApiResults'
+import { FavoriteMembershipState } from '../model/Favorite'
 import { getCachedBBNodes } from '../parser/bbcode/BBCodeCache'
 import { AppColors, NAV_BAR_H } from '../common/constants/Constants'
 import { PanelNavBar, NavBarMenuItem } from '../common/components/PanelNavBar'
@@ -29,12 +31,22 @@ import { getActiveAiValidationMessage } from '../service/ai/ActiveAiService'
 import { bbNodesToPlainText } from '../common/utils/Utils'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
+import { applyBlacklistStateToPosts } from '../common/utils/BlacklistUtils'
+import { dismissAnalyzerSessions } from '../common/media/ImageAnalyzerSession'
+import { HoldingHandMonitor, HoldingHandStatus } from '../common/managers/HoldingHandMonitor'
+import { SaveThreadContent } from '../common/dialogs/SaveThreadDialogs'
+import { ThreadTrackContent } from '../common/dialogs/ThreadTrackDialogs'
+import { savedThreadService, SaveThreadOutcome } from '../service/SavedThreadService'
+import { TrackRequest, TrackResult } from '../store/TrackedThreadStore'
+import { TrackedThread, TRACK_DEFAULT_KEEP_DAYS, TRACK_MAX_COUNT } from '../model/TrackedThread'
+import { ThreadTreeProgressEntry } from '../store/ThreadTreeProgressStore'
 import {
   ThreadTreeModel,
   ThreadTreeRow,
   ThreadTreeRowKind,
   ThreadTreeChild,
-  ThreadTreeQuoteRef
+  ThreadTreeQuoteRef,
+  ThreadTreeRoot
 } from '../model/ThreadTree'
 import {
   buildThreadTree,
@@ -48,24 +60,42 @@ import { ThreadTreeDataSource } from '../common/datasource/ThreadTreeDataSource'
 const logger = new Logger(DOMAIN_UI, 'ThreadTreePanel')
 
 /**
+ * 「检测到上次阅读进度」提示的**保护窗口**（ms）。
+ *
+ * 与 `ToastManager.actionDurationMs`（4000）对齐并略长一点：提示消失后按钮已不可点，
+ * 此时必须解除「禁止记录进度」的保护，否则用户忽略提示继续阅读时整场都不会落盘
+ * （首行超过一屏时 `onScrollIndex` 的 start 恒为 0，不能靠滚动解除）。
+ */
+const PROGRESS_PROMPT_PROTECT_MS: number = 4300
+
+/**
  * 帖子「两层递进树」阅读页面（独立栈页面）。
  *
- * 与自然列表页（ThreadPanel）**完全隔离**：本页面自己抓取全帖、自己展示加载进度、
+ * 与自然列表页（ThreadPanel）**数据隔离**：本页面自己抓取全帖、自己展示加载进度、
  * 自己持有树模型与数据源，不读写 ThreadPanel 的分页窗口，也不与其共享渲染状态。
+ * 但**功能面与列表页对齐**（`docs/THREAD_TREE_DESIGN.md` §3.6）：
+ * 更多菜单与列表页同构（收藏 / 离线保存 / 跟踪 / 刷新 / 只看楼主 / 切换阅读方式 /
+ * 从网页打开 / 分享），并各自维护阅读记录与阅读进度。
  *
  * 进入方式：
- * - 列表页更多菜单「递进树阅读」：push 本页（`fromListEntry = true`），返回即回列表页；
+ * - 列表页更多菜单「切换为递进树阅读」：push 本页（`fromListEntry = true`），返回即回列表页；
  * - 设置「帖子默认样式 = 递进树」：打开帖子时直接挂载本页（`fromListEntry = false`），
- *   「列表阅读」菜单项替换当前页为列表页。
+ *   「切换为列表阅读」替换当前页为列表页。
  */
 @Component
 export struct ThreadTreePanel {
   /** 主题 ID。 */
-  @Prop threadTid: string = ''
+  @Prop @Watch('onThreadChanged') threadTid: string = ''
   /** 初始定位楼层 pid（空串表示定位顶部；主楼哨兵 '0' 已由路由层归一为空串）。 */
   @Prop threadPid: string = ''
-  /** 是否由列表页 push 进入（决定「列表阅读」是返回还是替换当前页）。 */
+  /** 是否由列表页 push 进入（决定「切换为列表阅读」是返回还是替换当前页）。 */
   @Prop fromListEntry: boolean = false
+  /** 路由带来的「只看楼主」初始态（列表页切换阅读方式时沿用当前过滤状态）。 */
+  @Prop authorOnlyInit: boolean = false
+  /** 打开帖子的路由来源（决定是否允许恢复树内阅读进度，与列表页同一白名单）。 */
+  @Prop threadSource: string = ''
+  /** 路由请求的初始页码（> 1 表示有明确翻页意图，不恢复进度）。 */
+  @Prop threadPage: number = 1
 
   /** 全帖抓取中。 */
   @State isLoading: boolean = true
@@ -91,10 +121,45 @@ export struct ThreadTreePanel {
   @State listViewportHeight: number = 1
   /** AI 任务候选（多任务时的选择弹窗）。 */
   @State aiTasks: AiAgentPreset[] = []
+  /** 当前主题的收藏状态（更多菜单文案与激活态）。 */
+  @State favoriteState: FavoriteMembershipState = FavoriteMembershipState.UNKNOWN
+  /** 当前是否只看楼主（树内按楼主过滤重建）。 */
+  @State authorOnly: boolean = false
+  /** 握姿：决定底部回复按钮贴左还是贴右。 */
+  @State holdingStatus: HoldingHandStatus = appStore.settings.holdingHand as HoldingHandStatus
+  /** 跟踪对话框中选中的跟踪时长（天），由 ThreadTrackContent 回写。 */
+  @State private trackKeepDays: number = TRACK_DEFAULT_KEEP_DAYS
+  /** 保存帖子弹窗：页范围是否合法（由 SaveThreadContent 回写）。 */
+  @State private saveRangeValid: boolean = false
+  /** 保存帖子弹窗：选定起始页（由 SaveThreadContent 回写，非法为 -1）。 */
+  @State private saveStartPage: number = -1
+  /** 保存帖子弹窗：选定结束页（由 SaveThreadContent 回写，非法为 -1）。 */
+  @State private saveEndPage: number = -1
 
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
+  /**
+   * 主题收藏关系变更版本号。
+   *
+   * 只用于建立响应式依赖：收藏可能在收藏夹面板等处被修改，回到本页时更多菜单的
+   * 文案（收藏到… / 管理收藏）必须取到最新状态。
+   */
+  @StorageProp('favoriteTopicVersion') @Watch('onFavoriteTopicVersionChange') favoriteTopicVersion: number = 0
+  /**
+   * 跟踪列表版本号。
+   *
+   * 与列表页同源：跟踪状态可能在对话框/收藏面板等处变化，菜单激活态不能停在旧值。
+   */
+  @StorageProp('trackedThreadVersion') trackedThreadVersion: number = 0
+  /** 黑名单变更版本号：楼层仍需按最新黑名单遮蔽正文。 */
+  @StorageProp('blacklistVersion') @Watch('onBlacklistVersionChange') blacklistVersion: number = 0
 
+  /** 全帖楼层（未过滤；「只看楼主」切换时据此重建）。 */
+  private allPosts: PostInfo[] = []
+  /** 服务端总页数（取自抓取结果）。 */
+  private totalPages: number = 0
+  /** 楼层 pid → 服务端页码（切回列表模式与进度记录用）。 */
+  private pageByPid: Map<number, number> = new Map()
   /** 树模型（独立于任何分页窗口）。 */
   private treeModel: ThreadTreeModel | null = null
   /** 树 List 数据源（扁平可见行）。 */
@@ -124,6 +189,8 @@ export struct ThreadTreePanel {
   private treeOwner: string = ''
   /** 主题 fid（回复/编辑协议用）。 */
   private threadFid: number = 0
+  /** 楼主 uid（跟踪任务与只看楼主过滤用）。 */
+  private threadAuthorId: string = ''
   /** 楼主稳定作者标识（`authorKey` 语义，见 PostInfo）。 */
   private threadAuthorKey: string = ''
   /** 是否已取得可用楼主标识。 */
@@ -132,16 +199,122 @@ export struct ThreadTreePanel {
   private aiTaskDialogController?: CustomDialogController
   /** 待处理 AI 任务的楼层。 */
   private aiTaskPost: PostInfo | null = null
+  /** 保存帖子弹窗控制器。 */
+  private saveDialogController?: CustomDialogController
+  /** 跟踪帖子更新弹窗控制器。 */
+  private trackDialogController?: CustomDialogController
+
+  /** 是否已完成首次进入（@Watch 可能早于 aboutToAppear 触发）。 */
+  private hasInitiallyLoaded: boolean = false
+  /** 握持状态监视器。 */
+  private holdingMonitor: HoldingHandMonitor = new HoldingHandMonitor()
+  /** 是否已收到过握持状态（首次直接生效，后续带动画）。 */
+  private holdingDetected: boolean = false
+
+  /**
+   * 树内阅读进度的延迟保存计时器（滚动停顿 800ms 后落盘，离开页面时立即补记）。
+   *
+   * 与列表页 `ThreadPanel.progressRecordTimer` 同构，但记录的是**树内锚点行**
+   * （pid / 所属根 / 服务端页码），见 {@link recordTreeProgress}。
+   */
+  private progressRecordTimer: number = -1
+  /** 「检测到上次阅读进度」提示的保护窗口计时器（到时解除禁止记录）。 */
+  private progressPromptTimer: number = -1
+  /** 首屏完成后是否仍在等待读取并恢复上阅读进度。 */
+  private readingResumePending: boolean = false
+  /** 当前帖子的树内进度恢复是否已经处理过（防止刷新时重复恢复）。 */
+  private readingResumeHandled: boolean = false
+  /** 待用户确认的树内进度：Toast「前往查看」点击后执行定位；只影响定位动作，不作为记录开关。 */
+  private pendingResumeEntry: ThreadTreeProgressEntry | null = null
+  /**
+   * 刷新期间用户点击「前往查看」的延迟定位目标 pid。
+   *
+   * 刷新会卸载 List（`listMounted=false`），此时不能立即滚动；先记住目标，等新一轮
+   * 树加载完成、List 重新挂载后作为定位锚点消费。
+   */
+  private deferredResumePid: number = -1
+  /** 首次导航/恢复是否已执行过（未执行前不记录进度，避免把首行误记成阅读位置）。 */
+  private navigationApplied: boolean = false
+  /** `onScrollIndex` 最近上报的视口中心行下标（进度锚点取中心行）。 */
+  private lastScrollCenter: number = 0
+  /** `onScrollIndex` 最近上报的首个可见行下标（判断用户是否已开始阅读）。 */
+  private lastScrollStart: number = 0
 
   aboutToAppear(): void {
+    this.hasInitiallyLoaded = true
     this.treeOwner = 'tree-' + String(Date.now()) + '-' + String(Math.floor(Math.random() * 1000000))
+    this.authorOnly = this.authorOnlyInit
     this.loadTree(false)
     this.loadPersistedVotes()
+    this.syncFavoriteState()
+    appStore.favoriteStore.ensureFolders()
+    this.startHoldingHandMonitoring()
   }
 
   aboutToDisappear(): void {
+    // 先补记最终阅读位置（此时树模型与滚动状态仍有效），再清理资源
+    this.recordTreeProgress()
+    clearTimeout(this.progressRecordTimer)
+    this.progressRecordTimer = -1
+    clearTimeout(this.progressPromptTimer)
+    this.progressPromptTimer = -1
+    // 使在途的进度恢复读取/已弹出的提示失效：页面销毁后不得再定位
+    this.readingResumePending = false
+    this.pendingResumeEntry = null
+    this.deferredResumePid = -1
+    this.stopHoldingHandMonitoring()
     this.cancelWork()
     this.aiTaskDialogController = undefined
+    this.saveDialogController = undefined
+    this.trackDialogController = undefined
+  }
+
+  /**
+   * 切换帖子（同一页面实例被复用到另一个 tid）：补记旧帖进度并重置页面态。
+   */
+  private onThreadChanged(): void {
+    if (!this.hasInitiallyLoaded) {
+      this.hasInitiallyLoaded = true
+      return
+    }
+    // 切换前补记旧帖的最终阅读位置（此时 treeModel/allPosts 仍是旧帖数据）
+    this.recordTreeProgress()
+    clearTimeout(this.progressRecordTimer)
+    this.progressRecordTimer = -1
+    clearTimeout(this.progressPromptTimer)
+    this.progressPromptTimer = -1
+    if (this.highlightTimer >= 0) {
+      clearTimeout(this.highlightTimer)
+      this.highlightTimer = -1
+    }
+    this.highlightPid = 0
+    this.readingResumeHandled = false
+    this.readingResumePending = false
+    this.pendingResumeEntry = null
+    this.deferredResumePid = -1
+    this.navigationApplied = false
+    this.allPosts = []
+    this.pageByPid = new Map<number, number>()
+    this.treeModel = null
+    this.treeReady = false
+    this.treeDataSource.clear()
+    this.totalPages = 0
+    this.threadFid = 0
+    this.threadAuthorId = ''
+    this.threadAuthorKey = ''
+    this.hasThreadAuthorKey = false
+    this.authorOnly = this.authorOnlyInit
+    this.threadSubject = '递进树'
+    this.titleScrollEffectProgress = 0
+    this.lastScrollStart = 0
+    this.lastScrollCenter = 0
+    this.navigationPending = false
+    this.navigationScheduled = false
+    this.votedUpPids = new Set<string>()
+    this.votedDownPids = new Set<string>()
+    this.syncFavoriteState()
+    this.loadTree(false)
+    this.loadPersistedVotes()
   }
 
   /**
@@ -160,20 +333,30 @@ export struct ThreadTreePanel {
     this.listMounted = false
   }
 
+  // ==================== 加载 ====================
+
   /**
-   * 加载全帖并重建树（页面进入与「刷新递进树」共用）。
+   * 加载全帖并重建树（页面进入、「刷新递进树」、回复后刷新共用）。
    *
-   * @param keepSubject - 是否保留当前标题（刷新时避免标题短暂回退）
+   * @param keepSubject - 是否保留当前标题并回到当前阅读位置（刷新场景）；
+   *   false 表示首次加载，定位使用路由传入的 pid
    */
   private loadTree(keepSubject: boolean): void {
+    // 代际先推进、旧任务先取消：即使本次因 tid 为空直接早退，在途的旧结果也不得再提交
+    this.fetchGeneration++
+    const generation: number = this.fetchGeneration
+    clearTimeout(this.progressRecordTimer)
+    this.progressRecordTimer = -1
+    this.navigationApplied = false
     if (this.threadTid.length === 0) {
+      threadTreeFetchService.cancel(this.treeOwner)
       this.isLoading = false
       this.hasError = true
       this.errorMsg = '缺少帖子 ID'
       return
     }
-    this.fetchGeneration++
-    const generation: number = this.fetchGeneration
+    // 刷新时以当前视口中心行为锚点，避免重建后跳回路由进入时的位置
+    const refreshAnchorPid: number = keepSubject ? this.currentCenterPid() : -1
     const fetchTid: string = this.threadTid
     this.isLoading = true
     this.hasError = false
@@ -182,7 +365,8 @@ export struct ThreadTreePanel {
     this.progressTotal = 0
     this.treeReady = false
     this.treeDataSource.clear()
-    logger.info('tree-panel load start tid=%{public}s gen=%{public}d', fetchTid, generation)
+    logger.info('tree-panel load start tid=%{public}s gen=%{public}d refresh=%{public}s',
+      fetchTid, generation, String(keepSubject))
     threadTreeFetchService.fetchAll(this.treeOwner, fetchTid, (done: number, total: number): void => {
       if (generation !== this.fetchGeneration) {
         return
@@ -196,6 +380,7 @@ export struct ThreadTreePanel {
       }
       if (result.cancelled) {
         this.isLoading = false
+        this.deferredResumePid = -1
         appStore.showToast('已取消加载递进树')
         if (this.fromListEntry) {
           routerStore.back()
@@ -207,37 +392,130 @@ export struct ThreadTreePanel {
       }
       if (!result.ok) {
         this.isLoading = false
+        this.deferredResumePid = -1
         this.hasError = true
         this.errorMsg = result.error.length > 0 ? result.error : '加载失败'
         return
       }
       this.applyThreadInfo(keepSubject, result)
-      const model: ThreadTreeModel = buildThreadTree(result.posts, result.totalPages)
-      result.pageByPid.forEach((page: number, postPid: number): void => {
-        model.pageByPid.set(postPid, page)
-      })
-      this.treeModel = model
-      flattenThreadTree(model)
-      this.treeDataSource.replaceAll(model.rows)
+      this.allPosts = result.posts
+      this.totalPages = result.totalPages
+      this.pageByPid = result.pageByPid
+      // 旧树的可见中心/首行不再适用于新 rows，重置后再由本轮的 onScrollIndex 更新
+      this.lastScrollStart = 0
+      this.lastScrollCenter = 0
+      this.rebuildTree()
       this.treeReady = true
       this.isLoading = false
-      this.navigationPid = this.threadPid.length > 0 ? parseInt(this.threadPid, 10) : 0
+      // 阅读记录（浏览历史）与列表页同源：树模式打开同一帖子同样计入「看过」
+      this.recordBrowseHistory(result)
+      // 被跟踪的帖子：打开即推进已读基准（与列表页同一入口语义）
+      this.syncTrackedOnOpen()
+      this.navigationPid = this.resolveNavigationPid(refreshAnchorPid)
       this.navigationPending = true
       this.navigationScheduled = false
       this.scheduleNavigation()
+      // 路由自带定位意图时不恢复进度（避免两种定位意图打架）
+      if (refreshAnchorPid < 0 && this.threadPid.length === 0) {
+        this.tryRestoreTreeProgress()
+      }
       logger.info(
-        'tree-panel load done tid=%{public}s posts=%{public}d roots=%{public}d rows=%{public}d quotes=%{public}d',
-        fetchTid, model.totalPosts, model.roots.length, model.rows.length, model.quoteCount
+        'tree-panel load done tid=%{public}s posts=%{public}d roots=%{public}d rows=%{public}d ' +
+          'quotes=%{public}d authorOnly=%{public}s',
+        fetchTid, result.posts.length, this.treeModel !== null ? this.treeModel.roots.length : 0,
+        this.treeDataSource.totalCount(), this.treeModel !== null ? this.treeModel.quoteCount : 0,
+        String(this.authorOnly)
       )
     }).catch((error: Object): void => {
       if (generation !== this.fetchGeneration) {
         return
       }
       this.isLoading = false
+      this.deferredResumePid = -1
       this.hasError = true
       this.errorMsg = formatError(error)
       logger.error('tree-panel load failed tid=%{public}s: %{public}s', fetchTid, formatError(error))
     })
+  }
+
+  /**
+   * 按当前过滤状态重建树模型并替换数据源。
+   *
+   * 「只看楼主」在树内不是列表级过滤，而是**用楼主楼层重建一棵树**：被过滤掉的
+   * 非楼主楼层不再参与父子关系，原来回复它们的楼主楼层按「引用目标不在树内」提升为根
+   * （`buildThreadTree` 的既有语义），因此不会出现悬空子行或错误的折叠计数。
+   */
+  private rebuildTree(): void {
+    const posts: PostInfo[] = this.filteredPosts()
+    const model: ThreadTreeModel = buildThreadTree(posts, this.totalPages)
+    this.pageByPid.forEach((page: number, pid: number): void => {
+      model.pageByPid.set(pid, page)
+    })
+    // buildThreadTree 内部已 flatten；只看楼主补回根行引用上下文时才需要再摊平一次
+    if (this.restoreRootQuoteContext(model)) {
+      flattenThreadTree(model)
+    }
+    this.treeModel = model
+    this.treeDataSource.replaceAll(model.rows)
+  }
+
+  /**
+   * 只看楼主模式下，给「被引用楼层已被过滤掉」的根行补回引用上下文。
+   *
+   * 树页根行用 `PostItem` 渲染，正文默认是剥离引用区后的内容（`displayContent`）；
+   * 过滤后原本作为父节点的非楼主楼层不在树里，根行只剩一张没有任何“回复了谁”
+   * 提示的卡片，与列表页的只看楼主不一致。这里让这类根行保留原始正文（含引用块），
+   * 由卡片内的引用块继续表达被回复对象。
+   *
+   * 只有同时满足三个条件才改：只看楼主开启、该行是根、引用目标不在当前树模型中
+   * （被过滤/被删/跨帖）。主楼引用（`targetPid === 0`）不处理。
+   *
+   * @param model - 刚构建好的树模型（roots / rows 已就绪）
+   * @returns 是否修改了根行正文（调用方据此决定是否需要重新摊平）
+   */
+  private restoreRootQuoteContext(model: ThreadTreeModel): boolean {
+    if (!this.authorOnly) {
+      return false
+    }
+    let changed: boolean = false
+    for (let i: number = 0; i < model.roots.length; i++) {
+      const root: ThreadTreeRoot = model.roots[i]
+      const ref: ThreadTreeQuoteRef | null = root.ref
+      if (ref === null || ref.isTopicRef || ref.targetPid <= 0) {
+        continue
+      }
+      if (model.postByPid.has(ref.targetPid)) {
+        continue
+      }
+      if (root.displayContent !== root.post.content) {
+        root.displayContent = root.post.content
+        changed = true
+      }
+    }
+    return changed
+  }
+
+  /**
+   * 取当前参与建树的楼层（只看楼主时仅保留主楼与楼主楼层）。
+   *
+   * @returns 楼层数组
+   */
+  private filteredPosts(): PostInfo[] {
+    if (!this.authorOnly || !this.hasThreadAuthorKey) {
+      return this.allPosts
+    }
+    const filtered: PostInfo[] = []
+    for (let i: number = 0; i < this.allPosts.length; i++) {
+      const post: PostInfo = this.allPosts[i]
+      // 主楼恒保留：它是树的第一行，且 `buildThreadTree` 靠 `lou === 0` 识别
+      if (post.lou === 0 || this.isTopicAuthorPost(post)) {
+        filtered.push(post)
+      }
+    }
+    if (filtered.length === this.allPosts.length) {
+      return this.allPosts
+    }
+    return filtered
   }
 
   /**
@@ -248,16 +526,58 @@ export struct ThreadTreePanel {
    */
   private applyThreadInfo(keepSubject: boolean, result: ThreadTreeFetchResult): void {
     if (result.threadInfo === null) {
+      // 拿不到主题信息就没有可靠的楼主标识：不能维持“只看楼主”的激活态
+      this.disableAuthorOnlyIfUnavailable()
       return
     }
     this.threadFid = result.threadInfo.fid
+    this.threadAuthorId = String(result.threadInfo.authorid)
     this.threadAuthorKey = result.threadInfo.authorKey
     this.hasThreadAuthorKey = this.isAuthorKeyUsable(result.threadInfo.authorKey)
+    this.disableAuthorOnlyIfUnavailable()
     if (keepSubject && this.threadSubject.length > 0 && this.threadSubject !== '递进树') {
       return
     }
     const subject: string = unescapeHtml(result.threadInfo.subject)
     this.threadSubject = subject.length > 0 ? subject : '递进树'
+  }
+
+  /**
+   * 楼主标识不可用时关闭「只看楼主」并提示。
+   *
+   * 路由可能带着 `authorOnlyInit=true` 进入（从列表页切换阅读方式），但树页的过滤
+   * 依赖 `threadInfo.authorKey`；拿不到稳定标识时若仍显示激活态，菜单与实际内容会
+   * 互相矛盾（显示全部楼层却标着“只看楼主”）。
+   */
+  private disableAuthorOnlyIfUnavailable(): void {
+    if (!this.authorOnly || this.hasThreadAuthorKey) {
+      return
+    }
+    this.authorOnly = false
+    appStore.showToast('无法识别楼主，已显示全部楼层')
+  }
+
+  /**
+   * 把这次全帖抓取计入浏览历史（与列表页 `addBrowseHistoryFromThread` 同一份台账）。
+   *
+   * 抓取结果是树页面自己的聚合结构，这里按 `ThreadResult` 的同形状字段组装后交给
+   * `HistoryStore`：`threadInfo.replies` 即已读基线，主题列表据此判定「看过后有新回复」。
+   *
+   * @param result - 全帖抓取结果
+   */
+  private recordBrowseHistory(result: ThreadTreeFetchResult): void {
+    if (!appStore.auth.isAuthenticated) {
+      return
+    }
+    const historyResult: ThreadResult = new ThreadResult()
+    historyResult.ok = true
+    historyResult.threadInfo = result.threadInfo
+    historyResult.forumName = result.forumName
+    historyResult.posts = result.posts
+    historyResult.pagination.page = 1
+    historyResult.pagination.totalPages = result.totalPages
+    historyResult.pagination.totalRows = result.posts.length
+    appStore.addBrowseHistoryFromThread(appStore.auth.uid, historyResult, this.threadTid)
   }
 
   /**
@@ -301,6 +621,27 @@ export struct ThreadTreePanel {
   }
 
   /**
+   * 计算本轮加载完成后的定位锚点。
+   *
+   * 优先级：刷新期间用户点击「前往查看」的延迟目标 → 刷新前视口中心 → 路由 pid。
+   *
+   * @param refreshAnchorPid - 刷新前的中心行 pid；首次加载传 -1
+   * @returns 目标 pid（0 表示定位顶部）
+   */
+  private resolveNavigationPid(refreshAnchorPid: number): number {
+    if (this.deferredResumePid >= 0) {
+      const deferred: number = this.deferredResumePid
+      this.deferredResumePid = -1
+      return deferred
+    }
+    if (refreshAnchorPid >= 0) {
+      return refreshAnchorPid
+    }
+    const parsed: number = this.threadPid.length > 0 ? parseInt(this.threadPid, 10) : 0
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+
+  /**
    * 执行树定位：目标行不可见时先展开其所属根，再居中滚动。
    */
   private applyNavigation(): void {
@@ -309,6 +650,7 @@ export struct ThreadTreePanel {
     }
     this.navigationPending = false
     const pid: number = this.navigationPid
+    this.navigationApplied = true
     if (pid <= 0) {
       this.scroller.scrollToIndex(0, false, ScrollAlign.START)
       return
@@ -435,6 +777,49 @@ export struct ThreadTreePanel {
   }
 
   /**
+   * 视口中心锚点行下标；中心落在折叠行时向上下就近取一个楼层行。
+   *
+   * @returns 行下标；无可用行返回 -1
+   */
+  private resolveAnchorIndex(): number {
+    const model: ThreadTreeModel | null = this.treeModel
+    if (model === null || model.rows.length === 0) {
+      return -1
+    }
+    const rows: ThreadTreeRow[] = model.rows
+    const index: number = Math.max(0, Math.min(this.lastScrollCenter, rows.length - 1))
+    if (rows[index].post !== null) {
+      return index
+    }
+    for (let i: number = index - 1; i >= 0; i--) {
+      if (rows[i].post !== null) {
+        return i
+      }
+    }
+    for (let i: number = index + 1; i < rows.length; i++) {
+      if (rows[i].post !== null) {
+        return i
+      }
+    }
+    return -1
+  }
+
+  /**
+   * 当前视口中心楼层的 pid（切换阅读方式、刷新定位用）。
+   *
+   * @returns 楼层 pid；无可定位行时返回 -1
+   */
+  private currentCenterPid(): number {
+    const model: ThreadTreeModel | null = this.treeModel
+    const index: number = this.resolveAnchorIndex()
+    if (model === null || index < 0) {
+      return -1
+    }
+    const post: PostInfo | null = model.rows[index].post
+    return post !== null ? post.pid : -1
+  }
+
+  /**
    * 由树行构造子节点组件入参（引用头缺作者名时用目标楼层补齐）。
    *
    * @param row - 树行（`kind === CHILD`）
@@ -491,6 +876,218 @@ export struct ThreadTreePanel {
     const pid: number = row.post !== null ? row.post.pid : row.rootPid
     const highlight: string = row.highlighted ? '_h' : ''
     return String(row.kind) + '_' + String(pid) + '_' + String(row.rev) + highlight
+  }
+
+  // ==================== 阅读进度（树内锚点） ====================
+
+  /**
+   * 树内阅读进度记录是否有效（开关开启、已登录、树已就绪、首轮定位已完成）。
+   *
+   * @returns 是否可以记录
+   */
+  private shouldRecordProgress(): boolean {
+    return appStore.settings.recordReadingProgress &&
+      appStore.auth.uid.length > 0 &&
+      this.treeReady &&
+      // 首轮定位/滚动尚未执行：此时 lastScrollCenter 还是默认的 0，记录会把顶部主楼
+      // 误当成阅读位置（覆盖上次进度）
+      this.navigationApplied &&
+      // 导航事务进行中，rows 与 lastScrollCenter 可能暂时不同步
+      !this.navigationPending &&
+      // 进度读取窗口内不落盘（首屏自动定位会先停在顶部）
+      !this.readingResumePending &&
+      // 恢复提示可见窗口内不落盘；提示消失（PROGRESS_PROMPT_PROTECT_MS）后解除，
+      // 避免用户忽略提示继续阅读时整场都不记录
+      this.pendingResumeEntry === null
+  }
+
+  /**
+   * 滚动过程中节流调度一次进度记录（停顿后落盘，避免高频写入）。
+   */
+  private scheduleProgressRecord(): void {
+    if (!this.shouldRecordProgress()) return
+    clearTimeout(this.progressRecordTimer)
+    this.progressRecordTimer = setTimeout((): void => {
+      this.progressRecordTimer = -1
+      this.recordTreeProgress()
+    }, 800)
+  }
+
+  /**
+   * 记录当前树内阅读位置。
+   *
+   * 锚点取视口中心行（与还原时的居中定位同源对称）。与列表页不同，树视图没有分页窗口，
+   * 定位依据是**扁平可见行**，因此记录的是：
+   * - `pid` / `rootPid`：锚点楼层及所属根（恢复时先展开根再居中）；
+   * - `page`：锚点楼层所属服务端页码（诊断快照，切列表时以同一映射重算）。
+   *
+   * 刻意不记录扁平行下标：它会随折叠/展开与只看楼主过滤漂移，无法作为可靠的定位依据。
+   */
+  private recordTreeProgress(): void {
+    if (!this.shouldRecordProgress()) return
+    const model: ThreadTreeModel | null = this.treeModel
+    if (model === null) return
+    const index: number = this.resolveAnchorIndex()
+    if (index < 0) return
+    const row: ThreadTreeRow = model.rows[index]
+    const post: PostInfo | null = row.post
+    if (post === null) return
+    const entry = new ThreadTreeProgressEntry()
+    const postTid: number = post.tid
+    entry.tid = postTid > 0 ? String(postTid) : this.threadTid
+    entry.pid = post.pid
+    entry.rootPid = row.rootPid
+    const mappedPage: number | undefined = this.pageByPid.get(post.pid)
+    entry.page = mappedPage !== undefined && mappedPage > 0 ? mappedPage : 1
+    appStore.saveTreeReadingProgress(appStore.auth.uid, entry)
+  }
+
+  /**
+   * 首次进入当前帖子时尝试恢复上一次的树内阅读位置。
+   *
+   * 与列表页同一交互：不静默定位，读取通过校验后仅弹「前往查看」Toast，由用户点击执行。
+   * 门禁也与列表页对齐：路由自带楼层/page 定位意图、从列表页按当前中心行进入、
+   * 或来源不是「继续阅读」语义（链接/通知/搜索等）时不恢复。
+   */
+  private tryRestoreTreeProgress(): void {
+    if (this.readingResumeHandled || this.readingResumePending) return
+    if (this.threadTid.length === 0) return
+    if (this.fromListEntry || this.threadPid.length > 0) return
+    if (this.threadPage > 1) return
+    if (!this.isResumeAllowedSource()) return
+    if (!appStore.settings.recordReadingProgress || appStore.auth.uid.length === 0) return
+    this.readingResumePending = true
+    this.resumeTreeProgress()
+  }
+
+  /**
+   * 是否允许恢复阅读进度：与列表页共用「继续阅读」语义的来源白名单。
+   *
+   * @returns 来源是否允许恢复
+   */
+  private isResumeAllowedSource(): boolean {
+    return this.threadSource === ThreadSource.DEFAULT ||
+      this.threadSource === ThreadSource.TOPIC_LIST ||
+      this.threadSource === ThreadSource.BROWSE_HISTORY
+  }
+
+  /**
+   * 异步读取并校验树内进度；读取期间可能已切帖/销毁，需逐一校验。
+   */
+  private async resumeTreeProgress(): Promise<void> {
+    const uid: string = appStore.auth.uid
+    const tid: string = this.threadTid
+    let entry: ThreadTreeProgressEntry | null = null
+    try {
+      entry = await appStore.getTreeReadingProgress(uid, tid)
+    } catch (e) {
+      // 读盘异常不能让 readingResumePending 永久为 true：否则本页整场都不会记录进度
+      this.readingResumePending = false
+      logger.warn('tree-progress read failed tid=%{public}s: %{public}s', tid, formatError(e))
+      return
+    }
+    if (!this.readingResumePending || tid !== this.threadTid) return
+    // 读取期间账号可能已登出或切换：进度按账号隔离，身份不一致时丢弃，避免跨账号恢复
+    if (appStore.auth.uid !== uid) {
+      this.readingResumePending = false
+      return
+    }
+    if (!appStore.settings.recordReadingProgress) {
+      this.readingResumePending = false
+      return
+    }
+    this.readingResumePending = false
+    if (entry === null || entry.pid < 0) {
+      this.readingResumeHandled = true
+      return
+    }
+    // 读取期间用户已经开始滚动阅读：不打断当前阅读
+    if (this.lastScrollStart > 0 && this.listMounted) {
+      this.readingResumeHandled = true
+      return
+    }
+    this.readingResumeHandled = true
+    this.pendingResumeEntry = entry
+    // 提示可见窗口结束后自动解除“禁止落盘”保护，并用同一个计时器覆盖 Toast 的可点窗口：
+    // Toast 是全局组件、动作按钮没有关闭回调，只有计时器能保证保护窗口不会永久挂住
+    clearTimeout(this.progressPromptTimer)
+    this.progressPromptTimer = setTimeout((): void => {
+      this.progressPromptTimer = -1
+      this.pendingResumeEntry = null
+    }, PROGRESS_PROMPT_PROTECT_MS)
+    appStore.showToastAction('检测到上次阅读进度', '前往查看', (): void => {
+      this.goToResumedPosition()
+    })
+  }
+
+  /**
+   * 用户点击 Toast「前往查看」后执行树内定位。
+   *
+   * Toast 是全局组件，回调可能晚于面板销毁、帖子切换或正在进行的刷新触发，
+   * 入口重新校验：进度未失效、帖子/开关仍与记录时一致；刷新中则延迟到新一轮加载完成。
+   */
+  private goToResumedPosition(): void {
+    clearTimeout(this.progressPromptTimer)
+    this.progressPromptTimer = -1
+    const entry: ThreadTreeProgressEntry | null = this.pendingResumeEntry
+    this.pendingResumeEntry = null
+    if (entry === null) return
+    if (!this.listMounted) {
+      if (this.isLoading) {
+        // 刷新中 List 被卸载：记住目标，等新树就绪后由 resolveNavigationPid 消费
+        this.deferredResumePid = entry.pid
+        appStore.showToast('正在刷新，完成后将恢复阅读位置')
+        return
+      }
+      logger.warn('tree-progress resume unmounted tid=%{public}s pid=%{public}d',
+        this.threadTid, entry.pid)
+      appStore.showToast('帖子页面已关闭')
+      return
+    }
+    if (this.threadTid !== entry.tid) return
+    if (!appStore.settings.recordReadingProgress || appStore.auth.uid.length === 0) return
+    this.applyTreeResume(entry)
+  }
+
+  /**
+   * 执行树内恢复定位：先按 pid 找行（被折叠则展开所属根），
+   * 找不到时提示「原阅读位置已不可用」并回到顶部。
+   *
+   * 不再用记录时的扁平行下标兜底：下标会随折叠/展开与只看楼主过滤漂移，
+   * 按下标取到的很可能是另一个楼层，会静默把用户带到错误位置。
+   *
+   * @param entry - 树内进度条目
+   */
+  private applyTreeResume(entry: ThreadTreeProgressEntry): void {
+    logger.info(
+      'tree-progress resume tid=%{public}s pid=%{public}d root=%{public}d page=%{public}d',
+      this.threadTid, entry.pid, entry.rootPid, entry.page
+    )
+    let index: number = -1
+    if (entry.pid >= 0) {
+      index = this.treeDataSource.findIndexByPid(entry.pid)
+      if (index < 0 && entry.pid > 0) {
+        // 记录时所属根优先：折叠状态下锚点子行不在可见行里，先展开该根
+        if (entry.rootPid >= 0) {
+          this.expandTreeRoot(entry.rootPid)
+          index = this.treeDataSource.findIndexByPid(entry.pid)
+        }
+        // 根 pid 失效（帖子结构变化）时再按模型重新查所属根
+        if (index < 0 && this.ensureRowVisible(entry.pid)) {
+          index = this.treeDataSource.findIndexByPid(entry.pid)
+        }
+      }
+    }
+    if (index < 0) {
+      this.navigationApplied = true
+      appStore.showToast('原阅读位置已不可用')
+      this.scroller.scrollToIndex(0, false, ScrollAlign.START)
+      return
+    }
+    this.navigationApplied = true
+    this.scroller.scrollToIndex(index, false, ScrollAlign.CENTER)
+    this.highlightRow(entry.pid)
+    appStore.showToast('已恢复上次阅读位置')
   }
 
   // ==================== 交互 ====================
@@ -554,11 +1151,9 @@ export struct ThreadTreePanel {
    */
   private openFloorReply(post: PostInfo): void {
     let page: number = 1
-    if (this.treeModel !== null) {
-      const mapped: number | undefined = this.treeModel.pageByPid.get(post.pid)
-      if (mapped !== undefined && mapped > 0) {
-        page = mapped
-      }
+    const mapped: number | undefined = this.pageByPid.get(post.pid)
+    if (mapped !== undefined && mapped > 0) {
+      page = mapped
     }
     replyManager.startFloorReply(post, Number(this.threadTid), this.threadFid, page)
     floatingLayerStore.replyDialogTitle = replyManager.dialogTitle
@@ -637,10 +1232,51 @@ export struct ThreadTreePanel {
     this.votedUpPids = upPids
     this.votedDownPids = downPids
     appStore.saveVoteRecord(appStore.auth.uid, this.threadTid, upPids, downPids)
+    /*
+     * 同步楼层分数（与列表页 `ThreadPaginationManager.updateVoteScore` 同一增量规则）：
+     * `PostVoteBar` 只在当前组件实例内维护乐观分数，滚动离场后再复用会从
+     * `post.score/score_2` 重新同步；不回写模型楼层就会让已生效的投票在 UI 上“退回去”。
+     *
+     * 注意：回调里的 `post` 是行组件的 @Prop 拷贝，必须按 pid 回写 `allPosts` 里的
+     * 真源对象（列表页更新的是分页窗口里的模型对象，同理）。
+     */
+    const isUp: boolean = upPids.has(pidKey)
+    const isDown: boolean = downPids.has(pidKey)
+    const scoreDelta: number = (isUp ? 1 : 0) - (wasUp ? 1 : 0)
+    const score2Delta: number = (isDown ? 1 : 0) - (wasDown ? 1 : 0)
+    post.score += scoreDelta
+    post.score_2 += score2Delta
+    const canonical: PostInfo | null = this.findAllPostByPid(post.pid)
+    if (canonical !== null && canonical !== post) {
+      canonical.score += scoreDelta
+      canonical.score_2 += score2Delta
+    }
     if (result.message.length > 0) {
       appStore.showToast(result.message)
     }
     return result
+  }
+
+  /**
+   * 在全帖楼层（未过滤）中按 pid 查找真源对象。
+   *
+   * 只看楼主时锚点可能不在树模型里，因此优先查 `allPosts`，再回退树模型。
+   *
+   * @param pid - 楼层 pid
+   * @returns 楼层对象；未找到返回 null
+   */
+  private findAllPostByPid(pid: number): PostInfo | null {
+    for (let i: number = 0; i < this.allPosts.length; i++) {
+      if (this.allPosts[i].pid === pid) {
+        return this.allPosts[i]
+      }
+    }
+    const model: ThreadTreeModel | null = this.treeModel
+    if (model !== null) {
+      const post: PostInfo | undefined = model.postByPid.get(pid)
+      return post !== undefined ? post : null
+    }
+    return null
   }
 
   /**
@@ -853,6 +1489,289 @@ export struct ThreadTreePanel {
     .width('100%')
   }
 
+  // ==================== 收藏 / 保存 / 跟踪（与列表页同一套入口） ====================
+
+  /**
+   * 响应主题收藏关系变化并刷新当前收藏状态。
+   */
+  private onFavoriteTopicVersionChange(): void {
+    this.syncFavoriteState()
+  }
+
+  /**
+   * 从全局收藏 Store 同步当前帖子收藏状态。
+   */
+  private syncFavoriteState(): void {
+    this.favoriteState = this.threadTid.length > 0
+      ? appStore.favoriteStore.getTopicFavoriteState(this.threadTid)
+      : FavoriteMembershipState.UNKNOWN
+  }
+
+  /**
+   * 返回当前可信收藏状态对应的菜单文案。
+   *
+   * @returns 收藏操作菜单文案
+   */
+  private getFavoriteMenuLabel(): string {
+    if (this.favoriteState === FavoriteMembershipState.FAVORED) {
+      return '管理收藏'
+    }
+    if (this.favoriteState === FavoriteMembershipState.NOT_FAVORED) {
+      return '收藏到…'
+    }
+    return '收藏夹…'
+  }
+
+  /**
+   * 打开当前主题的收藏夹多选页面。
+   */
+  private openFavoriteFolders(): void {
+    if (this.threadTid.length === 0) {
+      return
+    }
+    routerStore.navigateActivity(Screen.favoriteFolders(this.threadTid))
+  }
+
+  /**
+   * 打开「保存帖子」对话框（选择保存的页范围）。
+   */
+  private openSaveThreadDialog(): void {
+    if (this.threadTid.length === 0) {
+      return
+    }
+    this.saveRangeValid = false
+    this.saveStartPage = -1
+    this.saveEndPage = -1
+    this.saveDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
+      systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
+      builder: CustomContentDialog({
+        primaryTitle: '保存帖子',
+        contentBuilder: (): void => { this.saveThreadContent() },
+        buttons: [
+          { value: '取消' },
+          {
+            value: '保存',
+            fontColor: AppColors.white,
+            background: AppColors.primary,
+            action: (): void => {
+              // 官方对话框模板的按钮不支持动态 disabled，页范围合法性在提交时判定
+              if (!this.saveRangeValid || this.saveStartPage < 1 || this.saveEndPage < this.saveStartPage) {
+                appStore.showToast('页范围无效')
+                return
+              }
+              this.startSaveThread(this.threadTid, this.saveStartPage, this.saveEndPage)
+            }
+          }
+        ]
+      }),
+      autoCancel: true
+    })
+    this.saveDialogController?.open()
+  }
+
+  /** 保存帖子弹窗的自定义内容（官方 CustomContentDialog 的 contentBuilder）。 */
+  @Builder
+  saveThreadContent() {
+    SaveThreadContent({
+      tid: this.threadTid,
+      initialSubject: this.threadSubject === '递进树' ? '' : this.threadSubject,
+      onRangeChange: (canSave: boolean, startPage: number, endPage: number): void => {
+        this.saveRangeValid = canSave
+        this.saveStartPage = startPage
+        this.saveEndPage = endPage
+      }
+    })
+  }
+
+  /**
+   * 启动后台保存任务；结果以 Toast 提示（进度由全局指示组件展示）。
+   *
+   * @param tid - 主题 ID
+   * @param startPage - 起始页
+   * @param endPage - 结束页
+   */
+  private startSaveThread(tid: string, startPage: number, endPage: number): void {
+    savedThreadService.saveThread(tid, startPage, endPage).then((outcome: SaveThreadOutcome): void => {
+      if (outcome.ok) {
+        appStore.showToast('已保存：' + outcome.message)
+      } else if (outcome.cancelled) {
+        appStore.showToast('已取消保存')
+      } else {
+        appStore.showToast('保存失败：' + outcome.message)
+      }
+    })
+  }
+
+  /**
+   * 当前帖子是否正在跟踪（更多菜单「跟踪帖子更新」的激活态）。
+   *
+   * @returns 是否已跟踪
+   */
+  private isTrackingCurrentThread(): boolean {
+    const version: number = this.trackedThreadVersion
+    return version >= 0 && appStore.isThreadTracked(this.threadTid)
+  }
+
+  /**
+   * 当前帖子的楼主昵称（添加跟踪时写入，避免检查回填前显示「未知作者」）。
+   *
+   * @returns 楼主昵称；未知时返回空串
+   */
+  private resolveThreadAuthorName(): string {
+    for (let i: number = 0; i < this.allPosts.length; i++) {
+      if (this.allPosts[i].lou === 0) {
+        return this.allPosts[i].author
+      }
+    }
+    return ''
+  }
+
+  /**
+   * 打开「跟踪帖子更新」对话框（更多菜单入口）。
+   */
+  private openTrackDialog(): void {
+    if (this.threadTid.length === 0) {
+      return
+    }
+    if (!appStore.auth.isAuthenticated) {
+      appStore.showToast('请先登录')
+      return
+    }
+    const existing: TrackedThread | null = appStore.getTrackedThread(this.threadTid)
+    const isTracked: boolean = existing !== null
+    this.trackKeepDays = isTracked && existing !== null && existing.keepDays > 0
+      ? existing.keepDays
+      : TRACK_DEFAULT_KEEP_DAYS
+    this.trackDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
+      systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
+      builder: CustomContentDialog({
+        primaryTitle: '跟踪帖子更新',
+        contentBuilder: (): void => { this.trackContent() },
+        buttons: [
+          { value: '取消' },
+          {
+            value: isTracked ? '保存' : '开始跟踪',
+            fontColor: AppColors.white,
+            background: AppColors.primary,
+            action: (): void => {
+              this.startTrackThread()
+            }
+          }
+        ]
+      }),
+      autoCancel: true
+    })
+    this.trackDialogController?.open()
+  }
+
+  /** 跟踪对话框的自定义内容（官方 CustomContentDialog 的 contentBuilder）。 */
+  @Builder
+  trackContent() {
+    ThreadTrackContent({
+      tid: this.threadTid,
+      onKeepDaysChange: (days: number): void => {
+        this.trackKeepDays = days
+      },
+      onStopTrack: (): void => {
+        this.trackDialogController?.close()
+        appStore.untrackThread(this.threadTid)
+        appStore.showToast('已停止跟踪')
+      }
+    })
+  }
+
+  /**
+   * 提交跟踪设置：未跟踪则新建，已跟踪则只更新跟踪天数（不动已读基准）。
+   */
+  private startTrackThread(): void {
+    if (!appStore.canTrackMoreThreads() && !appStore.isThreadTracked(this.threadTid)) {
+      appStore.showToast('最多同时跟踪 ' + String(TRACK_MAX_COUNT) + ' 个帖子')
+      return
+    }
+    const request: TrackRequest = new TrackRequest()
+    request.tid = this.threadTid
+    // 标题占位值（'递进树'）不作为真实标题入库，交给检查回填
+    request.subject = this.threadSubject === '递进树' ? '' : this.threadSubject
+    request.author = this.resolveThreadAuthorName()
+    request.authorid = Number(this.threadAuthorId) > 0 ? Number(this.threadAuthorId) : 0
+    request.fid = this.threadFid
+    request.forumName = ''
+    request.keepDays = this.trackKeepDays
+    appStore.trackThread(request).then((result: TrackResult): void => {
+      if (result.ok) {
+        appStore.showToast(result.created ? '已开始跟踪' : '跟踪设置已更新')
+      } else {
+        appStore.showToast(result.error || '跟踪失败')
+      }
+    })
+  }
+
+  /**
+   * 帖子页打开被跟踪的帖子后推进已读基准（与列表页同一语义）。
+   */
+  private syncTrackedOnOpen(): void {
+    if (this.threadTid.length === 0 || !appStore.auth.isAuthenticated) {
+      return
+    }
+    if (!appStore.isThreadTracked(this.threadTid)) {
+      return
+    }
+    appStore.markTrackedSeenOnOpen(this.threadTid).catch((error: Object): void => {
+      logger.warn('跟踪已读推进失败 tid=%{public}s: %{public}s', this.threadTid, formatError(error))
+    })
+  }
+
+  /**
+   * 响应黑名单变化，即时刷新树内楼层的遮蔽标记（行组件订阅同一版本号，会自行重绘）。
+   */
+  private onBlacklistVersionChange(): void {
+    applyBlacklistStateToPosts(this.allPosts, appStore.settingsStore.getBlacklistIds())
+  }
+
+  /**
+   * 获取当前可显示的主题标题（楼主被屏蔽时与列表页同一占位文案）。
+   *
+   * @returns 可显示标题
+   */
+  private getVisibleThreadSubject(): string {
+    if (this.blacklistVersion >= 0 && appStore.settingsStore.isBlacklisted(this.threadAuthorId)) {
+      return '该用户已被屏蔽'
+    }
+    return this.threadSubject
+  }
+
+  // ==================== 握持状态 ====================
+
+  /**
+   * 握持状态变化回调：首次检测直接生效，后续变化带 300ms 动画过渡。
+   *
+   * @param data - 新的握持状态
+   */
+  private onHoldingChanged(data: HoldingHandStatus): void {
+    if (this.holdingDetected) {
+      this.getUIContext()?.animateTo({ duration: 300, curve: Curve.EaseInOut }, (): void => {
+        this.holdingStatus = data
+      })
+    } else {
+      this.holdingStatus = data
+      this.holdingDetected = true
+    }
+  }
+
+  private startHoldingHandMonitoring(): void {
+    this.holdingMonitor.start((data: HoldingHandStatus): void => {
+      this.onHoldingChanged(data)
+    })
+  }
+
+  private stopHoldingHandMonitoring(): void {
+    this.holdingMonitor.stop()
+  }
+
   // ==================== 标题滚动效果 ====================
 
   /**
@@ -882,10 +1801,36 @@ export struct ThreadTreePanel {
   /**
    * 更多菜单项。
    *
+   * 与列表页（`ThreadPanel.moreMenuItems`）**同序同构**，只有两处按阅读样式命名：
+   * 「刷新帖子 / 刷新递进树」与「切换为递进树阅读 / 切换为列表阅读」。这样两页的
+   * 多功能下拉在用户看来是同一个菜单，切换阅读方式不会丢掉收藏、离线保存、跟踪等入口。
+   *
+   * 回调一律写成**箭头函数**：菜单项在 `PanelNavBar` 实例上渲染，只有箭头函数才能把
+   * `this` 固定在本组件上（见 `NavBarMenuItem` 的说明）。
+   *
    * @returns 菜单项
    */
   private moreMenuItems(): NavBarMenuItem[] {
     const items: NavBarMenuItem[] = []
+    items.push({
+      label: this.getFavoriteMenuLabel(),
+      action: (): void => {
+        this.openFavoriteFolders()
+      }
+    })
+    items.push({
+      label: '离线保存帖子',
+      action: (): void => {
+        this.openSaveThreadDialog()
+      }
+    })
+    items.push({
+      label: '跟踪帖子更新',
+      active: this.isTrackingCurrentThread(),
+      action: (): void => {
+        this.openTrackDialog()
+      }
+    })
     items.push({
       label: '刷新递进树',
       action: (): void => {
@@ -893,14 +1838,16 @@ export struct ThreadTreePanel {
       }
     })
     items.push({
-      label: '列表阅读',
+      label: '只看楼主',
+      active: this.authorOnly,
       action: (): void => {
-        if (this.fromListEntry) {
-          routerStore.back()
-        } else {
-          // 默认树样式直接打开时：替换当前页为**强制列表**的帖子页，避免再次被分流回树页
-          routerStore.navigateActivity(Screen.threadList(this.threadTid), true)
-        }
+        this.toggleAuthorOnly()
+      }
+    })
+    items.push({
+      label: '切换为列表阅读',
+      action: (): void => {
+        this.switchToListReading()
       }
     })
     items.push({
@@ -923,6 +1870,69 @@ export struct ThreadTreePanel {
     return items
   }
 
+  /**
+   * 切换「只看楼主」：用过滤后的楼层重建树，尽量停留在当前中心楼层。
+   */
+  private toggleAuthorOnly(): void {
+    if (!this.hasThreadAuthorKey) {
+      appStore.showToast('无法识别楼主，暂不支持只看楼主')
+      return
+    }
+    const anchorPid: number = this.currentCenterPid()
+    this.authorOnly = !this.authorOnly
+    // 树尚未就绪（首次加载/刷新中）：只更新状态，加载完成时按新状态建树
+    if (!this.treeReady || this.treeModel === null) {
+      return
+    }
+    this.rebuildTree()
+    if (!this.listMounted) {
+      return
+    }
+    if (anchorPid >= 0) {
+      const index: number = this.treeDataSource.findIndexByPid(anchorPid)
+      if (index >= 0) {
+        this.scroller.scrollToIndex(index, false, ScrollAlign.CENTER)
+        return
+      }
+    }
+    this.scroller.scrollToIndex(0, false, ScrollAlign.START)
+  }
+
+  /**
+   * 切换为列表阅读。
+   *
+   * 默认树样式打开（`fromListEntry=false`）时替换当前页为列表页，携带当前中心楼层的
+   * 服务端页码/pid 与只看楼主状态，切换后从同一位置继续阅读。
+   *
+   * 从列表页 push 进入（`fromListEntry=true`）时直接 `back()`：原列表页仍在栈中，
+   * 返回即保留它进入前的滚动位置与过滤状态（push 语义，不在返回时重载列表）。
+   */
+  private switchToListReading(): void {
+    let page: number = 1
+    let pid: string = ''
+    const model: ThreadTreeModel | null = this.treeModel
+    const index: number = this.resolveAnchorIndex()
+    if (model !== null && index >= 0) {
+      const post: PostInfo | null = model.rows[index].post
+      if (post !== null) {
+        pid = String(post.pid)
+        const mapped: number | undefined = this.pageByPid.get(post.pid)
+        if (mapped !== undefined && mapped > 0) {
+          page = mapped
+        }
+      }
+    }
+    // 从列表页 push 进来：返回即回列表页；默认树样式打开：替换当前页为列表页
+    if (this.fromListEntry) {
+      routerStore.back()
+      return
+    }
+    routerStore.navigateActivity(
+      Screen.threadList(this.threadTid, page, pid, this.authorOnly, this.threadAuthorId, this.threadAuthorKey),
+      true
+    )
+  }
+
   // ==================== UI ====================
 
   build() {
@@ -939,7 +1949,7 @@ export struct ThreadTreePanel {
       .width('100%').height('100%')
 
       PanelNavBar({
-        title: this.threadSubject,
+        title: this.getVisibleThreadSubject(),
         rightIcon: $r('app.media.icon_more'),
         scrollEffectProgress: this.titleScrollEffectProgress,
         hasMenu: true,
@@ -993,6 +2003,7 @@ export struct ThreadTreePanel {
     .width('100%').layoutWeight(1)
     .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
     .padding({ top: NAV_BAR_H + this.statusBarHeight })
+    .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
   }
 
   /**
@@ -1012,6 +2023,7 @@ export struct ThreadTreePanel {
     .width('100%').layoutWeight(1)
     .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
     .padding({ top: NAV_BAR_H + this.statusBarHeight })
+    .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
   }
 
   /**
@@ -1028,7 +2040,7 @@ export struct ThreadTreePanel {
       showContent: displayContent.length > 0,
       isVotedUp: this.votedUpPids.has(String(post.pid)),
       isVotedDown: this.votedDownPids.has(String(post.pid)),
-      holdingHand: 0,
+      holdingHand: this.holdingStatus,
       onImageClick: (urls: string[], index: number): void => {
         this.openImageViewer(urls, index)
       },
@@ -1086,7 +2098,7 @@ export struct ThreadTreePanel {
               showContent: row.displayContent.length > 0,
               isVotedUp: this.votedUpPids.has(String(row.post.pid)),
               isVotedDown: this.votedDownPids.has(String(row.post.pid)),
-              holdingHand: 0,
+              holdingHand: this.holdingStatus,
               isTopicAuthor: this.isTopicAuthorPost(row.post),
               isOwnPost: appStore.auth.isAuthenticated && String(row.post.authorid) === appStore.auth.uid,
               highlight: row.highlighted,
@@ -1138,6 +2150,7 @@ export struct ThreadTreePanel {
           }
         }
       }, (row: ThreadTreeRow) => this.rowKey(row))
+      this.LoadEndFooter()
     }
     .width('100%').layoutWeight(1)
     .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
@@ -1161,6 +2174,16 @@ export struct ThreadTreePanel {
     })
     .onDidScroll((): void => {
       this.syncTitleScrollEffect()
+      /* 正文图的识图选取态不允许跨滚动存活（与列表页一致）：系统在滚动过程中只是把文本
+         菜单临时收起、松手又放出来，只有主动拆掉分析器才收得干净。详见
+         `common/media/ImageAnalyzerSession.ets`。 */
+      dismissAnalyzerSessions()
+    })
+    .onScrollIndex((start: number, _end: number, center: number): void => {
+      this.lastScrollStart = start
+      this.lastScrollCenter = center
+      // 树内阅读进度：以视口中心行为锚点（与恢复时的居中定位同源对称）
+      this.scheduleProgressRecord()
     })
     .onAppear((): void => {
       this.listMounted = true
@@ -1171,6 +2194,25 @@ export struct ThreadTreePanel {
       this.listMounted = false
     })
     .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+  }
+
+  /**
+   * 列表尾部提示（与列表页 `LoadMoreFooter` 的完成态文案一致）。
+   *
+   * 树页一次性抓完全帖，不存在「加载更多」的中间态；到达末尾即在最后一行下方
+   * 明确提示已到结尾，避免用户继续下拉等待不存在的分页。
+   */
+  @Builder
+  LoadEndFooter() {
+    ListItem() {
+      Column() {
+        Row() {
+          Text('已加载全部回复').fontSize(13).fontColor(AppColors.textTertiary)
+        }
+        .width('100%').justifyContent(FlexAlign.Center)
+      }
+      .width('100%').height(NAV_BAR_H).justifyContent(FlexAlign.Center)
+    }
   }
 
   /**
@@ -1195,6 +2237,6 @@ export struct ThreadTreePanel {
       }
     }
     .width('100%').padding({ left: 16, right: 16, bottom: 16 + this.navBarHeight })
-    .justifyContent(FlexAlign.End)
+    .justifyContent(this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? FlexAlign.Start : FlexAlign.End)
   }
 }

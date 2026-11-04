@@ -109,7 +109,7 @@ class ExportGroupDef {
 const EXPORT_GROUPS: ExportGroupDef[] = [
   new ExportGroupDef('设置与主题', [DomainIds.SETTINGS, DomainIds.THEME]),
   new ExportGroupDef('阅读与进度', [DomainIds.HISTORY, DomainIds.READING_PROGRESS,
-    DomainIds.VOTES, DomainIds.POLL_VOTED]),
+    DomainIds.TREE_READING_PROGRESS, DomainIds.VOTES, DomainIds.POLL_VOTED]),
   new ExportGroupDef('社交与跟踪', [DomainIds.TRACKED_THREADS]),
   new ExportGroupDef('AI', [DomainIds.AI_SESSIONS, DomainIds.AI_TOOL_CACHE]),
   new ExportGroupDef('离线存档与草稿', [DomainIds.SAVED_THREADS, DomainIds.DRAFTS]),

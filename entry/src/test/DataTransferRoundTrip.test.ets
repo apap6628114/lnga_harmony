@@ -16,11 +16,12 @@ import {
  * 数据「导出 → 导入」容器往返回归测试。
  *
  * 覆盖（对应审计 EXP-01/EXP-02/IMP-01 的闭环门禁）：
- * 1. 容器往返解析：手工构造与导出产物同形的明文容器（16 个可导出域、镜像域带 ownerUid），
+ * 1. 容器往返解析：手工构造与导出产物同形的明文容器（17 个可导出域、镜像域带 ownerUid），
  *    `parseBackup` 必须完整解析、不丢域；每个域可被 Catalog 命中、策略不是 NEVER；
- * 2. 每域合并器兼容：16 个可导出域的典型 payload 都能被 `mergePayload` 接受，输出形态符合
- *    域约定（settings/theme 对象；history/reading_progress/drafts/saved_threads 裸数组；
- *    votes/poll_voted 对象；tracked_threads/ai_sessions 强制 `{items}` 信封；缓存域原样透传）；
+ * 2. 每域合并器兼容：17 个可导出域的典型 payload 都能被 `mergePayload` 接受，输出形态符合
+ *    域约定（settings/theme 对象；history/reading_progress/tree_reading_progress/drafts/
+ *    saved_threads 裸数组；votes/poll_voted 对象；tracked_threads/ai_sessions 强制 `{items}`
+ *    信封；缓存域原样透传）；
  * 3. 幂等往返：第一次合并结果同时作为 local 与 incoming 再合并，added/updated 必须为 0，
  *    不允许同一份备份重复导入时条目翻倍；
  * 4. 重复域 ID 去重：只保留首个，重复条目进入 `ParseOutcome.droppedDomains`（原因含「重复」），
@@ -38,11 +39,11 @@ import {
 /** 镜像域 ownerUid 样本（导出时写入、导入解析应原样保留）。 */
 const MIRROR_OWNER_UID: string = 'u1'
 
-/** 可导出域数量（INCLUDE 9 + OPTIONAL 7；NEVER 5 个不出现）。 */
-const EXPORTABLE_DOMAIN_COUNT: number = 16
+/** 可导出域数量（INCLUDE 10 + OPTIONAL 7；NEVER 5 个不出现）。 */
+const EXPORTABLE_DOMAIN_COUNT: number = 17
 
 /**
- * 按 Catalog 声明顺序返回 16 个可导出域的 ID。
+ * 按 Catalog 声明顺序返回 17 个可导出域的 ID。
  *
  * 与 `PersistenceCatalog.exportable()` 的顺序一致：导出容器按声明顺序写入 domains。
  *
@@ -59,6 +60,7 @@ function exportableIds(): string[] {
   ids.push(DomainIds.FAVORITE_MEMBERSHIP)
   ids.push(DomainIds.HISTORY)
   ids.push(DomainIds.READING_PROGRESS)
+  ids.push(DomainIds.TREE_READING_PROGRESS)
   ids.push(DomainIds.VOTES)
   ids.push(DomainIds.POLL_VOTED)
   ids.push(DomainIds.TRACKED_THREADS)
@@ -87,7 +89,7 @@ function makeDomainJson(id: string, payloadJson: string, ownerUid: string): stri
 }
 
 /**
- * 构造覆盖全部 16 个可导出域的合法明文容器 JSON 文本。
+ * 构造覆盖全部 17 个可导出域的合法明文容器 JSON 文本。
  *
  * 每个域给最小合法形状；镜像域写 ownerUid 供「归属保留」断言使用；
  * `checksum` 为空串（避免 Local Test 触发 cryptoFramework 的 SHA-256）。
@@ -106,6 +108,7 @@ function buildFullContainerText(): string {
     '{"favoredFolderIds":[],"knownFolderIds":[]}', MIRROR_OWNER_UID))
   entries.push(makeDomainJson(DomainIds.HISTORY, '[]', ''))
   entries.push(makeDomainJson(DomainIds.READING_PROGRESS, '[]', ''))
+  entries.push(makeDomainJson(DomainIds.TREE_READING_PROGRESS, '[]', ''))
   entries.push(makeDomainJson(DomainIds.VOTES, '{}', ''))
   entries.push(makeDomainJson(DomainIds.POLL_VOTED, '{}', ''))
   entries.push(makeDomainJson(DomainIds.TRACKED_THREADS, '{"items":[]}', ''))
@@ -168,13 +171,14 @@ function readItemsField(payload: Object): Object[] | null {
 }
 
 /**
- * 判断域的输出形态是否为裸数组（history/reading_progress/drafts/saved_threads）。
+ * 判断域的输出形态是否为裸数组（history/reading_progress/tree_reading_progress/drafts/saved_threads）。
  *
  * @param domainId - 域 ID
  * @returns 是否裸数组形态
  */
 function isBareArrayDomain(domainId: string): boolean {
   return domainId === DomainIds.HISTORY || domainId === DomainIds.READING_PROGRESS ||
+    domainId === DomainIds.TREE_READING_PROGRESS ||
     domainId === DomainIds.DRAFTS || domainId === DomainIds.SAVED_THREADS
 }
 
@@ -251,7 +255,7 @@ function buildFutureFormatContainerText(): string {
  */
 export default function dataTransferRoundTripTest(): void {
   describe('dataTransferRoundTrip', (): void => {
-    it('parsesAllSixteenExportableDomainsFromExportShapedContainer', 0,
+    it('parsesAllSeventeenExportableDomainsFromExportShapedContainer', 0,
       async (): Promise<void> => {
         const service: DataTransferService = new DataTransferService()
         const outcome: ParseOutcome = await service.parseBackup(buildFullContainerText(), '')

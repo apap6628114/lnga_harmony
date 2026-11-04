@@ -120,17 +120,35 @@ export class Screen {
   /**
    * 递进树页面：是否由自然列表页（ThreadPanel）push 进入。
    *
-   * true 时「列表阅读」菜单项直接 `back()` 返回下层列表页（保留列表滚动位置）；
+   * true 时「切换为列表阅读」菜单项直接 `back()` 返回下层列表页（保留列表滚动位置）；
    * false（设置默认样式直接打开树页）时改为替换当前页为列表页。
    */
   threadTreeFromList: boolean = false
   /**
    * 帖子页强制使用自然列表样式（忽略设置里的默认阅读样式）。
    *
-   * 由递进树页的「列表阅读」生成：默认样式为递进树时，普通 `Screen.thread` 会被
+   * 由递进树页的「切换为列表阅读」生成：默认样式为递进树时，普通 `Screen.thread` 会被
    * ActivityRouter 再次分流回树页，必须显式声明要走列表页。
    */
   threadForceList: boolean = false
+  /**
+   * 帖子页初始「只看楼主」状态。
+   *
+   * 列表页与递进树页共用：切换阅读方式时沿用当前过滤状态；两种阅读样式的
+   * 「只看楼主」语义一致（只看楼主楼层），列表页由服务端/本地过滤，树页按作者重建树。
+   */
+  threadAuthorOnly: boolean = false
+  /**
+   * 帖子页初始楼主 uid（`只看楼主` 首屏服务端过滤用）。
+   *
+   * 由递进树页切换过来时携带：列表页首屏请求前还没有主楼响应，缺了它「只看楼主」
+   * 会先按无过滤请求一次、出现整帖楼层闪一下再被过滤。
+   */
+  threadAuthorId: string = ''
+  /**
+   * 帖子页初始楼主稳定作者标识（匿名帖本地过滤用，语义见 `PostInfo.authorKey`）。
+   */
+  threadAuthorKey: string = ''
   uid: string = ''
   mid: string = ''
   messagePage: number = 1
@@ -172,15 +190,25 @@ export class Screen {
   /**
    * 创建**强制自然列表样式**的帖子页路由。
    *
-   * 用于递进树页的「列表阅读」：默认阅读样式为递进树时，普通 `Screen.thread` 会被
-   * ActivityRouter 再次分流到树页；本工厂显式声明走列表页。
+   * 用于递进树页的「切换为列表阅读」：默认阅读样式为递进树时，普通 `Screen.thread` 会被
+   * ActivityRouter 再次分流到树页；本工厂显式声明走列表页，并携带树页当前中心楼层
+   * （页码 + pid）与只看楼主状态，切换后从同一位置继续阅读。
    *
    * @param tid - 主题 ID
+   * @param page - 锚点楼层所属服务端页码
+   * @param pid - 锚点楼层 pid（'0' 主楼哨兵由 `Screen.thread` 归一为空串）
+   * @param authorOnly - 是否只看楼主
+   * @param authorId - 楼主 uid（只看楼主首屏过滤用，未知传空串）
+   * @param authorKey - 楼主稳定作者标识（匿名帖本地过滤用，未知传空串）
    * @returns 帖子页路由（强制列表样式）
    */
-  static threadList(tid: string): Screen {
-    const s = Screen.thread(tid)
+  static threadList(tid: string, page: number = 1, pid: string = '',
+    authorOnly: boolean = false, authorId: string = '', authorKey: string = ''): Screen {
+    const s = Screen.thread(tid, page, pid)
     s.threadForceList = true
+    s.threadAuthorOnly = authorOnly
+    s.threadAuthorId = authorId
+    s.threadAuthorKey = authorKey
     return s
   }
 
@@ -188,19 +216,22 @@ export class Screen {
    * 创建帖子「两层递进树」阅读页面路由。
    *
    * 递进树是**独立栈页面**：自己加载全帖、自己展示加载进度、自己渲染；
-   * 与自然列表页（ThreadPanel）互不共享状态，返回即回列表。
+   * 与自然列表页（ThreadPanel）互不共享渲染状态，返回即回列表。
    *
    * @param tid - 主题 ID
-   * @param fromList - 是否由列表页 push 进入（决定「列表阅读」是 back 还是替换当前页）
+   * @param fromList - 是否由列表页 push 进入（决定「切换为列表阅读」是 back 还是替换当前页）
    * @param pid - 可选的初始定位楼层 pid（空串表示定位顶部）
+   * @param authorOnly - 是否只看楼主（列表页切换阅读方式时沿用）
    * @returns 递进树页面路由
    */
-  static threadTree(tid: string, fromList: boolean = false, pid: string = ''): Screen {
+  static threadTree(tid: string, fromList: boolean = false, pid: string = '',
+    authorOnly: boolean = false): Screen {
     const s = new Screen()
     s.type = 'threadTree'
     s.tid = tid
     s.threadTreeFromList = fromList
     s.pid = pid === '0' ? '' : pid
+    s.threadAuthorOnly = authorOnly
     return s
   }
 

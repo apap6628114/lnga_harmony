@@ -17,7 +17,7 @@ import { BackupContainer, ImportPlan, SkippedDomain } from '../main/ets/common/t
  * 数据导入「域对等性」回归测试（审计 IMP-01 / IMP-02 / IMP-09）。
  *
  * 覆盖：
- * 1. Catalog 域对等性：21 域唯一且自检通过；ExportPolicy.INCLUDE 域的 ImportPolicy 不得为 NEVER；
+ * 1. Catalog 域对等性：22 域唯一且自检通过；ExportPolicy.INCLUDE 域的 ImportPolicy 不得为 NEVER；
  *    ImportPolicy.SKIP 域只允许 OPTIONAL/NEVER 导出；SECRET 域导出/导入双向 NEVER；
  *    ENVELOPE（rawPayload=false）域集合恰为 6 个；
  * 2. 解析防护（IMP-01）：单域载荷 JSON 字符数 > 8MB 时不再静默丢弃——
@@ -113,9 +113,9 @@ function readWrappedItems(payload: Object): Object[] {
  */
 export default function dataTransferDomainParityTest(): void {
   describe('dataTransferDomainParity', (): void => {
-    it('registersTwentyOneUniqueDomainsAndPassesSelfValidation', 0, (): void => {
+    it('registersTwentyTwoUniqueDomainsAndPassesSelfValidation', 0, (): void => {
       const all: DomainSpec[] = PersistenceCatalog.all()
-      expect(all.length).assertEqual(21)
+      expect(all.length).assertEqual(22)
 
       const ids: string[] = PersistenceCatalog.ids()
       expect(ids.length).assertEqual(all.length)

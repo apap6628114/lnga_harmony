@@ -186,6 +186,12 @@ export struct ThreadPanel {
   /** 路由请求的初始页码。 */
   @Prop threadPage: number = 1
   @Prop threadPid: string = ''
+  /** 路由带来的初始「只看楼主」状态（递进树页切换阅读方式时沿用）。 */
+  @Prop authorOnlyInit: boolean = false
+  /** 路由带来的初始楼主 uid（只看楼主首屏服务端过滤用）。 */
+  @Prop authorIdInit: string = ''
+  /** 路由带来的初始楼主稳定作者标识（匿名帖只看楼主本地过滤用）。 */
+  @Prop authorKeyInit: string = ''
   /** 打开帖子的路由来源（ThreadSource 枚举值），用于运行态诊断。 */
   @Prop threadSource: string = ''
   @Prop @Watch('onScrollToPid') navEntryId: number = 0
@@ -450,11 +456,14 @@ export struct ThreadPanel {
     this.singlePostFallback = false
     this.displayPage = initialPage
     // 楼主身份与 UI 状态同寿命：组件实例被复用打开另一个 tid 时（ArkUI 复用同一实例），
-    // 残留的旧帖楼主标识会把新帖楼层误标成楼主，故打开时必须清空、由首页响应重建。
-    this.threadAuthorId = ''
-    this.threadAuthorKey = ''
-    this.hasThreadAuthorKey = false
-    this.authorOnly = false
+    // 残留的旧帖楼主标识会把新帖楼层误标成楼主。先从路由声明的楼主身份重建
+    // （递进树页切换阅读方式时携带，保证「只看楼主」首屏就能过滤），其余由首屏响应补齐。
+    this.threadAuthorId = this.authorIdInit
+    this.threadAuthorKey = this.authorKeyInit
+    this.hasThreadAuthorKey = this.isAuthorKeyUsable(this.authorKeyInit)
+    // 「只看楼主」由路由声明（递进树页切换阅读方式时沿用），默认关闭；
+    // 但若同时没有可用的楼主身份（树页 threadInfo 缺失时可能发生），不能只亮着菜单却不过滤
+    this.authorOnly = this.authorOnlyInit && this.hasUsableAuthorIdentityInit()
     logger.info(
       'thread open tid=%{public}s page=%{public}d pid=%{public}s source=%{public}s',
       this.threadTid, initialPage, this.threadPid, this.threadSource
@@ -522,12 +531,13 @@ export struct ThreadPanel {
     this.isLoadingMore = false
     this.isLoadingPrevious = false
     this.hasError = false
-    this.authorOnly = false
+    this.authorOnly = this.authorOnlyInit && this.hasUsableAuthorIdentityInit()
     // 楼主身份随帖子切换重置：旧帖的稳定标识（尤其匿名帖的 `#anony_` 键）继续参与
-    // 比较会把新帖楼层误标成楼主，必须清空后由新帖首页响应重建
-    this.threadAuthorId = ''
-    this.threadAuthorKey = ''
-    this.hasThreadAuthorKey = false
+    // 比较会把新帖楼层误标成楼主；这里先从路由声明的身份重建（树页切换时携带），
+    // 其余由新帖首页响应补齐
+    this.threadAuthorId = this.authorIdInit
+    this.threadAuthorKey = this.authorKeyInit
+    this.hasThreadAuthorKey = this.isAuthorKeyUsable(this.authorKeyInit)
     this.syncFavoriteState()
     this.votedUpPids = new Set()
     this.votedDownPids = new Set()
@@ -2125,6 +2135,25 @@ export struct ThreadPanel {
   }
 
   /**
+   * 路由是否提供了可用于「只看楼主」首屏过滤的楼主身份。
+   *
+   * 普通帖看 uid；匿名帖 uid 是页内局部负数，必须靠稳定 `authorKey` 本地过滤。
+   * 两者都没有时（例如树页抓取结果缺 threadInfo）宁可关闭过滤，也不能让菜单显示
+   * 激活态却请求/展示全部楼层。
+   *
+   * @returns 是否可用
+   */
+  private hasUsableAuthorIdentityInit(): boolean {
+    // 匿名帖的 uid 是页内局部负数，只有稳定 authorKey 能用于本地过滤
+    if (this.isAuthorKeyUsable(this.authorKeyInit)) {
+      return true
+    }
+    const numericId: number = Number(this.authorIdInit)
+    return this.authorIdInit.length > 0 && this.authorIdInit !== '0' &&
+      Number.isFinite(numericId) && numericId > 0
+  }
+
+  /**
    * 该稳定作者标识是否可用于身份比较。
    *
    * 空串（解析不出）与非正数字（匿名楼的页内局部合成号）都不可比：前者没有信息，
@@ -2717,17 +2746,14 @@ export struct ThreadPanel {
           this.openTrackDialog()
         }
       })
-      // 递进树是独立栈页面：新页面自己抓全帖并渲染，本列表页保持原状，返回即回到这里。
-      // 只在在线来源提供：离线存档没有网络来源可供全帖抓取。
-      items.push({
-        label: '递进树阅读',
-        action: (): void => {
-          routerStore.navigateActivity(
-            Screen.threadTree(this.threadTid, true, String(this.currentListCenterPid()))
-          )
-        }
-      })
     }
+    // 刷新与「只看楼主」两项对两种来源都成立（离线存档也能重新读取本地存档）
+    items.push({
+      label: '刷新帖子',
+      action: (): void => {
+        this.refreshCurrentPage()
+      }
+    })
     // 激活态用文字色表达（`active`），不用系统菜单的选中图标：后者会为该菜单项单独预留一块
     // 左侧图标位，本菜单只有这一项带它时会显得"像多了几个空格"（实机反馈）。
     items.push({
@@ -2741,6 +2767,22 @@ export struct ThreadPanel {
         this.loadPosts(1, ThreadLoadMode.REPLACE)
       }
     })
+    if (!this.isSavedSource()) {
+      // 递进树是独立栈页面：新页面自己抓全帖并渲染，本列表页保持原状，返回即回到这里。
+      // 不带楼层锚点（pid）时树页会尝试恢复它自己的阅读进度；带锚点时按锚点进入。
+      // 只看楼主状态随路由透传，切换阅读方式不丢失当前过滤。
+      items.push({
+        label: '切换为递进树阅读',
+        action: (): void => {
+          const centerPid: number = this.currentListCenterPid()
+          // 主楼 pid 为 0：作为「无楼层锚点」传空串，避免树页把 0 当成定位顶部而跳过进度恢复
+          const anchorPid: string = centerPid > 0 ? String(centerPid) : ''
+          routerStore.navigateActivity(
+            Screen.threadTree(this.threadTid, true, anchorPid, this.authorOnly)
+          )
+        }
+      })
+    }
     items.push({
       label: '从网页打开',
       action: (): void => {
@@ -2760,6 +2802,22 @@ export struct ThreadPanel {
       }
     })
     return items
+  }
+
+  /**
+   * 刷新当前页（更多菜单「刷新帖子」）。
+   *
+   * 与列表页既有的刷新路径（回复后静默刷新、错误态重试）不同：这是用户显式要求重载，
+   * 按当前显示页整页替换窗口，并清空路由进入时的定位意图，避免刷新后又跳回初始楼层。
+   */
+  private refreshCurrentPage(): void {
+    if (this.isLoading) {
+      return
+    }
+    this.pendingTargetPid = ''
+    this.singlePostFallback = false
+    this.pendingTargetLastPost = false
+    this.loadPosts(Math.max(this.displayPage, 1), ThreadLoadMode.REPLACE)
   }
 
   /**

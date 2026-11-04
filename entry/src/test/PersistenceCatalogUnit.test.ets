@@ -33,6 +33,7 @@ export default function persistenceCatalogUnitTest(): void {
         DomainIds.AUTH, DomainIds.SESSIONS, DomainIds.SETTINGS, DomainIds.THEME,
         DomainIds.CATEGORIES, DomainIds.PROFILES, DomainIds.NOTIFICATIONS, DomainIds.ACTIVITIES,
         DomainIds.FAVORITE_MEMBERSHIP, DomainIds.HISTORY, DomainIds.READING_PROGRESS,
+        DomainIds.TREE_READING_PROGRESS,
         DomainIds.VOTES, DomainIds.POLL_VOTED, DomainIds.TRACKED_THREADS, DomainIds.AI_SESSIONS,
         DomainIds.AI_TOOL_CACHE, DomainIds.DRAFTS, DomainIds.DRAFT_MEDIA, DomainIds.SAVED_THREADS,
         DomainIds.MOVING_PHOTO_CACHE, DomainIds.META
@@ -120,6 +121,20 @@ export default function persistenceCatalogUnitTest(): void {
       if (history !== null) {
         expect(history.scope === DomainScope.DEVICE).assertTrue()
         expect(history.storage === StorageKind.PREFERENCES).assertTrue()
+      }
+    })
+
+    it('registersTreeReadingProgressAsDeviceProgressDomain', 0, (): void => {
+      const spec = PersistenceCatalog.byId(DomainIds.TREE_READING_PROGRESS)
+
+      expect(spec !== null).assertTrue()
+      if (spec !== null) {
+        // 与列表阅读进度同口径：设备级、可导出、按键去重合并、可清空
+        expect(spec.scope === DomainScope.DEVICE).assertTrue()
+        expect(spec.storage === StorageKind.PREFERENCES).assertTrue()
+        expect(spec.exportPolicy === ExportPolicy.INCLUDE).assertTrue()
+        expect(spec.importPolicy === ImportPolicy.MERGE_BY_KEY).assertTrue()
+        expect(spec.clearable).assertTrue()
       }
     })
 

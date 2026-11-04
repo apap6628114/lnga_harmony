@@ -67,7 +67,7 @@ export struct ActivityRouter {
    * 帖子条目是否应挂载递进树页面。
    *
    * 默认阅读样式为递进树时生效；以下情况仍走自然列表：
-   * - 路由显式要求列表样式（树页「列表阅读」替换出来的页面）；
+   * - 路由显式要求列表样式（树页「切换为列表阅读」替换出来的页面）；
    * - 离线存档来源（树页数据需要在线抓取，存档模式无网络来源）。
    *
    * @param entry - 活动栈条目
@@ -94,7 +94,10 @@ export struct ActivityRouter {
               ThreadTreePanel({
                 threadTid: entry.screen.tid,
                 threadPid: entry.screen.pid,
-                fromListEntry: false
+                fromListEntry: false,
+                authorOnlyInit: entry.screen.threadAuthorOnly,
+                threadSource: entry.screen.threadSource,
+                threadPage: entry.screen.threadPage
               })
             } else {
               ThreadPanel({
@@ -102,6 +105,9 @@ export struct ActivityRouter {
                 threadPage: entry.screen.threadPage,
                 threadPid: entry.screen.pid,
                 threadSource: entry.screen.threadSource,
+                authorOnlyInit: entry.screen.threadAuthorOnly,
+                authorIdInit: entry.screen.threadAuthorId,
+                authorKeyInit: entry.screen.threadAuthorKey,
                 navEntryId: entry.id
               })
             }
@@ -110,7 +116,10 @@ export struct ActivityRouter {
             ThreadTreePanel({
               threadTid: entry.screen.tid,
               threadPid: entry.screen.pid,
-              fromListEntry: entry.screen.threadTreeFromList
+              fromListEntry: entry.screen.threadTreeFromList,
+              authorOnlyInit: entry.screen.threadAuthorOnly,
+              threadSource: entry.screen.threadSource,
+              threadPage: entry.screen.threadPage
             })
           } else if (entry.screen.type === 'browseHistory') {
             BrowseHistoryPanel()
