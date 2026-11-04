@@ -8,6 +8,7 @@ import {
 } from '../../service/api/NgaUploader'
 import type { UploadAttachmentResult } from '../../model/NgaApiResults'
 import { appStore } from '../../store/AppStore'
+import { threadTreeFetchService } from '../../service/ThreadTreeFetchService'
 import { Logger, DOMAIN_MANAGER } from '../utils/Logger'
 import { decodeHtmlEntities } from '../utils/CodecUtils'
 import {
@@ -816,6 +817,17 @@ export class ReplyManagerClass implements DraftUploadHost {
       // 附件参数随本次提交被服务端消费，成功后必须立刻丢弃：本类是进程级单例，
       // 留着会让下一次「没插图」的回复带着旧参数提交（服务端报附件确认错误）。
       this.pendingAttachments = []
+      /*
+       * 写成功 = 服务端楼层数据已变化：作废该帖的树页抓取缓存。
+       *
+       * 树页的短时缓存只服务「返回再进入」的秒开，没有跨页失效的话，用户在列表页
+       * 回复后又立刻进树，会命中 90 秒内的旧全帖（看不到新楼层）。这里是所有
+       * 回复/编辑/贴条成功的共同出口，统一失效一次即可；树页自己的刷新入口本来
+       * 就会带 forceRefresh，不受影响。
+       */
+      if (this.ctx.tid > 0) {
+        threadTreeFetchService.invalidateCache(String(this.ctx.tid))
+      }
       /*
        * 提交成功 = 这份草稿已经变成帖子：草稿 JSON 与媒体副本目录一起回收。
        *

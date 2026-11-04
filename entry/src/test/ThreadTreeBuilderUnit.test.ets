@@ -61,14 +61,17 @@ function quotePidHeader(pid: number, tid: number, page: number): string {
 }
 
 /**
- * 构造带上层前缀文本的引用块头（验证「头部前有空白」）。
+ * 构造带前导空白与换行的引用块头（验证「引用区可以在前导噪音之后」）。
+ *
+ * 注意前缀只允许空白/换行：引用区前面出现任何正文文字都说明不是服务端生成的
+ * 引用头，不应被识别为回复关系（见 `doesNotExtractHeaderAfterBodyPrefix`）。
  *
  * @param pid - 被引用楼层 pid
  * @param page - 页码
  * @returns 楼层正文
  */
 function quotePidHeaderWithPrefix(pid: number, page: number): string {
-  return '前缀文字<br/>\n  [quote][pid=' + String(pid) + ',' + String(TID) + ',' + String(page)
+  return '  <br/>\n  [quote][pid=' + String(pid) + ',' + String(TID) + ',' + String(page)
     + ']Reply[/pid] [b]Post by [uid=1197343]miniyoyo[/uid] (2025-05-26 18:55):[/b]' + QUOTE_BODY
 }
 
@@ -285,6 +288,28 @@ export default function threadTreeBuilderUnitTest(): void {
       expect(quote.targetPage).assertEqual(3)
     })
 
+    it('doesNotExtractHeaderAfterBodyPrefix', 0, (): void => {
+      /** 引用头前面已经有正文文字：这层楼的引用样式属于用户正文，不是服务端回复头 */
+      const content: string = '前缀文字<br/>\n  [quote][pid=555,' + String(TID)
+        + ',3]Reply[/pid] [b]Post by [uid=1]甲[/uid] (2025-01-01):[/b]被引正文[/quote]'
+      expect(extractPrimaryQuoteRef(content, TID)).assertNull()
+    })
+
+    it('doesNotExtractHeaderInMidBody', 0, (): void => {
+      /** 正文中部复制的引用样式：不构成回复关系 */
+      const content: string = '正文开头' + quotePidHeader(111, TID, 1) + '结尾'
+      expect(extractPrimaryQuoteRef(content, TID)).assertNull()
+    })
+
+    it('doesNotExtractPlainQuoteWithoutLinkHeader', 0, (): void => {
+      /** 用户把 [quote] 当排版容器（无 pid/tid 链接头） */
+      expect(extractPrimaryQuoteRef('[quote]用户排版引用[/quote]<br/>正文', TID)).assertNull()
+      /** 链接头出现在块中部（块首是用户正文）：同样不是服务端引用块 */
+      const midLink: string = '[quote]用户正文 [pid=111,' + String(TID)
+        + ',1]Reply[/pid] [b]Post by [uid=1]甲[/uid] (2025-01-01):[/b][/quote]'
+      expect(extractPrimaryQuoteRef(midLink, TID)).assertNull()
+    })
+
     it('returnsNullWithoutValidHeader', 0, (): void => {
       expect(extractPrimaryQuoteRef('', TID)).assertNull()
       expect(extractPrimaryQuoteRef('普通正文，没有任何引用', TID)).assertNull()
@@ -300,6 +325,60 @@ export default function threadTreeBuilderUnitTest(): void {
       expect(quote.targetPid).assertEqual(123)
       expect(quote.targetPage).assertEqual(-1)
       expect(quote.external).assertFalse()
+    })
+
+    it('extractsUnclosedReplyToHeaderWithoutStripping', 0, (): void => {
+      /** 回复头缺少[/b]：关系仍要提取，但不能把后面的正文当引用区剥掉 */
+      const content: string = '[b]Reply to [pid=777,' + String(TID)
+        + ',2]Reply[/pid] Post by [uid=1]甲[/uid] (2025-01-01 00:00)<br/>正文'
+      const ref: ThreadTreeQuoteRef | null = extractPrimaryQuoteRef(content, TID)
+      expect(ref).not().assertNull()
+      expect((ref as ThreadTreeQuoteRef).targetPid).assertEqual(777)
+      expect(stripQuoteArea(content)).assertEqual(content)
+    })
+
+    it('extractsReplyToTopicHeader', 0, (): void => {
+      /** 回复楼主：`[b]Reply to [tid=T]Topic[/tid]`（真实数据存在，不能只认 pid 形态） */
+      const content: string = '[b]Reply to [tid=' + String(TID)
+        + ']Topic[/tid] Post by [uid=1132502]dawn28[/uid] (2026-08-10 13:02)[/b]<br/><br/>希望高通赢'
+      const ref: ThreadTreeQuoteRef | null = extractPrimaryQuoteRef(content, TID)
+      expect(ref).not().assertNull()
+      const quote: ThreadTreeQuoteRef = ref as ThreadTreeQuoteRef
+      expect(quote.targetPid).assertEqual(0)
+      expect(quote.isTopicRef).assertTrue()
+      expect(quote.external).assertFalse()
+      expect(quote.targetUid).assertEqual('1132502')
+      expect(quote.targetAuthor).assertEqual('dawn28')
+      expect(stripQuoteArea(content)).assertEqual('希望高通赢')
+    })
+
+    it('doesNotStripWhenReplyHeaderCloseBelongsToBodyBold', 0, (): void => {
+      /** 头缺[/b]时不能把正文里 [b]…[/b] 的闭合当成头部结束 */
+      const content: string = '[b]Reply to [pid=778,' + String(TID)
+        + ',2]Reply[/pid] Post by [uid=1]甲[/uid] (2025-01-01 00:00) 正文开始 [b]加粗强调内容[/b] 结尾正文'
+      const ref: ThreadTreeQuoteRef | null = extractPrimaryQuoteRef(content, TID)
+      expect(ref).not().assertNull()
+      expect(stripQuoteArea(content)).assertEqual(content)
+    })
+
+    it('extractsQuoteBlockAfterLeadingLineBreaks', 0, (): void => {
+      const content: string = '[quote]<br/>[pid=444,' + String(TID)
+        + ',1]Reply[/pid] [b]Post by [uid=9]乙[/uid] (2025-01-01):[/b]被引正文[/quote]<br/>本层正文'
+      const ref: ThreadTreeQuoteRef | null = extractPrimaryQuoteRef(content, TID)
+      expect(ref).not().assertNull()
+      expect((ref as ThreadTreeQuoteRef).targetPid).assertEqual(444)
+      expect(stripQuoteArea(content)).assertEqual('本层正文')
+    })
+
+    it('parsesAuthorFromHeaderNotQuotedBody', 0, (): void => {
+      /** 作者只从头部解析，被引正文里的 [uid] 提及不能顶替作者 */
+      const content: string = '[quote][pid=557,' + String(TID)
+        + ',1]Reply[/pid] [b]Post by [uid=2]丙[/uid] (2025-01-01):[/b]'
+        + '正文里提到 [uid=999]别人[/uid][/quote]<br/>本层正文'
+      const ref: ThreadTreeQuoteRef | null = extractPrimaryQuoteRef(content, TID)
+      expect(ref).not().assertNull()
+      expect((ref as ThreadTreeQuoteRef).targetUid).assertEqual('2')
+      expect((ref as ThreadTreeQuoteRef).targetAuthor).assertEqual('丙')
     })
   })
 
@@ -423,6 +502,22 @@ export default function threadTreeBuilderUnitTest(): void {
       expect(model.totalPages).assertEqual(5)
       expect(model.pageByPid.size).assertEqual(0)
     })
+
+    it('keepsUserWrittenQuoteAreaAsBodyAndRoot', 0, (): void => {
+      const main: PostInfo = createPost(0, 0, '主楼正文')
+      const userQuote: PostInfo = createPost(101, 1, '[quote]用户排版内容[/quote]<br/>本层正文')
+      const midLink: PostInfo = createPost(102, 2, '正文前缀' + quotePidHeader(101, TID, 1))
+      const model: ThreadTreeModel = buildThreadTree([userQuote, main, midLink], 1)
+      /** 两楼都不构成引用关系（引用样式不在正文开头）→ 都是根，且正文不被剥离 */
+      expect(model.quoteCount).assertEqual(0)
+      expect(model.roots.length).assertEqual(3)
+      const firstRoot: ThreadTreeRoot = model.roots[1]
+      expect(firstRoot.post.pid).assertEqual(101)
+      expect(firstRoot.displayContent).assertEqual('[quote]用户排版内容[/quote]<br/>本层正文')
+      const secondRoot: ThreadTreeRoot = model.roots[2]
+      expect(secondRoot.post.pid).assertEqual(102)
+      expect(secondRoot.displayContent).assertEqual('正文前缀' + quotePidHeader(101, TID, 1))
+    })
   })
 
   describe('threadTreeFlatten', (): void => {
@@ -533,9 +628,68 @@ export default function threadTreeBuilderUnitTest(): void {
       expect(stripQuoteArea(content)).assertEqual('本层正文')
     })
 
-    it('stripsNestedQuoteBlockByBalancedScan', 0, (): void => {
-      const content: string = '[quote][quote]内层引用[/quote]外层引用[/quote]<br/>正文'
+    it('stripsNestedServiceQuoteBlockByBalancedScan', 0, (): void => {
+      /** 服务端引用块内层出现嵌套 [quote]（防御异常数据）：按深度平衡剥到最外层闭合 */
+      const content: string = '[quote][pid=101,' + String(TID)
+        + ',1]Reply[/pid] [b]Post by [uid=1]甲[/uid] (2026-01-01):[/b][quote]内层[/quote]外层[/quote]<br/>正文'
       expect(stripQuoteArea(content)).assertEqual('正文')
+    })
+
+    it('keepsUserWrittenNestedQuote', 0, (): void => {
+      /** 没有链接头的嵌套 [quote] 是用户排版内容，不能被当成引用区剥掉 */
+      const content: string = '[quote][quote]内层引用[/quote]外层引用[/quote]<br/>正文'
+      expect(stripQuoteArea(content)).assertEqual(content)
+      expect(extractPrimaryQuoteRef(content, TID)).assertNull()
+    })
+
+    it('stripsServiceQuoteBlockAndKeepsUserQuoteAfterIt', 0, (): void => {
+      const content: string = quotePidHeader(111, TID, 1) + '<br/>'
+        + '[quote]用户自己补充的引用样式[/quote]'
+      expect(stripQuoteArea(content)).assertEqual('本层回复正文<br/>[quote]用户自己补充的引用样式[/quote]')
+      const ref: ThreadTreeQuoteRef | null = extractPrimaryQuoteRef(content, TID)
+      expect(ref).not().assertNull()
+      expect((ref as ThreadTreeQuoteRef).targetPid).assertEqual(111)
+    })
+
+    it('keepsUserWrittenQuoteArea', 0, (): void => {
+      const content: string = '[quote]用户自己写的引用样式[/quote]<br/>正文'
+      expect(stripQuoteArea(content)).assertEqual(content)
+      expect(extractPrimaryQuoteRef(content, TID)).assertNull()
+    })
+
+    it('stripsTopicQuoteBlock', 0, (): void => {
+      expect(stripQuoteArea(topicRefHeader(TID))).assertEqual('本层回复正文')
+    })
+
+    it('stripsOnlyFirstServiceQuoteBlock', 0, (): void => {
+      /** 连续两个服务端引用块：只剥第一个，第二个属于用户拼接的正文 */
+      const content: string = quotePidHeader(111, TID, 1) + '<br/>' + quotePidHeader(222, TID, 2)
+      const ref: ThreadTreeQuoteRef | null = extractPrimaryQuoteRef(content, TID)
+      expect(ref).not().assertNull()
+      expect((ref as ThreadTreeQuoteRef).targetPid).assertEqual(111)
+      const stripped: string = stripQuoteArea(content)
+      expect(stripped.indexOf('[quote][pid=222') >= 0).assertTrue()
+    })
+
+    it('extractsUnclosedQuoteBlockWithoutStripping', 0, (): void => {
+      /** 引用块未闭合：关系仍提取，但不剥离（无法确定块的结束位置） */
+      const content: string = '[quote][pid=445,' + String(TID)
+        + ',1]Reply[/pid] [b]Post by [uid=9]乙[/uid] (2025-01-01):[/b]没有闭合的正文'
+      const ref: ThreadTreeQuoteRef | null = extractPrimaryQuoteRef(content, TID)
+      expect(ref).not().assertNull()
+      expect((ref as ThreadTreeQuoteRef).targetPid).assertEqual(445)
+      expect(stripQuoteArea(content)).assertEqual(content)
+    })
+
+    it('stripsLongQuoteBlockLinearly', 0, (): void => {
+      /** 长引用块（约 8K 字符）必须正确且线性完成，防止平衡扫描退化为 O(n²) */
+      let longBody: string = ''
+      for (let i: number = 0; i < 2000; i++) {
+        longBody += '被引正文'
+      }
+      const content: string = '[quote][pid=556,' + String(TID)
+        + ',1]Reply[/pid] [b]Post by [uid=2]丙[/uid] (2025-01-01):[/b]' + longBody + '[/quote]<br/>本层正文'
+      expect(stripQuoteArea(content)).assertEqual('本层正文')
     })
 
     it('keepsMidBodyQuoteUntouched', 0, (): void => {

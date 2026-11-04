@@ -25,6 +25,7 @@ import { ANONYMOUS_NAME_PREFIX } from '../../parser/AnonymousParser';
 import { resolveAttachUrl } from '../../parser/_shared/AttachUrl';
 import { parseHtmlTask } from '../../parser/task/HtmlParseTask';
 import { withTimeout } from '../../common/utils/TimeoutUtils';
+import type { Throttler } from '../../common/concurrency/Throttler';
 import { taskpool } from '@kit.ArkTS';
 import type { ThreadData, ThreadRowInfo, Attachment, ThreadInfo } from '../../model/Thread';
 import { PostInfo, PostAttachInfo } from '../../model/PostInfo';
@@ -193,6 +194,20 @@ export function extractHtmlErrorPageMessage(html: string): string {
  */
 export function extractAppArticleHtml(response: object): string {
   const responseObj: Record<string, Object> = response as Record<string, Object>;
+  // 网络层冷却/风控的响应没有 html，只有 error_code=15 + error['0'] 可读文案
+  // （见 NgaClient.buildThrottledResponse）。必须先把它翻译回原文，否则会落到
+  // 「未返回 html」的技术兜底文案上——那既不是用户能懂的原因，也会让调用方
+  // 识别不出风控而多打一次重试。
+  const errorCode: number = Number(responseObj['error_code'] ?? 0);
+  if (errorCode === 15) {
+    const errorEntry: Record<string, Object> | undefined =
+      responseObj['error'] as Record<string, Object> | undefined;
+    let reason: string = '';
+    if (errorEntry !== undefined && errorEntry !== null) {
+      reason = String(errorEntry['0'] ?? '');
+    }
+    throw new Error(reason.length > 0 ? reason : '访问过于频繁，请稍后再试');
+  }
   const htmlValue: Object | undefined = responseObj['html'];
   const code: string = String(responseObj['code'] ?? '');
   const message: string = String(responseObj['msg'] ?? '');
@@ -253,13 +268,15 @@ export function isMissingFloorSinglePostView(pid: string, parsed: object | null)
  * @param pid - 楼层 ID
  * @param authorid - 只看某作者的楼层
  * @param page - 页码，e 表示末页
+ * @param throttle - 本次请求使用的限流器（默认全站；树页批量读取传专用实例）
  * @returns 与帖子解析器兼容的原始帖子对象
  */
 async function fetchAppArticleHtmlRaw(uid: string, cid: string, tid: string,
-  pid: string, authorid: string, page: string): Promise<Record<string, Object>> {
+  pid: string, authorid: string, page: string,
+  throttle?: Throttler): Promise<Record<string, Object>> {
   const request: ThreadHtmlRequest = buildThreadHtmlRequest(tid, pid, authorid, page);
   const response: Record<string, Object> = await ngaClient.postSignedPath(request.path, request.params,
-    { uid: uid, cid: cid }, request.signParams, request.output) as Record<string, Object>;
+    { uid: uid, cid: cid }, request.signParams, request.output, throttle) as Record<string, Object>;
   const html: string = extractAppArticleHtml(response);
   const parsed: Object = await taskpool.execute(parseHtmlTask, html);
   const parsedObj: Record<string, Object> = parsed as Record<string, Object>;
@@ -353,10 +370,11 @@ function lastPidOfPage(raw: Record<string, Object>): number {
  * @param pid - 楼层 pid（可空）
  * @param authorid - 只看楼主用户 ID（可空）
  * @param page - 页码（'e' 表示末页）
+ * @param throttle - 本次请求使用的限流器（默认全站）
  * @returns 取数结果
  */
 export async function fetchThreadRaw(token: string, tid: string, pid: string,
-  authorid: string, page: string): Promise<ThreadRawResult> {
+  authorid: string, page: string, throttle?: Throttler): Promise<ThreadRawResult> {
   const session = appStore.getSession(token);
   if (!session) {
     return { raw: null, error: '未登录' };
@@ -364,7 +382,7 @@ export async function fetchThreadRaw(token: string, tid: string, pid: string,
 
   try {
     const rawObj: Record<string, Object> = await fetchAppArticleHtmlRaw(session.uid, session.cid,
-      tid || '', pid, authorid, page);
+      tid || '', pid, authorid, page, throttle);
     return { raw: rawObj, error: '' };
   } catch (e) {
     const error: string = (e as Error).message ?? 'HTML 请求或解析异常';
@@ -383,12 +401,24 @@ export async function fetchThreadRaw(token: string, tid: string, pid: string,
  *
  * HTML 取数由 fetchThreadRaw 完成，本函数负责解析（fillThreadResult）与过滤，
  * 是 ThreadPanel 渲染整页的唯一取数入口。
+ *
+ * @param token - 会话令牌
+ * @param tid - 主题 ID
+ * @param pid - 楼层 ID
+ * @param authorid - 只看某作者的楼层
+ * @param page - 页码
+ * @param blacklist - 黑名单 UID
+ * @param keywords - 标题屏蔽关键词
+ * @param noteMap - 用户备注表
+ * @param throttle - 本次请求使用的限流器（默认全站；树页批量读取传专用实例）
+ * @returns 帖子详情结果
  */
 export async function getThread(token: string, tid: string, pid: string,
   authorid: string, page: string,
   blacklist: Set<string> = new Set(),
   keywords: string[] = [],
-  noteMap: Record<string, string> = {}): Promise<ThreadResult> {
+  noteMap: Record<string, string> = {},
+  throttle?: Throttler): Promise<ThreadResult> {
   const result = new ThreadResult();
   const session = appStore.getSession(token);
   if (!session) {
@@ -402,7 +432,7 @@ export async function getThread(token: string, tid: string, pid: string,
       return result;
     }
 
-    const fetched: ThreadRawResult = await fetchThreadRaw(token, tid, pid, authorid, page);
+    const fetched: ThreadRawResult = await fetchThreadRaw(token, tid, pid, authorid, page, throttle);
     if (!fetched.raw) {
       result.error = fetched.error || '无法加载该帖子';
       return result;

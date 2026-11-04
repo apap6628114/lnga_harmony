@@ -339,7 +339,8 @@ export struct ThreadTreePanel {
    * 加载全帖并重建树（页面进入、「刷新递进树」、回复后刷新共用）。
    *
    * @param keepSubject - 是否保留当前标题并回到当前阅读位置（刷新场景）；
-   *   false 表示首次加载，定位使用路由传入的 pid
+   *   false 表示首次加载，定位使用路由传入的 pid。该标志同时作为 `forceRefresh`
+   *   传给抓取服务：刷新/重试必须绕过短时缓存，首次进入则允许复用缓存（90 秒内秒开）
    */
   private loadTree(keepSubject: boolean): void {
     // 代际先推进、旧任务先取消：即使本次因 tid 为空直接早退，在途的旧结果也不得再提交
@@ -373,7 +374,7 @@ export struct ThreadTreePanel {
       }
       this.progressDone = done
       this.progressTotal = total
-    }).then((result: ThreadTreeFetchResult): void => {
+    }, keepSubject).then((result: ThreadTreeFetchResult): void => {
       if (generation !== this.fetchGeneration) {
         logger.warn('tree-panel load stale tid=%{public}s gen=%{public}d', fetchTid, generation)
         return
@@ -399,6 +400,9 @@ export struct ThreadTreePanel {
       }
       this.applyThreadInfo(keepSubject, result)
       this.allPosts = result.posts
+      // 抓取请求固定用空黑名单（保证引用图完整），遮蔽标记在提交时按当前黑名单统一补齐；
+      // 缓存命中时也走这里，避免复用上一次的黑名单快照
+      applyBlacklistStateToPosts(this.allPosts, appStore.settingsStore.getBlacklistIds())
       this.totalPages = result.totalPages
       this.pageByPid = result.pageByPid
       // 旧树的可见中心/首行不再适用于新 rows，重置后再由本轮的 onScrollIndex 更新

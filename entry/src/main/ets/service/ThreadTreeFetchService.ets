@@ -3,26 +3,68 @@ import { taskpool } from '@kit.ArkTS'
 import { appStore } from '../store/AppStore'
 import { getThread } from './api/ThreadApi'
 import { looksLikeThrottle } from './api/NgaThrottleSignals'
+import { Throttler } from '../common/concurrency/Throttler'
 import { PostInfo } from '../model/PostInfo'
 import type { ThreadInfo } from '../model/Thread'
 import { ThreadResult } from '../model/ThreadResult'
-import { preWarmPosts } from '../common/utils/PostWarmup'
+import { collectPostContents } from '../common/utils/PostWarmup'
+import { preWarmBatch } from '../parser/bbcode/BBCodeCache'
 import { withTimeout } from '../common/utils/TimeoutUtils'
 import { Logger, DOMAIN_SERVICE, formatError } from '../common/utils/Logger'
 
 const logger = new Logger(DOMAIN_SERVICE, 'ThreadTreeFetchService')
 
-/** 相邻两页请求之间的最小间隔（毫秒）：顺序抓取、不并发，对 NGA 保持节流礼貌。 */
-const TREE_PAGE_INTERVAL_MS: number = 300
+/** 相邻两页请求之间的最小派发间隔（毫秒）：由批量读取限流器统一控制。 */
+const TREE_PAGE_INTERVAL_MS: number = 250
+
+/** 并发抓取的页数上限：4 页在途，请求节奏由批量读取限流器统一控制。 */
+const TREE_PAGE_CONCURRENCY: number = 4
 
 /** 单页请求超时（毫秒）。 */
 const TREE_PAGE_TIMEOUT_MS: number = 15000
+
+/** 单页失败后重试前的退避间隔（毫秒）。 */
+const TREE_RETRY_BACKOFF_MS: number = 400
+
+/**
+ * 批量读取允许的滑动窗口请求数（60 秒内）。
+ *
+ * 180 次/分钟 = 3 次/秒（平均），是「长帖一次性抓全」与「不触发风控」的折中点：
+ * 100 页约 33~40 秒完成；而网页版打开一页论坛本身就会产生几十个静态资源与接口请求，
+ * 3 次/秒的持续读取量仍在正常浏览的形态内。
+ *
+ * 全站默认限流器（`ngaThrottler`）是 60 次/分钟，适合日常浏览，但会把长帖抓取
+ * 压到 100 秒以上；树页是**用户显式触发的一次性批量读取**，因此单独给一档窗口。
+ * 风控命中时全局冷却仍然生效（见 {@link treeBatchThrottler} 注释）。
+ */
+const TREE_BATCH_MAX_IN_WINDOW: number = 180
 
 /** 抓取完成后做首屏正文预热的楼层数上限（只预热首屏，不预热全量）。 */
 const TREE_WARMUP_POST_LIMIT: number = 60
 
 /** 命中风控时的统一提示文案（不自动重试，避免加深限流）。 */
 const TREE_THROTTLE_HINT: string = '访问过于频繁，请稍后再试'
+
+/** 全帖结果内存缓存的有效期（毫秒）：短时返回再进入免去重抓全帖。 */
+const TREE_CACHE_TTL_MS: number = 90000
+
+/** 全帖结果内存缓存最多保留的帖子数（按写入时间淘汰最旧）。 */
+const TREE_CACHE_MAX_ENTRIES: number = 2
+
+/** 单帖楼层数超过该值时不写缓存：超大帖（数千楼）全量常驻内存会显著抬高峰值。 */
+const TREE_CACHE_MAX_POSTS: number = 3000
+
+/**
+ * 树页批量读取专用限流器。
+ *
+ * 三重约束与全站默认配置同形（并发 4 / 最小派发间隔 250ms），只把**滑动窗口**
+ * 放宽到 {@link TREE_BATCH_MAX_IN_WINDOW} 次/分钟。它不绕开任何风控信号：
+ * - 网络层命中 429 或「过于频繁」文案时，`ngaThrottler.enterCooldown` 会全局拉闸；
+ * - 之后所有请求（包括本实例）都会在 `NgaClient.ngaRequest` 的冷却前置检查处被拒绝，
+ *   不会因为换了限流桶而继续打服务端。
+ */
+const treeBatchThrottler: Throttler = new Throttler(
+  TREE_PAGE_CONCURRENCY, TREE_PAGE_INTERVAL_MS, TREE_BATCH_MAX_IN_WINDOW, 60000)
 
 /**
  * 全帖抓取结果。
@@ -60,18 +102,54 @@ export class ThreadTreeFetchResult {
   forumName: string = ''
 }
 
+/** 并发抓页调度状态（单任务内共享，避免闭包修改外部变量）。 */
+class FetchPageScheduler {
+  /** 下一个待派发页码（从 2 开始）。 */
+  nextPage: number = 2
+
+  /** 服务端总页数。 */
+  totalPages: number = 1
+
+  /** 是否已停止派发（某页失败或命中风控）。 */
+  stopped: boolean = false
+
+  /** 停止原因（用户可读文案）。 */
+  error: string = ''
+
+  /** 已完成页数（含第 1 页）。 */
+  done: number = 0
+}
+
+/** 全帖结果缓存条目。 */
+class TreeFetchCacheEntry {
+  /** 写入时间戳（毫秒）。 */
+  savedAt: number = 0
+
+  /** 已成功抓取的全帖结果（posts 数组与页面映射跨页面实例共享）。 */
+  result: ThreadTreeFetchResult = new ThreadTreeFetchResult()
+}
+
 /**
  * 递进树全帖抓取服务。
  *
  * 流程（参照 `SavedThreadService.saveThread` 的逐页/节流/取消范式，但**不落盘**）：
  * 1. 取第 1 页（整页请求不带 pid、空黑名单/关键词/备注，保证引用图完整）→ 拿
  *    `totalPages`、主楼、主题信息；
- * 2. 顺序抓 2..N 页；每页间隔 {@link TREE_PAGE_INTERVAL_MS}、每页
- *    {@link TREE_PAGE_TIMEOUT_MS} 超时；任一页失败重试 1 次，仍失败则整体失败；
- *    命中风控（`looksLikeThrottle`）直接失败，不再重试；
+ * 2. 第 2..N 页**并发抓取**（{@link TREE_PAGE_CONCURRENCY} 路，请求间隔与窗口由
+ *    {@link treeBatchThrottler} 控制）；单页 {@link TREE_PAGE_TIMEOUT_MS} 超时，
+ *    失败重试 1 次（退避 {@link TREE_RETRY_BACKOFF_MS}），仍失败则整体失败；
+ *    命中风控（`looksLikeThrottle`）直接失败、不再重试，其余在途页停止派发；
  * 3. 合并按 pid 去重、按 `lou` 升序，逐页记录 `pageByPid`（每页抓到时就记）；
- * 4. `cancel(owner)` 在当前页完成后终止；每次启动递增内部 `generation`；
- * 5. 完成后 `preWarmPosts(前 min(60, n) 个, false, HIGH)` 预热首屏 BBCode 解析缓存。
+ * 4. `cancel(owner)` 在当前批次请求完成后终止（在途页结果丢弃）；每次启动递增内部
+ *    `generation`；
+ * 5. 完成后**后台**预热首屏楼层的 BBCode 解析缓存（不阻塞结果提交）。
+ *
+ * ## 缓存
+ *
+ * 成功结果按「账号 uid + tid」缓存 {@link TREE_CACHE_TTL_MS}，最多
+ * {@link TREE_CACHE_MAX_ENTRIES} 个帖子：列表→树→返回→再进树在缓存期内秒开，
+ * 不重复打服务端。刷新（菜单「刷新递进树」/回复后刷新）传 `forceRefresh = true`
+ * 跳过缓存。
  *
  * ## 并发与取消语义（页面级隔离的关键）
  *
@@ -79,7 +157,7 @@ export class ThreadTreeFetchResult {
  * 尚未销毁」的时序。服务因此必须做到：
  *
  * - **新任务等待旧任务退场**：`fetchAll` 若发现上一个任务的 Promise 仍在途，先置取消
- *   并 await 它结束（旧任务最多再等当前页请求），再启动新任务——不会出现
+ *   并 await 它结束（旧任务最多再等当前批次请求），再启动新任务——不会出现
  *   「已有任务进行中」把新页面直接拒掉；
  * - **cancel 按页面实例精确匹配**：旧页面销毁回调晚于新页面启动时，`cancel(oldOwner)`
  *   不会误杀新页面的任务；
@@ -93,7 +171,7 @@ export class ThreadTreeFetchService {
   /** 是否有抓取任务在途。 */
   private fetching: boolean = false
 
-  /** 取消标记：置位后当前页完成即终止。 */
+  /** 取消标记：置位后当前批次请求完成即终止。 */
   private cancelled: boolean = false
 
   /** 当前任务所属页面实例标识（`cancel` 精确匹配用）。 */
@@ -104,6 +182,9 @@ export class ThreadTreeFetchService {
 
   /** 当前在途任务的 Promise（新任务启动前先等待它退场）。 */
   private activeTask: Promise<ThreadTreeFetchResult> | null = null
+
+  /** 成功结果缓存（账号 + 帖子 → 全帖数据）。 */
+  private cache: Map<string, TreeFetchCacheEntry> = new Map<string, TreeFetchCacheEntry>()
 
   /** 是否有抓取任务在途。 */
   get isFetching(): boolean {
@@ -116,7 +197,7 @@ export class ThreadTreeFetchService {
   }
 
   /**
-   * 请求取消当前抓取任务（当前页完成后终止；无任务时为空操作）。
+   * 请求取消当前抓取任务（当前批次请求完成后终止；无任务时为空操作）。
    *
    * @param owner - 页面实例标识；传空串表示无条件取消当前任务。
    *   传具体 owner 时只有「当前任务正属于该页面」才生效，避免旧页面的销毁回调
@@ -133,29 +214,49 @@ export class ThreadTreeFetchService {
   }
 
   /**
+   * 丢弃指定帖子的缓存（诊断/测试用；正常刷新走 `forceRefresh`）。
+   *
+   * @param tid - 主题 ID
+   */
+  invalidateCache(tid: string): void {
+    const keysToDelete: string[] = []
+    this.cache.forEach((entry: TreeFetchCacheEntry, key: string): void => {
+      if (key.endsWith(':' + tid)) {
+        keysToDelete.push(key)
+      }
+    })
+    for (let i: number = 0; i < keysToDelete.length; i++) {
+      this.cache.delete(keysToDelete[i])
+    }
+  }
+
+  /**
    * 抓取全帖并合并。
    *
    * @param owner - 调用页面实例标识（用于精确取消/串行化，不能用 tid 代替：
    *   同一帖子返回再进入会出现两个页面实例）
    * @param tid - 主题 ID
    * @param onProgress - 每页完成回调（done 已完成页数，total 总页数）
+   * @param forceRefresh - 为 true 时跳过短时缓存，强制重新抓取（刷新/回复后刷新）
    * @returns 抓取结果；调用方提交前应校验自身代际/帖子是否已变化
    */
   async fetchAll(owner: string, tid: string,
-    onProgress?: (done: number, total: number) => void): Promise<ThreadTreeFetchResult> {
+    onProgress?: (done: number, total: number) => void,
+    forceRefresh: boolean = false): Promise<ThreadTreeFetchResult> {
     if (tid.length === 0) {
       const invalid: ThreadTreeFetchResult = new ThreadTreeFetchResult()
       invalid.error = '帖子参数无效'
       return invalid
     }
     const token: string = appStore.auth.token
-    if (!appStore.getSession(token)) {
+    const session = appStore.getSession(token)
+    if (!session) {
       const denied: ThreadTreeFetchResult = new ThreadTreeFetchResult()
       denied.error = '请先登录'
       return denied
     }
     // 上一个树页面可能尚未退场（快速切帖 / 返回再进入）：先请求它取消并等它结束，
-    // 否则会以「已有任务进行中」把新页面直接拒掉（旧任务最多再等当前页请求返回）
+    // 否则会以「已有任务进行中」把新页面直接拒掉（旧任务最多再等当前批次请求返回）
     const previousTask: Promise<ThreadTreeFetchResult> | null = this.activeTask
     if (previousTask !== null) {
       this.cancelled = true
@@ -168,13 +269,25 @@ export class ThreadTreeFetchService {
       }
     }
 
+    if (!forceRefresh) {
+      const cached: ThreadTreeFetchResult | null = this.readCache(session.uid, tid)
+      if (cached !== null) {
+        this.generation++
+        cached.generation = this.generation
+        logger.info('tree-fetch cache hit tid=%{public}s posts=%{public}d pages=%{public}d',
+          tid, cached.posts.length, cached.totalPages)
+        return cached
+      }
+    }
+
     this.fetching = true
     this.cancelled = false
     this.generation++
     const generation: number = this.generation
     this.activeOwner = owner
     this.activeTid = tid
-    const task: Promise<ThreadTreeFetchResult> = this.runFetch(token, tid, generation, onProgress)
+    const task: Promise<ThreadTreeFetchResult> = this.runFetch(token, tid, generation,
+      session.uid, onProgress, forceRefresh)
     this.activeTask = task
     try {
       return await task
@@ -194,20 +307,24 @@ export class ThreadTreeFetchService {
    * @param token - 会话令牌
    * @param tid - 主题 ID
    * @param generation - 本次任务代际
+   * @param uid - 当前登录用户 ID（缓存键组成部分）
    * @param onProgress - 每页完成回调
+   * @param forceRefresh - 是否强制刷新（成功后才写缓存）
    * @returns 抓取结果
    */
-  private async runFetch(token: string, tid: string, generation: number,
-    onProgress?: (done: number, total: number) => void): Promise<ThreadTreeFetchResult> {
+  private async runFetch(token: string, tid: string, generation: number, uid: string,
+    onProgress?: (done: number, total: number) => void,
+    forceRefresh: boolean = false): Promise<ThreadTreeFetchResult> {
     const result: ThreadTreeFetchResult = new ThreadTreeFetchResult()
     result.generation = generation
     const seenPids: Set<number> = new Set<number>()
     const collected: PostInfo[] = []
     const pageByPid: Map<number, number> = new Map<number, number>()
-    let done: number = 0
+    const scheduler: FetchPageScheduler = new FetchPageScheduler()
     let totalPages: number = 1
 
-    logger.info('tree-fetch begin tid=%{public}s gen=%{public}d', tid, generation)
+    logger.info('tree-fetch begin tid=%{public}s gen=%{public}d refresh=%{public}s concurrency=%{public}d',
+      tid, generation, String(forceRefresh), TREE_PAGE_CONCURRENCY)
     try {
       const first: ThreadResult = await this.fetchPage(token, tid, 1)
       if (!first.ok) {
@@ -222,33 +339,31 @@ export class ThreadTreeFetchService {
       result.threadInfo = first.threadInfo
       result.forumName = first.forumName
       totalPages = first.pagination.totalPages > 0 ? first.pagination.totalPages : 1
-      done = 1
-      this.notifyProgress(done, totalPages, onProgress)
+      scheduler.totalPages = totalPages
+      scheduler.done = 1
+      this.notifyProgress(scheduler.done, totalPages, onProgress)
       if (this.cancelled || generation !== this.generation) {
         result.cancelled = true
         return result
       }
 
-      for (let page: number = 2; page <= totalPages; page++) {
-        await this.sleep(TREE_PAGE_INTERVAL_MS)
-        if (this.cancelled || generation !== this.generation) {
-          result.cancelled = true
-          return result
+      if (totalPages > 1) {
+        const workers: Promise<void>[] = []
+        const workerCount: number = Math.min(TREE_PAGE_CONCURRENCY, totalPages - 1)
+        for (let i: number = 0; i < workerCount; i++) {
+          workers.push(this.fetchWorker(token, tid, generation, scheduler,
+            seenPids, collected, pageByPid, onProgress))
         }
-        const pageResult: ThreadResult = await this.fetchPage(token, tid, page)
-        if (!pageResult.ok) {
-          result.error = this.pageFailureMessage(page, pageResult)
-          logger.warn('tree-fetch page failed tid=%{public}s page=%{public}d: %{public}s',
-            tid, page, pageResult.error)
-          return result
-        }
-        this.mergePosts(pageResult.posts, page, seenPids, collected, pageByPid)
-        done++
-        this.notifyProgress(done, totalPages, onProgress)
+        await Promise.all(workers)
       }
 
       if (this.cancelled || generation !== this.generation) {
         result.cancelled = true
+        return result
+      }
+      if (scheduler.error.length > 0) {
+        result.error = scheduler.error
+        logger.warn('tree-fetch page failed tid=%{public}s: %{public}s', tid, scheduler.error)
         return result
       }
       collected.sort((a: PostInfo, b: PostInfo): number => a.lou - b.lou)
@@ -256,7 +371,9 @@ export class ThreadTreeFetchService {
       result.pageByPid = pageByPid
       result.totalPages = totalPages
       result.ok = true
-      await this.warmUp(collected)
+      /** 预热不阻塞结果提交：页面先渲染首屏，解析在 taskpool 里并行补齐缓存 */
+      this.warmUp(collected)
+      this.writeCache(uid, tid, result)
       logger.info('tree-fetch done tid=%{public}s gen=%{public}d posts=%{public}d pages=%{public}d',
         tid, generation, collected.length, totalPages)
       return result
@@ -268,6 +385,51 @@ export class ThreadTreeFetchService {
       logger.error('tree-fetch failed tid=%{public}s gen=%{public}d: %{public}s',
         tid, generation, formatError(e))
       return result
+    }
+  }
+
+  /**
+   * 一个并发抓页 worker：循环领取下一页直到取完、失败或取消。
+   *
+   * 页码分配通过 {@link FetchPageScheduler.nextPage} 同步自增完成（单线程语义），
+   * 每个 worker 独立请求、独立合并；结果合并顺序与完成顺序一致，最终再按楼号排序。
+   *
+   * @param token - 会话令牌
+   * @param tid - 主题 ID
+   * @param generation - 任务代际
+   * @param scheduler - 调度状态（页码游标/停止标记/进度）
+   * @param seenPids - 已合并 pid 集合（跨 worker 共享）
+   * @param collected - 已合并楼层（跨 worker 共享）
+   * @param pageByPid - pid → 页码映射（跨 worker 共享）
+   * @param onProgress - 进度回调
+   */
+  private async fetchWorker(token: string, tid: string, generation: number,
+    scheduler: FetchPageScheduler, seenPids: Set<number>, collected: PostInfo[],
+    pageByPid: Map<number, number>,
+    onProgress?: (done: number, total: number) => void): Promise<void> {
+    while (true) {
+      if (scheduler.stopped || this.cancelled || generation !== this.generation) {
+        return
+      }
+      if (scheduler.nextPage > scheduler.totalPages) {
+        return
+      }
+      const page: number = scheduler.nextPage
+      scheduler.nextPage++
+      const pageResult: ThreadResult = await this.fetchPage(token, tid, page)
+      if (!pageResult.ok) {
+        if (!scheduler.stopped) {
+          scheduler.stopped = true
+          scheduler.error = this.pageFailureMessage(page, pageResult)
+        }
+        return
+      }
+      if (this.cancelled || generation !== this.generation) {
+        return
+      }
+      this.mergePosts(pageResult.posts, page, seenPids, collected, pageByPid)
+      scheduler.done++
+      this.notifyProgress(scheduler.done, scheduler.totalPages, onProgress)
     }
   }
 
@@ -289,7 +451,10 @@ export class ThreadTreeFetchService {
     }
     logger.warn('tree-fetch page retry tid=%{public}s page=%{public}d: %{public}s',
       tid, page, result.error)
-    await this.sleep(TREE_PAGE_INTERVAL_MS)
+    await this.sleep(TREE_RETRY_BACKOFF_MS)
+    if (this.cancelled) {
+      return result
+    }
     result = await this.requestPage(token, tid, page)
     return result
   }
@@ -308,7 +473,8 @@ export class ThreadTreeFetchService {
     const emptyNotes: Record<string, string> = {}
     try {
       const result: ThreadResult = await withTimeout<ThreadResult>(
-        getThread(token, tid, '', '', String(page), emptyBlacklist, emptyKeywords, emptyNotes),
+        getThread(token, tid, '', '', String(page), emptyBlacklist, emptyKeywords, emptyNotes,
+          treeBatchThrottler),
         TREE_PAGE_TIMEOUT_MS
       )
       return result
@@ -364,9 +530,12 @@ export class ThreadTreeFetchService {
   /**
    * 预热首屏楼层的 BBCode 解析缓存（最多 {@link TREE_WARMUP_POST_LIMIT} 条）。
    *
+   * **不等待完成**：预热只影响首屏正文解析耗时，不应把已经抓完的数据继续扣在
+   * 「加载中」。缓存未命中时渲染层会同步解析，预热失败也只退化为该路径。
+   *
    * @param posts - 合并后的全帖楼层（按 lou 升序）
    */
-  private async warmUp(posts: PostInfo[]): Promise<void> {
+  private warmUp(posts: PostInfo[]): void {
     const count: number = Math.min(TREE_WARMUP_POST_LIMIT, posts.length)
     if (count <= 0) {
       return
@@ -375,11 +544,11 @@ export class ThreadTreeFetchService {
     for (let i: number = 0; i < count; i++) {
       warmupPosts.push(posts[i])
     }
-    try {
-      await preWarmPosts(warmupPosts, false, taskpool.Priority.HIGH)
-    } catch (e) {
-      logger.warn('tree-fetch preWarmPosts failed: %{public}s', formatError(e))
+    const contents: string[] = collectPostContents(warmupPosts, false)
+    if (contents.length === 0) {
+      return
     }
+    preWarmBatch(contents, taskpool.Priority.HIGH)
   }
 
   /**
@@ -397,6 +566,68 @@ export class ThreadTreeFetchService {
       return '第 ' + String(page) + ' 页加载失败：' + result.error
     }
     return '第 ' + String(page) + ' 页加载失败'
+  }
+
+  /**
+   * 读取缓存（同账号、同帖子、未过期）。
+   *
+   * @param uid - 当前登录用户 ID
+   * @param tid - 主题 ID
+   * @returns 缓存结果（共享 posts 数组）；未命中或过期返回 null
+   */
+  private readCache(uid: string, tid: string): ThreadTreeFetchResult | null {
+    const key: string = uid + ':' + tid
+    const entry: TreeFetchCacheEntry | undefined = this.cache.get(key)
+    if (entry === undefined) {
+      return null
+    }
+    if (Date.now() - entry.savedAt > TREE_CACHE_TTL_MS) {
+      this.cache.delete(key)
+      return null
+    }
+    const result: ThreadTreeFetchResult = new ThreadTreeFetchResult()
+    result.ok = true
+    result.posts = entry.result.posts
+    result.pageByPid = entry.result.pageByPid
+    result.totalPages = entry.result.totalPages
+    result.threadInfo = entry.result.threadInfo
+    result.forumName = entry.result.forumName
+    return result
+  }
+
+  /**
+   * 写入成功结果缓存（按写入时间淘汰最旧条目）。
+   *
+   * @param uid - 当前登录用户 ID
+   * @param tid - 主题 ID
+   * @param result - 成功抓取结果
+   */
+  private writeCache(uid: string, tid: string, result: ThreadTreeFetchResult): void {
+    if (!result.ok || result.cancelled) {
+      return
+    }
+    if (result.posts.length > TREE_CACHE_MAX_POSTS) {
+      /** 超大帖不常驻内存：缓存收益（返回再进入）不足以抵消内存峰值 */
+      return
+    }
+    const entry: TreeFetchCacheEntry = new TreeFetchCacheEntry()
+    entry.savedAt = Date.now()
+    entry.result = result
+    this.cache.set(uid + ':' + tid, entry)
+    while (this.cache.size > TREE_CACHE_MAX_ENTRIES) {
+      let oldestKey: string = ''
+      let oldestAt: number = Number.MAX_SAFE_INTEGER
+      this.cache.forEach((value: TreeFetchCacheEntry, key: string): void => {
+        if (value.savedAt < oldestAt) {
+          oldestAt = value.savedAt
+          oldestKey = key
+        }
+      })
+      if (oldestKey.length === 0) {
+        break
+      }
+      this.cache.delete(oldestKey)
+    }
   }
 
   /**

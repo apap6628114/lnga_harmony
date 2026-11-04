@@ -68,13 +68,15 @@
 但 HTML 通道的**普通楼层没有 `reply_to` 结构化字段**（只有贴条行由解析器补；JSON 主通道才有）。
 因此引用关系**必须从 `content` 文本提取**，不得依赖 `reply_to`（也不能为此改镜像解析器）。
 
-NGA 楼层 `content` 中表达「回复了哪一层」的头有三种真实形态（样本见 `docs/research/THREAD_TREE_QUOTE_RESEARCH.md`）：
+NGA 楼层 `content` 中表达「回复了哪一层」的头有四种真实形态（样本见 `docs/research/THREAD_TREE_QUOTE_RESEARCH.md`）：
 
 1. 引用块头：`[quote][pid=A,B,C]Reply[/pid] [b]Post by [uid=U]name[/uid] (date):[/b]…[/quote]`
    → 目标 pid = A（A 是被引用楼层 pid；B 是**被引用楼层所属主题 tid**；C 是被引用楼层页码）。
 2. 回复头：`[b]Reply to [pid=A,B,C]Reply[/pid] Post by [uid=U]name[/uid] (date)[/b]<br/><br/>正文`
    → 目标 pid = A。
-3. 主楼引用头：`[quote][tid=T]Topic[/tid] [b]Post by …[/b]` 或 `[quote][pid=0,T,1]Reply[/pid] …`
+3. 回复主楼头：`[b]Reply to [tid=T]Topic[/tid] Post by [uid=U]name[/uid] (date)[/b]`
+   → 目标 = 主楼（`isTopicRef = true`）。真实样本存在（回复楼主时由客户端生成），不能只认 pid 形态。
+4. 主楼引用头：`[quote][tid=T]Topic[/tid] [b]Post by …[/b]` 或 `[quote][pid=0,T,1]Reply[/pid] …`
    → 目标 = 主楼（`isTopicRef = true`）。
 
 真实变体（已覆盖）：
@@ -85,8 +87,36 @@ NGA 楼层 `content` 中表达「回复了哪一层」的头有三种真实形�
 - 网页端（`from_client = 0 /`）生成的 C 段可能恒为 1，**C 段不得用于定位**（页码一律以抓取时 `pageByPid` 为准）。
 - 主楼 `pid` 在 HTML 通道恒为 0；主楼靠 `lou === 0` 识别。
 
-提取规则（`extractPrimaryQuoteRef(content, tid)`）：取最靠前匹配；`[uid=…]` 用 `[^\]]+`；作者段不强制以 `(date):` 结尾；
-多引用取第一个；结果记录 `targetPid/targetPage/targetUid/targetAuthor/rawHeader/isTopicRef/external`。
+提取规则（`extractPrimaryQuoteRef(content, tid)`）：**只从正文开头提取**；一条楼层只取最外层第一个有效头，
+不递归嵌套引用。`[uid=…]` 用宽松匹配；作者段不强制以 `(date):` 结尾；多引用取第一个；结果记录
+`targetPid/targetPage/targetUid/targetAuthor/rawHeader/isTopicRef/external`。
+
+**引用区的位置与结构约束（精准识别与区分的核心）**：
+
+服务端只把回复/引用头生成在**正文最前面**，因此「是不是回复关系」由两个条件共同判定：
+
+1. **位置**：引用区必须在正文开头，前面只允许空白、`<br>`/`<br/>`、`&nbsp;`。前面出现任何正文文字、
+   图片或格式标签，就不再是服务端引用头。
+2. **结构**：`[quote]` 块内第一个有效元素必须是 `[pid=A,B,C]Reply[/pid]` 或 `[tid=T]Topic[/tid]`
+   链接头；`[b]Reply to …` 头必须紧贴正文开头，支持 `[pid=…]` 与 `[tid=…]Topic[/tid]` 两种内嵌头。
+
+**未闭合/异常头的降级规则**（宁可漏剥，不可吞正文）：
+
+- `[quote]` 块未闭合：仍提取引用关系，但**不剥离**（无法确定块结束位置）；
+- `[b]Reply to` 头缺 `[/b]`，或 400 字符窗口内的 `[/b]` 实际属于正文的 `[b]…[/b]`：仍提取关系，
+  但**不剥离**（`isSafeReplyHeaderClose` 要求 `[/b]` 之前不出现 `<br` 或第二个 `[b]`）；
+- 作者只从头部窗口（到 `[/b]` 或第一处 `<br`）解析，被引正文里的 `[uid=…]` 提及不会顶替作者。
+
+由此区分三类容易混淆的形态：
+
+| 形态 | 位置 | 是否回复关系 | 是否从显示正文剥离 |
+| --- | --- | --- | --- |
+| 服务端引用/回复头 | 正文开头 + 块首链接头 | 是 | 是 |
+| 用户把 `[quote]` 当排版容器（无 pid/tid 头） | 任意位置 | 否 | 否（文字不被吞） |
+| 用户复制/手打的引用样式（头在正文中部、或 `[quote]` 块中部才出现链接头） | 正文中部 | 否 | 否 |
+
+`stripQuoteArea` 与 `extractPrimaryQuoteRef` 共用同一次「头部引用区扫描」（`scanLeadingQuoteArea`），
+保证「建了边的引用块一定会被剥离」「没建边的用户引用样式一定不会被吞」。
 
 **硬约束**：不得修改 `entry/src/main/ets/common/utils/QuoteInjectionCore.ets`（TS 镜像真源），
 新解析器写在独立新文件里（不在 `tools/bbcode-ts/src` 镜像清单内）。
@@ -118,16 +148,40 @@ NGA 楼层 `content` 中表达「回复了哪一层」的头有三种真实形�
 流程（参照 `SavedThreadService.saveThread`，但不落盘）：
 
 1. 取第 1 页 `getThread(…, 空黑名单, 空关键词, 空备注)` → 拿 `totalPages`、主楼、主题信息。
-2. 顺序抓 2..N：页间 **300ms**、单页 **15s 超时**、失败重试 1 次后整体失败；命中风控不重试直接失败。
+2. 第 2..N 页**并发抓取**（{@link TREE_PAGE_CONCURRENCY} = 4 路并发）；单页 **15s 超时**、失败重试 1 次
+   （退避 400ms）后整体失败；命中风控不重试直接失败，其余在途页停止派发。
 3. 合并按 pid 去重、按 `lou` 升序，逐页记录 `pageByPid`（含主楼 `0 → 1`）。
 4. 每页完成回调 `onProgress(done, total)`；支持 `cancel(owner)`；每次 `fetchAll` 递增代际。
-5. 完成前 `await preWarmPosts(前 min(60,n) 个, false, HIGH)`。
+5. 完成后**后台**预热首屏楼层（前 min(60,n) 条，不阻塞结果提交）。
 6. 不写 `savedThreadProgress`，不碰 `ThreadPaginationManager`。
+
+**限流与风控（速度/节流平衡）**：
+
+- 全站默认限流器 `ngaThrottler` 是 6 并发 / 150ms 间隔 / **60 次每 60 秒**，适合日常浏览，但会把 100 页
+  长帖压到 100 秒以上。
+- 树页是用户显式触发的一次性批量读取，使用独立的 `treeBatchThrottler`：**4 并发 / 250ms 最小派发间隔 /
+  180 次每 60 秒**（平均 3 次/秒，瞬时上限 4 次/秒）。100 页约 33~40 秒，29 页约 8~10 秒；
+  仍低于网页版一次打开页面的静态资源 + 接口请求量。
+- 独立限流桶**不绕开风控**：命中 429 / 风控文案时 `ngaThrottler.enterCooldown` 全局拉闸，之后所有请求
+  （含树页）都会在 `NgaClient.ngaRequest` 的冷却前置检查处被拒绝。
+- 网络层通过可选 `throttle` 参数把限流器从 `ThreadTreeFetchService` 透传到 `postSignedPath`，
+  其余调用方不传时保持全站默认行为。
+- 两个桶各自计数、互不可见：树页抓取期间普通浏览仍走 `ngaThrottler`，同一域名下瞬时总并发
+  最坏为 6 + 4。这是「不改变全站日常浏览节奏」的代价；批量桶的 250ms 间隔保证自身不突发。
+
+**短时缓存**：成功结果按「账号 uid + tid」缓存 **90 秒**、最多 2 个帖子（按写入时间淘汰）；
+单帖楼层数超过 3000 时不写缓存（超大帖全量常驻内存会显著抬高峰值）。
+列表→树→返回→再进树在缓存期内秒开；菜单「刷新递进树」、回复/编辑后刷新、错误态重试传
+`forceRefresh = true` 跳过缓存。
+
+**跨页写操作必须失效缓存**：缓存只服务「返回再进入」，用户在列表页回复/编辑/贴条成功后再进树，
+若不失效会命中 90 秒内的旧全帖。`ReplyManager.send` 成功（回复/编辑/贴条的共同出口）调用
+`threadTreeFetchService.invalidateCache(tid)`；树页自己的刷新入口本来就带 `forceRefresh`，不受影响。
 
 **并发与取消语义（页面级隔离的关键，review 后补强）**：
 
 - 树页是独立栈页面，「快速切帖」「列表→树→返回→再进树」会出现**新旧两个页面实例重叠**的时序。
-- `fetchAll(owner, tid)`：若上一个任务的 Promise 仍在途，先置取消并 `await` 它退场（旧任务最多再等当前页请求），
+- `fetchAll(owner, tid)`：若上一个任务的 Promise 仍在途，先置取消并 `await` 它退场（旧任务最多再等当前批次请求），
   再启动新任务——不会以「已有任务进行中」把新页面直接拒掉。
 - `cancel(owner)`：只有当前任务正属于该 owner 才生效；旧页面销毁回调晚于新页面启动时不会误杀新任务。
 - 调用方（`ThreadTreePanel`）为每个页面实例生成唯一 `treeOwner`（时间戳 + 随机数），所有 `cancel`/`fetchAll` 都带它。
@@ -174,13 +228,20 @@ Stack
 
 ### 3.3.1 引用区剥离（`stripQuoteArea`）
 
-树模式所有节点（含根行）正文统一经 `stripQuoteArea(content)` 处理：
+树模式所有节点（含根行）正文统一经**头部引用区扫描**（`scanLeadingQuoteArea`，`stripQuoteArea` 的同一套判定）处理：
 
-1. 剥离正文开头（允许前导空白）的 `[b]Reply to …[/b]` 回复头；
-2. 剥离开头的 `[quote]…[/quote]` 引用块（标签深度平衡扫描，支持嵌套，不用非贪婪正则以免截断）；
-3. 两者可连续出现，循环剥离（上限 8 轮防御异常数据）；
-4. 清理剥离后开头的空白与 `<br/>`；
-5. **只处理正文开头**：正文中部出现的 `[quote]` 字样视为用户内容，不删除（文字不被吞原则）。
+1. 只剥离**服务端引用区**：正文开头（允许前导空白 / `<br/>` / `&nbsp;`）的
+   `[b]Reply to …[/b]` 回复头（pid 与 `[tid]Topic[/tid]` 两种），或块首就是 `[pid=…]`/`[tid=…]`
+   链接头的 `[quote]…[/quote]` 块；
+2. 与 `extractPrimaryQuoteRef` 共用同一次扫描（`scanLeadingQuoteArea`），判定完全一致；
+3. 最多剥离一个引用区（`Reply to` 头 + 紧跟的一个引用块，或一个引用块）；连续第二个服务端引用块
+   也保留（属于用户拼接的正文）；
+4. 剥离后清理开头的空白与 `<br/>`，其余正文格式原样保留；
+5. **不剥离**：正文中部出现的 `[quote]` 块、开头没有链接头的 `[quote]`（用户把 `[quote]` 当排版容器）、
+   未闭合的 `[quote]` 块、`[/b]` 缺失或 `[/b]` 实际属于正文的 Reply to 头——这些要么是用户正文，
+   要么无法确定边界，删掉会造成「文字被吞」的意外表现；
+6. 平衡扫描与标签比较按**原串下标**逐字符进行（不做整串 `toLowerCase`），避免 `İ` 等字符小写化
+   变长导致剥离位置切在字符中间；单遍 O(n)，长引用块不会退化成 O(n²)。
 
 剥离结果缓存在 `ThreadTreeRoot/ThreadTreeChild.displayContent`，由 `flattenThreadTree` 复制到行上；
 `PostItem` / `ThreadTreeChildItem` 通过 `displayContent` + `showContent` 渲染（默认不传时行为与自然列表完全一致）。
@@ -302,12 +363,20 @@ Stack
 
 ## 6. 测试与门禁
 
-`entry/src/test/ThreadTreeBuilderUnit.test.ets`（28 例，在 `List.test.ets` 注册）覆盖：
+`entry/src/test/ThreadTreeBuilderUnit.test.ets`（50 例，在 `List.test.ets` 注册）覆盖：
 
-1. 引用头提取：quote 头 / Reply to 头 / 主楼 Topic 头 / `[pid=0]` 主楼哨兵 / 匿名 uid / 跨帖 / 多引用取第一 / 无引用 / 头部前空白；
-2. 建树：引用主楼 → 根；引用不存在 pid → 根；自引用 / 环 → 提升为根不丢楼；深层引用平铺；主楼无子节点；
-3. 折叠：3 条全显、4 条显 2 + MORE(hidden=2)、展开后全显、未知根不可展开；
-4. 排序与查找：根/子行按楼号升序、`findRootPidByPid` 语义、`findRowIndexByPid`。
+1. 引用头提取：quote 头 / Reply to 头（pid 与 `[tid]Topic[/tid]` 两种）/ 主楼 Topic 头 / `[pid=0]`
+   主楼哨兵 / 匿名 uid / 跨帖 / 多引用取第一 / 无引用 / 头部前空白 / 未闭合 Reply to 头
+   （提取但不剥离）/ 缺 `[/b]` 且正文含 `[b]`（不剥离）；
+2. **引用区位置与结构边界**（本次补强）：正文前缀后不提取、正文中部引用样式不提取、无链接头的 `[quote]`
+   不提取、块中部才出现链接头不提取、块首前噪音（`<br/>`）仍提取、作者只从头部窗口解析；
+3. 建树：引用主楼 → 根；引用不存在 pid → 根；自引用 / 环 → 提升为根不丢楼；深层引用平铺；主楼无子节点；
+   用户排版引用样式保留在正文且楼层为根；
+4. 折叠：3 条全显、4 条显 2 + MORE(hidden=2)、展开后全显、未知根不可展开；
+5. 排序与查找：根/子行按楼号升序、`findRootPidByPid` 语义、`findRowIndexByPid`；
+6. 剥离：服务端引用块 / 回复头剥离、嵌套服务端块按深度平衡剥离、主楼引用块剥离、用户排版引用
+   （含嵌套）保留、服务端块后的用户引用样式保留、连续两个服务端块只剥第一个、正文中部引用不动、
+   未闭合块提取但不剥离、约 8K 字符长引用块线性完成、仅引用时返回空串。
 
 门禁：`hvigorw assembleHap` 编译通过 + `hvigorw test` 通过 + `node scripts/check-eol.mjs` 通过；
 镜像 `sync-to-ets.mjs --dry` 0 修改。
@@ -331,14 +400,19 @@ Stack
 ## 8. 风险与已知限制
 
 1. 引用头格式覆盖率以真实样本统计为准；解析器对未知格式静默降级（不崩溃、不误判）。
-2. 长帖抓取耗时与风控：100 页约 1–2 分钟，必须可取消；失败即停。
+   **只认正文开头的服务端引用区**，正文中部/无链接头的引用样式一律视为用户正文（宁可少判，不可错判）。
+2. 长帖抓取耗时与风控：4 路并发 + 批量读窗口 180 次/分钟，100 页约 33~40 秒；必须可取消；失败即停。
+   若线上日志频繁出现 `[NGA][THROTTLE]` 冷却，应下调 `TREE_BATCH_MAX_IN_WINDOW`。
 3. 树页回复/编辑成功后整树重抓（D10）：长帖会再次等待，这是「简单隔离」的代价；用户也可用菜单手动刷新。
+   短时缓存（90 秒）只服务「返回再进入」，刷新动作一律 `forceRefresh`。
 4. 树页与列表页不共享分页窗口：从树页返回列表页回到原位置（push 语义）；默认树样式打开时
    「切换为列表阅读」是替换页，列表页恢复**它自己的** `reading_progress`（没有记录则从第 1 页开始）。
 5. 主楼 pid 在 HTML 通道可能为 0：引用主楼一律按 `isTopicRef` 判定，不依赖 pid 匹配。
 6. 树页的阅读进度与列表页**分开存储**（`tree_reading_progress` / `reading_progress`）：
    两种视图形状不同、锚点语义不同，互不覆盖；切换阅读方式**不携带位置**，
    因此切换动作本身也不会把一边的楼层写进另一边的进度记录。
+7. 缓存共享 `PostInfo` 对象：树页投票等写操作会回写缓存对象，下一次缓存命中看到的是最新分数（符合预期）；
+   黑名单状态由页面订阅 `blacklistVersion` 重新应用，不依赖缓存写入时的快照。
 
 ## 9. 实现落地差异（交付时校准）
 
@@ -374,3 +448,27 @@ Stack
     - 树页成功加载后写浏览历史、推进跟踪已读；
     - 投票成功后分数回写全帖楼层真源对象，避免行复用后分数回退；
     - 末尾提示「已加载全部回复」、握姿对齐、黑名单刷新、滚动静默收起识图会话等细节与列表页一致。
+12. **抓取速度与引用识别优化（2026-11）**：
+    - 抓取从「顺序 + 每页 300ms 固定间隔」改为「第 1 页后 4 路并发」；页间节奏交给专用限流器
+      `treeBatchThrottler`（4 并发 / 250ms / 180 次每 60 秒），不再由业务层 sleep 硬编码；
+      单页失败重试前退避 400ms；在途请求全部完成/取消后才返回，取消语义不变；
+    - 成功结果按「账号 uid + tid」缓存 90 秒（最多 2 帖、单帖 > 3000 楼不缓存），
+      列表→树→返回→再进树秒开；菜单刷新 / 回复后刷新 / 错误态重试传 `forceRefresh` 强制重抓；
+    - 首屏 BBCode 预热改为后台执行（`preWarmBatch` 不 await），不再阻塞「加载完成 → 首屏渲染」；
+    - 引用关系提取与引用区剥离统一为「头部引用区扫描」（`scanLeadingQuoteArea`）：只认正文开头、
+      只认 `[quote]` 块首链接头；正文中部/无链接头的引用样式不建边、不剥离，
+      修复「树里挂错父楼层」与「用户正文被吞」两类意外表现；
+    - 单测从 28 例扩展到 50 例（新增引用区位置/结构边界、用户排版保留、建树保留、回复主楼
+      `[tid]` 头、缺 `[/b]` 安全判定、未闭合块、连续引用块、长引用块用例）。
+13. **独立 review 修复（提交前）**：
+    - 平衡扫描从「逐字符 `indexOf`」改为 `matchTagAt` 逐字符比较（ASCII 大小写不敏感、无分配），
+      恢复 O(n)：修复长引用块（10KB+）在 UI 线程退化为 O(n²) 造成的秒级~十秒级阻塞；
+    - 回复头补 `[b]Reply to [tid=T]Topic[/tid]` 主楼形态（真实数据存在，旧实现漏判且不剥离）；
+    - `[/b]` 闭合判定增加结构校验（前段不得出现 `<br` 或第二个 `[b]`）：修复「头缺 `[/b]` 时把正文
+      加粗的 `[/b]` 当头部结束」导致吞正文；
+    - 引用块未闭合时仍提取关系但不剥离；作者解析窗口截断到 `[/b]`/`<br`，避免被引正文里的 `[uid]`
+      顶替作者；
+    - 不再整串 `toLowerCase`（避免 `İ` 等字符变长导致下标错位）；
+    - `ReplyManager.send` 成功后失效树页缓存（列表页回复后 90 秒内进树不再看到旧楼层）；
+    - 网络层风控响应（`error_code=15`）在 `extractAppArticleHtml` 翻译回可读原因，树页能识别风控、
+      不再多打一次重试；域名重试前复查全局冷却，独立限流桶也不会绕过闸门。

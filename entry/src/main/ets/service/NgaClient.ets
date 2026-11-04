@@ -1,7 +1,8 @@
 import { http } from '@kit.NetworkKit';
 import { preprocessJson, extractScriptStoreJson } from '../parser/NgaJsonSanitizer';
 import { classifyAuthFailure } from './api/AuthErrors';
-import { ngaThrottler, isThrottleCooldownMessage } from '../common/concurrency/Throttler';
+import { ngaThrottler, isThrottleCooldownMessage, THROTTLE_COOLDOWN_MARKER } from '../common/concurrency/Throttler';
+import type { Throttler } from '../common/concurrency/Throttler';
 import {
   DEFAULT_THROTTLE_COOLDOWN_MS,
   hasThrottleSignal,
@@ -168,6 +169,9 @@ interface HttpResponse {
  * @param allowRetry - 为 false 时关闭「失败后轮换域名重试」。**写操作必须为 false**：
  *   请求可能已到达服务端，重试会造成重复发帖 / 重复回复（不可逆的数据事故）。
  *   重试之间带指数退避（见 NgaThrottleSignals.retryDelayMs），不再是失败即连打。
+ * @param throttle - 本次请求使用的限流器；默认全站 {@link ngaThrottler}。树页一次性
+ *   批量读取会传入专用实例（更宽的滑动窗口），但**冷却闸门仍是全局的**：所有实例都
+ *   在 `ngaRequest` 入口检查 `ngaThrottler` 的冷却状态，风控命中后不会绕开。
  * @returns HTTP 响应（status + ArrayBuffer body）
  */
 async function executeWithRetry(
@@ -179,7 +183,8 @@ async function executeWithRetry(
   extraHeaders: Record<string, string> | undefined,
   baseUrl: string,
   skipContentLength: boolean = false,
-  allowRetry: boolean = true
+  allowRetry: boolean = true,
+  throttle: Throttler = ngaThrottler
 ): Promise<HttpResponse> {
   const resolvedBaseUrl: string = baseUrl || DOMAINS[activeDomainIndex];
   const hostname: string = extractHostname(resolvedBaseUrl);
@@ -216,20 +221,26 @@ async function executeWithRetry(
 
   // 冷却期在 acquire 处直接 reject。acquire 必须放在 try/finally **之外**：
   // reject 时尚未占用槽位，若进了 finally 的 release，会误释放别的请求的槽位。
-  await ngaThrottler.acquire(hostname);
+  await throttle.acquire(hostname);
 
   try {
     try {
       response = await httpReq(url, method, header, body);
     } catch (firstError) {
       firstErrorMsg = (firstError as Error).message;
-      ngaThrottler.release(hostname);
+      throttle.release(hostname);
       released = true;
 
       // 写操作不自动重试：请求可能已经被服务端处理，重试等于重复提交。
       // 明确告诉调用方「结果未知」，让它提示用户核对，而不是悄悄再发一次。
       if (!allowRetry) {
         throw new Error('请求未完成（写操作不自动重试，请确认操作是否已生效）: ' + firstErrorMsg);
+      }
+
+      // 重试前复查全局冷却：首请求失败与重试之间，别的请求可能已经触发风控拉闸。
+      // 独立限流桶（树页）不会自己进入冷却，这一步保证重试也不会绕开闸门。
+      if (ngaThrottler.isCoolingDown()) {
+        throw new Error(THROTTLE_COOLDOWN_MARKER + '请求过于频繁，请稍后重试');
       }
 
       let retrySuccess = false;
@@ -240,7 +251,7 @@ async function executeWithRetry(
 
         // 退避后才重试：失败即连打多个域名是最容易被判定为攻击的形态
         await sleep(retryDelayMs(i));
-        await ngaThrottler.acquire(retryHostname);
+        await throttle.acquire(retryHostname);
         try {
           const retryUrl = buildUrl(retryBaseUrl, path, params);
           response = await httpReq(retryUrl, method, header, body);
@@ -249,7 +260,7 @@ async function executeWithRetry(
         } catch (retryError) {
           firstErrorMsg = (retryError as Error).message;
         } finally {
-          ngaThrottler.release(retryHostname);
+          throttle.release(retryHostname);
         }
       }
 
@@ -260,7 +271,7 @@ async function executeWithRetry(
     return response;
   } finally {
     if (!released) {
-      ngaThrottler.release(hostname);
+      throttle.release(hostname);
     }
   }
 }
@@ -495,15 +506,17 @@ function buildSignedHeaders(): Record<string, string> {
  *   的服务端响应标注 `encode:"GBK"`，实测 `__inchst` 与 Content-Type charset 都改不动它，
  *   必须按 GB18030 解码，否则中文主题标题会整段变成替换字符（见 postSignedPathGb）。
  * @param allowRetry - 是否允许失败后轮换域名重试（写操作必须为 false）
+ * @param throttle - 限流器（默认全站）
  * @returns NGA JSON 响应
  */
 async function ngaPostSignedCore(path: string, qparams: Record<string, string>,
   fields: Record<string, string>, cookies: Cookies | undefined,
-  utf8Response: boolean = true, allowRetry: boolean = true): Promise<object> {
+  utf8Response: boolean = true, allowRetry: boolean = true,
+  throttle: Throttler = ngaThrottler): Promise<object> {
   const extraHeaders: Record<string, string> = buildSignedHeaders();
   return ngaRequest(path, http.RequestMethod.POST, qparams,
     buildEncodedBody(fields), cookies, 'https://ngabbs.com', extraHeaders, true, utf8Response,
-    allowRetry);
+    allowRetry, throttle);
 }
 
 /**
@@ -572,11 +585,15 @@ async function ngaPostSigned(path: string, lib: string, act: string,
  * @param cookies - 会话 cookie（提供 access_uid/access_token 与 Cookie 头）
  * @param signParams - 参与签名的参数值拼接（read.php 无 addSignParams → 传空串）
  * @param output - __output，默认 '14'（read.php 帖子详情传 '17'）
+ * @param throttle - 本次请求使用的限流器（默认全站；树页批量读取传专用实例）
+ * @returns NGA JSON 响应
  */
 async function ngaPostSignedPath(path: string, params: Record<string, string>,
-  cookies: Cookies | undefined, signParams: string, output: string): Promise<object> {
+  cookies: Cookies | undefined, signParams: string, output: string,
+  throttle?: Throttler): Promise<object> {
   const fields: Record<string, string> = buildSignedFields(params, cookies, signParams, output);
-  return ngaPostSignedCore(path, emptyStringRecord(), fields, cookies);
+  return ngaPostSignedCore(path, emptyStringRecord(), fields, cookies, true, true,
+    throttle !== undefined ? throttle : ngaThrottler);
 }
 
 /**
@@ -595,11 +612,14 @@ async function ngaPostSignedPath(path: string, params: Record<string, string>,
  * @param cookies - 会话 cookie（提供 access_uid/access_token 与 Cookie 头）
  * @param signParams - 参与签名的参数值拼接（read.php 无 addSignParams → 传空串）
  * @param output - __output 值（read.php 状态查询传 '8'）
+ * @param throttle - 本次请求使用的限流器（默认全站）
  */
 async function ngaPostSignedPathGb(path: string, params: Record<string, string>,
-  cookies: Cookies | undefined, signParams: string, output: string): Promise<object> {
+  cookies: Cookies | undefined, signParams: string, output: string,
+  throttle?: Throttler): Promise<object> {
   const fields: Record<string, string> = buildSignedFields(params, cookies, signParams, output);
-  return ngaPostSignedCore(path, emptyStringRecord(), fields, cookies, false);
+  return ngaPostSignedCore(path, emptyStringRecord(), fields, cookies, false, true,
+    throttle !== undefined ? throttle : ngaThrottler);
 }
 
 async function ngaGetRaw(path: string, params: Record<string, string>,
@@ -631,7 +651,8 @@ export interface Cookies {
  * @param extraHeaders - 额外 header
  * @param skipInchst - 是否跳过自动注入 __inchst
  * @param utf8Response - 是否按 UTF-8 解码（false 走 GB18030）
- * @param allowRetry - 是否允许失败重试（写操作必须为 false）
+ * @param allowRetry - 是否允许失败后轮换域名重试（写操作必须为 false）
+ * @param throttle - 本次请求使用的限流器（默认全站；树页批量读取传专用实例）
  * @returns NGA 响应对象
  */
 async function ngaRequest(path: string, method: http.RequestMethod,
@@ -639,7 +660,7 @@ async function ngaRequest(path: string, method: http.RequestMethod,
   cookies: Cookies | undefined, baseUrl: string,
   extraHeaders: Record<string, string> | undefined,
   skipInchst: boolean = false, utf8Response: boolean = false,
-  allowRetry: boolean = true): Promise<object> {
+  allowRetry: boolean = true, throttle: Throttler = ngaThrottler): Promise<object> {
   if (!skipInchst && !params['__inchst']) {
     params['__inchst'] = 'UTF8';
   }
@@ -655,7 +676,7 @@ async function ngaRequest(path: string, method: http.RequestMethod,
   let response: HttpResponse;
   try {
     response = await executeWithRetry(
-      path, params, method, body, cookies, extraHeaders, baseUrl, false, allowRetry
+      path, params, method, body, cookies, extraHeaders, baseUrl, false, allowRetry, throttle
     );
   } catch (netError) {
     const message: string = (netError as Error).message;
@@ -767,7 +788,8 @@ interface INgaClient {
     includeClientChecksum?: boolean, inchst?: string, signalAuthFailure?: boolean) => Promise<object>;
   /** App 签名接口（POST form + access_uid/access_token/sign），无 __lib/__act（thread.php 官方通道）。 */
   postSignedPath: (path: string, params: Record<string, string>,
-    cookies: Cookies | undefined, signParams: string, output: string) => Promise<object>;
+    cookies: Cookies | undefined, signParams: string, output: string,
+    throttle?: Throttler) => Promise<object>;
   /** App 签名接口，响应按 GB18030 解码（read.php __output=8 跟踪状态查询通道）。 */
   postSignedPathGb: (path: string, params: Record<string, string>,
     cookies: Cookies | undefined, signParams: string, output: string) => Promise<object>;
@@ -803,8 +825,9 @@ const client: INgaClient = {
   },
 
   async postSignedPath(path: string, params: Record<string, string>,
-    cookies: Cookies | undefined, signParams: string, output: string): Promise<object> {
-    return ngaPostSignedPath(path, params, cookies, signParams, output);
+    cookies: Cookies | undefined, signParams: string, output: string,
+    throttle?: Throttler): Promise<object> {
+    return ngaPostSignedPath(path, params, cookies, signParams, output, throttle);
   },
 
   async postSignedPathGb(path: string, params: Record<string, string>,
