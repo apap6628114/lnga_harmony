@@ -191,20 +191,21 @@ export class Screen {
    * 创建**强制自然列表样式**的帖子页路由。
    *
    * 用于递进树页的「切换为列表阅读」：默认阅读样式为递进树时，普通 `Screen.thread` 会被
-   * ActivityRouter 再次分流到树页；本工厂显式声明走列表页，并携带树页当前中心楼层
-   * （页码 + pid）与只看楼主状态，切换后从同一位置继续阅读。
+   * ActivityRouter 再次分流到树页；本工厂显式声明走列表页。
+   *
+   * **不携带楼层位置**：列表页与树页各自维护独立的阅读进度（`reading_progress` /
+   * `tree_reading_progress`），切换后由目标页恢复它自己的进度，避免一种样式的位置
+   * 覆盖另一种样式的进度记录。只透传「只看楼主」与楼主身份，保证过滤状态一致。
    *
    * @param tid - 主题 ID
-   * @param page - 锚点楼层所属服务端页码
-   * @param pid - 锚点楼层 pid（'0' 主楼哨兵由 `Screen.thread` 归一为空串）
    * @param authorOnly - 是否只看楼主
    * @param authorId - 楼主 uid（只看楼主首屏过滤用，未知传空串）
    * @param authorKey - 楼主稳定作者标识（匿名帖本地过滤用，未知传空串）
    * @returns 帖子页路由（强制列表样式）
    */
-  static threadList(tid: string, page: number = 1, pid: string = '',
-    authorOnly: boolean = false, authorId: string = '', authorKey: string = ''): Screen {
-    const s = Screen.thread(tid, page, pid)
+  static threadList(tid: string, authorOnly: boolean = false, authorId: string = '',
+    authorKey: string = ''): Screen {
+    const s = Screen.thread(tid)
     s.threadForceList = true
     s.threadAuthorOnly = authorOnly
     s.threadAuthorId = authorId
@@ -220,7 +221,8 @@ export class Screen {
    *
    * @param tid - 主题 ID
    * @param fromList - 是否由列表页 push 进入（决定「切换为列表阅读」是 back 还是替换当前页）
-   * @param pid - 可选的初始定位楼层 pid（空串表示定位顶部）
+   * @param pid - 可选的初始定位楼层 pid（空串表示无定位意图：由树页按自己的阅读进度恢复；
+   *   从列表页「切换阅读方式」进入时固定传空串，不把列表当前楼层带进树页）
    * @param authorOnly - 是否只看楼主（列表页切换阅读方式时沿用）
    * @returns 递进树页面路由
    */

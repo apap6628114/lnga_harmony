@@ -2037,20 +2037,6 @@ export struct ThreadPanel {
   }
 
   /**
-   * 当前列表视口中心楼层的 pid（进入递进树页面时的初始定位锚点）。
-   *
-   * @returns 中心楼层 pid；窗口为空或主楼 pid 为 0 时返回 0（树页面定位顶部）
-   */
-  private currentListCenterPid(): number {
-    const count: number = this.mgr.posts.length
-    if (count <= 0) {
-      return 0
-    }
-    const index: number = Math.max(0, Math.min(this.lastScrollCenter, count - 1))
-    return this.mgr.posts[index].pid
-  }
-
-  /**
    * 打开「保存帖子」对话框（选择保存的页范围）。
    */
   private openSaveThreadDialog(): void {
@@ -2769,16 +2755,13 @@ export struct ThreadPanel {
     })
     if (!this.isSavedSource()) {
       // 递进树是独立栈页面：新页面自己抓全帖并渲染，本列表页保持原状，返回即回到这里。
-      // 不带楼层锚点（pid）时树页会尝试恢复它自己的阅读进度；带锚点时按锚点进入。
-      // 只看楼主状态随路由透传，切换阅读方式不丢失当前过滤。
+      // **不携带当前楼层**：两种阅读样式各有独立的阅读进度（列表 reading_progress /
+      // 树 tree_reading_progress），切换后由目标页恢复它自己的进度；只看楼主状态随路由透传。
       items.push({
         label: '切换为递进树阅读',
         action: (): void => {
-          const centerPid: number = this.currentListCenterPid()
-          // 主楼 pid 为 0：作为「无楼层锚点」传空串，避免树页把 0 当成定位顶部而跳过进度恢复
-          const anchorPid: string = centerPid > 0 ? String(centerPid) : ''
           routerStore.navigateActivity(
-            Screen.threadTree(this.threadTid, true, anchorPid, this.authorOnly)
+            Screen.threadTree(this.threadTid, true, '', this.authorOnly)
           )
         }
       })

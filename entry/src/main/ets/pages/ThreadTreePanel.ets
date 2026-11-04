@@ -86,7 +86,7 @@ const PROGRESS_PROMPT_PROTECT_MS: number = 4300
 export struct ThreadTreePanel {
   /** 主题 ID。 */
   @Prop @Watch('onThreadChanged') threadTid: string = ''
-  /** 初始定位楼层 pid（空串表示定位顶部；主楼哨兵 '0' 已由路由层归一为空串）。 */
+  /** 初始定位楼层 pid（空串表示无定位意图：由树页自己的阅读进度决定，无记录则顶部）。 */
   @Prop threadPid: string = ''
   /** 是否由列表页 push 进入（决定「切换为列表阅读」是返回还是替换当前页）。 */
   @Prop fromListEntry: boolean = false
@@ -919,7 +919,7 @@ export struct ThreadTreePanel {
    * 锚点取视口中心行（与还原时的居中定位同源对称）。与列表页不同，树视图没有分页窗口，
    * 定位依据是**扁平可见行**，因此记录的是：
    * - `pid` / `rootPid`：锚点楼层及所属根（恢复时先展开根再居中）；
-   * - `page`：锚点楼层所属服务端页码（诊断快照，切列表时以同一映射重算）。
+   * - `page`：锚点楼层所属服务端页码（诊断快照；切换阅读方式不携带位置）。
    *
    * 刻意不记录扁平行下标：它会随折叠/展开与只看楼主过滤漂移，无法作为可靠的定位依据。
    */
@@ -946,13 +946,14 @@ export struct ThreadTreePanel {
    * 首次进入当前帖子时尝试恢复上一次的树内阅读位置。
    *
    * 与列表页同一交互：不静默定位，读取通过校验后仅弹「前往查看」Toast，由用户点击执行。
-   * 门禁也与列表页对齐：路由自带楼层/page 定位意图、从列表页按当前中心行进入、
-   * 或来源不是「继续阅读」语义（链接/通知/搜索等）时不恢复。
+   * 门禁与列表页对齐：路由自带楼层/page 定位意图、或来源不是「继续阅读」语义
+   * （链接/通知/搜索等）时不恢复。从列表页「切换阅读方式」进入时路由不带位置，
+   * 因此同样恢复树页自己的进度——两种样式各记各的，互不覆盖。
    */
   private tryRestoreTreeProgress(): void {
     if (this.readingResumeHandled || this.readingResumePending) return
     if (this.threadTid.length === 0) return
-    if (this.fromListEntry || this.threadPid.length > 0) return
+    if (this.threadPid.length > 0) return
     if (this.threadPage > 1) return
     if (!this.isResumeAllowedSource()) return
     if (!appStore.settings.recordReadingProgress || appStore.auth.uid.length === 0) return
@@ -1901,34 +1902,21 @@ export struct ThreadTreePanel {
   /**
    * 切换为列表阅读。
    *
-   * 默认树样式打开（`fromListEntry=false`）时替换当前页为列表页，携带当前中心楼层的
-   * 服务端页码/pid 与只看楼主状态，切换后从同一位置继续阅读。
+   * 默认树样式打开（`fromListEntry=false`）时替换当前页为列表页，**不携带当前楼层**：
+   * 列表页会恢复它自己的 `reading_progress`（与树页的 `tree_reading_progress` 分离），
+   * 只把「只看楼主」状态与楼主身份透传过去以保证过滤一致。
    *
    * 从列表页 push 进入（`fromListEntry=true`）时直接 `back()`：原列表页仍在栈中，
    * 返回即保留它进入前的滚动位置与过滤状态（push 语义，不在返回时重载列表）。
    */
   private switchToListReading(): void {
-    let page: number = 1
-    let pid: string = ''
-    const model: ThreadTreeModel | null = this.treeModel
-    const index: number = this.resolveAnchorIndex()
-    if (model !== null && index >= 0) {
-      const post: PostInfo | null = model.rows[index].post
-      if (post !== null) {
-        pid = String(post.pid)
-        const mapped: number | undefined = this.pageByPid.get(post.pid)
-        if (mapped !== undefined && mapped > 0) {
-          page = mapped
-        }
-      }
-    }
     // 从列表页 push 进来：返回即回列表页；默认树样式打开：替换当前页为列表页
     if (this.fromListEntry) {
       routerStore.back()
       return
     }
     routerStore.navigateActivity(
-      Screen.threadList(this.threadTid, page, pid, this.authorOnly, this.threadAuthorId, this.threadAuthorKey),
+      Screen.threadList(this.threadTid, this.authorOnly, this.threadAuthorId, this.threadAuthorKey),
       true
     )
   }
