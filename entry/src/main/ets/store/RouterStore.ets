@@ -118,17 +118,10 @@ export class Screen {
   /** 打开帖子的路由来源（ThreadSource）。 */
   threadSource: string = ''
   /**
-   * 递进树页面：是否由自然列表页（ThreadPanel）push 进入。
-   *
-   * true 时「切换为列表阅读」菜单项直接 `back()` 返回下层列表页（保留列表滚动位置）；
-   * false（设置默认样式直接打开树页）时改为替换当前页为列表页。
-   */
-  threadTreeFromList: boolean = false
-  /**
    * 帖子页强制使用自然列表样式（忽略设置里的默认阅读样式）。
    *
-   * 由递进树页的「切换为列表阅读」生成：默认样式为递进树时，普通 `Screen.thread` 会被
-   * ActivityRouter 再次分流回树页，必须显式声明要走列表页。
+   * 由递进树页的「切换为列表阅读」/ 加载中的「以常规列表打开」生成：默认样式为递进树时，
+   * 普通 `Screen.thread` 会被 ActivityRouter 再次分流回树页，必须显式声明要走列表页。
    */
   threadForceList: boolean = false
   /**
@@ -190,50 +183,62 @@ export class Screen {
   /**
    * 创建**强制自然列表样式**的帖子页路由。
    *
-   * 用于递进树页的「切换为列表阅读」：默认阅读样式为递进树时，普通 `Screen.thread` 会被
-   * ActivityRouter 再次分流到树页；本工厂显式声明走列表页。
+   * 用于递进树页的「切换为列表阅读」与加载中的「以常规列表打开」：默认阅读样式为
+   * 递进树时，普通 `Screen.thread` 会被 ActivityRouter 再次分流到树页；本工厂显式声明走列表页。
+   *
+   * **两种阅读样式互斥**：切换由 `navigateActivity(screen, true)` 原地替换当前栈条目完成，
+   * 被替换掉的递进树条目随即移除、页面实例销毁，栈里不会同时存在同一帖子的两个阅读样式。
    *
    * **不携带楼层位置**：列表页与树页各自维护独立的阅读进度（`reading_progress` /
    * `tree_reading_progress`），切换后由目标页恢复它自己的进度，避免一种样式的位置
-   * 覆盖另一种样式的进度记录。只透传「只看楼主」与楼主身份，保证过滤状态一致。
+   * 覆盖另一种样式的进度记录。只透传「只看楼主」、楼主身份与路由来源。
    *
    * @param tid - 主题 ID
    * @param authorOnly - 是否只看楼主
    * @param authorId - 楼主 uid（只看楼主首屏过滤用，未知传空串）
    * @param authorKey - 楼主稳定作者标识（匿名帖本地过滤用，未知传空串）
+   * @param source - 打开帖子的来源（ThreadSource）；替换页面后来源只能随路由携带，
+   *   否则阅读进度恢复白名单等来源语义会失准
    * @returns 帖子页路由（强制列表样式）
    */
   static threadList(tid: string, authorOnly: boolean = false, authorId: string = '',
-    authorKey: string = ''): Screen {
+    authorKey: string = '', source: string = ''): Screen {
     const s = Screen.thread(tid)
     s.threadForceList = true
     s.threadAuthorOnly = authorOnly
     s.threadAuthorId = authorId
     s.threadAuthorKey = authorKey
+    s.threadSource = source
     return s
   }
 
   /**
    * 创建帖子「两层递进树」阅读页面路由。
    *
-   * 递进树是**独立栈页面**：自己加载全帖、自己展示加载进度、自己渲染；
-   * 与自然列表页（ThreadPanel）互不共享渲染状态，返回即回列表。
+   * 递进树是**独立渲染的页面组件**：自己加载全帖、自己展示加载进度、自己渲染；
+   * 与自然列表页互不共享状态。两种阅读样式**互斥**：切换一律用
+   * `navigateActivity(screen, true)` 原地替换当前栈条目，被替换的列表页实例销毁，
+   * 返回时不会再退回到另一种阅读样式。
    *
    * @param tid - 主题 ID
-   * @param fromList - 是否由列表页 push 进入（决定「切换为列表阅读」是 back 还是替换当前页）
    * @param pid - 可选的初始定位楼层 pid（空串表示无定位意图：由树页按自己的阅读进度恢复；
    *   从列表页「切换阅读方式」进入时固定传空串，不把列表当前楼层带进树页）
    * @param authorOnly - 是否只看楼主（列表页切换阅读方式时沿用）
+   * @param source - 打开帖子的来源（ThreadSource）；列表页切换过来时随路由携带
+   * @param authorId - 楼主 uid（列表页切换过来时已知，抓取结果返回前用它维持只看楼主与标题屏蔽）
+   * @param authorKey - 楼主稳定作者标识（匿名帖本地过滤用，同样在抓取结果前维持过滤）
    * @returns 递进树页面路由
    */
-  static threadTree(tid: string, fromList: boolean = false, pid: string = '',
-    authorOnly: boolean = false): Screen {
+  static threadTree(tid: string, pid: string = '', authorOnly: boolean = false,
+    source: string = '', authorId: string = '', authorKey: string = ''): Screen {
     const s = new Screen()
     s.type = 'threadTree'
     s.tid = tid
-    s.threadTreeFromList = fromList
     s.pid = pid === '0' ? '' : pid
     s.threadAuthorOnly = authorOnly
+    s.threadSource = source
+    s.threadAuthorId = authorId
+    s.threadAuthorKey = authorKey
     return s
   }
 
@@ -458,6 +463,14 @@ export class RouterStoreClass {
     this.activityStack = []
   }
 
+  /**
+   * 导航到指定页面。
+   *
+   * @param screen - 目标页面
+   * @param replace - 是否**原地替换**当前栈顶条目（栈深度不变）。
+   *   同一帖子的「自然列表 / 递进树」阅读样式切换必须传 true：两种样式互斥，
+   *   被替换掉的页面条目移除后其组件实例随之销毁，返回时不会再退回另一种样式
+   */
   navigateActivity(screen: Screen, replace: boolean = false): void {
     const entry = new NavEntry(++nextNavId, screen)
 

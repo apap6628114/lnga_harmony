@@ -2824,15 +2824,15 @@ export struct ThreadPanel {
       }
     })
     if (!this.isSavedSource()) {
-      // 递进树是独立栈页面：新页面自己抓全帖并渲染，本列表页保持原状，返回即回到这里。
-      // **不携带当前楼层**：两种阅读样式各有独立的阅读进度（列表 reading_progress /
-      // 树 tree_reading_progress），切换后由目标页恢复它自己的进度；只看楼主状态随路由透传。
+      // 两种阅读样式**互斥**：原地替换当前列表页条目（列表页实例随替换销毁，
+      // 销毁前由 `aboutToDisappear` 补记阅读进度），返回直接回主题列表。
+      // **不携带当前楼层**：两种样式各有独立的阅读进度（列表 reading_progress /
+      // 树 tree_reading_progress），切换后由目标页恢复它自己的进度；
+      // 只看楼主、楼主身份与路由来源随路由透传。
       items.push({
         label: '切换为递进树阅读',
         action: (): void => {
-          routerStore.navigateActivity(
-            Screen.threadTree(this.threadTid, true, '', this.authorOnly)
-          )
+          this.switchToTreeReading()
         }
       })
     }
@@ -2855,6 +2855,25 @@ export struct ThreadPanel {
       }
     })
     return items
+  }
+
+  /**
+   * 切换为递进树阅读（更多菜单与一次性引导弹窗共用）。
+   *
+   * 两种阅读样式**互斥**：`navigateActivity(screen, true)` 原地替换当前列表页条目，
+   * 列表页实例随替换销毁（`aboutToDisappear` 已补记阅读进度）；返回时直接回主题列表，
+   * 不会退回列表阅读。
+   *
+   * **不携带列表当前楼层**：树页按自己的 `tree_reading_progress` 恢复（无记录则顶部）；
+   * 只看楼主、楼主身份与路由来源随路由透传——树页抓完全帖前也能维持过滤状态，
+   * 加载中再切回列表时不会把「只看楼主」丢掉。
+   */
+  private switchToTreeReading(): void {
+    routerStore.navigateActivity(
+      Screen.threadTree(this.threadTid, '', this.authorOnly, this.threadSource,
+        this.threadAuthorId, this.threadAuthorKey),
+      true
+    )
   }
 
   // ==================== 递进树一次性引导 ====================
@@ -2908,7 +2927,7 @@ export struct ThreadPanel {
             fontColor: AppColors.white,
             background: AppColors.primary,
             action: (): void => {
-              this.openTreeReadingMode()
+              this.switchToTreeReading()
             }
           }
         ]
@@ -2916,16 +2935,6 @@ export struct ThreadPanel {
       autoCancel: true
     })
     this.treeGuideDialogController?.open()
-  }
-
-  /**
-   * 从引导弹窗直接进入递进树页。
-   *
-   * 与更多菜单「切换为递进树阅读」同一路由语义（`fromList = true`）：push 独立树页，
-   * 返回即回到当前列表页；只看楼主状态随路由透传。
-   */
-  private openTreeReadingMode(): void {
-    routerStore.navigateActivity(Screen.threadTree(this.threadTid, true, '', this.authorOnly))
   }
 
   /** 「递进树」引导弹窗的自定义内容（官方 CustomContentDialog 的 contentBuilder）。 */

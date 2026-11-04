@@ -94,8 +94,9 @@ export struct ActivityRouter {
               ThreadTreePanel({
                 threadTid: entry.screen.tid,
                 threadPid: entry.screen.pid,
-                fromListEntry: false,
                 authorOnlyInit: entry.screen.threadAuthorOnly,
+                authorIdInit: entry.screen.threadAuthorId,
+                authorKeyInit: entry.screen.threadAuthorKey,
                 threadSource: entry.screen.threadSource,
                 threadPage: entry.screen.threadPage
               })
@@ -112,12 +113,16 @@ export struct ActivityRouter {
               })
             }
           } else if (entry.screen.type === 'threadTree') {
-            // 从列表页菜单 push 的独立树阅读页：返回即回原列表页（列表状态自然保留）
+            // 列表页 / 递进树互斥：本条目由列表页「切换为递进树阅读」**原地替换**而来
+            // （`navigateActivity(screen, true)`），列表页实例已随替换销毁；
+            // 树页「切换为列表阅读」同样以替换方式回到 `'thread'` + `threadForceList`，
+            // 因此栈里始终只有该帖子的一个阅读样式，返回不会退回另一种模式
             ThreadTreePanel({
               threadTid: entry.screen.tid,
               threadPid: entry.screen.pid,
-              fromListEntry: entry.screen.threadTreeFromList,
               authorOnlyInit: entry.screen.threadAuthorOnly,
+              authorIdInit: entry.screen.threadAuthorId,
+              authorKeyInit: entry.screen.threadAuthorKey,
               threadSource: entry.screen.threadSource,
               threadPage: entry.screen.threadPage
             })

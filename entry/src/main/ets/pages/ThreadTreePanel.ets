@@ -69,7 +69,7 @@ const logger = new Logger(DOMAIN_UI, 'ThreadTreePanel')
 const PROGRESS_PROMPT_PROTECT_MS: number = 4300
 
 /**
- * 帖子「两层递进树」阅读页面（独立栈页面）。
+ * 帖子「两层递进树」阅读页面（与列表页互斥的独立页面组件）。
  *
  * 与自然列表页（ThreadPanel）**数据隔离**：本页面自己抓取全帖、自己展示加载进度、
  * 自己持有树模型与数据源，不读写 ThreadPanel 的分页窗口，也不与其共享渲染状态。
@@ -77,10 +77,11 @@ const PROGRESS_PROMPT_PROTECT_MS: number = 4300
  * 更多菜单与列表页同构（收藏 / 离线保存 / 跟踪 / 刷新 / 只看楼主 / 切换阅读方式 /
  * 从网页打开 / 分享），并各自维护阅读记录与阅读进度。
  *
- * 进入方式：
- * - 列表页更多菜单「切换为递进树阅读」：push 本页（`fromListEntry = true`），返回即回列表页；
- * - 设置「帖子默认样式 = 递进树」：打开帖子时直接挂载本页（`fromListEntry = false`），
- *   「切换为列表阅读」替换当前页为列表页。
+ * 进入方式（两种阅读样式**互斥**，切换一律用 `navigateActivity(screen, true)` 原地替换栈条目）：
+ * - 列表页更多菜单「切换为递进树阅读」：替换当前列表页（列表页实例随替换销毁），
+ *   返回直接回主题列表，不会再退回列表阅读；
+ * - 设置「帖子默认样式 = 递进树」：打开帖子时直接挂载本页（仍是同一个 `Screen.thread` 条目）；
+ * - 本页「切换为列表阅读」/ 加载中的「以常规列表打开」：终止全帖抓取并替换为列表页。
  */
 @Component
 export struct ThreadTreePanel {
@@ -88,10 +89,17 @@ export struct ThreadTreePanel {
   @Prop @Watch('onThreadChanged') threadTid: string = ''
   /** 初始定位楼层 pid（空串表示无定位意图：由树页自己的阅读进度决定，无记录则顶部）。 */
   @Prop threadPid: string = ''
-  /** 是否由列表页 push 进入（决定「切换为列表阅读」是返回还是替换当前页）。 */
-  @Prop fromListEntry: boolean = false
   /** 路由带来的「只看楼主」初始态（列表页切换阅读方式时沿用当前过滤状态）。 */
   @Prop authorOnlyInit: boolean = false
+  /**
+   * 路由带来的楼主 uid（列表页切换过来时已知）。
+   *
+   * 全帖抓取返回前用它维持「只看楼主」与标题屏蔽；切回列表时也原样透传，
+   * 避免加载中切换丢失过滤状态。抓取结果返回后以服务端 `threadInfo` 为准。
+   */
+  @Prop authorIdInit: string = ''
+  /** 路由带来的楼主稳定作者标识（匿名帖本地过滤用，语义见 `PostInfo.authorKey`）。 */
+  @Prop authorKeyInit: string = ''
   /** 打开帖子的路由来源（决定是否允许恢复树内阅读进度，与列表页同一白名单）。 */
   @Prop threadSource: string = ''
   /** 路由请求的初始页码（> 1 表示有明确翻页意图，不恢复进度）。 */
@@ -254,6 +262,11 @@ export struct ThreadTreePanel {
     }
     this.treeOwner = 'tree-' + String(Date.now()) + '-' + String(Math.floor(Math.random() * 1000000))
     this.authorOnly = this.authorOnlyInit
+    // 全帖抓取返回前先用路由带来的楼主身份（列表页切换过来时已知）：
+    // 加载中再切回列表也要能沿用「只看楼主」，抓取结果返回后以服务端 threadInfo 为准
+    this.threadAuthorId = this.authorIdInit
+    this.threadAuthorKey = this.authorKeyInit
+    this.hasThreadAuthorKey = this.isAuthorKeyUsable(this.authorKeyInit)
     this.loadTree(false)
     this.loadPersistedVotes()
     this.syncFavoriteState()
@@ -310,9 +323,10 @@ export struct ThreadTreePanel {
     this.treeDataSource.clear()
     this.totalPages = 0
     this.threadFid = 0
-    this.threadAuthorId = ''
-    this.threadAuthorKey = ''
-    this.hasThreadAuthorKey = false
+    // 与 aboutToAppear 同源：先回到路由身份（可能为空），抓取结果返回后再覆盖
+    this.threadAuthorId = this.authorIdInit
+    this.threadAuthorKey = this.authorKeyInit
+    this.hasThreadAuthorKey = this.isAuthorKeyUsable(this.authorKeyInit)
     this.authorOnly = this.authorOnlyInit
     this.threadSubject = '递进树'
     this.titleScrollEffectProgress = 0
@@ -390,15 +404,12 @@ export struct ThreadTreePanel {
         return
       }
       if (result.cancelled) {
+        // 递进树条目取代了列表页，不存在「返回原列表页」的退路：取消后停留在错误态，
+        // 由用户选择重试、退出，或在加载态直接「以常规列表打开」
         this.isLoading = false
         this.deferredResumePid = -1
-        appStore.showToast('已取消加载递进树')
-        if (this.fromListEntry) {
-          routerStore.back()
-        } else {
-          this.hasError = true
-          this.errorMsg = '已取消加载递进树'
-        }
+        this.hasError = true
+        this.errorMsg = '已取消加载递进树'
         return
       }
       if (!result.ok) {
@@ -540,14 +551,18 @@ export struct ThreadTreePanel {
    */
   private applyThreadInfo(keepSubject: boolean, result: ThreadTreeFetchResult): void {
     if (result.threadInfo === null) {
-      // 拿不到主题信息就没有可靠的楼主标识：不能维持“只看楼主”的激活态
+      // 拿不到主题信息：保留路由带来的楼主身份（若有），两者都不可用时才关闭只看楼主
       this.disableAuthorOnlyIfUnavailable()
       return
     }
     this.threadFid = result.threadInfo.fid
-    this.threadAuthorId = String(result.threadInfo.authorid)
-    this.threadAuthorKey = result.threadInfo.authorKey
-    this.hasThreadAuthorKey = this.isAuthorKeyUsable(result.threadInfo.authorKey)
+    const fetchAuthorId: number = result.threadInfo.authorid
+    const fetchAuthorKey: string = result.threadInfo.authorKey
+    // 服务端结果优先；它没给（uid=0 / authorKey 为空）时回落到路由身份，
+    // 否则「只看楼主」与标题屏蔽会在加载完成后反而被关闭
+    this.threadAuthorId = fetchAuthorId !== 0 ? String(fetchAuthorId) : this.authorIdInit
+    this.threadAuthorKey = fetchAuthorKey.length > 0 ? fetchAuthorKey : this.authorKeyInit
+    this.hasThreadAuthorKey = this.isAuthorKeyUsable(this.threadAuthorKey)
     this.disableAuthorOnlyIfUnavailable()
     if (keepSubject && this.threadSubject.length > 0 && this.threadSubject !== '递进树') {
       return
@@ -559,9 +574,9 @@ export struct ThreadTreePanel {
   /**
    * 楼主标识不可用时关闭「只看楼主」并提示。
    *
-   * 路由可能带着 `authorOnlyInit=true` 进入（从列表页切换阅读方式），但树页的过滤
-   * 依赖 `threadInfo.authorKey`；拿不到稳定标识时若仍显示激活态，菜单与实际内容会
-   * 互相矛盾（显示全部楼层却标着“只看楼主”）。
+   * 路由可能带着 `authorOnlyInit=true` 进入（从列表页切换阅读方式），但树页的过滤依赖
+   * 楼主稳定标识（抓取结果里的 `threadInfo.authorKey`，返回前用路由带来的 `authorKeyInit`）；
+   * 两者都拿不到时若仍显示激活态，菜单与实际内容会互相矛盾（显示全部楼层却标着“只看楼主”）。
    */
   private disableAuthorOnlyIfUnavailable(): void {
     if (!this.authorOnly || this.hasThreadAuthorKey) {
@@ -1862,7 +1877,7 @@ export struct ThreadTreePanel {
     items.push({
       label: '切换为列表阅读',
       action: (): void => {
-        this.switchToListReading()
+        this.replaceWithListReading()
       }
     })
     items.push({
@@ -1914,23 +1929,23 @@ export struct ThreadTreePanel {
   }
 
   /**
-   * 切换为列表阅读。
+   * 终止递进树工作并切换为列表阅读。
    *
-   * 默认树样式打开（`fromListEntry=false`）时替换当前页为列表页，**不携带当前楼层**：
-   * 列表页会恢复它自己的 `reading_progress`（与树页的 `tree_reading_progress` 分离），
-   * 只把「只看楼主」状态与楼主身份透传过去以保证过滤一致。
+   * 更多菜单「切换为列表阅读」与加载态「以常规列表打开」共用：
+   * 1. 先 `cancelWork()`：取消在途抓取并推进抓取代际，在途页结果不再提交任何状态；
+   * 2. 再 `navigateActivity(screen, true)` **原地替换**当前栈条目——递进树条目随替换移除、
+   *    页面实例销毁，栈里只保留列表页一种阅读样式，返回不会退回递进树。
    *
-   * 从列表页 push 进入（`fromListEntry=true`）时直接 `back()`：原列表页仍在栈中，
-   * 返回即保留它进入前的滚动位置与过滤状态（push 语义，不在返回时重载列表）。
+   * **不携带树内楼层**：列表页恢复它自己的 `reading_progress`（与树页的
+   * `tree_reading_progress` 分离）；只透传「只看楼主」、楼主身份与路由来源，
+   * 保证过滤状态与来源语义（阅读进度恢复白名单等）一致。
    */
-  private switchToListReading(): void {
-    // 从列表页 push 进来：返回即回列表页；默认树样式打开：替换当前页为列表页
-    if (this.fromListEntry) {
-      routerStore.back()
-      return
-    }
+  private replaceWithListReading(): void {
+    // 替换发生在下一帧；先终止抓取，避免在途页结果提交到即将销毁的组件
+    this.cancelWork()
     routerStore.navigateActivity(
-      Screen.threadList(this.threadTid, this.authorOnly, this.threadAuthorId, this.threadAuthorKey),
+      Screen.threadList(this.threadTid, this.authorOnly, this.threadAuthorId, this.threadAuthorKey,
+        this.threadSource),
       true
     )
   }
@@ -1967,10 +1982,14 @@ export struct ThreadTreePanel {
   }
 
   /**
-   * 全帖抓取中的加载态：进度（页数 / 百分比）+ 取消。
+   * 全帖抓取中的加载态：进度（页数 / 百分比）+「取消」+「以常规列表打开」。
    *
    * 取消按钮在总页数未知（第 1 页尚未返回）时同样可用：首屏请求也可能卡满超时，
    * 不能只在拿到 totalPages 之后才允许退出。
+   *
+   * 「以常规列表打开」是加载期的逃生舱：全帖抓取可能持续数十秒，用户不想等时直接换到
+   * 列表样式阅读——终止抓取，并把当前递进树栈条目替换为列表页（见
+   * {@link replaceWithListReading}）。
    */
   @Builder
   LoadingState() {
@@ -1992,12 +2011,21 @@ export struct ThreadTreePanel {
           Text('正在加载帖子…')
             .fontSize(14).fontColor(AppColors.textSecondary)
         }
-        Text('取消')
-          .fontSize(14).fontColor(AppColors.destructive)
-          .padding({ top: 6, bottom: 6, left: 12, right: 12 })
-          .onClick((): void => {
-            threadTreeFetchService.cancel(this.treeOwner)
-          })
+        Row({ space: 8 }) {
+          Text('取消')
+            .fontSize(14).fontColor(AppColors.destructive)
+            .padding({ top: 6, bottom: 6, left: 12, right: 12 })
+            .onClick((): void => {
+              threadTreeFetchService.cancel(this.treeOwner)
+            })
+          Text('以常规列表打开')
+            .fontSize(14).fontColor(AppColors.primary)
+            .padding({ top: 6, bottom: 6, left: 12, right: 12 })
+            .onClick((): void => {
+              this.replaceWithListReading()
+            })
+        }
+        .margin({ top: 4 })
       }
       .margin({ top: 20 })
       .alignItems(HorizontalAlign.Center)

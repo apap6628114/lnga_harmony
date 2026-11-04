@@ -13,21 +13,23 @@
 
 ## 1. 产品定义与决策
 
-### 1.1 两种阅读样式 = 两个独立页面
+### 1.1 两种阅读样式 = 两个互斥的独立页面
 
 | 样式 | 页面组件 | 数据来源 | 列表结构 | 页面栈 |
 | --- | --- | --- | --- | --- |
-| 列表（LIST） | `pages/ThreadPanel.ets`（现有，不改动窗口语义） | 连续分页窗口（`ThreadPaginationManager`） | 自然楼层顺序，`PostItem` | `Screen.thread`（现有） |
-| 递进树（TREE） | `pages/ThreadTreePanel.ets`（新增） | 一次性全帖抓取（`ThreadTreeFetchService`，独立数据） | 两层扁平树（根行 + 子行 + 折叠行） | `Screen.threadTree`（新增） |
+| 列表（LIST） | `pages/ThreadPanel.ets`（现有，不改动窗口语义） | 连续分页窗口（`ThreadPaginationManager`） | 自然楼层顺序，`PostItem` | `Screen.thread`（`threadForceList=true` 时强制列表） |
+| 递进树（TREE） | `pages/ThreadTreePanel.ets`（新增） | 一次性全帖抓取（`ThreadTreeFetchService`，独立数据） | 两层扁平树（根行 + 子行 + 折叠行） | `Screen.threadTree` / 默认样式下的 `Screen.thread`（两种样式互斥，同一栈条目） |
 
 **页面隔离原则（本次设计的核心）**：
 
 1. 两个页面**不共享任何可变状态**：树页不读也不写 `ThreadPaginationManager` 的窗口、不碰 `PostInfoDataSource`、
    不复用列表页的滚动/定位/阅读进度事务；列表页也不感知树页的模型与数据源。
 2. 树页自己负责「加载 → 进度 → 渲染 → 刷新」全生命周期；列表页只提供一个入口（更多菜单）。
-3. 两页之间的交互是路由：从列表页进入树页 = push 新栈条目；返回 = `back()`，列表页原样保留
-   （滚动位置、分页窗口、只看楼主状态都不受影响）。「切换阅读方式」只携带只看楼主与楼主身份，
-   **不携带楼层位置**：两种样式各记各的阅读进度、各自恢复，切过去不会把一种样式的位置写进另一种的进度。
+3. 两页之间的交互是路由，且**两种阅读样式互斥**：切换一律 `navigateActivity(screen, true)`
+   **原地替换**当前栈条目，被替换的页面实例随条目移除而销毁；栈里始终只有该帖子的一个
+   阅读样式，返回直接回上一层（主题列表等），不会退回另一种样式。
+   「切换阅读方式」只携带只看楼主、楼主身份与路由来源，**不携带楼层位置**：
+   两种样式各记各的阅读进度、各自恢复，切过去不会把一种样式的位置写进另一种的进度。
 4. 树页拥有自己的阅读进度（独立域 `tree_reading_progress`）与阅读记录（写入浏览历史）；
    树页内回复/编辑成功后重新抓取全帖（页面内刷新），不改列表页数据。
 
@@ -35,15 +37,19 @@
 
 1. **设置页**：阅读设置新增「帖子阅读样式」项（列表 / 递进树），持久化为 `threadRenderMode`；
    它决定**打开帖子时挂载哪个页面**（`ActivityRouter` 按它分流 `Screen.thread` 条目的渲染组件）。
-2. **列表页更多菜单**：「切换为递进树阅读」→ `routerStore.navigateActivity(Screen.threadTree(tid, true, '', 只看楼主))`
-   push 独立树页；**不携带当前楼层**，树页恢复它自己的 `tree_reading_progress`（没有记录则从顶部开始），
-   只看楼主状态随路由透传。
-3. **树页更多菜单**：「切换为列表阅读」→ 若是从列表页 push 进来的则 `back()`（回列表页）；
-   若是默认样式直接打开（下方不是列表页）则 `routerStore.navigateActivity(Screen.threadList(tid, 只看楼主, 楼主 uid, 楼主 authorKey), true)`
-   替换当前页；**不携带树内楼层**，列表页恢复它自己的 `reading_progress`。
+2. **列表页更多菜单**：「切换为递进树阅读」→
+   `routerStore.navigateActivity(Screen.threadTree(tid, '', 只看楼主, 来源, 楼主 uid, 楼主 authorKey), true)`
+   **原地替换**当前列表页条目（列表页实例销毁）；**不携带当前楼层**，树页恢复它自己的
+   `tree_reading_progress`（没有记录则从顶部开始），只看楼主、楼主身份与来源随路由透传
+   （抓取结果返回前也能维持过滤，加载中切回列表不丢状态）。
+3. **树页更多菜单**：「切换为列表阅读」→
+   `routerStore.navigateActivity(Screen.threadList(tid, 只看楼主, 楼主 uid, 楼主 authorKey, 来源), true)`
+   **原地替换**当前树页条目（树页实例销毁；从列表页切换而来与默认样式直接打开两条路径一致）；
+   **不携带树内楼层**，列表页恢复它自己的 `reading_progress`。加载中的「以常规列表打开」
+   走同一出口，但先终止在途抓取（见 D11）。
 4. **首次打开帖子的一次性引导**：第一次以**列表样式打开在线帖子**、首屏内容加载完成后，弹出一次
    新功能说明弹窗（标题「新增阅读方式：递进树」，内容为"树是什么 + 从哪里进"）。主按钮「试试递进树」
-   直接 push 树页（与更多菜单同一路由语义，`fromList = true`），次按钮「知道了」仅关闭。
+   直接替换为树页（与更多菜单同一路由语义），次按钮「知道了」仅关闭。
    弹窗打开**之前**先把 meta 里的 `treeGuideAcknowledged` 置 true 并异步持久化——**全局只提示一次**，跨启动有效。
    离线存档来源（无树入口）不弹也**不置位**，用户下次在线打开时仍会看到唯一一次引导；
    默认样式已是递进树的用户打开帖子直接进树页，由树页侧静默置位，不再打扰。
@@ -56,13 +62,13 @@
 | D2 | 第一层 = 无有效引用目标的楼层（含引用主楼、引用目标被删/不在帖内、异常自引用/环） | 按楼层号升序 |
 | D3 | 第二层 = 根的任意深度后代，**平铺**在根下，按楼层号升序 | 每条子节点显示它**直接回复的那一层**（可能不是根） |
 | D4 | 折叠：某根的后代总数 > 3 时，默认显示前 2 条，其余折叠为一行「共 N 条回复，点击查看」；≤ 3 时全部显示 | 展开后显示全部，不再二次折叠；展开状态在当前树页会话内保留 |
-| D5 | 树页提供「只看楼主」，按楼主楼层**重建树**而不是列表级隐藏 | 过滤后非楼主楼层不参与父子关系，引用它们的楼主楼层按「目标不在树内」提升为根（`buildThreadTree` 既有语义）；主楼恒保留；被过滤父楼层的根行保留原始正文（含引用块）以维持“回复了谁”的上下文。列表页与树页的只看楼主状态随「切换阅读方式」路由透传 |
+| D5 | 树页提供「只看楼主」，按楼主楼层**重建树**而不是列表级隐藏 | 过滤后非楼主楼层不参与父子关系，引用它们的楼主楼层按「目标不在树内」提升为根（`buildThreadTree` 既有语义）；主楼恒保留；被过滤父楼层的根行保留原始正文（含引用块）以维持“回复了谁”的上下文。列表页与树页的只看楼主状态、楼主身份随「切换阅读方式」路由透传（抓取结果返回前用路由身份，返回后以 `threadInfo` 为准） |
 | D6 | 离线存档来源不提供树入口 | 列表页菜单不出现「切换为递进树阅读」（离线存档没有网络来源可供全帖抓取） |
 | D7 | 树页**独立记录/恢复**自己的阅读进度 | 记录树内锚点行（pid / 所属根 / 页码；不记录会漂移的扁平行下标），存于独立域 `tree_reading_progress`，不与列表页的 `reading_progress` 互相覆盖；恢复交互与列表页一致（Toast「前往查看」后定位） |
 | D8 | 全帖抓取不应用黑名单/关键词过滤 | 保证引用图完整；黑名单遮蔽仍由 `PostItem`/`ThreadTreeChildItem` 渲染层判断 |
 | D9 | 跳转 `→` 在树内定位 | 目标被折叠时展开其所属根再定位；目标为被删楼层/不存在 → Toast；目标为主楼 → 定位第一行 |
 | D10 | 树页内回复/编辑成功后重新抓取全帖并重建树 | Toast 成功提示 + 页面回到加载态；不做增量合并（简单可靠） |
-| D11 | 树页加载态 = 全屏加载视图 + 「正在加载全部楼层 n/N 页」 + 进度条 + 取消 | 加载期间不显示旧内容；取消后：从列表页进入的 `back()`，默认样式进入的显示错误态（可重试） |
+| D11 | 树页加载态 = 全屏加载视图 + 「正在加载全部楼层 n/N 页」 + 进度条 + 「取消」+「以常规列表打开」 | 加载期间不显示旧内容；「取消」停在错误态（可重试、可退出）；「以常规列表打开」先终止在途抓取并让在途回调失效，再把当前递进树栈条目**原地替换**为列表页——树条目移除、页面实例销毁，列表页恢复它自己的阅读进度 |
 | D12 | 树模型只在树页生命周期内持有 | 返回/销毁即释放；列表页完全不受影响 |
 | D13 | 「递进树」新功能引导**只提示一次** | 标记是 meta 域的一次性字段 `treeGuideAcknowledged`（不随登出/切号重置，也不被「清空本地数据」清除，与 `migrationNoticeAcknowledged` 同一口径），判定走纯函数 `ThreadTreeGuidePolicy.shouldShow`：已提示 / 离线存档 / 默认树样式三种情况都不弹。列表页在弹窗前先置位，多列多实例不会叠窗；树页则静默置位 |
 
@@ -178,7 +184,7 @@ NGA 楼层 `content` 中表达「回复了哪一层」的头有四种真实形�
 
 **短时缓存**：成功结果按「账号 uid + tid」缓存 **90 秒**、最多 2 个帖子（按写入时间淘汰）；
 单帖楼层数超过 3000 时不写缓存（超大帖全量常驻内存会显著抬高峰值）。
-列表→树→返回→再进树在缓存期内秒开；菜单「刷新递进树」、回复/编辑后刷新、错误态重试传
+列表 ↔ 树切换后再进入在缓存期内秒开；菜单「刷新递进树」、回复/编辑后刷新、错误态重试传
 `forceRefresh = true` 跳过缓存。
 
 **跨页写操作必须失效缓存**：缓存只服务「返回再进入」，用户在列表页回复/编辑/贴条成功后再进树，
@@ -187,7 +193,7 @@ NGA 楼层 `content` 中表达「回复了哪一层」的头有四种真实形�
 
 **并发与取消语义（页面级隔离的关键，review 后补强）**：
 
-- 树页是独立栈页面，「快速切帖」「列表→树→返回→再进树」会出现**新旧两个页面实例重叠**的时序。
+- 树页是与列表页互斥的独立页面组件，「快速切帖」「列表 ↔ 树反复切换」会出现**新旧两个页面实例重叠**的时序。
 - `fetchAll(owner, tid)`：若上一个任务的 Promise 仍在途，先置取消并 `await` 它退场（旧任务最多再等当前批次请求），
   再启动新任务——不会以「已有任务进行中」把新页面直接拒掉。
 - `cancel(owner)`：只有当前任务正属于该 owner 才生效；旧页面销毁回调晚于新页面启动时不会误杀新任务。
@@ -263,8 +269,11 @@ Stack
 
 ### 3.5 加载态 / 错误态
 
-- 加载态：`LoadingStateView` + 「正在加载全部楼层 n/N 页」+ 线性进度条 + 「取消」；
-  总页数未知（第 1 页尚未返回）时显示「正在加载帖子…」，**取消按钮同样可用**（首屏请求也可能卡满超时）。
+- 加载态：`LoadingStateView` + 「正在加载全部楼层 n/N 页」+ 线性进度条 + 「取消」+「以常规列表打开」；
+  总页数未知（第 1 页尚未返回）时显示「正在加载帖子…」，**两个按钮同样可用**（首屏请求也可能卡满超时）。
+- 「以常规列表打开」是加载期逃生舱：不必等全帖抓完、也不必先退出帖子——点击后终止在途抓取
+  （在途回调失效）并把当前递进树栈条目原地替换为列表页，树条目移除、页面实例销毁；
+  「取消」则只终止抓取并停在错误态，可重试或退出。
 - 错误态：`ErrorStateView(msg, onRetry)`（重试重新抓取）。
 
 ### 3.6 菜单（与列表页同构）
@@ -278,12 +287,12 @@ Stack
 | 3 | 跟踪帖子更新（激活态） | 同左 | 跟踪设置弹窗 |
 | 4 | 刷新帖子 | 刷新递进树 | 按当前阅读位置重载 |
 | 5 | 只看楼主（激活态） | 同左 | 列表页请求过滤；树页按楼主重建树 |
-| 6 | 切换为递进树阅读 | 切换为列表阅读 | 阅读方式切换（ListCell）：只携带只看楼主与楼主身份，**不携带位置**；两种样式各自恢复自己的阅读进度 |
+| 6 | 切换为递进树阅读 | 切换为列表阅读 | 阅读方式切换（ListCell）：只携带只看楼主、楼主身份与路由来源，**不携带位置**；两种样式各自恢复自己的阅读进度；**原地替换**当前栈条目，另一种样式的页面实例随替换销毁 |
 
 > 树页「只看楼主」下，被过滤掉父楼层的根行会保留原始正文（含引用块），
 > 让卡片继续表达“回复了谁”；否则根行只剩一张没有回复上下文的卡片。
-> 从列表页 push 进入时，「切换为列表阅读」直接 `back()`，返回原列表页并保留其
-> 进入前的滚动位置与过滤状态（push 语义，不在返回时重载列表）。
+> 两种阅读样式互斥：切换一律原地替换当前栈条目（`navigateActivity(screen, true)`），
+> 被替换的页面实例销毁，返回直接回上一层，不会退回另一种阅读样式。
 | 7 | 从网页打开 | 同左 | WebView |
 | 8 | 分享帖子 | 同左 | 分享链接 |
 
@@ -335,26 +344,32 @@ Stack
 `store/RouterStore.ets`：
 
 - `ScreenType` 增加 `'threadTree'`；
-- `Screen.threadTree(tid, fromList, pid, authorOnly)` 工厂 + `threadTreeFromList` 字段；
-- `Screen.threadList(tid, authorOnly, authorId, authorKey)` 工厂（强制列表样式 + 过滤/楼主身份透传，**不携带位置**）；
+- `Screen.threadTree(tid, pid, authorOnly, source, authorId, authorKey)` 工厂（树页路由；`pid` 只用于显式定位入口，
+  阅读方式切换固定传空串；楼主身份用于抓取结果返回前维持只看楼主）；
+- `Screen.threadList(tid, authorOnly, authorId, authorKey, source)` 工厂（强制列表样式 + 过滤/楼主身份/来源透传，**不携带位置**）；
 - `Screen.threadAuthorOnly` 字段（两种阅读样式共用）；
 - `getTitle()` 增加 `'递进树'`。
-- `navigateActivity` 现有行为：`'thread'` 类型在栈顶也是 thread 时替换，其余 push；`'threadTree'` 走普通 push（独立栈条目）。
+- `navigateActivity` 现有行为：`'thread'` 类型在栈顶也是 thread 时替换，其余 push；
+  **列表 / 递进树切换必须显式传 `replace = true`**——原地替换栈顶条目，两种阅读样式互斥，
+  被替换的页面实例随条目移除而销毁。
 
 ### 4.2 ActivityRouter
 
 `pages/ActivityRouter.ets`：
 
-- `'thread'` 条目：`appStore.settings.threadRenderMode === ThreadRenderMode.TREE` → 挂载 `ThreadTreePanel(fromListEntry=false, authorOnlyInit=screen.threadAuthorOnly, threadSource=screen.threadSource, threadPage=screen.threadPage)`，
+- `'thread'` 条目：`appStore.settings.threadRenderMode === ThreadRenderMode.TREE` → 挂载 `ThreadTreePanel(authorOnlyInit=screen.threadAuthorOnly, authorIdInit=screen.threadAuthorId, authorKeyInit=screen.threadAuthorKey, threadSource=screen.threadSource, threadPage=screen.threadPage)`，
   否则挂载 `ThreadPanel`（分页/定位语义不变，仅新增 `authorOnlyInit / authorIdInit / authorKeyInit` 三项路由透传）；
-- `'threadTree'` 条目：挂载 `ThreadTreePanel(fromListEntry=entry.screen.threadTreeFromList, authorOnlyInit=screen.threadAuthorOnly, threadSource=screen.threadSource, threadPage=screen.threadPage)`；
-- TTS 停止判定把 `threadTree` 也视为帖子类页面。
+- `'threadTree'` 条目：挂载 `ThreadTreePanel(authorOnlyInit=screen.threadAuthorOnly, authorIdInit=screen.threadAuthorId, authorKeyInit=screen.threadAuthorKey, threadSource=screen.threadSource, threadPage=screen.threadPage)`
+  （由列表页切换时**原地替换**而来，与列表页互斥：列表页实例已在替换时销毁）；
+- TTS 停止判定把 `threadTree` 也视为帖子类页面（替换条目会改变条目 id，因此切换阅读样式即停止朗读）。
 
 ### 4.3 列表页入口（`ThreadPanel.ets`）
 
 `moreMenuItems()` 与树页**同序同构**（§3.6）：在线来源依次为 收藏 / 离线保存 / 跟踪 /
 刷新帖子 / 只看楼主 / 切换为递进树阅读 / 从网页打开 / 分享；离线存档来源去掉网络相关项。
-「切换为递进树阅读」push `Screen.threadTree(this.threadTid, true, '', this.authorOnly)`：
+「切换为递进树阅读」以
+`routerStore.navigateActivity(Screen.threadTree(this.threadTid, '', this.authorOnly, this.threadSource, this.threadAuthorId, this.threadAuthorKey), true)`
+**原地替换**当前列表页条目（列表页实例销毁）：
 不把列表当前楼层带进树页，树页按自己的进度恢复（无记录则顶部）。
 列表页只新增了「刷新帖子」与本项，不改分页/定位/进度逻辑。
 
@@ -421,8 +436,9 @@ Stack
    若线上日志频繁出现 `[NGA][THROTTLE]` 冷却，应下调 `TREE_BATCH_MAX_IN_WINDOW`。
 3. 树页回复/编辑成功后整树重抓（D10）：长帖会再次等待，这是「简单隔离」的代价；用户也可用菜单手动刷新。
    短时缓存（90 秒）只服务「返回再进入」，刷新动作一律 `forceRefresh`。
-4. 树页与列表页不共享分页窗口：从树页返回列表页回到原位置（push 语义）；默认树样式打开时
-   「切换为列表阅读」是替换页，列表页恢复**它自己的** `reading_progress`（没有记录则从第 1 页开始）。
+4. 树页与列表页不共享分页窗口，且两种阅读样式互斥：切换是**原地替换**当前栈条目，
+   被替换的页面实例销毁，返回直接回上一层；切换后目标页恢复**它自己的**阅读进度
+   （列表 `reading_progress` / 树 `tree_reading_progress`，没有记录则从第 1 页 / 顶部开始）。
 5. 主楼 pid 在 HTML 通道可能为 0：引用主楼一律按 `isTopicRef` 判定，不依赖 pid 匹配。
 6. 树页的阅读进度与列表页**分开存储**（`tree_reading_progress` / `reading_progress`）：
    两种视图形状不同、锚点语义不同，互不覆盖；切换阅读方式**不携带位置**，
@@ -441,12 +457,12 @@ Stack
 7. 门禁结果：`assembleHap` BUILD SUCCESSFUL；Hypium 全量用例通过；EOL 通过；镜像 `--dry` 0 修改。
 8. UI 运行时行为（滚动、展开、高亮、加载进度）需在设备上实际体验确认；本工程不做 UI 自动化。
 9. **交付前 review 修复**：
-   - 抓取服务并发竞态：新增 `owner` 标识 + 「新任务先等待旧任务退场」，快速切帖 / 列表→树→返回→再进树
+   - 抓取服务并发竞态：新增 `owner` 标识 + 「新任务先等待旧任务退场」，快速切帖 / 列表 ↔ 树反复切换
      不再误报「已有任务进行中」，旧页面销毁也不会误取消新页面的任务（见 §2.5）；
    - `PostItem.displayContent/showContent` 改为 `@Prop`：树页刷新后行键值可能不变（pid + rev 相同），
      只有 @Prop 会随新参数更新，普通字段会保留旧值导致正文不刷新；
    - 树 List 启用 `maintainVisibleContentPosition(true)`：展开折叠行（整体 replaceAll）时视口不跳动；
-   - 加载态取消按钮在总页数未知（第 1 页未返回）时也可用；
+   - 加载态「取消」与「以常规列表打开」在总页数未知（第 1 页未返回）时都可用；
    - 「切换为递进树阅读」菜单项只在在线来源显示（离线存档不出现该入口）。
 10. 调研临时产物（`docs/research/samples/` 抓取样本与分析脚本、B 站现场截图，约 4.6MB）已在交付前清理；
     三份调研报告（引用格式统计、B 站交互规则、工程接入地图）保留，作为解析规则与参数的依据。
@@ -469,7 +485,7 @@ Stack
       `treeBatchThrottler`（4 并发 / 250ms / 180 次每 60 秒），不再由业务层 sleep 硬编码；
       单页失败重试前退避 400ms；在途请求全部完成/取消后才返回，取消语义不变；
     - 成功结果按「账号 uid + tid」缓存 90 秒（最多 2 帖、单帖 > 3000 楼不缓存），
-      列表→树→返回→再进树秒开；菜单刷新 / 回复后刷新 / 错误态重试传 `forceRefresh` 强制重抓；
+      列表 ↔ 树切换后再进入秒开；菜单刷新 / 回复后刷新 / 错误态重试传 `forceRefresh` 强制重抓；
     - 首屏 BBCode 预热改为后台执行（`preWarmBatch` 不 await），不再阻塞「加载完成 → 首屏渲染」；
     - 引用关系提取与引用区剥离统一为「头部引用区扫描」（`scanLeadingQuoteArea`）：只认正文开头、
       只认 `[quote]` 块首链接头；正文中部/无链接头的引用样式不建边、不剥离，
@@ -488,3 +504,13 @@ Stack
     - `ReplyManager.send` 成功后失效树页缓存（列表页回复后 90 秒内进树不再看到旧楼层）；
     - 网络层风控响应（`error_code=15`）在 `extractAppArticleHtml` 翻译回可读原因，树页能识别风控、
       不再多打一次重试；域名重试前复查全局冷却，独立限流桶也不会绕过闸门。
+14. **阅读样式栈互斥与加载期切换（2026-11）**：
+    - 列表 / 递进树不再以 push + back 共存：切换一律 `navigateActivity(screen, true)` **原地替换**
+      当前栈条目，另一种样式的页面实例随条目移除销毁；返回直接回上一层，不会退回另一种样式；
+    - 删除 `Screen.threadTree` 的 `fromList` 参数、`Screen.threadTreeFromList` 字段与
+      `ThreadTreePanel.fromListEntry`（从列表页切换与默认树样式打开统一为替换语义）；
+    - 树页加载态新增「以常规列表打开」：先 `cancelWork()`（终止抓取、在途回调失效），
+      再把树条目替换为 `Screen.threadList`（强制列表样式）——加载期间不必等全帖抓完即可切换；
+    - 切换时透传路由来源 `threadSource` 与楼主身份（`authorId / authorKey`，由两个工厂分别接收），
+      替换页面后阅读进度恢复白名单、只看楼主过滤与标题屏蔽等语义不丢失；
+    - 「取消」保留为终止抓取并停在错误态（可重试、可退出）。
