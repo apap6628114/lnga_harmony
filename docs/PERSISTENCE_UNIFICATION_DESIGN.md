@@ -575,6 +575,11 @@ Hub.writePayload(spec, payload, ownerUid, flush)
 
 > `dataVersion` 与 `formatVersion`（导出文件）不是一回事：前者描述"磁盘上的数据"，后者描述"导出容器"。
 > 两者都在 `PersistenceCatalog` 里有唯一常量。
+>
+> 实际锚点还包含三个不在上面示例里的字段：`migrationNoticeAcknowledged`（迁移完成提醒只提示一次）、
+> `treeGuideAcknowledged`（帖子「递进树」新功能引导只提示一次，见 `docs/THREAD_TREE_DESIGN.md` D13）
+> 与 `transferHistory`（导出/导入历史）。三者都是**设备级一次性/历史元数据**，不随登出、设置重置或
+> 「清空本地数据」而回到初始值。
 
 ### 5.2 三条触发路径
 

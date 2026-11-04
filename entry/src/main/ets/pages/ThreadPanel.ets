@@ -53,6 +53,7 @@ import { injectQuoteContent } from '../common/utils/QuoteInjection'
 import { HoldingHandMonitor, HoldingHandStatus } from '../common/managers/HoldingHandMonitor'
 import { UIMaterialManager } from '../common/managers/UIMaterialManager'
 import { TitleScrollEffect } from '../common/utils/TitleScrollEffect'
+import { ThreadTreeGuidePolicy } from '../common/utils/ThreadTreeGuidePolicy'
 import {
   PAGE_PICKER_ELLIPSIS,
   PAGE_PICKER_MAX_DIRECT,
@@ -246,6 +247,10 @@ export struct ThreadPanel {
   private saveDialogController?: CustomDialogController
   /** 跟踪帖子更新对话框控制器（更多菜单「跟踪帖子更新」入口）。 */
   private trackDialogController?: CustomDialogController
+  /** 「递进树」一次性引导弹窗控制器（首次打开帖子时展示一次）。 */
+  private treeGuideDialogController?: CustomDialogController
+  /** 「递进树」一次性引导是否已判定过（同一页面实例只判定一次）。 */
+  private treeGuideChecked: boolean = false
   /** 跟踪对话框选中的跟踪时长（天），由 ThreadTrackContent 回写。 */
   @State private trackKeepDays: number = TRACK_DEFAULT_KEEP_DAYS
   /**
@@ -504,6 +509,7 @@ export struct ThreadPanel {
     this.mgr.reset()
     this.saveDialogController = undefined
     this.trackDialogController = undefined
+    this.treeGuideDialogController = undefined
   }
 
   private onThreadChanged(): void {
@@ -1444,6 +1450,8 @@ export struct ThreadPanel {
             // 本次是"目标楼层已删除"回退后的整页视图：楼层不可能出现，明确告知用户
             appStore.showToast(THREAD_FLOOR_MISSING_ERROR)
           }
+          // 首屏内容落屏后再引导（一次性的新功能提示，内部自带「已提示」判定）
+          this.maybeShowTreeReadingGuide()
         } else if (mode === ThreadLoadMode.APPEND) {
           const previousEnd: number = this.mgr.loadedPageEnd
           const added: PostInfo[] = this.mgr.appendPosts(
@@ -2785,6 +2793,98 @@ export struct ThreadPanel {
       }
     })
     return items
+  }
+
+  // ==================== 递进树一次性引导 ====================
+
+  /**
+   * 首次打开帖子时引导用户认识「递进树」阅读模式（全局只提示一次）。
+   *
+   * 触发条件（全部满足才弹）：
+   * - 设备上从未提示过（meta 中的 `treeGuideAcknowledged`，跨启动有效、不随登出重置）；
+   * - 当前是普通在线帖子页，不是离线存档（离线存档没有全帖抓取来源，按设计不提供树入口）；
+   * - 当前不在递进树默认样式下（默认树样式的用户打开帖子直接进树页，由树页侧静默置位）。
+   *
+   * **先置位、再弹窗**：标记是同步内存赋值，多列 / 多实例同时到达首屏时，后到的实例
+   * 立刻看到 true 而不再弹，因此同一瞬间不会叠出多个引导弹窗。
+   */
+  private maybeShowTreeReadingGuide(): void {
+    if (this.treeGuideChecked) {
+      return
+    }
+    this.treeGuideChecked = true
+    const shouldShow: boolean = ThreadTreeGuidePolicy.shouldShow(
+      appStore.treeGuideAcknowledged, this.isSavedSource(), appStore.settings.threadRenderMode
+    )
+    if (!shouldShow) {
+      return
+    }
+    appStore.acknowledgeTreeGuide().catch((e: Error): void => {
+      logger.warn('acknowledge tree guide failed: %{public}s', formatError(e))
+    })
+    this.openTreeReadingGuide()
+  }
+
+  /**
+   * 打开「递进树」引导弹窗。
+   *
+   * 背板走系统沉浸材质（与工程其它弹窗同一配方：背景透明 + `dialogMaterial` + 统一遮罩），
+   * 内容区不叠背景色。文案只讲用户能感知到的两件事：树是什么、从哪里进。
+   */
+  private openTreeReadingGuide(): void {
+    this.treeGuideDialogController = new CustomDialogController({
+      backgroundColor: Color.Transparent,
+      systemMaterial: UIMaterialManager.dialogMaterial,
+      maskColor: UIMaterialManager.scrim,
+      builder: CustomContentDialog({
+        primaryTitle: '新增阅读方式：递进树',
+        contentBuilder: (): void => { this.treeReadingGuideContent() },
+        buttons: [
+          { value: '知道了' },
+          {
+            value: '试试递进树',
+            fontColor: AppColors.white,
+            background: AppColors.primary,
+            action: (): void => {
+              this.openTreeReadingMode()
+            }
+          }
+        ]
+      }),
+      autoCancel: true
+    })
+    this.treeGuideDialogController?.open()
+  }
+
+  /**
+   * 从引导弹窗直接进入递进树页。
+   *
+   * 与更多菜单「切换为递进树阅读」同一路由语义（`fromList = true`）：push 独立树页，
+   * 返回即回到当前列表页；只看楼主状态随路由透传。
+   */
+  private openTreeReadingMode(): void {
+    routerStore.navigateActivity(Screen.threadTree(this.threadTid, true, '', this.authorOnly))
+  }
+
+  /** 「递进树」引导弹窗的自定义内容（官方 CustomContentDialog 的 contentBuilder）。 */
+  @Builder
+  treeReadingGuideContent() {
+    Column({ space: 10 }) {
+      Text('帖子新增「递进树」阅读：按楼层之间的回复关系，把回复挂到被回复的楼层下面，长帖的讨论脉络一眼就能看清。')
+        .fontSize(14)
+        /* 浮层内文字取系统前景色而不是应用暖棕阶：半透明玻璃之上降调色可读性不足
+           （见 ThreadTrackDialogs 文件头的取色约定） */
+        .fontColor(UIMaterialManager.adaptiveForeground)
+        .lineHeight(21)
+        .width('100%')
+      Text('入口：帖子右上角「更多」菜单 →「切换为递进树阅读」；也可以在「设置 → 帖子阅读样式」里把它设为默认。')
+        .fontSize(13)
+        .fontColor(UIMaterialManager.adaptiveForeground)
+        .lineHeight(20)
+        .width('100%')
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
   }
 
   /**

@@ -175,7 +175,7 @@ function buildSpecs(): DomainSpec[] {
   specs.push(new DomainSpec(
     'meta', '数据版本锚点', StorageKind.PREFERENCES, 'meta', '', 1,
     DomainScope.DEVICE, ExportPolicy.NEVER, ImportPolicy.NEVER, false, false, 1024,
-    '迁移状态与全局数据版本。内部专用。'
+    '迁移状态、全局数据版本与一次性提示标记（含导出/导入历史）。内部专用。'
   ))
   /*
    * 载荷模式分配：

@@ -41,6 +41,12 @@
 3. **树页更多菜单**：「切换为列表阅读」→ 若是从列表页 push 进来的则 `back()`（回列表页）；
    若是默认样式直接打开（下方不是列表页）则 `routerStore.navigateActivity(Screen.threadList(tid, 只看楼主, 楼主 uid, 楼主 authorKey), true)`
    替换当前页；**不携带树内楼层**，列表页恢复它自己的 `reading_progress`。
+4. **首次打开帖子的一次性引导**：第一次以**列表样式打开在线帖子**、首屏内容加载完成后，弹出一次
+   新功能说明弹窗（标题「新增阅读方式：递进树」，内容为"树是什么 + 从哪里进"）。主按钮「试试递进树」
+   直接 push 树页（与更多菜单同一路由语义，`fromList = true`），次按钮「知道了」仅关闭。
+   弹窗打开**之前**先把 meta 里的 `treeGuideAcknowledged` 置 true 并异步持久化——**全局只提示一次**，跨启动有效。
+   离线存档来源（无树入口）不弹也**不置位**，用户下次在线打开时仍会看到唯一一次引导；
+   默认样式已是递进树的用户打开帖子直接进树页，由树页侧静默置位，不再打扰。
 
 ### 1.3 决策表（实现必须遵守）
 
@@ -58,6 +64,7 @@
 | D10 | 树页内回复/编辑成功后重新抓取全帖并重建树 | Toast 成功提示 + 页面回到加载态；不做增量合并（简单可靠） |
 | D11 | 树页加载态 = 全屏加载视图 + 「正在加载全部楼层 n/N 页」 + 进度条 + 取消 | 加载期间不显示旧内容；取消后：从列表页进入的 `back()`，默认样式进入的显示错误态（可重试） |
 | D12 | 树模型只在树页生命周期内持有 | 返回/销毁即释放；列表页完全不受影响 |
+| D13 | 「递进树」新功能引导**只提示一次** | 标记是 meta 域的一次性字段 `treeGuideAcknowledged`（不随登出/切号重置，也不被「清空本地数据」清除，与 `migrationNoticeAcknowledged` 同一口径），判定走纯函数 `ThreadTreeGuidePolicy.shouldShow`：已提示 / 离线存档 / 默认树样式三种情况都不弹。列表页在弹窗前先置位，多列多实例不会叠窗；树页则静默置位 |
 
 ## 2. 数据与算法（纯逻辑，已单测）
 
@@ -385,6 +392,10 @@ Stack
 门禁：`hvigorw assembleHap` 编译通过 + `hvigorw test` 通过 + `node scripts/check-eol.mjs` 通过；
 镜像 `sync-to-ets.mjs --dry` 0 修改。
 
+一次性引导另有 `entry/src/test/ThreadTreeGuideUnit.test.ets`（在 `List.test.ets` 注册）：覆盖触发策略的
+三条排除规则（已提示 / 离线存档 / 默认树样式），以及 meta 标记的磁盘兼容读取（字段存在 / 旧数据缺字段 /
+坏字段三种输入的归一化结果）。
+
 ## 7. 文件清单与写入归属
 
 | 文件 | 归属 |
@@ -395,6 +406,7 @@ Stack
 | `common/datasource/ThreadTreeDataSource.ets` | 数据层成员 |
 | `store/ThreadTreeProgressStore.ets` + `PersistenceCatalog` 注册 + `DomainMergers` / 数据管理页 / 单测接线 | 数据层成员 |
 | `common/components/thread-tree/ThreadTreeChildItem.ets` / `ThreadTreeMoreItem.ets` | UI 层成员 |
+| `common/utils/ThreadTreeGuidePolicy.ets` + `entry/src/test/ThreadTreeGuideUnit.test.ets`（一次性引导触发策略与单测） | Lead |
 | `pages/ThreadTreePanel.ets`（独立树阅读页面） | Lead |
 | `pages/ActivityRouter.ets` / `store/RouterStore.ets`（路由类型与分流） | Lead |
 | `pages/ThreadPanel.ets`（更多菜单同构 + 刷新项） | Lead |

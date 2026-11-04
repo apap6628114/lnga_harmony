@@ -242,6 +242,16 @@ export struct ThreadTreePanel {
 
   aboutToAppear(): void {
     this.hasInitiallyLoaded = true
+    /*
+     * 一次性引导的置位（见 `ThreadPanel.maybeShowTreeReadingGuide`）：
+     * 直接以递进树进入的用户**已经在用它**，再弹「存在递进树模式」只是打扰；
+     * 这里静默置位，保证之后即使切到列表阅读也不会再被引导一次。
+     */
+    if (!appStore.treeGuideAcknowledged) {
+      appStore.acknowledgeTreeGuide().catch((e: Error): void => {
+        logger.warn('acknowledge tree guide failed: %{public}s', formatError(e))
+      })
+    }
     this.treeOwner = 'tree-' + String(Date.now()) + '-' + String(Math.floor(Math.random() * 1000000))
     this.authorOnly = this.authorOnlyInit
     this.loadTree(false)

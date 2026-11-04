@@ -174,6 +174,7 @@ export function normalizeMeta(raw: Record<string, Object>): PersistenceMeta {
   meta.appVersionCode = readNumber(raw['appVersionCode'], 0)
   meta.migration = normalizeReport(raw['migration'])
   meta.migrationNoticeAcknowledged = readBoolean(raw['migrationNoticeAcknowledged'], false)
+  meta.treeGuideAcknowledged = readBoolean(raw['treeGuideAcknowledged'], false)
   meta.transferHistory = normalizeTransferHistory(raw['transferHistory'])
   return meta
 }

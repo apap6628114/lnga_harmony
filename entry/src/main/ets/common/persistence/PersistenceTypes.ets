@@ -488,6 +488,14 @@ export class PersistenceMeta {
    */
   migrationNoticeAcknowledged: boolean = false
   /**
+   * 帖子「递进树」新功能引导是否已向用户展示（只提示一次的持久化标记）。
+   *
+   * 放在 meta 而不是设置域：它是**设备级**的一次性提示，不能随登出/切号的设置重置
+   * 而回到未提示（否则同一个用户会反复看到新功能弹窗）；「清空本地数据」也不重置它
+   * （与 `migrationNoticeAcknowledged` 同一处理口径，见 `resetGovernanceMetaAfterClear`）。
+   */
+  treeGuideAcknowledged: boolean = false
+  /**
    * 最近导出/导入历史（最新在前，最多 `TRANSFER_HISTORY_MAX` 条）。
    *
    * 只记元数据（时间/域数/体积/结果），不记任何业务内容；「清空本地数据」时一并清空。

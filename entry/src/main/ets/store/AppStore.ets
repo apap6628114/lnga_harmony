@@ -146,6 +146,8 @@ class AppStoreClass {
   private startupMigrationReport: MigrationReport | null = null
   /** 本次启动是否有待展示的迁移提醒（见 migrationNoticePending 注释）。 */
   private migrationNoticePendingFlag: boolean = false
+  /** 「递进树」新功能引导是否已提示过（meta 持久化标记的内存快照，见 treeGuideAcknowledged）。 */
+  private treeGuideAcknowledgedFlag: boolean = false
   /** 应用版本信息（迁移/导出容器的诊断字段）。 */
   private appVersionName: string = ''
   private appVersionCode: number = 0
@@ -349,6 +351,23 @@ class AppStoreClass {
      */
     this.initDataTransferService()
     await dataTransferService.clearLegacyUndoSnapshots()
+    // 一次性新功能引导的持久化标记（与迁移提醒同源：meta，不随设置重置）
+    await this.loadTreeGuideAcknowledged()
+  }
+
+  /**
+   * 从 meta 读取「递进树」一次性引导标记到内存快照。
+   *
+   * meta 缺失（首次安装且未落锚点）时保持未提示；读取失败只降级为"本次可能再提示一次"，
+   * 不影响启动。
+   */
+  private async loadTreeGuideAcknowledged(): Promise<void> {
+    try {
+      const meta: PersistenceMeta | null = await persistenceHub.metaStore.load()
+      this.treeGuideAcknowledgedFlag = meta !== null && meta.treeGuideAcknowledged === true
+    } catch (e) {
+      logger.warn('load tree guide acknowledged failed: %{public}s', formatError(e))
+    }
   }
 
   /**
@@ -1177,6 +1196,40 @@ class AppStoreClass {
       await persistenceHub.metaStore.save(meta)
     } catch (e) {
       logger.warn('acknowledge migration notice failed: %{public}s', formatError(e))
+    }
+  }
+
+  /**
+   * 「递进树」新功能引导是否已提示过（全局只提示一次）。
+   *
+   * 标记持久化在 meta（`treeGuideAcknowledged`），不随登出/切号的设置重置而丢失；
+   * 判定策略见 `ThreadTreeGuidePolicy`。
+   */
+  get treeGuideAcknowledged(): boolean {
+    return this.treeGuideAcknowledgedFlag
+  }
+
+  /**
+   * 标记「递进树」新功能引导已提示（持久化到 meta，保证只提示一次）。
+   *
+   * **先置内存标记再异步落盘**：多列 / 多实例同时到达首屏时，后到的实例同步读取
+   * `treeGuideAcknowledged` 立刻拿到 true，不会叠出第二个引导弹窗；
+   * 落盘失败只影响下次冷启动（最坏情况多提示一次），不阻断当前界面。
+   */
+  async acknowledgeTreeGuide(): Promise<void> {
+    if (this.treeGuideAcknowledgedFlag) {
+      return
+    }
+    this.treeGuideAcknowledgedFlag = true
+    try {
+      const meta: PersistenceMeta | null = await persistenceHub.metaStore.load()
+      if (meta === null) {
+        return
+      }
+      meta.treeGuideAcknowledged = true
+      await persistenceHub.metaStore.save(meta)
+    } catch (e) {
+      logger.warn('acknowledge tree guide failed: %{public}s', formatError(e))
     }
   }
 
