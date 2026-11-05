@@ -173,6 +173,26 @@ const POST_ARG_MARKER: string = 'commonui.postArg.proc(';
 export const THREAD_FLOOR_MISSING_ERROR: string = '该楼层不存在或已删除';
 
 /**
+ * 整页视图（请求不带 pid）解析不出任何楼层时的兜底文案。
+ *
+ * 触发条件见 {@link hasRawThreadRows}：解析后的 `__R` 为空、或其中没有一条可当
+ * 楼层用的行。这是**页面状态**而不是请求故障——服务端返回了合法帖子页，只是这一页
+ * 没有任何可见楼层。调用方可据 `ThreadResult.emptyPage` 把这种情况降级为「跳过该页」，
+ * 而不是把整帖判死（树页全帖抓取即如此）。
+ */
+export const THREAD_NO_FLOOR_ERROR: string = 'HTML 解析结果没有帖子楼层';
+
+/**
+ * HTML 解析结果缺少 `__R` 时抛出的错误文案（页面结构不是帖子页）。
+ *
+ * 与 {@link THREAD_NO_FLOOR_ERROR} 区分：那是「有 `__R` 但没有有效行」（合法空页，
+ * 可降级为跳过），这是「根本没有 `__R`」——页面结构异常，属请求链问题，**不**降级为
+ * 跳过（见 `getThread` 的取数失败分支）。HTML 降级解析器目前恒输出 `__R`，这条分支
+ * 用于防御解析器回归或页面结构变化。
+ */
+export const THREAD_HTML_NO_ROWS_ERROR: string = 'APP read.php HTML 解析结果缺少帖子楼层';
+
+/**
  * 从 NGA 错误提示页 HTML 中提取服务端报告的原因文本。
  *
  * 错误页在正文首部给出 `<!--msgcodestart-->N<!--msgcodeend-->` 与
@@ -309,7 +329,7 @@ async function fetchAppArticleHtmlRaw(uid: string, cid: string, tid: string,
   const parsedData: Record<string, Object> | undefined = parsedObj['data'] as Record<string, Object> | undefined;
   const rawRows: Record<string, Object> | undefined = parsedData?.['__R'] as Record<string, Object> | undefined;
   if (!rawRows) {
-    throw new Error('APP read.php HTML 解析结果缺少帖子楼层');
+    throw new Error(THREAD_HTML_NO_ROWS_ERROR);
   }
   // 单帖视图（请求带 pid）解析出 0 个楼层：服务端用"空帖子页"表达该楼层已被删除 /
   // 不可见（不是错误页，取数层无法提前拦截）。此时必须给出可读原因，不能交给
@@ -348,6 +368,32 @@ export function hasRawThreadRows(raw: Record<string, Object>): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * 判断一页结果是否属于「整页视图的合法空页」。
+ *
+ * 只有同时满足三个条件才算：
+ * 1. **整页视图**：请求不带 pid——单帖视图 0 楼层是「目标楼层已删除」，语义不同；
+ * 2. **没有服务端过滤**：请求不带 authorid——「只看楼主」翻到某页恰好没有楼主楼层时，
+ *    服务端按过滤条件返回 0 行，那是正常过滤结果，不能当成「整页不可见」；
+ * 3. **原始数据里也没有任何可用楼层行**：有关键词/黑名单可过滤时，原始行仍在
+ *    （{@link hasRawThreadRows}），不算空页。
+ *
+ * 纯函数（只看入参与原始数据），供 `getThread` 置位 `ThreadResult.emptyPage`，
+ * 也是「异常页跳过」策略的唯一判据来源，便于单测覆盖。
+ *
+ * @param pid - 请求携带的楼层 ID（空串表示整页视图）
+ * @param authorid - 服务端过滤作者 ID（空串表示未过滤）
+ * @param raw - HTML 解析后的同形状原始数据
+ * @returns 属于整页视图的合法空页时为 true
+ */
+export function isEmptyWholePage(pid: string, authorid: string,
+  raw: Record<string, Object>): boolean {
+  if (pid.length > 0 || authorid.length > 0) {
+    return false;
+  }
+  return !hasRawThreadRows(raw);
 }
 
 /**
@@ -464,15 +510,19 @@ export async function getThread(token: string, tid: string, pid: string,
     const fetched: ThreadRawResult = await fetchThreadRaw(token, tid, pid, authorid, page, throttle, opt);
     if (!fetched.raw) {
       result.error = fetched.error || '无法加载该帖子';
+      // 取数层抛错（网络 / 错误页 / 甚至「解析结果缺少 __R」）一律不算空页：
+      // 那是请求链或页面结构问题，不是「这一页没有可见楼层」，不能降级为跳过。
       return result;
     }
     fillThreadResult(fetched.raw, result, blacklist, keywords, noteMap);
     if (result.posts.length === 0 && !hasRawThreadRows(fetched.raw)) {
       result.ok = false;
-      // 单帖视图（带 pid）拿不到任何可用楼层时，语义是"目标楼层不存在/不可见"，
-      // 与整页视图的空响应区分开——后者才保留技术性兜底文案。
+      // 单帖视图（带 pid）拿不到任何可用楼层时，语义是"目标楼层不存在/不可见"；
+      // 整页视图解析出 0 楼层则是「合法空页」（整页楼位全部不可见），置 emptyPage
+      // 供树页全帖抓取跳过该页，不把整帖判死。
+      result.emptyPage = isEmptyWholePage(pid, authorid, fetched.raw);
       result.error = result.error
-        || (pid.length > 0 ? THREAD_FLOOR_MISSING_ERROR : 'HTML 解析结果没有帖子楼层');
+        || (pid.length > 0 ? THREAD_FLOOR_MISSING_ERROR : THREAD_NO_FLOOR_ERROR);
     }
   } catch (e) {
     const htmlErr: string = (e as Error).message ?? 'HTML 解析异常';

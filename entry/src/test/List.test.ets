@@ -50,6 +50,7 @@ import dataReviewFixesTest from './DataReviewFixes.test';
 import draftKeyUtilsUnitTest from './DraftKeyUtilsUnit.test';
 import threadTreeBuilderUnitTest from './ThreadTreeBuilderUnit.test';
 import threadTreeGuideUnitTest from './ThreadTreeGuideUnit.test';
+import threadTreeFetchUnitTest from './ThreadTreeFetchUnit.test';
 
 /**
  * 注册全部本地单元测试。
@@ -107,4 +108,5 @@ export default function testsuite(): void {
   draftKeyUtilsUnitTest();
   threadTreeBuilderUnitTest();
   threadTreeGuideUnitTest();
+  threadTreeFetchUnitTest();
 }

@@ -77,7 +77,12 @@ export class ThreadTreeFetchResult {
   /** 本次抓取的任务代际（服务内部递增，调用方可用于诊断；提交校验以调用方自身代际为准）。 */
   generation: number = 0
 
-  /** 是否抓取成功（完整抓完全部页并按 pid 合并）。 */
+  /**
+   * 是否抓取成功（完整抓完全部页并按 pid 合并）。
+   *
+   * `skippedPages` 非空时仍为 true：跳过页只是「那一页没有可见楼层」，
+   * 其余页内容完整可用（见 {@link ThreadTreeFetchResult.skippedPages}）。
+   */
   ok: boolean = false
 
   /** 是否被取消（与失败区分，UI 不弹错误、回到原视图）。 */
@@ -95,11 +100,94 @@ export class ThreadTreeFetchResult {
   /** 服务端总页数（至少为 1）。 */
   totalPages: number = 0
 
+  /**
+   * 被跳过的异常页（页码升序）。
+   *
+   * 这些页服务端返回了合法帖子页、但整页没有任何可见楼层（`ThreadResult.emptyPage`），
+   * 已跳过、不参与合并。`ok = true` 时若本字段非空，表示结果是**部分完整**的：
+   * 页面可以照常阅读，但缺少这几页的楼层（树里表现为内容偏少、引用目标可能悬空，
+   * `buildThreadTree` 会把目标不在树内的楼层提升为根，不会丢行）。
+   *
+   * 跳过页数过半时不会提交部分结果（`isSkippedPagesOverwhelming` 改判整体失败），
+   * 因此 `ok = true` 时这里最多是少数页。
+   */
+  skippedPages: number[] = []
+
   /** 主题元数据（取自第 1 页响应）。 */
   threadInfo: ThreadInfo | null = null
 
   /** 版块名（取自第 1 页响应）。 */
   forumName: string = ''
+}
+
+/**
+ * 单页失败是否可以从「整帖致命」降级为「跳过该页」。
+ *
+ * 只放过「页面本身没有可见楼层」这一类（{@link ThreadResult.emptyPage}）：服务端
+ * 返回了合法帖子页（`template=read`），只是整页楼位全部不可见——被批量删除、
+ * 审核中、被屏蔽，或 HTML 里根本没有楼层行。它**不是请求链故障**，跳过一页仍能
+ * 读到其余全部楼层，一页全空不该让整帖不可读。
+ *
+ * 其余失败一律不可跳过，整体失败并停止派发：
+ * - 网络错误 / 超时：可能是本机弱网，继续抓会连续超时；
+ * - 风控文案：继续抓会加深限流。当前 `emptyPage` 的 error 恒为 `THREAD_NO_FLOOR_ERROR`，
+ *   这条检查在生产上不会命中；保留它是防止将来 `emptyPage` 语义扩展到携带原始错误时，
+ *   风控页被静默当成空页跳过；
+ * - 服务端错误页（帖子被锁定 / 待审核 / 权限不足）：整帖不可读，逐页跳过没有意义。
+ *
+ * @param result - 该页的请求结果
+ * @returns 只跳过该页、继续抓其余页时为 true
+ */
+export function isSkippablePageFailure(result: ThreadResult): boolean {
+  if (result.ok || !result.emptyPage) {
+    return false
+  }
+  return !looksLikeThrottle(result.error)
+}
+
+/**
+ * 被跳过的空页数量是否已多到不能算「局部异常」。
+ *
+ * 少数页整页不可见是正常的页面状态（某段回复被批量删除 / 审核中），跳过即可；
+ * 但**半页以上都空**说明不是局部问题（帖子被拆 / 合并、账号态异常、解析器大面积
+ * 回归），这时继续展示残缺的树会误导用户，应整体失败让用户重试或换列表阅读。
+ *
+ * 阈值 = max(2, ⌈总页数 / 2⌉)：小帖至少允许缺 1 页（2 页帖缺 1 页仍可读），
+ * 3 页帖缺 2 页则只剩 1 页，判为整体失败。
+ *
+ * @param skippedCount - 被跳过的页数
+ * @param totalPages - 服务端总页数
+ * @returns 应整体失败时为 true
+ */
+export function isSkippedPagesOverwhelming(skippedCount: number, totalPages: number): boolean {
+  if (skippedCount <= 0) {
+    return false
+  }
+  const limit: number = Math.max(2, Math.ceil(totalPages / 2))
+  return skippedCount >= limit
+}
+
+/**
+ * 生成单页失败的用户可读文案（风控命中时给统一提示）。
+ *
+ * 纯函数（不读实例状态），便于单测覆盖「第 1 页空页」这类无法在本地构造的文案。
+ *
+ * @param page - 失败页码
+ * @param result - 该页结果
+ * @returns 用户可读文案
+ */
+export function formatPageFailureMessage(page: number, result: ThreadResult): string {
+  if (looksLikeThrottle(result.error)) {
+    return TREE_THROTTLE_HINT
+  }
+  if (result.emptyPage) {
+    // 只会在第 1 页出现（其余页的空页已按「跳过」处理）：没有主楼可渲染，整帖无法阅读
+    return '第 ' + String(page) + ' 页没有可显示的楼层（整页楼层可能已被删除或屏蔽）'
+  }
+  if (result.error.length > 0) {
+    return '第 ' + String(page) + ' 页加载失败：' + result.error
+  }
+  return '第 ' + String(page) + ' 页加载失败'
 }
 
 /** 并发抓页调度状态（单任务内共享，避免闭包修改外部变量）。 */
@@ -110,14 +198,17 @@ class FetchPageScheduler {
   /** 服务端总页数。 */
   totalPages: number = 1
 
-  /** 是否已停止派发（某页失败或命中风控）。 */
+  /** 是否已停止派发（某页致命失败或命中风控）。 */
   stopped: boolean = false
 
   /** 停止原因（用户可读文案）。 */
   error: string = ''
 
-  /** 已完成页数（含第 1 页）。 */
+  /** 已完成页数（含第 1 页与被跳过的空页）。 */
   done: number = 0
+
+  /** 被跳过的空页页码（worker 完成顺序入列，提交前统一排序）。 */
+  skippedPages: number[] = []
 }
 
 /** 全帖结果缓存条目。 */
@@ -139,7 +230,14 @@ class TreeFetchCacheEntry {
  *    {@link treeBatchThrottler} 控制）；单页 {@link TREE_PAGE_TIMEOUT_MS} 超时，
  *    失败重试 1 次（退避 {@link TREE_RETRY_BACKOFF_MS}），仍失败则整体失败；
  *    命中风控（`looksLikeThrottle`）直接失败、不再重试，其余在途页停止派发；
+ * 2.1 **例外：单页空页跳过**。服务端返回合法帖子页但整页没有任何可见楼层时
+ *    （`ThreadResult.emptyPage`，典型成因是整页楼位被批量删除 / 审核 / 屏蔽），
+ *    不重试、不整体失败，只记入 `skippedPages` 继续抓其余页——一页楼位全空不该
+ *    让整帖不可读。其余失败类型（网络、超时、风控、锁定/审核中等错误页）仍是
+ *    整体失败：它们说明请求链或帖子状态有问题，继续抓只会打更多无效请求；
  * 3. 合并按 pid 去重、按 `lou` 升序，逐页记录 `pageByPid`（每页抓到时就记）；
+ * 3.1 有跳过页时结果仍是 `ok = true`，但 `skippedPages` 非空、**不写短时缓存**
+ *    （下次进入或刷新会重抓，有机会补齐；否则 90 秒内重进仍是缺页）；
  * 4. `cancel(owner)` 在当前批次请求完成后终止（在途页结果丢弃）；每次启动递增内部
  *    `generation`；
  * 5. 完成后**后台**预热首屏楼层的 BBCode 解析缓存（不阻塞结果提交）。
@@ -328,7 +426,11 @@ export class ThreadTreeFetchService {
     try {
       const first: ThreadResult = await this.fetchPage(token, tid, 1)
       if (!first.ok) {
-        result.error = this.pageFailureMessage(1, first)
+        result.error = formatPageFailureMessage(1, first)
+        // 第 1 页失败是整帖唯一的「无内容可渲染」入口：必须留日志（技术原因在
+        // first.error 里，UI 文案只给用户可读表述），否则空页降级路径不可诊断
+        logger.warn('tree-fetch page1 failed tid=%{public}s gen=%{public}d empty=%{public}s: %{public}s',
+          tid, generation, String(first.emptyPage), first.error)
         return result
       }
       if (first.posts.length === 0) {
@@ -370,12 +472,32 @@ export class ThreadTreeFetchService {
       result.posts = collected
       result.pageByPid = pageByPid
       result.totalPages = totalPages
+      // worker 完成顺序不确定：跳过页统一按页码升序提交，UI 提示才不会乱序
+      result.skippedPages = scheduler.skippedPages.slice()
+      result.skippedPages.sort((a: number, b: number): number => a - b)
+      if (isSkippedPagesOverwhelming(result.skippedPages.length, totalPages)) {
+        // 过半页都空：不是「局部整页被删」，而是帖子状态或抓取链整体异常。
+        // 此时展示残缺的树会误导用户，按整体失败处理（UI 给错误态与重试）
+        result.ok = false
+        result.posts = []
+        result.pageByPid = new Map<number, number>()
+        result.error = '有 ' + String(result.skippedPages.length) + ' 页没有可显示的楼层，帖子可能已被删除或屏蔽'
+        logger.warn('tree-fetch overwhelmingly empty tid=%{public}s gen=%{public}d skipped=%{public}d pages=%{public}d',
+          tid, generation, result.skippedPages.length, totalPages)
+        return result
+      }
       result.ok = true
       /** 预热不阻塞结果提交：页面先渲染首屏，解析在 taskpool 里并行补齐缓存 */
       this.warmUp(collected)
-      this.writeCache(uid, tid, result)
-      logger.info('tree-fetch done tid=%{public}s gen=%{public}d posts=%{public}d pages=%{public}d',
-        tid, generation, collected.length, totalPages)
+      if (result.skippedPages.length === 0) {
+        this.writeCache(uid, tid, result)
+      }
+      // 一条完成日志带出全部关键量：帖子/页数/跳过页（缺页结果不写缓存，见上方闸门）
+      logger.info('tree-fetch done tid=%{public}s gen=%{public}d posts=%{public}d pages=%{public}d ' +
+        'skipped=%{public}s cache=%{public}s',
+        tid, generation, collected.length, totalPages,
+        result.skippedPages.length > 0 ? result.skippedPages.join(',') : '-',
+        result.skippedPages.length === 0 ? 'on' : 'off')
       return result
     } catch (e) {
       result.ok = false
@@ -418,9 +540,22 @@ export class ThreadTreeFetchService {
       scheduler.nextPage++
       const pageResult: ThreadResult = await this.fetchPage(token, tid, page)
       if (!pageResult.ok) {
+        if (isSkippablePageFailure(pageResult)) {
+          // 该页是「合法空页」（整页楼位全部不可见）：跳过继续抓其余页。
+          // 一页楼位全空不该让整帖不可读；跳过页会在结果里如实上报给 UI。
+          // 另一个 worker 已判定致命失败或任务已取消时不再记进度（结果随即被丢弃）
+          if (!scheduler.stopped && !this.cancelled && generation === this.generation) {
+            scheduler.skippedPages.push(page)
+            scheduler.done++
+            this.notifyProgress(scheduler.done, scheduler.totalPages, onProgress)
+            logger.warn('tree-fetch page skipped tid=%{public}s page=%{public}d: %{public}s',
+              tid, page, pageResult.error)
+          }
+          continue
+        }
         if (!scheduler.stopped) {
           scheduler.stopped = true
-          scheduler.error = this.pageFailureMessage(page, pageResult)
+          scheduler.error = formatPageFailureMessage(page, pageResult)
         }
         return
       }
@@ -434,7 +569,11 @@ export class ThreadTreeFetchService {
   }
 
   /**
-   * 抓取一页，失败重试 1 次（命中风控时不重试）。
+   * 抓取一页，失败重试 1 次（命中风控或整页空页时不重试）。
+   *
+   * 空页不重试只对第 2 页起成立：那一页的退路是「跳过该页」，重试没有收益；
+   * 第 1 页没有退路（没有主楼就没有可渲染内容），瞬时空响应必须再给一次机会，
+   * 不能让一次偶发异常直接锁死整帖。
    *
    * @param token - 会话令牌
    * @param tid - 主题 ID
@@ -444,6 +583,11 @@ export class ThreadTreeFetchService {
   private async fetchPage(token: string, tid: string, page: number): Promise<ThreadResult> {
     let result: ThreadResult = await this.requestPage(token, tid, page)
     if (result.ok) {
+      return result
+    }
+    // 空页是服务端的稳定页面状态（整页楼层被删除/审核/屏蔽），重试不会有不同结果：
+    // 直接交给调用方按「跳过该页」处理，省下一次无效请求
+    if (result.emptyPage && page > 1) {
       return result
     }
     if (looksLikeThrottle(result.error)) {
@@ -552,24 +696,11 @@ export class ThreadTreeFetchService {
   }
 
   /**
-   * 生成单页失败的用户可读文案（风控命中时给统一提示）。
-   *
-   * @param page - 失败页码
-   * @param result - 该页结果
-   * @returns 失败文案
-   */
-  private pageFailureMessage(page: number, result: ThreadResult): string {
-    if (looksLikeThrottle(result.error)) {
-      return TREE_THROTTLE_HINT
-    }
-    if (result.error.length > 0) {
-      return '第 ' + String(page) + ' 页加载失败：' + result.error
-    }
-    return '第 ' + String(page) + ' 页加载失败'
-  }
-
-  /**
    * 读取缓存（同账号、同帖子、未过期）。
+   *
+   * 缓存里**永远没有跳过页**：含跳过页的结果不写缓存（见 `runFetch` 的写侧闸门），
+   * 因此这里返回的结果 `skippedPages` 恒为空，无需复制。若将来放宽写侧闸门，
+   * 必须同时在这里复制 `skippedPages`，否则 UI 会静默丢掉缺页提示。
    *
    * @param uid - 当前登录用户 ID
    * @param tid - 主题 ID

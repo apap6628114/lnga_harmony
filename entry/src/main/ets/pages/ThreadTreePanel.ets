@@ -119,6 +119,18 @@ export struct ThreadTreePanel {
   @State threadSubject: string = '递进树'
   /** 树模型是否可渲染。 */
   @State treeReady: boolean = false
+  /**
+   * 本次抓取缺页的常驻提示（空串表示没有缺页）。
+   *
+   * 由 {@link buildSkippedPagesHint} 生成，同时用于：
+   * - 列表尾部「已加载全部回复（第 X 页缺少楼层）」；
+   * - 阅读进度恢复提示的补充说明（见 {@link resumeTreeProgress}）。
+   *
+   * 不只用一次性 Toast：Toast 是单条替换语义，紧接着弹出的「检测到上次阅读进度」
+   * 会把它顶掉（`ToastManager.showImpl` 每次展示都会覆盖上一条），用户就会在
+   * 不知情的情况下读一份缺页的树。
+   */
+  @State skippedPageHint: string = ''
   /** 已点赞楼层 pid 集合。 */
   @State votedUpPids: Set<string> = new Set()
   /** 已点踩楼层 pid 集合。 */
@@ -322,6 +334,7 @@ export struct ThreadTreePanel {
     this.treeReady = false
     this.treeDataSource.clear()
     this.totalPages = 0
+    this.skippedPageHint = ''
     this.threadFid = 0
     // 与 aboutToAppear 同源：先回到路由身份（可能为空），抓取结果返回后再覆盖
     this.threadAuthorId = this.authorIdInit
@@ -390,6 +403,8 @@ export struct ThreadTreePanel {
     this.progressTotal = 0
     this.treeReady = false
     this.treeDataSource.clear()
+    // 上一轮的缺页提示属于旧结果：刷新/重试后由新一轮抓取重新判定
+    this.skippedPageHint = ''
     logger.info('tree-panel load start tid=%{public}s gen=%{public}d refresh=%{public}s',
       fetchTid, generation, String(keepSubject))
     threadTreeFetchService.fetchAll(this.treeOwner, fetchTid, (done: number, total: number): void => {
@@ -432,6 +447,9 @@ export struct ThreadTreePanel {
       this.rebuildTree()
       this.treeReady = true
       this.isLoading = false
+      // 有页被跳过时记录缺页提示（尾部文案 + 进度提示合并）并弹一次 Toast：
+      // 树仍照常可读，但用户需要知道内容不全（刷新会绕过短时缓存重抓，有机会补齐）
+      this.applySkippedPages(result.skippedPages)
       // 阅读记录（浏览历史）与列表页同源：树模式打开同一帖子同样计入「看过」
       this.recordBrowseHistory(result)
       // 被跟踪的帖子：打开即推进已读基准（与列表页同一入口语义）
@@ -461,6 +479,45 @@ export struct ThreadTreePanel {
       this.errorMsg = formatError(error)
       logger.error('tree-panel load failed tid=%{public}s: %{public}s', fetchTid, formatError(error))
     })
+  }
+
+  /**
+   * 应用本次抓取的缺页信息：写入常驻提示并在需要时弹一次 Toast。
+   *
+   * 提示不只用 Toast 承载（见 {@link skippedPageHint} 字段说明）：Toast 会被后续
+   * 提示覆盖，常驻文案保证「树少了哪几页」在页面上始终可查。
+   *
+   * @param skippedPages - 被跳过的页码（升序）
+   */
+  private applySkippedPages(skippedPages: number[]): void {
+    this.skippedPageHint = this.buildSkippedPagesHint(skippedPages)
+    if (this.skippedPageHint.length === 0) {
+      return
+    }
+    appStore.showToast(this.skippedPageHint + '，已跳过')
+  }
+
+  /**
+   * 生成缺页提示文案（Toast / 列表尾部 / 进度提示共用同一份）。
+   *
+   * Toast 一行放得下 3 个页码；更多时只报总数 + 前 3 个示例。
+   *
+   * @param skippedPages - 被跳过的页码（升序）
+   * @returns 文案；没有缺页时为空串
+   */
+  private buildSkippedPagesHint(skippedPages: number[]): string {
+    if (skippedPages.length === 0) {
+      return ''
+    }
+    const shown: string[] = []
+    const limit: number = Math.min(skippedPages.length, 3)
+    for (let i: number = 0; i < limit; i++) {
+      shown.push(String(skippedPages[i]))
+    }
+    if (skippedPages.length <= limit) {
+      return '第 ' + shown.join('、') + ' 页缺少楼层'
+    }
+    return '共 ' + String(skippedPages.length) + ' 页缺少楼层（如第 ' + shown.join('、') + ' 页）'
   }
 
   /**
@@ -1045,7 +1102,12 @@ export struct ThreadTreePanel {
       this.progressPromptTimer = -1
       this.pendingResumeEntry = null
     }, PROGRESS_PROMPT_PROTECT_MS)
-    appStore.showToastAction('检测到上次阅读进度', '前往查看', (): void => {
+    // 缺页提示并入同一条 Toast：Toast 是单条替换语义，紧随其后的这条会把刚才的
+    // 缺页提示顶掉；合并后两条信息都不丢（常驻文案仍在 skippedPageHint 里可查）
+    const resumeText: string = this.skippedPageHint.length > 0
+      ? '检测到上次阅读进度（' + this.skippedPageHint + '）'
+      : '检测到上次阅读进度'
+    appStore.showToastAction(resumeText, '前往查看', (): void => {
       this.goToResumedPosition()
     })
   }
@@ -2240,18 +2302,33 @@ export struct ThreadTreePanel {
    *
    * 树页一次性抓完全帖，不存在「加载更多」的中间态；到达末尾即在最后一行下方
    * 明确提示已到结尾，避免用户继续下拉等待不存在的分页。
+   *
+   * 有缺页时把缺页信息并入同一行（常驻、可查）：Toast 会被后续提示覆盖，
+   * 这里保证「树少了哪几页」在读完时仍然可见。
    */
   @Builder
   LoadEndFooter() {
     ListItem() {
       Column() {
         Row() {
-          Text('已加载全部回复').fontSize(13).fontColor(AppColors.textTertiary)
+          Text(this.loadEndText()).fontSize(13).fontColor(AppColors.textTertiary)
         }
         .width('100%').justifyContent(FlexAlign.Center)
       }
       .width('100%').height(NAV_BAR_H).justifyContent(FlexAlign.Center)
     }
+  }
+
+  /**
+   * 列表尾部文案：缺页时附带缺页提示。
+   *
+   * @returns 尾部文案
+   */
+  private loadEndText(): string {
+    if (this.skippedPageHint.length === 0) {
+      return '已加载全部回复'
+    }
+    return '已加载全部回复（' + this.skippedPageHint + '）'
   }
 
   /**

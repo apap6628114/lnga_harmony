@@ -27,6 +27,18 @@ export class ThreadResult extends ApiResult {
   forumName: string = '';
   pagination: ThreadPaging = new ThreadPaging();
   posts: PostInfo[] = [];
+  /**
+   * 本页请求是否拿到了**合法帖子页**、但页面里一个可见楼层都没有（空页）。
+   *
+   * 官方 read.php 对「整页楼位全部不可见」的页不报错：HTTP 200、`template=read`、
+   * `__R` 为空对象。这类页不是请求故障，而是页面状态（楼层被删除 / 审核中 / 被屏蔽，
+   * 或 HTML 里根本没有楼层行）。树页全帖抓取据此把它降级为「跳过该页」而不是让
+   * 整帖不可读，见 `ThreadTreeFetchService.isSkippablePageFailure`。
+   *
+   * 只有整页视图（请求不带 pid）才可能为 true：单帖视图拿不到楼层是
+   * 「目标楼层已不存在」，走 `THREAD_FLOOR_MISSING_ERROR`，语义不同。
+   */
+  emptyPage: boolean = false;
 }
 
 /**
