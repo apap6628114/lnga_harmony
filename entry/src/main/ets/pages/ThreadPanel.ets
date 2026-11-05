@@ -2761,6 +2761,15 @@ export struct ThreadPanel {
    *
    * 这里**不再需要**在回调里关闭菜单：两参 `bindMenu` 由系统持有开合，点菜单项后系统自会收起。
    *
+   * ## 排序（与树页 `ThreadTreePanel.moreMenuItems` 同序同构）
+   *
+   * 按「保存订阅 → 阅读视图 → 外部动作」三段排列：
+   * 收藏 / 离线保存 / 跟踪 → 只看楼主 / 切换阅读方式 / 刷新 → 从网页打开 / 分享。
+   *
+   * 刷新是视图组里唯一的**整页重载**动作（按当前显示页 REPLACE 重载），放在本组末尾而不是
+   * 两个状态开关之间：避免与「跟踪 / 只看楼主」相邻造成误触，也保证离线存档来源裁掉保存组与
+   * 切换项后，刷新仍留在视图组末尾（菜单项位置随来源裁剪而前移不可避免，至少组内相对次序不变）。
+   *
    * @returns 菜单项
    */
   private moreMenuItems(): NavBarMenuItem[] {
@@ -2796,13 +2805,8 @@ export struct ThreadPanel {
         }
       })
     }
-    // 刷新与「只看楼主」两项对两种来源都成立（离线存档也能重新读取本地存档）
-    items.push({
-      label: '刷新帖子',
-      action: (): void => {
-        this.refreshCurrentPage()
-      }
-    })
+    // 「只看楼主」「刷新」两项对两种来源都成立（离线存档也能重新读取本地存档）；
+    // 只看楼主是视图组首项，刷新是组末项（排序理由见方法头）
     // 激活态用文字色表达（`active`），不用系统菜单的选中图标：后者会为该菜单项单独预留一块
     // 左侧图标位，本菜单只有这一项带它时会显得"像多了几个空格"（实机反馈）。
     items.push({
@@ -2836,6 +2840,13 @@ export struct ThreadPanel {
         }
       })
     }
+    // 刷新排在阅读视图组末尾：本组唯一的整页重载动作，不夹在两个状态开关之间（见方法头）
+    items.push({
+      label: '刷新帖子',
+      action: (): void => {
+        this.refreshCurrentPage()
+      }
+    })
     items.push({
       label: '从网页打开',
       action: (): void => {

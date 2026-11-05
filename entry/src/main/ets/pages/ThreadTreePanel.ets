@@ -1837,6 +1837,11 @@ export struct ThreadTreePanel {
    * 「刷新帖子 / 刷新递进树」与「切换为递进树阅读 / 切换为列表阅读」。这样两页的
    * 多功能下拉在用户看来是同一个菜单，切换阅读方式不会丢掉收藏、离线保存、跟踪等入口。
    *
+   * 顺序按「保存订阅 → 阅读视图 → 外部动作」三段：收藏 / 离线保存 / 跟踪 →
+   * 只看楼主 / 切换阅读方式 / 刷新 → 从网页打开 / 分享。刷新固定在本组末尾——
+   * 树页「刷新递进树」要**重抓全帖**（4 路并发 + 限流，长帖可达数十秒，期间整页为加载态），
+   * 是本菜单里代价最大的动作，不能紧跟在高频的「跟踪」下方，避免误触。
+   *
    * 回调一律写成**箭头函数**：菜单项在 `PanelNavBar` 实例上渲染，只有箭头函数才能把
    * `this` 固定在本组件上（见 `NavBarMenuItem` 的说明）。
    *
@@ -1864,12 +1869,6 @@ export struct ThreadTreePanel {
       }
     })
     items.push({
-      label: '刷新递进树',
-      action: (): void => {
-        this.loadTree(true)
-      }
-    })
-    items.push({
       label: '只看楼主',
       active: this.authorOnly,
       action: (): void => {
@@ -1880,6 +1879,13 @@ export struct ThreadTreePanel {
       label: '切换为列表阅读',
       action: (): void => {
         this.replaceWithListReading()
+      }
+    })
+    // 刷新排在阅读视图组末尾（理由见方法头：树页刷新是全帖重抓，代价最大）
+    items.push({
+      label: '刷新递进树',
+      action: (): void => {
+        this.loadTree(true)
       }
     })
     items.push({
