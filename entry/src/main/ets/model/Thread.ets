@@ -72,6 +72,14 @@ export interface ThreadRowInfo {
   alterinfo: string;
   score: number;
   score_2: number;
+  /**
+   * 官方 JSON（`read.php?__output=8`）直接下发的「本楼层回复的目标楼层 pid」。
+   *
+   * 服务端权威字段，只在 JSON 主通道出现；HTML 降级通道（`read.php` 静态页）的
+   * 楼层数据里没有该字段，解析器保持 0。客户端建树时作为正文头部解析的兜底来源
+   * （见 `ThreadTreeBuilder.resolveParentPid`），不得据此替代引用区剥离逻辑。
+   */
+  replyTo: number;
   isInBlackList: boolean;
   userNote: string;
   imageUrlList: string[];

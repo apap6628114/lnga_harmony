@@ -127,6 +127,8 @@ function mapRow(raw: Record<string, Object>, blacklist: Set<string>,
     alterinfo: String(raw['alterinfo'] ?? ''),
     score: Number(raw['score'] ?? 0),
     score_2: Number(raw['score_2'] ?? 0),
+    // 官方 JSON（read.php?__output=8）直接下发的回复目标楼层 pid；HTML 降级通道没有该字段。
+    replyTo: Number(raw['reply_to'] ?? 0) || 0,
     isInBlackList: blacklist.has(String(raw['authorid'])),
     userNote: noteMap[String(raw['authorid'])] ?? '',
     imageUrlList: (raw['imageUrlList'] as string[]) ?? [],

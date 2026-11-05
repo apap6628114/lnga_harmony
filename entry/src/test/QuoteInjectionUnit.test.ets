@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@ohos/hypium'
-import { injectQuoteContent } from '../main/ets/common/utils/QuoteInjection'
+import { injectQuoteContent, stripCommentReplyHeader } from '../main/ets/common/utils/QuoteInjection'
 import { PostInfo } from '../main/ets/model/PostInfo'
 
 /**
@@ -109,6 +109,78 @@ export default function quoteInjectionUnitTest(): void {
       const before: string = lou43.content
       injectQuoteContent(posts, posts)
       expect(lou43.content).assertEqual(before)
+    })
+
+    it('keepsBodyOfGluedReplyToHeader', 0, (): void => {
+      /* 真实形态（tid=47855036 的 16 楼）：正文与 Reply to 头共用同一个 [b] 块，
+       * 中间没有 <br/>。注入后本层正文必须保留在引用区之外——旧实现按 [/b] 切正文，
+       * 正文会被整段丢掉（列表模式整层只剩引用块）。 */
+      const lou5Content: string = '葱这个玩意味道差能差到哪里去？<br/><br/>看最后一张图，葱白也不短啊？'
+      const lou16Content: string =
+        '[b]Reply to [pid=886957875,47855036,1]Reply[/pid] Post by [uid=309772]collins[/uid] ' +
+        '(2026-11-05 11:33)最差的也不过是又苦又辣，不过种葱的也不i傻是，肯定挑好的种，' +
+        '即便味道出现偏差也不至于太离谱。[/b]'
+      const lou5 = makePost(886957875, 5, lou5Content)
+      const lou16 = makePost(886958643, 16, lou16Content)
+      const posts: PostInfo[] = [lou16, lou5]
+      injectQuoteContent(posts, posts)
+
+      expect(lou16.content.includes('葱这个玩意味道差能差到哪里去？')).assertTrue()
+      expect(lou16.content.includes('最差的也不过是又苦又辣')).assertTrue()
+      expect(lou16.content.indexOf('最差的也不过是') > lou16.content.indexOf('[/quote]')).assertTrue()
+      expect(lou16.content.endsWith('即便味道出现偏差也不至于太离谱。')).assertTrue()
+    })
+
+    it('stripsGluedHeaderFromReferencedFloor', 0, (): void => {
+      /* 被引用楼层自身是粘连 Reply to 形态：注入的引用区只含它的正文，
+       * 头与末尾的 [/b] 都不得进入引用区。 */
+      const quotedContent: string =
+        '[b]Reply to [pid=200,47855036,1]Reply[/pid] Post by [uid=2]乙[/uid] (2026-11-05 10:00)' +
+        '被引用楼的粘连正文[/b]'
+      const targetContent: string =
+        '[b]Reply to [pid=100,47855036,1]Reply[/pid] Post by [uid=1]甲[/uid] (2026-11-05 11:00)[/b]<br/>本层正文'
+      const quoted = makePost(100, 2, quotedContent)
+      const target = makePost(101, 3, targetContent)
+      const posts: PostInfo[] = [target, quoted]
+      injectQuoteContent(posts, posts)
+
+      expect(target.content.includes('被引用楼的粘连正文')).assertTrue()
+      expect(target.content.includes('Reply to [pid=200')).assertFalse()
+      expect(target.content.includes('[/b]被引用楼的粘连正文')).assertFalse()
+      expect(target.content.endsWith('本层正文')).assertTrue()
+    })
+
+    it('stripsCommentReplyHeaderKeepingGluedBody', 0, (): void => {
+      /* 楼中楼评论的回复头：标准形态只去头；粘连形态只去头与末尾 [/b]，
+       * 评论正文必须保留（旧正则按 [/b] 截取会把正文整段吃掉）。 */
+      const standard: string =
+        '[b]Reply to [pid=1,2,3]Reply[/pid] Post by [uid=9]甲[/uid] (2025-05-26 17:37)[/b]<br/><br/>评论正文'
+      expect(stripCommentReplyHeader(standard)).assertEqual('<br/><br/>评论正文')
+
+      const glued: string =
+        '[b]Reply to [pid=1,2,3]Reply[/pid] Post by [uid=9]甲[/uid] (2025-05-26 17:37)评论粘连正文[/b]'
+      expect(stripCommentReplyHeader(glued)).assertEqual('评论粘连正文')
+
+      const anonymous: string =
+        '[b]Reply to [pid=1,2,3]Reply[/pid] Post by [uid]#anony_abc[/uid] (2025-05-26 17:37)匿名评论[/b]'
+      expect(stripCommentReplyHeader(anonymous)).assertEqual('匿名评论')
+
+      /* 头尾带冒号与空格再闭合：不得残留裸 [/b] */
+      const colonClose: string =
+        '[b]Reply to [pid=1,2,3]Reply[/pid] Post by [uid=9]甲[/uid] (2025-05-26 17:37): [/b]<br/>评论正文'
+      expect(stripCommentReplyHeader(colonClose)).assertEqual('<br/>评论正文')
+
+      /* 作者段带颜色包装的楼号：`[color=gray](224楼)[/color] (日期)` */
+      const floorHint: string =
+        '[b]Reply to [pid=1,2,3]Reply[/pid] Post by [uid=9]甲[/uid][color=gray](224楼)[/color] ' +
+        '(2025-07-27 22:54)楼号评论[/b]'
+      expect(stripCommentReplyHeader(floorHint)).assertEqual('楼号评论')
+
+      /* 非标准「Reply to 某人」不是服务端回复头：原样返回，不得按 [/b] 截断 */
+      const loose: string = '[b]Reply to 某人[/b] 他说 [uid=1]甲[/uid] (2020年) 那段话很有道理'
+      expect(stripCommentReplyHeader(loose)).assertEqual(loose)
+
+      expect(stripCommentReplyHeader('普通评论正文')).assertEqual('普通评论正文')
     })
   })
 }

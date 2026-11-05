@@ -6,6 +6,7 @@ import { BBCodeContentView } from '../BBCodeContentView'
 import { PostInfo } from '../../../model/PostInfo'
 import { BBNode, BBNodeType } from '../../../model/BBCodeNode'
 import { appStore } from '../../../store/AppStore'
+import { stripCommentReplyHeader } from '../../utils/QuoteInjection'
 
 /**
  * 过滤掉指定类型的 BBCode 节点（递归处理子节点），并清理开头的空文本节点。
@@ -57,14 +58,17 @@ function filterBBTags(nodes: BBNode[], skipTypes: BBNodeType[]): BBNode[] {
 }
 
 /**
- * 剥离回复头（如 [b]Reply to ... [/b]）
+ * 剥离回复头（如 [b]Reply to ... [/b]）。
+ *
+ * 头与正文的切分按「作者段 + 日期/楼号括号」定位（`stripCommentReplyHeader`）：
+ * 粘连形态 `[b]Reply to … (日期)正文[/b]` 下正文夹在头与 `[/b]` 之间，
+ * 按 `[/b]` 截取会把评论正文整段丢掉。
+ *
+ * @param content 评论原始正文
+ * @returns 用于展示的评论正文
  */
 function stripPostByHeader(content: string): string {
-  if (!content) return ''
-  return content
-    .replace(/^\[b\]Reply\s+to[\s\S]*?\[\/b\]\s*/i, '')
-    .replace(/^[\r\n\s]+/, '')
-    .trim()
+  return stripCommentReplyHeader(content)
 }
 
 /**

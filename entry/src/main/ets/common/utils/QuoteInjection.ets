@@ -1,5 +1,21 @@
 import type { PostInfo } from '../../model/PostInfo'
-import { buildReplyQuoteContent, fixTruncatedQuoteContent } from './QuoteInjectionCore'
+import { buildReplyQuoteContent, fixTruncatedQuoteContent, stripReplyToHeader } from './QuoteInjectionCore'
+
+/**
+ * 剥离楼中楼评论开头的 Reply to 头（评论行由上层展示「回复 @某人」，正文不再重复头）。
+ *
+ * 边界逻辑下沉在镜像真源 `QuoteInjectionCore.stripReplyToHeader`：按「作者段 + 日期/楼号括号」
+ * 定位头结束点（不是 `[/b]`），标准/粘连形态都只去头、保留正文；匹配不到带
+ * `[pid=…]`/`Post by` 结构的回复头时原样返回。
+ *
+ * @param content - 评论原始正文
+ * @returns 用于展示的评论正文
+ */
+export function stripCommentReplyHeader(content: string): string {
+  return stripReplyToHeader(content)
+    .replace(/^[\r\n\s]+/, '')
+    .trim()
+}
 
 /**
  * 引用注入装配层（楼层集合遍历）。

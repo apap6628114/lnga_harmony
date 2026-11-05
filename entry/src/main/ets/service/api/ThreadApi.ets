@@ -673,6 +673,7 @@ export function fillThreadResult(raw: Record<string, Object>, result: ThreadResu
     post.alterinfo = row.alterinfo;
     post.score = row.score;
     post.score_2 = row.score_2;
+    post.replyTo = row.replyTo;
     post.isInBlackList = row.isInBlackList;
     post.userNote = row.userNote;
     // 禁言判定（与官方网页数据同源）：

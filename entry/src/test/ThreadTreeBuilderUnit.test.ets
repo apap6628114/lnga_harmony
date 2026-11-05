@@ -88,6 +88,26 @@ function replyToHeader(pid: number, tid: number, page: number): string {
     + ']Reply[/pid] Post by [uid=360579]迷惘中的骑士[/uid] (2025-05-26 17:37)[/b]<br/><br/>本层回复正文'
 }
 
+/** 粘连形态正文：Reply to 头与正文共用同一个 `[b]` 块，中间没有 `<br/>` 分隔。 */
+const GLUED_REPLY_BODY: string = '本层粘连正文'
+
+/**
+ * 构造粘连形态的回复头（真实数据形态，如 tid 47855036 的 16 楼）：
+ * `[b]Reply to [pid=…]Reply[/pid] Post by [uid=…]名字[/uid] (日期)正文[/b]`。
+ *
+ * 头的真结束点是日期括号，`[/b]` 在正文末尾——旧实现以 `[/b]` 为界会把正文整段
+ * 吃进引用区，树模式表现为该层看不见任何正文。
+ *
+ * @param pid - 被引用楼层 pid
+ * @param page - 页码
+ * @returns 楼层正文
+ */
+function gluedReplyToHeader(pid: number, page: number): string {
+  return '[b]Reply to [pid=' + String(pid) + ',' + String(TID) + ',' + String(page)
+    + ']Reply[/pid] Post by [uid=360579]迷惘中的骑士[/uid] (2026-11-05 11:33)'
+    + GLUED_REPLY_BODY + '[/b]'
+}
+
 /**
  * 构造主楼引用头（`[quote][tid=T]Topic[/tid] [b]Post by …[/b]`）。
  *
@@ -169,6 +189,20 @@ export default function threadTreeBuilderUnitTest(): void {
     it('extractsReplyToHeader', 0, (): void => {
       const ref: ThreadTreeQuoteRef | null =
         extractPrimaryQuoteRef(replyToHeader(824921217, TID, 2), TID)
+      expect(ref).not().assertNull()
+      const quote: ThreadTreeQuoteRef = ref as ThreadTreeQuoteRef
+      expect(quote.targetPid).assertEqual(824921217)
+      expect(quote.targetPage).assertEqual(2)
+      expect(quote.targetUid).assertEqual('360579')
+      expect(quote.targetAuthor).assertEqual('迷惘中的骑士')
+      expect(quote.isTopicRef).assertFalse()
+      expect(quote.external).assertFalse()
+    })
+
+    it('extractsGluedReplyToHeader', 0, (): void => {
+      /** 粘连形态：头的真结束点是日期括号，正文在同一个 [b] 块内紧跟其后 */
+      const ref: ThreadTreeQuoteRef | null =
+        extractPrimaryQuoteRef(gluedReplyToHeader(824921217, 2), TID)
       expect(ref).not().assertNull()
       const quote: ThreadTreeQuoteRef = ref as ThreadTreeQuoteRef
       expect(quote.targetPid).assertEqual(824921217)
@@ -451,6 +485,63 @@ export default function threadTreeBuilderUnitTest(): void {
       expect(model.roots[1].children[0].parentPid).assertEqual(501)
     })
 
+    it('buildsEdgeFromReplyToFieldWhenHeaderMissing', 0, (): void => {
+      /** 正文头缺失（HTML 降级通道常见）：用官方 JSON 的 reply_to 补边 */
+      const main: PostInfo = createPost(600, 0, '主楼正文')
+      const rootPost: PostInfo = createPost(601, 1, '无引用头的根')
+      const replyPost: PostInfo = createPost(602, 2, '正文里没有引用头')
+      replyPost.replyTo = 601
+      const model: ThreadTreeModel = buildThreadTree([replyPost, rootPost, main], 1)
+      expect(model.mainPid).assertEqual(600)
+      expect(model.roots.length).assertEqual(2)
+      expect(model.roots[1].post.pid).assertEqual(601)
+      expect(model.roots[1].children.length).assertEqual(1)
+      expect(model.roots[1].children[0].post.pid).assertEqual(602)
+      expect(model.roots[1].children[0].parentPid).assertEqual(601)
+      expect(findRootPidByPid(model, 602)).assertEqual(601)
+      expect(model.quoteCount).assertEqual(1)
+    })
+
+    it('keepsHeaderTargetAheadOfReplyToField', 0, (): void => {
+      /** 正文头与 reply_to 并存时以正文头为准（两者正常情况下应一致） */
+      const main: PostInfo = createPost(610, 0, '主楼正文')
+      const rootPost: PostInfo = createPost(611, 1, '根楼层')
+      const otherPost: PostInfo = createPost(612, 2, '另一个根楼层')
+      const replyPost: PostInfo = createPost(613, 3, quotePidHeader(611, TID, 1))
+      replyPost.replyTo = 612
+      const model: ThreadTreeModel = buildThreadTree([main, rootPost, otherPost, replyPost], 1)
+      expect(model.roots[1].post.pid).assertEqual(611)
+      expect(model.roots[1].children.length).assertEqual(1)
+      expect(model.roots[1].children[0].post.pid).assertEqual(613)
+      expect(model.roots[2].post.pid).assertEqual(612)
+      expect(model.roots[2].children.length).assertEqual(0)
+    })
+
+    it('treatsReplyToMainOrMissingAsRoot', 0, (): void => {
+      const main: PostInfo = createPost(620, 0, '主楼正文')
+      const toMain: PostInfo = createPost(621, 1, '回复主楼')
+      toMain.replyTo = 620
+      const toMissing: PostInfo = createPost(622, 2, '回复不存在的楼层')
+      toMissing.replyTo = 999999
+      const model: ThreadTreeModel = buildThreadTree([main, toMain, toMissing], 1)
+      expect(model.roots.length).assertEqual(3)
+      expect(model.roots[1].post.pid).assertEqual(621)
+      expect(model.roots[2].post.pid).assertEqual(622)
+    })
+
+    it('keepsGluedReplyBodyInDisplayContent', 0, (): void => {
+      /** 粘连形态：剥离引用头后正文必须完整保留（修复「整层看不见正文」） */
+      const main: PostInfo = createPost(630, 0, '主楼正文')
+      const rootPost: PostInfo = createPost(631, 1, '根楼层正文')
+      const glued: PostInfo = createPost(632, 2, gluedReplyToHeader(631, 1))
+      const model: ThreadTreeModel = buildThreadTree([main, rootPost, glued], 1)
+      expect(model.roots.length).assertEqual(2)
+      expect(model.roots[1].children.length).assertEqual(1)
+      const child: ThreadTreeChild = model.roots[1].children[0]
+      expect(child.post.pid).assertEqual(632)
+      expect(child.displayContent).assertEqual(GLUED_REPLY_BODY)
+    })
+
     it('treatsLaterTargetAsRoot', 0, (): void => {
       const laterFloor: PostInfo = createPost(205, 5, '后面楼层')
       const earlierFloor: PostInfo = createPost(202, 2, quotePidHeader(205, TID, 1))
@@ -650,6 +741,67 @@ export default function threadTreeBuilderUnitTest(): void {
       const content: string = '[b]Reply to [pid=101,123456,1]Reply[/pid] Post by [uid=1]甲[/uid]'
         + ' (2026-01-01 00:00)[/b]<br/><br/>本层正文'
       expect(stripQuoteArea(content)).assertEqual('本层正文')
+    })
+
+    it('stripsGluedReplyToHeaderKeepingBody', 0, (): void => {
+      /** 粘连形态：头与正文共用同一个 [b] 块，只剥头、正文完整保留（不得整层清空） */
+      expect(stripQuoteArea(gluedReplyToHeader(101, 1))).assertEqual(GLUED_REPLY_BODY)
+    })
+
+    it('stripsGluedReplyToHeaderWithLineBreaks', 0, (): void => {
+      /** 粘连形态的多行正文：<br/> 属于正文，不能被当成头结束点 */
+      const content: string = '[b]Reply to [pid=101,' + String(TID)
+        + ',1]Reply[/pid] Post by [uid=1]甲[/uid] (2026-01-01 00:00)第一行<br/>第二行[/b]'
+      expect(stripQuoteArea(content)).assertEqual('第一行<br/>第二行')
+    })
+
+    it('stripsReplyToHeaderKeepingBodyRightAfterBoldClose', 0, (): void => {
+      /** 标准形态的变体：[/b] 后没有 <br/> 直接是正文（真实数据存在） */
+      const content: string = '[b]Reply to [pid=101,' + String(TID)
+        + ',1]Reply[/pid] Post by [uid=1]甲[/uid] (2026-01-01 00:00)[/b]本层正文'
+      expect(stripQuoteArea(content)).assertEqual('本层正文')
+    })
+
+    it('stripsGluedReplyToHeaderWithInnerBoldInBody', 0, (): void => {
+      /** 正文自身带 [b]…[/b]：只去掉头部残留的那个 [/b]，正文格式原样保留 */
+      const content: string = '[b]Reply to [pid=101,' + String(TID)
+        + ',1]Reply[/pid] Post by [uid=1]甲[/uid] (2026-01-01 00:00)正文[b]重点[/b]结尾[/b]'
+      expect(stripQuoteArea(content)).assertEqual('正文[b]重点[/b]结尾')
+    })
+
+    it('stripsGluedHeaderKeepingColorLeadBody', 0, (): void => {
+      /** 正文首元素是颜色块：头尾只允许「日期/楼号括号」，不得把正文的颜色块当头部延伸 */
+      const content: string = '[b]Reply to [pid=101,' + String(TID)
+        + ',1]Reply[/pid] Post by [uid=1]甲[/uid] (2026-01-01 00:00)[color=red]红色正文内容[/color][/b]'
+      expect(stripQuoteArea(content)).assertEqual('[color=red]红色正文内容[/color]')
+    })
+
+    it('stripsGluedHeaderKeepingParenLeadBody', 0, (): void => {
+      /** 正文以普通括号短语开头：不是日期/楼号括号，不能被当成头部 */
+      const content: string = '[b]Reply to [pid=101,' + String(TID)
+        + ',1]Reply[/pid] Post by [uid=1]甲[/uid] (2026-01-01 00:00)(补充说明)正文后面[/b]'
+      expect(stripQuoteArea(content)).assertEqual('(补充说明)正文后面')
+    })
+
+    it('stripsGluedHeaderWithUppercaseBoldClose', 0, (): void => {
+      /** BBCode 标签大小写不敏感：[/B] 也要被识别为头部闭合 */
+      const content: string = '[b]Reply to [pid=101,' + String(TID)
+        + ',1]Reply[/pid] Post by [uid=1]甲[/uid] (2026-01-01 00:00)正文[/B]'
+      expect(stripQuoteArea(content)).assertEqual('正文')
+    })
+
+    it('doesNotStripMalformedHeaderWithBody', 0, (): void => {
+      /** 头结构无法定位（作者名超长）：只提取关系、不剥离，正文不得被吞 */
+      let longName: string = ''
+      for (let i: number = 0; i < 300; i++) {
+        longName += '名'
+      }
+      const content: string = '[b]Reply to [pid=101,' + String(TID)
+        + ',1]Reply[/pid] Post by [uid=1]' + longName + '[/uid] (2026-01-01 00:00)正文[/b]'
+      expect(stripQuoteArea(content)).assertEqual(content)
+      const ref: ThreadTreeQuoteRef | null = extractPrimaryQuoteRef(content, TID)
+      expect(ref).not().assertNull()
+      expect((ref as ThreadTreeQuoteRef).targetPid).assertEqual(101)
     })
 
     it('stripsNestedServiceQuoteBlockByBalancedScan', 0, (): void => {

@@ -76,16 +76,29 @@
 
 ### 2.1 引用关系提取
 
-**数据源事实（调研已验证）**：客户端帖子数据走 `read.php?__output=17` APP HTML → `html-thread` 解析器
-（`ThreadApi.buildThreadHtmlRequest`），产出的 `content` 与 JSON 主通道（`__output=8`）**逐字一致**（quote 头无差异）。
-但 HTML 通道的**普通楼层没有 `reply_to` 结构化字段**（只有贴条行由解析器补；JSON 主通道才有）。
-因此引用关系**必须从 `content` 文本提取**，不得依赖 `reply_to`（也不能为此改镜像解析器）。
+**数据源事实（2026-11 复查）**：
+
+| 通道 | 用途 | 楼层 `reply_to` |
+| --- | --- | --- |
+| `read.php?__output=8`（JSON 主通道） | 工具/样本基准 | **有**：`reply_to` = 被回复楼层 pid |
+| `read.php?__output=17`（APP HTML，客户端唯一通道） | 客户端渲染 | **无**：`postArg.proc` 参数与页面里都没有该字段 |
+
+客户端 `ThreadApi.getThread` → `fetchThreadRaw` → `fetchAppArticleHtmlRaw` 只走 `__output=17`，
+所以**客户端拿不到 `reply_to`**，引用关系必须从 `content` 文本提取（这是当前唯一可行路径）。
+JSON 通道实测（6 页 / 114 个非主楼层）：19 个带服务端引用头，其中 17 个 `reply_to` 与头部
+pid **完全一致、0 反例**；2 个跨页 quote 形态缺失 `reply_to`。两个通道的 `content` 逐字一致。
+`PostInfo.replyTo` 已保留为**兜底来源**：正文头缺失时用它补边（`resolveParentPid`），
+接入 JSON 通道或 HTML 解析器补齐该字段后即自动生效，不改变剥离逻辑。
 
 NGA 楼层 `content` 中表达「回复了哪一层」的头有四种真实形态（样本见 `docs/research/THREAD_TREE_QUOTE_RESEARCH.md`）：
 
 1. 引用块头：`[quote][pid=A,B,C]Reply[/pid] [b]Post by [uid=U]name[/uid] (date):[/b]…[/quote]`
    → 目标 pid = A（A 是被引用楼层 pid；B 是**被引用楼层所属主题 tid**；C 是被引用楼层页码）。
-2. 回复头：`[b]Reply to [pid=A,B,C]Reply[/pid] Post by [uid=U]name[/uid] (date)[/b]<br/><br/>正文`
+2. 回复头（两种形态，头都结束于**作者段 + 日期括号**，不是 `[/b]`）：
+   - 标准：`[b]Reply to [pid=A,B,C]Reply[/pid] Post by [uid=U]name[/uid] (date)[/b]<br/><br/>正文`
+   - **粘连**：`[b]Reply to [pid=A,B,C]Reply[/pid] Post by [uid=U]name[/uid] (date)正文[/b]`
+     （正文与头共用同一个 `[b]` 块，中间没有 `<br/>`；真实样本 tid 47855036 的 16 楼，
+     以 `[/b]` 为界会把正文整段吃进引用区，表现为**整层看不见正文**）
    → 目标 pid = A。
 3. 回复主楼头：`[b]Reply to [tid=T]Topic[/tid] Post by [uid=U]name[/uid] (date)[/b]`
    → 目标 = 主楼（`isTopicRef = true`）。真实样本存在（回复楼主时由客户端生成），不能只认 pid 形态。
@@ -113,11 +126,16 @@ NGA 楼层 `content` 中表达「回复了哪一层」的头有四种真实形�
 2. **结构**：`[quote]` 块内第一个有效元素必须是 `[pid=A,B,C]Reply[/pid]` 或 `[tid=T]Topic[/tid]`
    链接头；`[b]Reply to …` 头必须紧贴正文开头，支持 `[pid=…]` 与 `[tid=…]Topic[/tid]` 两种内嵌头。
 
-**未闭合/异常头的降级规则**（宁可漏剥，不可吞正文）：
+**头部结束边界与降级规则**（宁可漏剥，不可吞正文）：
 
-- `[quote]` 块未闭合：仍提取引用关系，但**不剥离**（无法确定块结束位置）；
-- `[b]Reply to` 头缺 `[/b]`，或 400 字符窗口内的 `[/b]` 实际属于正文的 `[b]…[/b]`：仍提取关系，
-  但**不剥离**（`isSafeReplyHeaderClose` 要求 `[/b]` 之前不出现 `<br` 或第二个 `[b]`）；
+- Reply to 头的结束点 = **作者段（`[/uid]`）+ 日期/楼号括号**（`findReplyHeaderEnd` 精确定位）；
+  `[/b]` 只是常见收尾，不再是判定依据——粘连形态下 `[/b]` 在正文末尾。
+- 粘连形态（`…[/uid] (date)正文[/b]`）：只剥头，正文完整保留；正文末尾那个属于头的 `[/b]`
+  一并去掉（要求该 `[/b]` 位于全文末尾、且 `[/b]` 数量恰比 `[b]` 多一个），正文自带的
+  `[b]…[/b]` 原样保留。
+- Reply to 头**缺 `[/b]`**（或 `[/b]` 之后还有内容、不在末尾）：仍提取引用关系，但**不剥离**，
+  保留原文——无法确认头部边界时宁可不剥。
+- `[quote]` 块未闭合：仍提取引用关系，但**不剥离**（无法确定块结束位置）。
 - 作者只从头部窗口（到 `[/b]` 或第一处 `<br`）解析，被引正文里的 `[uid=…]` 提及不会顶替作者。
 
 由此区分三类容易混淆的形态：
@@ -253,11 +271,15 @@ Stack
 2. 与 `extractPrimaryQuoteRef` 共用同一次扫描（`scanLeadingQuoteArea`），判定完全一致；
 3. 最多剥离一个引用区（`Reply to` 头 + 紧跟的一个引用块，或一个引用块）；连续第二个服务端引用块
    也保留（属于用户拼接的正文）；
-4. 剥离后清理开头的空白与 `<br/>`，其余正文格式原样保留；
-5. **不剥离**：正文中部出现的 `[quote]` 块、开头没有链接头的 `[quote]`（用户把 `[quote]` 当排版容器）、
-   未闭合的 `[quote]` 块、`[/b]` 缺失或 `[/b]` 实际属于正文的 Reply to 头——这些要么是用户正文，
+4. Reply to 头按「作者段 + 日期/楼号括号」定位结束点，**不以 `[/b]` 为界**：标准形态
+   `…(date)[/b]<br/>正文` 与粘连形态 `…(date)正文[/b]` 都只剥头、正文完整保留——后者是
+   真实数据形态（tid 47855036 的 16 楼），以 `[/b]` 为界会把正文整段吞掉、整层看不见内容；
+5. 剥离后清理开头的空白与 `<br/>`，其余正文格式原样保留；粘连形态下正文末尾残留的头部 `[/b]`
+   一并去掉（正文自带的 `[b]…[/b]` 保留）；
+6. **不剥离**：正文中部出现的 `[quote]` 块、开头没有链接头的 `[quote]`（用户把 `[quote]` 当排版容器）、
+   未闭合的 `[quote]` 块、缺 `[/b]` 闭合或 `[/b]` 不在末尾的 Reply to 头——这些要么是用户正文，
    要么无法确定边界，删掉会造成「文字被吞」的意外表现；
-6. 平衡扫描与标签比较按**原串下标**逐字符进行（不做整串 `toLowerCase`），避免 `İ` 等字符小写化
+7. 平衡扫描与标签比较按**原串下标**逐字符进行（不做整串 `toLowerCase`），避免 `İ` 等字符小写化
    变长导致剥离位置切在字符中间；单遍 O(n)，长引用块不会退化成 O(n²)。
 
 剥离结果缓存在 `ThreadTreeRoot/ThreadTreeChild.displayContent`，由 `flattenThreadTree` 复制到行上；
@@ -389,20 +411,23 @@ Stack
 
 ## 6. 测试与门禁
 
-`entry/src/test/ThreadTreeBuilderUnit.test.ets`（50 例，在 `List.test.ets` 注册）覆盖：
+`entry/src/test/ThreadTreeBuilderUnit.test.ets`（65 例，在 `List.test.ets` 注册）覆盖：
 
-1. 引用头提取：quote 头 / Reply to 头（pid 与 `[tid]Topic[/tid]` 两种）/ 主楼 Topic 头 / `[pid=0]`
-   主楼哨兵 / 匿名 uid / 跨帖 / 多引用取第一 / 无引用 / 头部前空白 / 未闭合 Reply to 头
-   （提取但不剥离）/ 缺 `[/b]` 且正文含 `[b]`（不剥离）；
+1. 引用头提取：quote 头 / Reply to 头（pid 与 `[tid]Topic[/tid]` 两种，标准形态与**粘连形态**）/
+   主楼 Topic 头 / `[pid=0]` 主楼哨兵 / 匿名 uid / 跨帖 / 多引用取第一 / 无引用 / 头部前空白 /
+   未闭合 Reply to 头（提取但不剥离）/ 缺 `[/b]` 且正文含 `[b]`（不剥离）/ 头结构不可定位时只提取不剥离；
 2. **引用区位置与结构边界**（本次补强）：正文前缀后不提取、正文中部引用样式不提取、无链接头的 `[quote]`
    不提取、块中部才出现链接头不提取、块首前噪音（`<br/>`）仍提取、作者只从头部窗口解析；
 3. 建树：引用主楼 → 根；引用不存在 pid → 根；自引用 / 环 → 提升为根不丢楼；深层引用平铺；主楼无子节点；
-   用户排版引用样式保留在正文且楼层为根；
+   用户排版引用样式保留在正文且楼层为根；**`reply_to` 兜底建边**（正文头缺失时补边、正文头优先于
+   `reply_to`、`reply_to` 指向主楼/不存在 → 根）；
 4. 折叠：3 条全显、4 条显 2 + MORE(hidden=2)、展开后全显、未知根不可展开；
 5. 排序与查找：根/子行按楼号升序、`findRootPidByPid` 语义、`findRowIndexByPid`；
-6. 剥离：服务端引用块 / 回复头剥离、嵌套服务端块按深度平衡剥离、主楼引用块剥离、用户排版引用
-   （含嵌套）保留、服务端块后的用户引用样式保留、连续两个服务端块只剥第一个、正文中部引用不动、
-   未闭合块提取但不剥离、约 8K 字符长引用块线性完成、仅引用时返回空串。
+6. 剥离：服务端引用块 / 回复头剥离、**粘连回复头只剥头保留正文**（单行 / 多行 / 正文含 `[b]…[/b]` /
+   正文以 `[color=…]` 开头 / 正文以普通括号开头 / `[/B]` 大写闭合）、
+   `[/b]` 后直接正文、嵌套服务端块按深度平衡剥离、主楼引用块剥离、用户排版引用（含嵌套）保留、
+   服务端块后的用户引用样式保留、连续两个服务端块只剥第一个、正文中部引用不动、未闭合块提取但不剥离、
+   约 8K 字符长引用块线性完成、仅引用时返回空串。
 
 门禁：`hvigorw assembleHap` 编译通过 + `hvigorw test` 通过 + `node scripts/check-eol.mjs` 通过；
 镜像 `sync-to-ets.mjs --dry` 0 修改。
@@ -514,3 +539,43 @@ Stack
     - 切换时透传路由来源 `threadSource` 与楼主身份（`authorId / authorKey`，由两个工厂分别接收），
       替换页面后阅读进度恢复白名单、只看楼主过滤与标题屏蔽等语义不丢失；
     - 「取消」保留为终止抓取并停在错误态（可重试、可退出）。
+14. **引用区剥离边界修复与 `reply_to` 兜底（2026-11，线上缺陷 tid 47855036 #16）**：
+    - 现象：#16 回复 #5，树页该层**看不见任何正文**；列表页同样中招（引用注入后正文消失）；
+    - 根因：该层 `content` 是粘连形态
+      `[b]Reply to [pid=…#5]Reply[/pid] Post by [uid=…] (date)正文[/b]`——正文与头共用同一个
+      `[b]` 块。两处实现都以 `[/b]` 为头部结束：树构建器把整段正文当作引用区剥掉
+      （`displayContent` 为空、`showContent=false`）；引用注入（`buildReplyQuoteContent`）
+      取 `[/b]` 之后的文本当本层正文，得到空串，正文整段丢失；
+    - 修复（树构建器）：Reply to 头改为按「作者段 + 日期/楼号括号」精确定位（`findReplyHeaderEnd`）；
+      粘连形态只剥头、保留正文，并去掉正文末尾属于头部的 `[/b]`；缺 `[/b]` 或 `[/b]` 不在末尾时
+      仍不剥离（沿用「宁可漏剥，不可吞正文」）；
+    - 修复（列表引用注入，`tools/bbcode-ts/src/common/utils/QuoteInjectionCore.ts` 镜像真源，
+      已 `npm run sync` 回写）：`splitReplyHeader` 用同一套边界切分「头 / 本层正文」；
+      `cleanReferencedContent` 同步支持去掉被引用楼自身的粘连 Reply to 头；
+    - 修复（评论区）：`PostComments` 的 `stripPostByHeader` 也是按 `[/b]` 截断（`^\[b\]Reply to[\s\S]*?\[\/b\]`），
+      粘连形态下会把评论正文整段吃掉；改为 `QuoteInjection.stripCommentReplyHeader`
+      （作者段 + 日期/楼号括号定位、支持匿名头，剥离后为空时回退原文）；
+    - 数据源复查：JSON 主通道（`__output=8`）的楼层带 `reply_to`（与头部 pid 17/17 一致、0 反例），
+      但客户端唯一通道 APP HTML（`__output=17`）**没有**该字段，故引用关系仍以文本解析为主，
+      `PostInfo.replyTo` 作为正文头缺失时的兜底（`resolveParentPid`）；
+    - 单测：树构建器从 52 例扩展到 61 例（新增粘连形态提取/剥离、多行正文、正文含粗体、
+      `[/b]` 后直接正文、`reply_to` 兜底建边、正文头优先、`reply_to` 指向主楼/不存在）；
+      Node 侧引用注入从 6 例扩展到 8 例、Hypium 引用注入从 4 例扩展到 6 例
+      （粘连头保留本层正文、被引用楼自身是粘连头时只注入正文）。
+15. **独立 review 补修（2026-11，同一缺陷的残余边界）**：
+    - H1：`findReplyHeaderEnd` 的头部尾部原为「循环消费任意 `(…)` 与任意 `[color=…]…[/color]`」，
+      粘连形态 + 正文首元素是短颜色块（或普通括号短语）时仍会被当头部吞掉；改为**每类至多一个**
+      且括号必须是日期/楼号模式（`(YYYY-MM-DD HH:MM)` / `(N楼)`、可被一个 `[color=…]` 包裹）；
+    - M1：`ReplyManager.buildQuotePrefix` 仍按 `[/b]` 清洗被回复楼正文（回复该楼时引用预览看不到
+      对方正文），改用 `QuoteInjectionCore.stripReplyToHeader`；
+    - M2：评论区宽松正则（`[b]Reply to …[/b] …[uid=…]…（…）`）会把非服务端头误当回复头吞掉前缀，
+      改为要求 `[pid=…]/[tid=…]` + `Post by` 结构；
+    - M3：`matchReplyToHeader` 的回退路径（头结构不可定位）原按 `[/b]` 猜测边界，粘连 + 结构异常
+      （如作者名超长）会吞正文；改为**只提取关系、不剥离**（`isSafeReplyHeaderClose` 随之移除）；
+    - L1/L2：评论头 `…(日期): [/b]` 与 `[color=gray](224楼)[/color] (日期)` 形态的识别补齐
+      （标准形态允许 `[/b]` 前有空白/冒号；颜色包裹的楼号可出现在日期括号前）；
+    - L3：注入路径粘连 + 正文自带 `[b]…[/b]` 时残留末尾 `[/b]`，`splitReplyHeader` 改为
+      「末尾闭合 + `[/b]` 比 `[b]` 多一个」判定；
+    - L4：`trimTrailingQuoteBold` 改用大小写不敏感的 `[/b]` 查找；
+    - 单测：树构建器 61 → 65 例；Node 引用注入 8 → 11 例；Hypium 引用注入 6 → 7 例
+      （新增评论头剥离与不误吞用例）。

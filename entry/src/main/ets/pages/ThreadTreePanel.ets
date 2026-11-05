@@ -1395,9 +1395,11 @@ export struct ThreadTreePanel {
    * 朗读楼层正文。
    *
    * @param p - 楼层
+   * @param displayContent - 树模式正文（已剥离引用区）；传空串时读原始 content
    */
-  private readAloud(p: PostInfo): void {
-    const plainText: string = bbNodesToPlainText(getCachedBBNodes(p.content))
+  private readAloud(p: PostInfo, displayContent: string = ''): void {
+    const source: string = displayContent.length > 0 ? displayContent : p.content
+    const plainText: string = bbNodesToPlainText(getCachedBBNodes(source))
     if (plainText.trim().length === 0) {
       appStore.showToast('该楼层没有可朗读的内容')
       return
@@ -2103,7 +2105,7 @@ export struct ThreadTreePanel {
         this.beginAiSummarize(p)
       },
       onReadAloud: (p: PostInfo): void => {
-        this.readAloud(p)
+        this.readAloud(p, displayContent)
       },
       isTopicAuthor: this.isTopicAuthorPost(post),
       isOwnPost: appStore.auth.isAuthenticated && String(post.authorid) === appStore.auth.uid,
@@ -2168,7 +2170,7 @@ export struct ThreadTreePanel {
                 this.beginAiSummarize(p)
               },
               onReadAloud: (p: PostInfo): void => {
-                this.readAloud(p)
+                this.readAloud(p, row.displayContent)
               },
             })
           } else {

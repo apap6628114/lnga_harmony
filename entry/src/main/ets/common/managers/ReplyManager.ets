@@ -11,6 +11,7 @@ import { appStore } from '../../store/AppStore'
 import { threadTreeFetchService } from '../../service/ThreadTreeFetchService'
 import { Logger, DOMAIN_MANAGER } from '../utils/Logger'
 import { decodeHtmlEntities } from '../utils/CodecUtils'
+import { stripReplyToHeader } from '../utils/QuoteInjectionCore'
 import {
   PendingAttachment,
   AttachmentParams,
@@ -189,7 +190,9 @@ export class ReplyManagerClass implements DraftUploadHost {
     const uid: string = post.authorid < 0 ? '-1' : String(post.authorid)
     let cleanContent: string = post.content
     cleanContent = cleanContent.replace(/\[quote\]([\s\S])*\[\/quote\]/g, '')
-    cleanContent = cleanContent.replace(/\[b\]Reply to \[pid=\d+,\d+,\d+\]Reply\[\/pid\] Post by .+?\[\/b\]/g, '')
+    /* 去掉被引用楼自身的 Reply to 头：边界按「作者段 + 日期/楼号括号」定位，
+     * 粘连形态（正文与头共用同一个 [b] 块）下不会把正文一起吃掉。 */
+    cleanContent = stripReplyToHeader(cleanContent)
     cleanContent = cleanContent.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
     cleanContent = cleanContent.replace(/&#(\d+);/g, (_s: string, c: string): string => {
       const code: number = parseInt(c, 10)

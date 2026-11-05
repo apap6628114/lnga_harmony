@@ -17,14 +17,23 @@ import {
  * 3. `flattenThreadTree` / `expandRoot` / 查找函数：按折叠状态生成可见扁平行并支持定位。
  *
  * 数据契约与不变量见 `docs/THREAD_TREE_DESIGN.md` §2，模型见 `model/ThreadTree.ets`。
- * 真实引用头的统计依据（本工程样本 tid 44191387 / 47762778 / 44681192）：
+ * 真实引用头的统计依据（本工程样本 tid 44191387 / 44681192 / 47762778 / 47855036）：
  * - `[quote][pid=A,B,C]Reply[/pid] [b]Post by [uid=U]name[/uid] (date):[/b]…[/quote]`
  * - `[b]Reply to [pid=A,B,C]Reply[/pid] Post by [uid=U]name[/uid] (date)[/b]…`
+ * - `[b]Reply to [pid=A,B,C]Reply[/pid] Post by [uid=U]name[/uid] (date)正文[/b]`（粘连形态）
  * - `[quote][tid=T]Topic[/tid] [b]Post by [uid=U]name[/uid] (date):[/b]…[/quote]`
  * 其中 U 可能是数字 uid，也可能是匿名的 `[uid]#anony_<32hex>[/uid]`（真实数据是**无等号**
  * 的 `[uid]…[/uid]` 形态，`[uid=#anony_…]` 只作兼容），作者段也可能带
  * `[color=gray](224楼)[/color]`、`(31楼)` 之类楼号提示而不是纯日期，因此作者段解析
  * 只以 `[/uid]` 为界，不强制日期格式。
+ *
+ * **引用头的结束边界**：Reply to 头的真结束点是「作者段 + 日期/楼号括号」，不是 `[/b]`。
+ * 真实数据里正文可能直接接在日期后面（与头共用同一个 `[b]` 块，中间没有 `<br/>`），
+ * 以 `[/b]` 为界会把正文整段吃进引用区——树模式表现为**整层看不见正文**。
+ * 因此 `matchReplyToHeader` 先按作者段精确定位，只有结构不完整时才退回 `[/b]` 判定。
+ *
+ * **引用关系的数据来源优先级**：正文头部解析（HTML 降级通道的唯一来源）→ 官方 JSON
+ * 下发的 `reply_to`（`PostInfo.replyTo`，服务端权威字段，正文头缺失时补边）。
  *
  * **引用区的位置约束（精准识别与区分的核心）**：服务端只把回复/引用头生成在正文最前面，
  * 因此引用关系只从**正文开头**提取；正文中部出现的 `[quote]` / `[pid=…]` 是用户自己写的
@@ -61,6 +70,25 @@ const RE_REPLY_TO_HEAD: RegExp = /^\[b\]\s*Reply to\s*\[pid=([^\]]*)\]\s*(?:Repl
 
 /** 回复头的主楼形态：`[b]Reply to [tid=T]Topic[/tid]`（回复楼主时真实出现）。 */
 const RE_REPLY_TO_TID_HEAD: RegExp = /^\[b\]\s*Reply to\s*\[tid=([^\]]*)\]\s*Topic\s*\[\/tid\]/i
+
+/**
+ * 回复头里的作者段引导词 `Post by `（小写，做 ASCII 大小写不敏感比较）。
+ *
+ * 服务端生成的 Reply to 头固定是 `[b]Reply to [pid=…]Reply[/pid] Post by [uid=…]名字[/uid] (日期)`，
+ * 作者段是「头在哪里结束」的唯一定位锚点——不能再用 `[/b]`：真实数据存在
+ * `[b]Reply to … (日期)正文[/b]` 的**粘连形态**（正文与头共用同一个 `[b]` 块，中间没有
+ * `<br/>` 分隔），以 `[/b]` 为界会把正文整段吃进「引用区」。
+ */
+const REPLY_POST_BY: string = 'post by '
+
+/** 头内日期/楼号括号的最大长度（`(2026-11-05 11:33)` / `(224楼)`）。 */
+const HEADER_PAREN_MAX: number = 40
+
+/** 头内作者颜色包装 `[color=…]…[/color]` 的最大长度。 */
+const HEADER_COLOR_MAX: number = 120
+
+/** 作者段 `[uid=…]名字[/uid]` 的最大长度（正常几十字符，超长说明不是作者段）。 */
+const HEADER_AUTHOR_MAX: number = 200
 
 /** 带属性 uid：`[uid=123]name[/uid]` / `[uid=#anony_x]name[/uid]`（名字可为空）。 */
 const RE_UID_ATTR: RegExp = /\[uid=([^\]]*)\]([\s\S]*?)\[\/uid\]/
@@ -259,6 +287,14 @@ class LeadingQuoteScan {
 
   /** 正文起点：跳过引用区后的下标；无引用区时为 0。 */
   bodyStart: number = 0
+
+  /**
+   * 正文终点（不含端点）；-1 表示到正文末尾。
+   *
+   * 只在「Reply to 头与正文粘连」时被设置：头与正文共用同一个 `[b]` 块，
+   * 正文末尾残留该块的 `[/b]`，必须随引用区一起去掉（否则 BBCode 渲染会出现裸标签）。
+   */
+  bodyEnd: number = -1
 }
 
 /** 一个已识别的引用区片段（引用关系 + 区段结束位置）。 */
@@ -266,8 +302,17 @@ class QuoteAreaMatch {
   /** 该片段表达的引用关系。 */
   ref: ThreadTreeQuoteRef = new ThreadTreeQuoteRef()
 
-  /** 片段结束位置（`[/quote]` 或 `[/b]` 之后的下标）。 */
+  /** 片段结束位置（`[/quote]` 或 `[/b]` 之后的下标；粘连形态为正文起点）。 */
   end: number = 0
+
+  /**
+   * 片段是否以 `[/b]` 收尾。
+   *
+   * - `true`：标准形态 `…[/b]<br/>正文`，正文在 `end` 之后，直接截取；
+   * - `false`：正文与头共用同一个 `[b]` 块（`[b]Reply to … (日期)正文[/b]`），
+   *   `end` 是正文起点，正文末尾还留着该 `[b]` 的闭合标签，需要单独去掉。
+   */
+  closedByBold: boolean = false
 }
 
 /**
@@ -425,31 +470,248 @@ function matchServiceQuoteBlock(content: string, start: number,
 }
 
 /**
- * 判断回复头的 `[/b]` 是否真的属于头部结构。
+ * 判断下标处是否匹配 ASCII 标签（大小写不敏感）。
  *
- * 头缺 `[/b]` 时，正文里后面的 `[b]…[/b]` 会提供一个「看起来在 400 字符内」的
- * `[/b]`；直接拿它当头部结束会把中间正文整段吃掉。头部内部不可能出现 `<br` 或
- * 第二个 `[b]`，出现任一即判定这个 `[/b]` 不属于头。
+ * 逐字符比较只针对 ASCII，下标始终对应原串；不做整串 `toLowerCase`，
+ * 避免 `İ` 等字符小写化变长导致下标错位。
  *
  * @param content - 楼层正文
- * @param start - 头起始下标
- * @param boldClose - 候选 `[/b]` 下标
- * @returns `[/b]` 属于头部时为 true
+ * @param at - 待判断下标
+ * @param tag - 小写标签（如 `[/b]`）
+ * @returns 匹配时为 true
  */
-function isSafeReplyHeaderClose(content: string, start: number, boldClose: number): boolean {
-  if (boldClose <= start + 3) {
+function matchAsciiTagAt(content: string, at: number, tag: string): boolean {
+  if (at < 0 || at + tag.length > content.length) {
     return false
   }
-  const body: string = content.substring(start + 3, boldClose).toLowerCase()
-  return body.indexOf('<br') < 0 && body.indexOf('[b]') < 0
+  for (let i: number = 0; i < tag.length; i++) {
+    let code: number = content.charCodeAt(at + i)
+    if (code >= 65 && code <= 90) {
+      code += 32
+    }
+    if (code !== tag.charCodeAt(i)) {
+      return false
+    }
+  }
+  return true
+}
+
+/**
+ * 从后往前查找 ASCII 子串（大小写不敏感）。
+ *
+ * @param content - 楼层正文
+ * @param needle - 小写目标子串
+ * @param from - 扫描起点（含）
+ * @returns 命中下标；未命中返回 -1
+ */
+function lastIndexOfAsciiIgnoreCase(content: string, needle: string, from: number): number {
+  for (let at: number = content.length - needle.length; at >= from; at--) {
+    if (matchAsciiTagAt(content, at, needle)) {
+      return at
+    }
+  }
+  return -1
+}
+
+/**
+ * ASCII 大小写不敏感的子串查找（只比较 ASCII，下标恒对应原串）。
+ *
+ * 不能用 `content.substring(…).toLowerCase().indexOf()`：Unicode 里部分字符
+ * （如 `İ`）小写化后长度会变，lower 串的下标与原串错位。头部窗口最长
+ * `HEADER_SCAN_MAX`，逐字符比较的常数开销可忽略。
+ *
+ * @param content - 楼层正文
+ * @param needle - 已小写的目标子串
+ * @param from - 起始下标
+ * @param limit - 扫描终点（不含）
+ * @returns 命中下标；未命中返回 -1
+ */
+function indexOfAsciiIgnoreCase(content: string, needle: string, from: number,
+  limit: number): number {
+  const needleLength: number = needle.length
+  const lastStart: number = limit - needleLength
+  for (let at: number = from; at <= lastStart; at++) {
+    let matched: boolean = true
+    for (let i: number = 0; i < needleLength; i++) {
+      let code: number = content.charCodeAt(at + i)
+      if (code >= 65 && code <= 90) {
+        code += 32
+      }
+      if (code !== needle.charCodeAt(i)) {
+        matched = false
+        break
+      }
+    }
+    if (matched) {
+      return at
+    }
+  }
+  return -1
+}
+
+/** 行内空白字符（不包含换行标签：`<br>` 表示头已结束、正文开始）。 */
+const INLINE_SPACE_CHARS: string = ' \t\r\n'
+
+/**
+ * 跳过行内空白字符。
+ *
+ * @param content - 楼层正文
+ * @param from - 起始下标
+ * @returns 第一个非空白字符下标
+ */
+function skipInlineSpaces(content: string, from: number): number {
+  let cursor: number = from
+  while (cursor < content.length) {
+    const ch: string = content.charAt(cursor)
+    if (INLINE_SPACE_CHARS.indexOf(ch) < 0) {
+      break
+    }
+    cursor++
+  }
+  return cursor
+}
+
+/** Reply to 头的结构定位结果。 */
+class ReplyHeaderSpan {
+  /** 头结束下标：标准形态指向 `[/b]` 之后，粘连/缺闭合形态指向正文起点。 */
+  end: number = 0
+
+  /** 头是否以 `[/b]` 收尾（标准形态）；false 表示正文与头共用同一个 `[b]` 块。 */
+  closed: boolean = false
+}
+
+/**
+ * 按「作者段 + 日期/楼号括号」精确定位 Reply to 头的结束位置。
+ *
+ * 服务端生成的回复头结构固定为
+ * `[b]Reply to [pid=…]Reply[/pid] Post by [uid=…]名字[/uid] (日期)`，
+ * 真正的头结束点是**作者段之后的日期/楼号括号**，不是 `[/b]`：
+ * 真实数据存在 `[b]Reply to … (日期)正文[/b]` 的粘连形态（正文与头在同一个 `[b]`
+ * 块内、中间没有 `<br/>` 分隔），以 `[/b]` 为界会把正文整段吞掉。
+ *
+ * 头部尾部允许的元素（**每类至多一个**，不循环消费）：可选 `[color=…](N楼)[/color]`
+ * 颜色包装的楼号、可选 `(日期)` 或 `(N楼)` 括号、可选冒号、可选 `[/b]`。
+ * 括号必须匹配日期/楼号模式——正文里用户自写的 `[color=red]…[/color]` 或以
+ * `(补充说明)` 开头的正文不会被当成头部延伸吞掉。
+ *
+ * @param content - 楼层正文
+ * @param from - `[pid=…]Reply[/pid]` 头之后的下标
+ * @param limit - 扫描上限（头部窗口终点）
+ * @returns 头结构定位结果；找不到 `Post by` 或作者段（结构不完整）时返回 null
+ */
+function findReplyHeaderEnd(content: string, from: number, limit: number): ReplyHeaderSpan | null {
+  const scanEnd: number = Math.min(limit, content.length)
+  const postByAt: number = indexOfAsciiIgnoreCase(content, REPLY_POST_BY, from, scanEnd)
+  if (postByAt < 0 || postByAt > from + 8) {
+    return null
+  }
+  const authorFrom: number = postByAt + REPLY_POST_BY.length
+  const authorTo: number = Math.min(scanEnd, authorFrom + HEADER_AUTHOR_MAX)
+  const authorWindow: string = content.substring(authorFrom, authorTo)
+  const attrMatch: RegExpExecArray | null = RE_UID_ATTR.exec(authorWindow)
+  const bareMatch: RegExpExecArray | null = attrMatch === null ? RE_UID_BARE.exec(authorWindow) : null
+  if (attrMatch === null && bareMatch === null) {
+    return null
+  }
+  const authorMatch: RegExpExecArray = attrMatch !== null ? attrMatch : (bareMatch as RegExpExecArray)
+  if (authorMatch.index > 8) {
+    return null
+  }
+  let cursor: number = authorFrom + authorMatch.index + authorMatch[0].length
+  cursor = skipInlineSpaces(content, cursor)
+  /** 可选：颜色包装的楼号 `[color=gray](224楼)[/color]`（真实作者段变体） */
+  if (matchTagAt(content, cursor, '[color=')) {
+    const colorWindow: string = content.substring(cursor,
+      Math.min(scanEnd, cursor + HEADER_COLOR_MAX))
+    const colorFloor: RegExpExecArray | null = RE_HEADER_COLOR_FLOOR.exec(colorWindow)
+    if (colorFloor !== null) {
+      cursor = skipInlineSpaces(content, cursor + colorFloor[0].length)
+    }
+  }
+  /** 可选：日期/楼号括号（只认这两种模式，避免把正文首句的括号当头部） */
+  const parenWindow: string = content.substring(cursor,
+    Math.min(scanEnd, cursor + HEADER_PAREN_MAX))
+  if (RE_HEADER_DATE_PAREN.test(parenWindow) || RE_HEADER_FLOOR_PAREN.test(parenWindow)) {
+    const closeParen: number = content.indexOf(')', cursor)
+    if (closeParen > cursor && closeParen < scanEnd) {
+      cursor = skipInlineSpaces(content, closeParen + 1)
+    }
+  }
+  if (content.charAt(cursor) === ':') {
+    cursor = skipInlineSpaces(content, cursor + 1)
+  }
+  let closed: boolean = false
+  if (matchTagAt(content, cursor, '[/b]')) {
+    cursor += 4
+    closed = true
+  }
+  const span: ReplyHeaderSpan = new ReplyHeaderSpan()
+  span.end = cursor
+  span.closed = closed
+  return span
+}
+
+/** 头部尾部日期括号：`(2026-11-05 11:33)`。 */
+const RE_HEADER_DATE_PAREN: RegExp = /^\(\d{4}-\d{2}-\d{2}[0-9:\s-]*\)/
+
+/** 头部尾部楼号括号：`(224楼)`。 */
+const RE_HEADER_FLOOR_PAREN: RegExp = /^\(\d+楼\)/
+
+/** 头部尾部颜色包装的楼号：`[color=gray](224楼)[/color]`（真实作者段变体）。 */
+const RE_HEADER_COLOR_FLOOR: RegExp = /^\[color=[^\]]*\]\s*\(\d+楼\)\s*\[\/color\]/i
+
+/** `[/b]` 之后允许出现的字符：只有空白与换行时，该 `[/b]` 才可能是头部闭合。 */
+const TRAILING_BLANK_PATTERN: RegExp = /^(?:\s|<br\s*\/?>|\u00a0)*$/i
+
+/**
+ * 计算粘连形态正文的终点：去掉正文末尾属于头部 `[b]` 的 `[/b]`。
+ *
+ * 粘连形态下被剥离的头以 `[b]` 开头，正文继承了该块的闭合标签。判定条件：
+ * 1. `[/b]` 必须位于正文**末尾**（之后只有空白/换行），否则它可能是正文里
+ *    别的粗体块的闭合，不能当作头部闭合；
+ * 2. 正文里 `[/b]` 数量必须多于 `[b]` 数量，且多出来的正好一个。
+ * 任一条件不满足都返回正文长度（调用方据此判定「头缺闭合」，不剥离）。
+ *
+ * @param content - 楼层正文
+ * @param from - 正文起点
+ * @returns 正文终点（不含）；无需/无法处理时返回正文长度
+ */
+function trimTrailingQuoteBold(content: string, from: number): number {
+  const lastClose: number = lastIndexOfAsciiIgnoreCase(content, '[/b]', from)
+  if (lastClose < 0) {
+    return content.length
+  }
+  const tail: string = content.substring(lastClose + 4)
+  if (!TRAILING_BLANK_PATTERN.test(tail)) {
+    return content.length
+  }
+  let openCount: number = 0
+  let closeCount: number = 0
+  let index: number = from
+  while (index < content.length) {
+    if (matchTagAt(content, index, '[b]')) {
+      openCount++
+      index += 3
+      continue
+    }
+    if (matchTagAt(content, index, '[/b]')) {
+      closeCount++
+      index += 4
+      continue
+    }
+    index++
+  }
+  return closeCount === openCount + 1 ? lastClose : content.length
 }
 
 /**
  * 匹配正文开头的 `[b]Reply to …[/b]` 回复头（pid 形态与主楼 tid 形态）。
  *
- * 头必须紧贴正文开头（允许前导空白/换行）。真实数据里 `[/b]` 偶尔缺失，或正文
- * 在窗口内含 `[b]`：此时仍提取引用关系（关系不丢），但把 `end` 置为起点表示
- * **不剥离**——无法确定头在哪里结束，剥离会把后面的正文一起吃进「引用区」。
+ * 头必须紧贴正文开头（允许前导空白/换行）。结束位置按
+ * {@link findReplyHeaderEnd} 的「作者段 + 日期括号」精确定位：标准形态
+ * `…(日期)[/b]<br/>正文` 与粘连形态 `…(日期)正文[/b]` 都能正确处理。
+ * 头结构不完整（没有 `Post by`/作者段）时**只保留引用关系、不剥离**：
+ * 按 `[/b]` 猜测边界会把粘连形态的正文整段吞掉（宁可漏剥，不可吞正文）。
  *
  * @param content - 楼层正文
  * @param start - 待匹配下标
@@ -462,21 +724,39 @@ function matchReplyToHeader(content: string, start: number, tid: number): QuoteA
   const pidMatch: RegExpExecArray | null = RE_REPLY_TO_HEAD.exec(headWindow)
   const tidMatch: RegExpExecArray | null = pidMatch === null
     ? RE_REPLY_TO_TID_HEAD.exec(headWindow) : null
+  const pidHeadLength: number = pidMatch !== null ? pidMatch[0].length
+    : (tidMatch !== null ? tidMatch[0].length : 0)
+  if (pidHeadLength === 0) {
+    return null
+  }
+  const span: ReplyHeaderSpan | null = findReplyHeaderEnd(content, start + pidHeadLength,
+    start + HEADER_SCAN_MAX)
+  /**
+   * 作者解析窗口：精确定位成功时只取头部，粘连形态下正文里的 `[uid=…]` 提及不会被当成
+   * 被引用作者；定位失败时退回旧窗口（到 `[/b]` 或第一处 `<br`）。
+   */
+  const authorWindow: string = span !== null && span.end > start
+    ? content.substring(start, span.end)
+    : buildAuthorWindow(content, start, Math.min(content.length, start + HEADER_SCAN_MAX))
   let ref: ThreadTreeQuoteRef | null = null
   if (pidMatch !== null) {
-    ref = buildPidRef(pidMatch[1], headWindow, tid)
+    ref = buildPidRef(pidMatch[1], authorWindow, tid)
   } else if (tidMatch !== null) {
-    ref = buildTopicRef(tidMatch[1], headWindow, tid)
+    ref = buildTopicRef(tidMatch[1], authorWindow, tid)
   }
   if (ref === null) {
     return null
   }
-  const boldClose: number = content.indexOf('[/b]', start)
-  const closed: boolean = boldClose >= 0 && boldClose + 4 <= start + HEADER_SCAN_MAX &&
-    isSafeReplyHeaderClose(content, start, boldClose)
   const match: QuoteAreaMatch = new QuoteAreaMatch()
   match.ref = ref
-  match.end = closed ? boldClose + 4 : start
+  if (span !== null && span.end > start) {
+    match.end = span.end
+    match.closedByBold = span.closed
+  } else {
+    /** 结构不完整：不剥离（end 置为起点），只把引用关系带出去 */
+    match.end = start
+    match.closedByBold = false
+  }
   return match
 }
 
@@ -518,6 +798,17 @@ function scanLeadingQuoteArea(content: string, tid: number): LeadingQuoteScan {
       return scan
     }
     let bodyStart: number = skipLeadingNoise(content, reply.end)
+    if (!reply.closedByBold) {
+      /**
+       * 粘连形态：正文与头共用同一个 `[b]` 块，正文末尾残留该块的 `[/b]`。
+       * 找不到这处闭合（头缺 `[/b]`）时无法确定头的边界，关系保留但正文原样展示。
+       */
+      const trimmedEnd: number = trimTrailingQuoteBold(content, bodyStart)
+      if (trimmedEnd >= content.length) {
+        return scan
+      }
+      scan.bodyEnd = trimmedEnd
+    }
     const quote: QuoteAreaMatch | null = matchServiceQuoteBlock(content, bodyStart, tid)
     if (quote !== null && quote.end > bodyStart) {
       bodyStart = skipLeadingNoise(content, quote.end)
@@ -566,6 +857,15 @@ export function extractPrimaryQuoteRef(content: string, tid: number): ThreadTree
 /**
  * 解析单个非主楼楼层的直接父楼层 pid。
  *
+ * 引用目标来源的优先级：
+ * 1. **正文头部解析出的引用关系**（`ref`）：HTML 降级通道只有这条路，
+ *    它也是「剥离引用区」必须依赖的同一套判定；
+ * 2. **官方 JSON 下发的 `reply_to`**（`post.replyTo`）：`read.php?__output=8` 的楼层
+ *    直接带被回复楼层的 pid，是服务端的权威表达；正文头缺失或解析失败时用它补边。
+ *
+ * 两种来源都不存在、目标不在帖内、目标是主楼、目标不比本层更早（含自引用）时，
+ * 该楼层按顶层根处理（返回 0）。
+ *
  * @param post - 当前楼层
  * @param ref - 当前楼层的主引用关系
  * @param model - 树模型（此时 `postByPid` 已填充）
@@ -574,26 +874,33 @@ export function extractPrimaryQuoteRef(content: string, tid: number): ThreadTree
  */
 function resolveParentPid(post: PostInfo, ref: ThreadTreeQuoteRef | null,
   model: ThreadTreeModel, mainPid: number): number {
-  if (ref === null) {
+  let targetPid: number = 0
+  let topicRef: boolean = false
+  let external: boolean = false
+  if (ref !== null) {
+    topicRef = ref.isTopicRef
+    external = ref.external
+    if (!topicRef && !external) {
+      targetPid = ref.targetPid
+    }
+  }
+  if (!external && !topicRef && targetPid <= 0 && post.replyTo > 0) {
+    targetPid = post.replyTo
+  }
+  if (external || topicRef || targetPid <= 0) {
     return 0
   }
-  if (ref.isTopicRef) {
+  if (mainPid > 0 && targetPid === mainPid) {
     return 0
   }
-  if (ref.external) {
-    return 0
-  }
-  if (mainPid > 0 && ref.targetPid === mainPid) {
-    return 0
-  }
-  const target: PostInfo | undefined = model.postByPid.get(ref.targetPid)
+  const target: PostInfo | undefined = model.postByPid.get(targetPid)
   if (target === undefined) {
     return 0
   }
   if (target.lou >= post.lou) {
     return 0
   }
-  return ref.targetPid
+  return targetPid
 }
 
 /**
@@ -703,6 +1010,12 @@ export function buildThreadTree(posts: PostInfo[], totalPages: number): ThreadTr
     }
     if (scan.ref !== null) {
       refOfPid.set(post.pid, scan.ref)
+      model.quoteCount++
+    } else if (post.replyTo > 0) {
+      /** 正文头缺失时用官方 `reply_to` 补一条最小引用关系（无作者名，UI 仍可跳转） */
+      const replyRef: ThreadTreeQuoteRef = new ThreadTreeQuoteRef()
+      replyRef.targetPid = post.replyTo
+      refOfPid.set(post.pid, replyRef)
       model.quoteCount++
     }
     parentOfPid.set(post.pid, resolveParentPid(post, scan.ref, model, model.mainPid))
@@ -913,14 +1226,16 @@ export function findRootPidByPid(model: ThreadTreeModel, pid: number): number {
 const LEADING_BREAK_PATTERN: RegExp = /^(?:\s|<br\s*\/?>|\u00a0)+/i
 
 /**
- * 按扫描结果截取树模式正文（跳过引用区并清理前导换行）。
+ * 按扫描结果截取树模式正文（跳过引用区、清掉粘连头残留的 `[/b]`、清理前导换行）。
  *
  * @param content - 楼层原始 BBCode 正文
  * @param scan - 头部引用区扫描结果
  * @returns 树模式要显示的正文
  */
 function stripScannedBody(content: string, scan: LeadingQuoteScan): string {
-  const body: string = scan.bodyStart > 0 ? content.substring(scan.bodyStart) : content
+  const end: number = scan.bodyEnd >= 0 ? scan.bodyEnd : content.length
+  const body: string = scan.bodyStart > 0 ? content.substring(scan.bodyStart, end)
+    : content.substring(0, end)
   return body.replace(LEADING_BREAK_PATTERN, '')
 }
 
@@ -931,7 +1246,8 @@ function stripScannedBody(content: string, scan: LeadingQuoteScan): string {
  * 正文里再显示一遍引用块既冗余又占屏幕，故树模式渲染前统一剥离。
  *
  * **只剥离服务端引用区**（与 {@link extractPrimaryQuoteRef} 同一套判定）：
- * - `[b]Reply to [pid=…]…[/b]` 回复头（快速回复自动生成的头）；
+ * - `[b]Reply to [pid=…]…[/b]` 回复头（快速回复自动生成的头），标准形态
+ *   `…(日期)[/b]<br/>正文` 与粘连形态 `…(日期)正文[/b]` 都只剥头、保留正文；
  * - `[quote][pid=…]Reply[/pid]…[/quote]` / `[quote][tid=…]Topic[/tid]…[/quote]`
  *   引用块（块首必须是链接头；`[quote]` 支持嵌套，按标签深度平衡扫描，不会截断）。
  *

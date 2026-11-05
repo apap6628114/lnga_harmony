@@ -2,7 +2,7 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { buildReplyQuoteContent, fixTruncatedQuoteContent } from '../src/common/utils/QuoteInjectionCore'
+import { buildReplyQuoteContent, fixTruncatedQuoteContent, stripReplyToHeader } from '../src/common/utils/QuoteInjectionCore'
 
 /** 样本目录（相对 tools/bbcode-ts 运行目录）。 */
 const SAMPLES_DIR: string = join(process.cwd(), 'samples')
@@ -75,6 +75,40 @@ describe('引用注入核心（QuoteInjectionCore）', () => {
     assert.ok(result.endsWith('[s:ac:哭笑]一个月真的张口就来，我们公司90%业务在h5做鸿蒙迁移都用了五六个人月。'))
   })
 
+  it('粘连 Reply to 头注入后本层正文不丢失', () => {
+    /* 真实形态（tid 47855036 的 16 楼）：正文与头共用同一个 [b] 块，中间没有 <br/>。
+     * 旧实现按 [/b] 切正文 → replyText 为空 → 本层正文整段消失（列表模式只剩引用块）。 */
+    const glued: string =
+      '[b]Reply to [pid=886957875,47855036,1]Reply[/pid] Post by [uid=309772]collins[/uid] ' +
+      '(2026-11-05 11:33)最差的也不过是又苦又辣，不过种葱的也不i傻是，肯定挑好的种，' +
+      '即便味道出现偏差也不至于太离谱。[/b]'
+    const quoted: string = '葱这个玩意味道差能差到哪里去？<br/><br/>看最后一张图，葱白也不短啊？'
+    const lookup = (pid: number): string | undefined => pid === 886957875 ? quoted : undefined
+    const result: string = buildReplyQuoteContent(glued, lookup)
+
+    assert.ok(result.includes('葱这个玩意味道差能差到哪里去？'), '引用区应含被引楼层正文')
+    assert.ok(result.includes('最差的也不过是又苦又辣'), '本层正文必须保留')
+    assert.ok(result.indexOf('最差的也不过是') > result.indexOf('[/quote]'),
+      '本层正文应位于引用区之外')
+    assert.ok(!result.includes('离谱。[/b]'), '不得残留头部闭合标签')
+    assert.ok(result.endsWith('即便味道出现偏差也不至于太离谱。'), '本层正文应原样收尾')
+  })
+
+  it('被引用楼层是粘连 Reply to 时只注入其正文', () => {
+    const target: string =
+      '[b]Reply to [pid=100,47855036,1]Reply[/pid] Post by [uid=1]甲[/uid] (2026-11-05 11:00)[/b]<br/>本层正文'
+    const quoted: string =
+      '[b]Reply to [pid=200,47855036,1]Reply[/pid] Post by [uid=2]乙[/uid] (2026-11-05 10:00)' +
+      '被引用楼的粘连正文[/b]'
+    const lookup = (pid: number): string | undefined => pid === 100 ? quoted : undefined
+    const result: string = buildReplyQuoteContent(target, lookup)
+
+    assert.ok(result.includes('被引用楼的粘连正文'), '应注入被引用楼正文')
+    assert.ok(!result.includes('Reply to [pid=200'), '被引用楼的头不进入引用区')
+    assert.ok(!result.includes('[/b]被引用楼的粘连正文'), '不得残留头部闭合标签')
+    assert.ok(result.endsWith('本层正文'), '本层正文应保留')
+  })
+
   it('非 Reply to 格式或原文缺失时原样返回', () => {
     const plain: string = '普通正文[pid=1,2]链接[/pid]'
     assert.equal(buildReplyQuoteContent(plain, () => 'x'), plain)
@@ -99,6 +133,55 @@ describe('引用注入核心（QuoteInjectionCore）', () => {
     assert.ok(result.includes('[quote][pid=880227572,47475364,2]Reply[/pid]'))
     assert.ok(result.includes('被引用楼正文\n第二段'))
     assert.ok(result.endsWith('正文'))
+  })
+
+  it('粘连 Reply to 头 + 正文自带粗体时只去头部闭合', () => {
+    /* 正文里自带 [b]重点[/b]：头部的 [/b] 在整段末尾，不能把第一个 [/b] 当头部闭合。 */
+    const glued: string =
+      '[b]Reply to [pid=880227572,47475364,2]Reply[/pid] Post by [uid=42023922]llllllIl[/uid] ' +
+      '(2026-08-31 20:40)正文[b]重点[/b]结尾[/b]'
+    const lookup = (pid: number): string | undefined => pid === 880227572 ? '被引用楼正文' : undefined
+    const result: string = buildReplyQuoteContent(glued, lookup)
+
+    assert.ok(result.includes('被引用楼正文'))
+    assert.ok(result.endsWith('正文[b]重点[/b]结尾'), '本层正文与粗体格式应完整保留')
+    assert.ok(!result.endsWith('[/b]'), '不得残留头部闭合标签')
+  })
+
+  it('Reply to 头缺 [/b] 或 [/b] 不在末尾时不吞正文', () => {
+    const lookup = (pid: number): string | undefined => pid === 880227572 ? '被引用楼正文' : undefined
+    /* 头缺 [/b]：正文完整保留 */
+    const noClose: string =
+      '[b]Reply to [pid=880227572,47475364,2]Reply[/pid] Post by [uid=42023922]llllllIl[/uid] ' +
+      '(2026-08-31 20:40)<br/>本层正文'
+    assert.ok(buildReplyQuoteContent(noClose, lookup).endsWith('<br/>本层正文'),
+      '缺 [/b] 时正文不得被吞')
+    /* [/b] 在正文中间（后面还有内容）：不能只取到 [/b] 之前 */
+    const midClose: string =
+      '[b]Reply to [pid=880227572,47475364,2]Reply[/pid] Post by [uid=42023922]llllllIl[/uid] ' +
+      '(2026-08-31 20:40)[b]重点[/b]后面还有正文'
+    const midResult: string = buildReplyQuoteContent(midClose, lookup)
+    assert.ok(midResult.includes('后面还有正文'), '[/b] 之后的正文不得被吞')
+  })
+
+  it('stripReplyToHeader 按作者段+日期括号切分且不误吞', () => {
+    /* 标准形态 */
+    const standard: string =
+      '[b]Reply to [pid=1,2,3]Reply[/pid] Post by [uid=9]甲[/uid] (2025-05-26 17:37): [/b]<br/>评论正文'
+    assert.equal(stripReplyToHeader(standard), '<br/>评论正文')
+    /* 粘连形态 */
+    const glued: string =
+      '[b]Reply to [pid=1,2,3]Reply[/pid] Post by [uid=9]甲[/uid] (2025-05-26 17:37)评论粘连正文[/b]'
+    assert.equal(stripReplyToHeader(glued), '评论粘连正文')
+    /* 匿名作者 */
+    const anonymous: string =
+      '[b]Reply to [pid=1,2,3]Reply[/pid] Post by [uid]#anony_abc[/uid] (2025-05-26 17:37)匿名评论[/b]'
+    assert.equal(stripReplyToHeader(anonymous), '匿名评论')
+    /* 非标准「Reply to 某人」不是服务端回复头：原样返回，不得按 [/b] 截断 */
+    const loose: string = '[b]Reply to 某人[/b] 他说 [uid=1]甲[/uid] (2020年) 那段话很有道理'
+    assert.equal(stripReplyToHeader(loose), loose)
+    /* 正文里含 [/uid] 与括号的用户内容同样不误吞 */
+    assert.equal(stripReplyToHeader('普通正文[uid=1]甲[/uid] (2020年) 后面'), '普通正文[uid=1]甲[/uid] (2020年) 后面')
   })
 
   it('截断引用修复保留段落换行', () => {

@@ -68,6 +68,13 @@ export class PostInfo {
   alterinfo: string = '';
   score: number = 0;
   score_2: number = 0;
+  /**
+   * 官方 JSON 直接下发的「本楼层回复的目标楼层 pid」（`ThreadRowInfo.replyTo` 透传）。
+   *
+   * 0 表示没有该字段或无回复：HTML 降级通道不提供该字段，老数据也可能缺失。
+   * 建树时它只是正文头部解析的兜底来源，不参与引用区剥离判定。
+   */
+  replyTo: number = 0;
   isInBlackList: boolean = false;
   userNote: string = '';
   isMuted: boolean = false;
