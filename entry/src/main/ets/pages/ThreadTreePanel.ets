@@ -82,6 +82,15 @@ const PROGRESS_PROMPT_PROTECT_MS: number = 4300
  *   返回直接回主题列表，不会再退回列表阅读；
  * - 设置「帖子默认样式 = 递进树」：打开帖子时直接挂载本页（仍是同一个 `Screen.thread` 条目）；
  * - 本页「切换为列表阅读」/ 加载中的「以常规列表打开」：终止全帖抓取并替换为列表页。
+ *
+ * 全帖抓取可能持续数十秒（4 路并发 + 限流），因此**加载期有三种出口**（不强迫用户等完整抓取）：
+ * - 「查看已加载 n/N 页」：中断抓取，把已抓楼层送进树（`partialData`）；
+ * - 「取消」：放弃这次阅读并退出（`routerStore.back()`）；
+ * - 「以常规列表打开」：换成列表样式阅读。
+ *
+ * 部分数据**不做断点续传、也不挂常驻提醒**：中断是用户自己的决定，不需要再被告知一次；
+ * 只在列表尾部用一句中性的「已加载 n/N 页」标识内容边界（替代「已加载全部回复」），
+ * 不弹 Toast、不加横幅。想拿全内容走「刷新递进树」整帖重抓。
  */
 @Component
 export struct ThreadTreePanel {
@@ -131,6 +140,25 @@ export struct ThreadTreePanel {
    * 不知情的情况下读一份缺页的树。
    */
   @State skippedPageHint: string = ''
+  /**
+   * 当前树是否只覆盖**部分页**（加载中人工中断，或某页失败后用户选择查看已加载数据）。
+   *
+   * 刻意**不做常驻提醒**：中断是用户自己的操作，页面上不再挂横幅/弹 Toast；
+   * 这个标志只用于两件事：
+   * 1. 列表尾部把「已加载全部回复」换成中性的「已加载 n/N 页」（内容边界，不是警告）；
+   * 2. 树内跳转/阅读进度恢复找不到楼层时，把「不存在」改述为「不在已加载页内」。
+   *
+   * 不提供断点续传：补齐内容走「刷新递进树」整帖重抓。
+   */
+  @State partialData: boolean = false
+  /** 部分数据下已覆盖页数（与服务端总页数共同构成 n/N）。 */
+  @State partialLoadedPages: number = 0
+  /** 部分数据下的服务端总页数。 */
+  @State partialTotalPages: number = 0
+  /** 是否正在中断加载（已请求取消，等待在途页返回后提交部分数据）。 */
+  @State interrupting: boolean = false
+  /** 错误态是否提供「查看已加载 n/N 页」入口（失败前已抓到楼层时为 true）。 */
+  @State hasPartialFallback: boolean = false
   /** 已点赞楼层 pid 集合。 */
   @State votedUpPids: Set<string> = new Set()
   /** 已点踩楼层 pid 集合。 */
@@ -200,6 +228,23 @@ export struct ThreadTreePanel {
   private highlightPid: number = 0
   /** 抓取代际：刷新/销毁时递增，使旧结果失效。 */
   private fetchGeneration: number = 0
+  /**
+   * 整页加载失败但已抓到楼层时的暂存结果（错误态「查看已加载」用）。
+   *
+   * 刻意**不自动提交**：失败中断留下的残缺树不能静默展示（用户会以为帖子就这些），
+   * 但直接丢弃又浪费已抓内容，因此挂在错误态由用户主动选择。
+   */
+  private failedPartialResult: ThreadTreeFetchResult | null = null
+  /**
+   * 失败暂存结果对应的刷新锚点与标题策略。
+   *
+   * 刷新失败时 `loadTree` 已经把树清空，但失败结果里可能仍有已抓楼层；用户点
+   * 「查看已加载」提交时如果只用 `-1`，`resolveNavigationPid` 会退回路由 pid（通常 0），
+   * 表现为**刷失败后看部分数据会跳回顶部**。这里把失败时算好的锚点与
+   * `keepSubject` 一并暂存，提交时原样透传。
+   */
+  private failedPartialAnchorPid: number = -1
+  private failedPartialKeepSubject: boolean = false
   /**
    * 本页面实例标识（抓取服务的 owner）。
    *
@@ -335,6 +380,14 @@ export struct ThreadTreePanel {
     this.treeDataSource.clear()
     this.totalPages = 0
     this.skippedPageHint = ''
+    this.partialData = false
+    this.partialLoadedPages = 0
+    this.partialTotalPages = 0
+    this.interrupting = false
+    this.hasPartialFallback = false
+    this.failedPartialResult = null
+    this.failedPartialAnchorPid = -1
+    this.failedPartialKeepSubject = false
     this.threadFid = 0
     // 与 aboutToAppear 同源：先回到路由身份（可能为空），抓取结果返回后再覆盖
     this.threadAuthorId = this.authorIdInit
@@ -375,6 +428,9 @@ export struct ThreadTreePanel {
   /**
    * 加载全帖并重建树（页面进入、「刷新递进树」、回复后刷新共用）。
    *
+   * 加载期有三种出口（见 {@link LoadingState}）：查看已加载 / 取消 / 以常规列表打开。
+   * 部分数据不做断点续传：想拿全内容走本方法（刷新）整帖重抓。
+   *
    * @param keepSubject - 是否保留当前标题并回到当前阅读位置（刷新场景）；
    *   false 表示首次加载，定位使用路由传入的 pid。该标志同时作为 `forceRefresh`
    *   传给抓取服务：刷新/重试必须绕过短时缓存，首次进入则允许复用缓存（90 秒内秒开）
@@ -386,6 +442,11 @@ export struct ThreadTreePanel {
     clearTimeout(this.progressRecordTimer)
     this.progressRecordTimer = -1
     this.navigationApplied = false
+    this.failedPartialResult = null
+    this.failedPartialAnchorPid = -1
+    this.failedPartialKeepSubject = false
+    this.hasPartialFallback = false
+    this.interrupting = false
     if (this.threadTid.length === 0) {
       threadTreeFetchService.cancel(this.treeOwner)
       this.isLoading = false
@@ -403,8 +464,11 @@ export struct ThreadTreePanel {
     this.progressTotal = 0
     this.treeReady = false
     this.treeDataSource.clear()
-    // 上一轮的缺页提示属于旧结果：刷新/重试后由新一轮抓取重新判定
+    // 上一轮的缺页/部分数据提示属于旧结果：新一轮抓取重新判定
     this.skippedPageHint = ''
+    this.partialData = false
+    this.partialLoadedPages = 0
+    this.partialTotalPages = 0
     logger.info('tree-panel load start tid=%{public}s gen=%{public}d refresh=%{public}s',
       fetchTid, generation, String(keepSubject))
     threadTreeFetchService.fetchAll(this.treeOwner, fetchTid, (done: number, total: number): void => {
@@ -418,67 +482,136 @@ export struct ThreadTreePanel {
         logger.warn('tree-panel load stale tid=%{public}s gen=%{public}d', fetchTid, generation)
         return
       }
-      if (result.cancelled) {
-        // 递进树条目取代了列表页，不存在「返回原列表页」的退路：取消后停留在错误态，
-        // 由用户选择重试、退出，或在加载态直接「以常规列表打开」
-        this.isLoading = false
+      // 用户是否主动点了「查看已加载」：必须在清空 interrupting 之前取快照。
+      // 服务层的 cancelled 也可能是「被新任务抢占」——平板三列下从板块列打开另一个帖子时，
+      // 本页被路由覆盖但仍存活、自身代际不变，B 页面的 fetchAll 会把本页任务置为取消。
+      // 那种取消不是用户的阅读决定，不能替用户提交部分树或写历史/弹提示。
+      const userInterrupted: boolean = this.interrupting
+      this.interrupting = false
+      if (result.cancelled && !userInterrupted) {
+        // 被其他页面/任务抢占：不替用户自动提交部分树、不写历史、不弹提示，
+        // 但数据不丢——已抓完就正常建树；只抓到一部分就挂在错误态的「查看已加载」入口上
         this.deferredResumePid = -1
+        if (result.ok && !result.partial) {
+          this.commitFetchResult(result, keepSubject, refreshAnchorPid)
+          logger.info('tree-panel preempted but complete tid=%{public}s', fetchTid)
+          return
+        }
+        this.isLoading = false
         this.hasError = true
-        this.errorMsg = '已取消加载递进树'
+        this.errorMsg = '加载被其他操作中断'
+        if (result.ok && result.partial) {
+          this.failedPartialResult = result
+          this.failedPartialAnchorPid = refreshAnchorPid
+          this.failedPartialKeepSubject = keepSubject
+          this.hasPartialFallback = true
+          this.partialLoadedPages = result.loadedPages
+          this.partialTotalPages = result.totalPages
+        }
+        logger.info('tree-panel load preempted tid=%{public}s gen=%{public}d loaded=%{public}d',
+          fetchTid, generation, result.loadedPages)
         return
       }
       if (!result.ok) {
+        // 没有可提交楼层：取消（第 1 页返回前中断）或首屏失败
         this.isLoading = false
         this.deferredResumePid = -1
         this.hasError = true
-        this.errorMsg = result.error.length > 0 ? result.error : '加载失败'
+        this.errorMsg = result.cancelled ? '已取消加载递进树'
+          : (result.error.length > 0 ? result.error : '加载失败')
         return
       }
-      this.applyThreadInfo(keepSubject, result)
-      this.allPosts = result.posts
-      // 抓取请求固定用空黑名单（保证引用图完整），遮蔽标记在提交时按当前黑名单统一补齐；
-      // 缓存命中时也走这里，避免复用上一次的黑名单快照
-      applyBlacklistStateToPosts(this.allPosts, appStore.settingsStore.getBlacklistIds())
-      this.totalPages = result.totalPages
-      this.pageByPid = result.pageByPid
-      // 旧树的可见中心/首行不再适用于新 rows，重置后再由本轮的 onScrollIndex 更新
-      this.lastScrollStart = 0
-      this.lastScrollCenter = 0
-      this.rebuildTree()
-      this.treeReady = true
-      this.isLoading = false
-      // 有页被跳过时记录缺页提示（尾部文案 + 进度提示合并）并弹一次 Toast：
-      // 树仍照常可读，但用户需要知道内容不全（刷新会绕过短时缓存重抓，有机会补齐）
-      this.applySkippedPages(result.skippedPages)
-      // 阅读记录（浏览历史）与列表页同源：树模式打开同一帖子同样计入「看过」
-      this.recordBrowseHistory(result)
-      // 被跟踪的帖子：打开即推进已读基准（与列表页同一入口语义）
-      this.syncTrackedOnOpen()
-      this.navigationPid = this.resolveNavigationPid(refreshAnchorPid)
-      this.navigationPending = true
-      this.navigationScheduled = false
-      this.scheduleNavigation()
-      // 路由自带定位意图时不恢复进度（避免两种定位意图打架）
-      if (refreshAnchorPid < 0 && this.threadPid.length === 0) {
-        this.tryRestoreTreeProgress()
+      if (result.partial && !result.cancelled) {
+        // 抓取中途失败但已有楼层：不自动提交残缺树（会误导「帖子就这些」），
+        // 停在错误态并提供「查看已加载 n/N 页」由用户主动选择
+        this.isLoading = false
+        this.deferredResumePid = -1
+        this.hasError = true
+        this.errorMsg = result.error.length > 0 ? result.error : '加载未完成'
+        this.failedPartialResult = result
+        this.failedPartialAnchorPid = refreshAnchorPid
+        this.failedPartialKeepSubject = keepSubject
+        this.hasPartialFallback = true
+        this.partialLoadedPages = result.loadedPages
+        this.partialTotalPages = result.totalPages
+        logger.warn('tree-panel partial fallback tid=%{public}s loaded=%{public}d/%{public}d',
+          fetchTid, result.loadedPages, result.totalPages)
+        return
       }
-      logger.info(
-        'tree-panel load done tid=%{public}s posts=%{public}d roots=%{public}d rows=%{public}d ' +
-          'quotes=%{public}d authorOnly=%{public}s',
-        fetchTid, result.posts.length, this.treeModel !== null ? this.treeModel.roots.length : 0,
-        this.treeDataSource.totalCount(), this.treeModel !== null ? this.treeModel.quoteCount : 0,
-        String(this.authorOnly)
-      )
+      // 完整结果，或用户主动中断（cancelled）后拿到了已抓楼层：直接建树
+      this.commitFetchResult(result, keepSubject, refreshAnchorPid)
     }).catch((error: Object): void => {
       if (generation !== this.fetchGeneration) {
         return
       }
+      this.interrupting = false
       this.isLoading = false
       this.deferredResumePid = -1
       this.hasError = true
       this.errorMsg = formatError(error)
       logger.error('tree-panel load failed tid=%{public}s: %{public}s', fetchTid, formatError(error))
     })
+  }
+
+  /**
+   * 提交一次抓取结果并重建树（完整、人工中断、错误态查看已加载三条路径共用）。
+   *
+   * @param result - 抓取结果（`ok` 必须为 true）
+   * @param keepSubject - 是否保留当前标题
+   * @param anchorPid - 定位锚点（-1 表示按路由 pid / 阅读进度决定）
+   */
+  private commitFetchResult(result: ThreadTreeFetchResult, keepSubject: boolean,
+    anchorPid: number): void {
+    this.applyThreadInfo(keepSubject, result)
+    this.allPosts = result.posts
+    // 抓取请求固定用空黑名单（保证引用图完整），遮蔽标记在提交时按当前黑名单统一补齐；
+    // 缓存命中时也走这里，避免复用上一次的黑名单快照
+    applyBlacklistStateToPosts(this.allPosts, appStore.settingsStore.getBlacklistIds())
+    this.totalPages = result.totalPages
+    this.pageByPid = result.pageByPid
+    // 旧树的可见中心/首行不再适用于新 rows，重置后再由本轮的 onScrollIndex 更新
+    this.lastScrollStart = 0
+    this.lastScrollCenter = 0
+    this.rebuildTree()
+    this.treeReady = true
+    this.isLoading = false
+    this.interrupting = false
+    this.applyPartialState(result)
+    // 有页被跳过时记录缺页提示并弹一次 Toast；部分数据不弹「已加载 n/N 页」——
+    // 中断是用户自己的决定，不再用 Toast 重复告知；缺页提示仍保留（那才是未知信息）
+    this.applySkippedPages(result.skippedPages)
+    // 阅读记录（浏览历史）与列表页同源：树模式打开同一帖子同样计入「看过」
+    this.recordBrowseHistory(result)
+    // 被跟踪的帖子：打开即推进已读基准（与列表页同一入口语义）
+    this.syncTrackedOnOpen()
+    this.navigationPid = this.resolveNavigationPid(anchorPid)
+    this.navigationPending = true
+    this.navigationScheduled = false
+    this.scheduleNavigation()
+    // 路由自带定位意图时不恢复进度（避免两种定位意图打架）
+    if (anchorPid < 0 && this.threadPid.length === 0) {
+      this.tryRestoreTreeProgress()
+    }
+    logger.info(
+      'tree-panel load done tid=%{public}s posts=%{public}d roots=%{public}d rows=%{public}d ' +
+        'quotes=%{public}d authorOnly=%{public}s partial=%{public}s',
+      this.threadTid, result.posts.length, this.treeModel !== null ? this.treeModel.roots.length : 0,
+      this.treeDataSource.totalCount(), this.treeModel !== null ? this.treeModel.quoteCount : 0,
+      String(this.authorOnly), String(result.partial)
+    )
+  }
+
+  /**
+   * 应用结果的部分数据状态（只服务列表尾部文案与「未加载页」相关的提示口径）。
+   *
+   * 不做任何常驻提醒：横幅、Toast 都不发；中断是用户自己的决定。
+   *
+   * @param result - 已提交的抓取结果
+   */
+  private applyPartialState(result: ThreadTreeFetchResult): void {
+    this.partialData = result.partial
+    this.partialLoadedPages = result.loadedPages
+    this.partialTotalPages = result.totalPages
   }
 
   /**
@@ -808,7 +941,7 @@ export struct ThreadTreePanel {
       return
     }
     if (!this.ensureRowVisible(pid)) {
-      appStore.showToast('该楼层不存在或已删除')
+      appStore.showToast(this.missingFloorHint())
       return
     }
     const index: number = this.treeDataSource.findIndexByPid(pid)
@@ -817,6 +950,22 @@ export struct ThreadTreePanel {
     }
     this.scroller.scrollToIndex(index, false, ScrollAlign.CENTER)
     this.highlightRow(pid)
+  }
+
+  /**
+   * 树内跳转命中不到楼层时的提示文案。
+   *
+   * 部分数据下 `postByPid` 只含已加载页的楼层，同帖链接「→」指到未加载页时不能
+   * 断言「不存在或已删除」——那不是事实，用户该做的是刷新拿全内容。
+   *
+   * @returns 提示文案
+   */
+  private missingFloorHint(): string {
+    if (this.partialData) {
+      return '该楼层不在已加载的 ' + String(this.partialLoadedPages) + '/' +
+        String(this.partialTotalPages) + ' 页内，可刷新递进树获取全部'
+    }
+    return '该楼层不存在或已删除'
   }
 
   /**
@@ -1103,7 +1252,8 @@ export struct ThreadTreePanel {
       this.pendingResumeEntry = null
     }, PROGRESS_PROMPT_PROTECT_MS)
     // 缺页提示并入同一条 Toast：Toast 是单条替换语义，紧随其后的这条会把刚才的
-    // 缺页提示顶掉；合并后两条信息都不丢（常驻文案仍在 skippedPageHint 里可查）
+    // 缺页提示顶掉；合并后两条信息都不丢（常驻文案仍在 skippedPageHint 里可查）。
+    // 部分数据（用户主动中断）不并入提示——中断是用户自己的操作，不再重复告知。
     const resumeText: string = this.skippedPageHint.length > 0
       ? '检测到上次阅读进度（' + this.skippedPageHint + '）'
       : '检测到上次阅读进度'
@@ -1142,8 +1292,10 @@ export struct ThreadTreePanel {
   }
 
   /**
-   * 执行树内恢复定位：先按 pid 找行（被折叠则展开所属根），
-   * 找不到时提示「原阅读位置已不可用」并回到顶部。
+   * 执行树内恢复定位：先按 pid 找行（被折叠则展开所属根）。
+   *
+   * 找不到时分两种口径：完整树里找不到是「已不可用」；部分数据里更可能只是
+   * **那几页还没加载**，不能谎报楼层不存在（见 {@link missingFloorHint} 的同口径处理）。
    *
    * 不再用记录时的扁平行下标兜底：下标会随折叠/展开与只看楼主过滤漂移，
    * 按下标取到的很可能是另一个楼层，会静默把用户带到错误位置。
@@ -1172,7 +1324,10 @@ export struct ThreadTreePanel {
     }
     if (index < 0) {
       this.navigationApplied = true
-      appStore.showToast('原阅读位置已不可用')
+      appStore.showToast(this.partialData
+        ? '上次阅读位置不在已加载的 ' + String(this.partialLoadedPages) + '/' +
+          String(this.partialTotalPages) + ' 页内，可刷新后恢复'
+        : '原阅读位置已不可用')
       this.scroller.scrollToIndex(0, false, ScrollAlign.START)
       return
     }
@@ -1183,6 +1338,58 @@ export struct ThreadTreePanel {
   }
 
   // ==================== 交互 ====================
+
+  /**
+   * 加载中人工中断：请求取消并等待在途页返回，随后由抓取结果的 `cancelled` 分支
+   * 提交已抓到的楼层（见 {@link loadTree}）。
+   *
+   * 取消不是「立即返回」：服务端在途请求没有真正的中止手段，服务会在当前批次请求
+   * 收尾后返回（通常 1~3 秒，最坏为单页超时的 15 秒）。这段时间页面显示
+   * 「正在中断加载…」并收起三个操作按钮，避免重复触发。
+   */
+  private beginViewLoaded(): void {
+    if (this.progressDone <= 0 || this.interrupting) {
+      return
+    }
+    this.interrupting = true
+    threadTreeFetchService.cancel(this.treeOwner)
+    logger.info('tree-panel interrupt tid=%{public}s done=%{public}d/%{public}d',
+      this.threadTid, this.progressDone, this.progressTotal)
+  }
+
+  /**
+   * 加载中取消：终止抓取并退出递进树页面。
+   *
+   * 递进树条目替代了列表页，页面栈里没有「原来的视图」可退：取消的语义就是放弃这次
+   * 阅读，与系统返回一致。已抓数据直接丢弃（想留着看请用「查看已加载」）。
+   */
+  private cancelLoadingAndExit(): void {
+    this.cancelWork()
+    routerStore.back()
+  }
+
+  /**
+   * 错误态「查看已加载」：把失败前抓到的楼层提交成部分树。
+   *
+   * 数据来自 {@link failedPartialResult}（失败时暂存、不自动提交）；提交后与人工中断
+   * 的部分树完全同构：尾部标注已加载范围。定位锚点与标题策略沿用失败时暂存的
+   * 值——刷新失败后再看部分数据仍旧停在刷新前的阅读位置，不会跳回顶部。
+   */
+  private commitFailedPartial(): void {
+    const result: ThreadTreeFetchResult | null = this.failedPartialResult
+    if (result === null) {
+      return
+    }
+    const anchorPid: number = this.failedPartialAnchorPid
+    const keepSubject: boolean = this.failedPartialKeepSubject
+    this.failedPartialResult = null
+    this.failedPartialAnchorPid = -1
+    this.failedPartialKeepSubject = false
+    this.hasPartialFallback = false
+    this.hasError = false
+    this.errorMsg = ''
+    this.commitFetchResult(result, keepSubject, anchorPid)
+  }
 
   /**
    * 回复/编辑发送成功后刷新全帖树。
@@ -1444,7 +1651,8 @@ export struct ThreadTreePanel {
           this.treeJumpToPid(linkPidNumber)
           return
         }
-        appStore.showToast('该楼层不在递进树中')
+        // 目标不在树里时不能一律说「不在递进树中」：部分数据下它可能只是还没加载
+        appStore.showToast(this.missingFloorHint())
         return
       }
     }
@@ -1903,6 +2111,7 @@ export struct ThreadTreePanel {
    * 只看楼主 / 切换阅读方式 / 刷新 → 从网页打开 / 分享。刷新固定在本组末尾——
    * 树页「刷新递进树」要**重抓全帖**（4 路并发 + 限流，长帖可达数十秒，期间整页为加载态），
    * 是本菜单里代价最大的动作，不能紧跟在高频的「跟踪」下方，避免误触。
+   * 部分数据不提供「补齐剩余页」：用户用「刷新递进树」整帖重抓，不引入断点续传。
    *
    * 回调一律写成**箭头函数**：菜单项在 `PanelNavBar` 实例上渲染，只有箭头函数才能把
    * `this` 固定在本组件上（见 `NavBarMenuItem` 的说明）。
@@ -2052,20 +2261,26 @@ export struct ThreadTreePanel {
   }
 
   /**
-   * 全帖抓取中的加载态：进度（页数 / 百分比）+「取消」+「以常规列表打开」。
+   * 全帖抓取中的加载态：进度 + 三种出口。
    *
-   * 取消按钮在总页数未知（第 1 页尚未返回）时同样可用：首屏请求也可能卡满超时，
-   * 不能只在拿到 totalPages 之后才允许退出。
+   * 三个操作是**并列的三种意图**（不是主次按钮堆叠）：
+   * 1. 「查看已加载 n/N 页」——中断抓取，把已经拿到的楼层送进树（数据没白等）；
+   * 2. 「取消」——放弃这次阅读并退出（递进树条目替代了列表页，没有「原视图」可退，
+   *    取消即返回上一层，见 {@link cancelLoadingAndExit}）；
+   * 3. 「以常规列表打开」——换一种阅读样式，重新从列表页加载（见 {@link replaceWithListReading}）。
    *
-   * 「以常规列表打开」是加载期的逃生舱：全帖抓取可能持续数十秒，用户不想等时直接换到
-   * 列表样式阅读——终止抓取，并把当前递进树栈条目替换为列表页（见
-   * {@link replaceWithListReading}）。
+   * 第 1 页尚未返回时（`progressDone = 0`）「查看已加载」禁用：此时没有可展示的数据，
+   * 但按钮保留在原位，避免布局跳动。取消与切列表在总页数未知时同样可用——首屏请求
+   * 也可能卡满超时，不能只在拿到 totalPages 之后才允许退出。
+   *
+   * 请求取消后（`interrupting`）收起三个按钮、显示「正在中断加载…」：在途请求没有真正的
+   * 中止手段，服务要等当前批次收尾，重复点击没有意义。
    */
   @Builder
   LoadingState() {
     Column() {
       LoadingStateView()
-      Column({ space: 8 }) {
+      Column({ space: 10 }) {
         if (this.progressTotal > 0) {
           Text('正在加载全部楼层 ' + String(this.progressDone) + '/' + String(this.progressTotal) + ' 页')
             .fontSize(14).fontColor(AppColors.textSecondary)
@@ -2081,21 +2296,43 @@ export struct ThreadTreePanel {
           Text('正在加载帖子…')
             .fontSize(14).fontColor(AppColors.textSecondary)
         }
-        Row({ space: 8 }) {
-          Text('取消')
-            .fontSize(14).fontColor(AppColors.destructive)
-            .padding({ top: 6, bottom: 6, left: 12, right: 12 })
-            .onClick((): void => {
-              threadTreeFetchService.cancel(this.treeOwner)
-            })
-          Text('以常规列表打开')
-            .fontSize(14).fontColor(AppColors.primary)
-            .padding({ top: 6, bottom: 6, left: 12, right: 12 })
-            .onClick((): void => {
-              this.replaceWithListReading()
-            })
+        // 动作区固定高度：中断态只显示一行提示，若不占位会让整块内容在「点中断」瞬间
+        // 上下跳动；高度按「主按钮 32 + 间距 10 + 次级行 26」取 68
+        Column({ space: 10 }) {
+          if (this.interrupting) {
+            Row({ space: 8 }) {
+              LoadingProgress().width(16).height(16).color(AppColors.textTertiary)
+              Text('正在中断加载…').fontSize(13).fontColor(AppColors.textSecondary)
+            }
+            .height(32)
+          } else {
+            Button(this.viewLoadedLabel())
+              .fontSize(14).height(32).padding({ left: 16, right: 16 })
+              .backgroundColor(this.canViewLoaded() ? AppColors.primary : AppColors.bgSecondary)
+              .fontColor(this.canViewLoaded() ? AppColors.white : AppColors.textSecondary)
+              .enabled(this.canViewLoaded())
+              .onClick((): void => {
+                this.beginViewLoaded()
+              })
+            Row({ space: 8 }) {
+              Text('取消')
+                .fontSize(14).fontColor(AppColors.destructive)
+                .padding({ top: 6, bottom: 6, left: 12, right: 12 })
+                .onClick((): void => {
+                  this.cancelLoadingAndExit()
+                })
+              Text('以常规列表打开')
+                .fontSize(14).fontColor(AppColors.primary)
+                .padding({ top: 6, bottom: 6, left: 12, right: 12 })
+                .onClick((): void => {
+                  this.replaceWithListReading()
+                })
+            }
+          }
         }
-        .margin({ top: 4 })
+        .height(68)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
       }
       .margin({ top: 20 })
       .alignItems(HorizontalAlign.Center)
@@ -2107,7 +2344,10 @@ export struct ThreadTreePanel {
   }
 
   /**
-   * 加载失败态：原因 + 重试。
+   * 加载失败态：原因 + 重试；失败前已抓到楼层时追加「查看已加载」。
+   *
+   * 部分结果不自动提交（残缺树会让人误以为帖子就这些），但也不丢弃——
+   * 由用户主动选择是否先读已抓到的部分。
    */
   @Builder
   ErrorState() {
@@ -2119,11 +2359,46 @@ export struct ThreadTreePanel {
           return Promise.resolve()
         }
       })
+      if (this.hasPartialFallback) {
+        Button('查看已加载的 ' + String(this.partialLoadedPages) + '/' +
+          String(this.partialTotalPages) + ' 页')
+          .fontSize(13).height(30).padding({ left: 14, right: 14 })
+          .backgroundColor(AppColors.bgSecondary)
+          .fontColor(AppColors.textPrimary)
+          .margin({ top: 8 })
+          .onClick((): void => {
+            this.commitFailedPartial()
+          })
+      }
     }
     .width('100%').layoutWeight(1)
     .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
     .padding({ top: NAV_BAR_H + this.statusBarHeight })
     .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+  }
+
+  /**
+   * 「查看已加载」按钮文案（总页数已知时带上进度）。
+   *
+   * @returns 按钮文案
+   */
+  private viewLoadedLabel(): string {
+    if (this.progressTotal > 0) {
+      return '查看已加载 ' + String(this.progressDone) + '/' + String(this.progressTotal) + ' 页'
+    }
+    if (this.progressDone > 0) {
+      return '查看已加载 ' + String(this.progressDone) + ' 页'
+    }
+    return '查看已加载'
+  }
+
+  /**
+   * 是否已有可提交的楼层（第 1 页返回后才可能出现）。
+   *
+   * @returns 可点击「查看已加载」时为 true
+   */
+  private canViewLoaded(): boolean {
+    return this.progressDone > 0
   }
 
   /**
@@ -2303,8 +2578,9 @@ export struct ThreadTreePanel {
    * 树页一次性抓完全帖，不存在「加载更多」的中间态；到达末尾即在最后一行下方
    * 明确提示已到结尾，避免用户继续下拉等待不存在的分页。
    *
-   * 有缺页时把缺页信息并入同一行（常驻、可查）：Toast 会被后续提示覆盖，
-   * 这里保证「树少了哪几页」在读完时仍然可见。
+   * 两种不完整情况都在这条常驻行里表达（读完全程时一定看得见）：
+   * - 部分数据（中断/失败后查看已加载）：文案给出已加载范围；
+   * - 有缺页（服务端空页）：把缺页信息并入文案（Toast 会被后续提示覆盖）。
    */
   @Builder
   LoadEndFooter() {
@@ -2320,11 +2596,22 @@ export struct ThreadTreePanel {
   }
 
   /**
-   * 列表尾部文案：缺页时附带缺页提示。
+   * 列表尾部文案：部分数据时给已加载范围并附缺页提示，完整时给完成文案。
+   *
+   * 缺页提示在这里也要保留：Toast 是单条替换语义、会被后续提示覆盖，
+   * 尾部是读完最后一行时唯一还能看到的常驻位置。
    *
    * @returns 尾部文案
    */
   private loadEndText(): string {
+    if (this.partialData) {
+      const progress: string = '已加载 ' + String(this.partialLoadedPages) +
+        '/' + String(this.partialTotalPages) + ' 页'
+      if (this.skippedPageHint.length > 0) {
+        return progress + '（' + this.skippedPageHint + '）'
+      }
+      return progress
+    }
     if (this.skippedPageHint.length === 0) {
       return '已加载全部回复'
     }

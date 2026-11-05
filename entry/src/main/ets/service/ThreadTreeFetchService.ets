@@ -71,27 +71,34 @@ const treeBatchThrottler: Throttler = new Throttler(
  *
  * 调用方（ThreadTreePanel）用它提交结果：`ok` 为 true 时
  * `posts` / `pageByPid` / `totalPages` / `threadInfo` / `forumName` 可用；
- * `cancelled` 与失败区分（取消不弹错误）；失败时 `posts` 为空数组、不提交半成品。
+ * `partial` 区分「完整」与「只抓到了部分页」（取消/失败仍保留已抓楼层）；
+ * 没有楼层时 `ok = false`，`error` 给出原因。
  */
 export class ThreadTreeFetchResult {
   /** 本次抓取的任务代际（服务内部递增，调用方可用于诊断；提交校验以调用方自身代际为准）。 */
   generation: number = 0
 
   /**
-   * 是否抓取成功（完整抓完全部页并按 pid 合并）。
+   * 是否有可提交的楼层（完整或部分）。
    *
    * `skippedPages` 非空时仍为 true：跳过页只是「那一页没有可见楼层」，
    * 其余页内容完整可用（见 {@link ThreadTreeFetchResult.skippedPages}）。
+   * `partial` 为 true 时同样为 true：取消/失败前抓到的楼层仍是可用数据。
    */
   ok: boolean = false
 
-  /** 是否被取消（与失败区分，UI 不弹错误、回到原视图）。 */
+  /**
+   * 本次抓取是否被取消（人工中断 / 页面销毁 / 被新任务抢占）。
+   *
+   * 与失败区分：取消是**用户或生命周期**发起的，`error` 为空；取消时若已抓到楼层，
+   * 结果仍是 `ok = true` 的部分结果（见 {@link ThreadTreeFetchResult.partial}）。
+   */
   cancelled: boolean = false
 
-  /** 失败文案（ok 为 true 或 cancelled 时为空串）。 */
+  /** 失败文案（完整成功或纯取消时为空串；部分结果里可能是中断前的失败原因）。 */
   error: string = ''
 
-  /** 合并后的全帖楼层（按 pid 去重、按 `lou` 升序）；失败/取消时为空数组。 */
+  /** 合并后的楼层（按 pid 去重、按 `lou` 升序）；无数据时为空数组。 */
   posts: PostInfo[] = []
 
   /** 服务端页码映射：楼层 pid → 抓取时所在页（含主楼 pid=0 → 1）。 */
@@ -118,6 +125,40 @@ export class ThreadTreeFetchResult {
 
   /** 版块名（取自第 1 页响应）。 */
   forumName: string = ''
+
+  /**
+   * 是否只覆盖**部分页**（人工中断，或某页失败但已有楼层可读）。
+   *
+   * `ok = true && partial = true` 时 `posts` 仍是**可直接建树的可用数据**，只是不完整：
+   * 调用方必须向用户明示「已加载 loadedPages / totalPages 页」。页面不提供断点续传，
+   * 补齐内容走既有「刷新递进树」整帖重抓。
+   *
+   * 三个出口的区别：
+   * - `ok = false`：没有可提交的楼层（第 1 页失败、取消发生在第 1 页返回前）；
+   * - `ok = true && partial = false`：全部页覆盖（跳过页仍算覆盖）；
+   * - `ok = true && partial = true`：`loadedPages < totalPages`。
+   */
+  partial: boolean = false
+
+  /** 已覆盖页数（成功抓取页 + 跳过空页；不含未派发页）。 */
+  loadedPages: number = 0
+}
+
+/**
+ * 由已覆盖页数与服务端总页数推导「是否只覆盖了部分页」。
+ *
+ * 纯函数：取消 / 失败 / 完整三条出口共用同一口径，便于单测锁定「何时算部分数据」。
+ * 总页数未知（≤ 0）时返回 false——调用方必须先判 `ok`，此时 `partial` 没有意义。
+ *
+ * @param loadedPages - 已覆盖页数（成功页 + 跳过空页）
+ * @param totalPages - 服务端总页数
+ * @returns 仍缺页时为 true
+ */
+export function derivePartial(loadedPages: number, totalPages: number): boolean {
+  if (totalPages <= 0) {
+    return false
+  }
+  return loadedPages < totalPages
 }
 
 /**
@@ -209,6 +250,14 @@ class FetchPageScheduler {
 
   /** 被跳过的空页页码（worker 完成顺序入列，提交前统一排序）。 */
   skippedPages: number[] = []
+
+  /**
+   * 已覆盖页码（成功抓取页 + 跳过空页）。
+   *
+   * 与 `done` 的区别：`done` 只用于进度展示，`covered` 是**内容覆盖的事实来源**
+   * （`loadedPages` / `partial` 由它派生，取消时判断「是否已有完整数据」也用它）。
+   */
+  covered: Set<number> = new Set<number>()
 }
 
 /** 全帖结果缓存条目。 */
@@ -238,8 +287,12 @@ class TreeFetchCacheEntry {
  * 3. 合并按 pid 去重、按 `lou` 升序，逐页记录 `pageByPid`（每页抓到时就记）；
  * 3.1 有跳过页时结果仍是 `ok = true`，但 `skippedPages` 非空、**不写短时缓存**
  *    （下次进入或刷新会重抓，有机会补齐；否则 90 秒内重进仍是缺页）；
- * 4. `cancel(owner)` 在当前批次请求完成后终止（在途页结果丢弃）；每次启动递增内部
- *    `generation`；
+ * 4. `cancel(owner)` 在当前批次请求完成后终止；每次启动递增内部 `generation`。
+ *    **取消不再丢弃已抓楼层**：已抓到的楼层装进 `ok = true && partial = true` 的结果
+ *    （`loadedPages` / `partial` 标出覆盖范围），由页面决定是否提交——这是
+ *    「加载中人工中断 → 查看已有数据」的数据来源。页面销毁/被新任务抢占时页面按
+ *    自身代际丢弃结果即可，服务端无需区分取消的发起方。**不做断点续传**：
+ *    部分数据之后补齐内容一律走页面「刷新递进树」整帖重抓；
  * 5. 完成后**后台**预热首屏楼层的 BBCode 解析缓存（不阻塞结果提交）。
  *
  * ## 缓存
@@ -247,7 +300,7 @@ class TreeFetchCacheEntry {
  * 成功结果按「账号 uid + tid」缓存 {@link TREE_CACHE_TTL_MS}，最多
  * {@link TREE_CACHE_MAX_ENTRIES} 个帖子：列表→树→返回→再进树在缓存期内秒开，
  * 不重复打服务端。刷新（菜单「刷新递进树」/回复后刷新）传 `forceRefresh = true`
- * 跳过缓存。
+ * 跳过缓存。**部分结果不写缓存**（否则 90 秒内重进会直接读到残缺树）。
  *
  * ## 并发与取消语义（页面级隔离的关键）
  *
@@ -336,7 +389,9 @@ export class ThreadTreeFetchService {
    * @param tid - 主题 ID
    * @param onProgress - 每页完成回调（done 已完成页数，total 总页数）
    * @param forceRefresh - 为 true 时跳过短时缓存，强制重新抓取（刷新/回复后刷新）
-   * @returns 抓取结果；调用方提交前应校验自身代际/帖子是否已变化
+   * @returns 抓取结果；调用方提交前应校验自身代际/帖子是否已变化。
+   *   被取消时若已抓到楼层，同样返回 `ok = true` 的部分结果（`cancelled = true`），
+   *   由调用方决定提交还是丢弃——这是「人工中断后看已有数据」的数据来源
    */
   async fetchAll(owner: string, tid: string,
     onProgress?: (done: number, total: number) => void,
@@ -400,7 +455,14 @@ export class ThreadTreeFetchService {
   }
 
   /**
-   * 执行一次完整抓取（`fetchAll` 的串行化外壳之外的纯抓取流程）。
+   * 执行一次抓取（`fetchAll` 的串行化外壳之外的纯抓取流程）。
+   *
+   * 结果有三种出口（语义见 `ThreadTreeFetchResult.partial`）：
+   * - **完整成功**：全部页覆盖，`ok = true`、`partial = false`；
+   * - **中断/失败但已有楼层**：`ok = true`、`partial = true`，`loadedPages` 标出已覆盖页数。
+   *   这是「人工中断后看已有数据」与「错误态查看已加载」的数据来源——取消不再丢弃
+   *   已经抓到的楼层，是否提交由页面决定；
+   * - **无数据**（第 1 页失败、或第 1 页返回前取消）：`ok = false`。
    *
    * @param token - 会话令牌
    * @param tid - 主题 ID
@@ -421,7 +483,8 @@ export class ThreadTreeFetchService {
     const scheduler: FetchPageScheduler = new FetchPageScheduler()
     let totalPages: number = 1
 
-    logger.info('tree-fetch begin tid=%{public}s gen=%{public}d refresh=%{public}s concurrency=%{public}d',
+    logger.info(
+      'tree-fetch begin tid=%{public}s gen=%{public}d refresh=%{public}s concurrency=%{public}d',
       tid, generation, String(forceRefresh), TREE_PAGE_CONCURRENCY)
     try {
       const first: ThreadResult = await this.fetchPage(token, tid, 1)
@@ -442,11 +505,11 @@ export class ThreadTreeFetchService {
       result.forumName = first.forumName
       totalPages = first.pagination.totalPages > 0 ? first.pagination.totalPages : 1
       scheduler.totalPages = totalPages
+      scheduler.covered.add(1)
       scheduler.done = 1
       this.notifyProgress(scheduler.done, totalPages, onProgress)
       if (this.cancelled || generation !== this.generation) {
-        result.cancelled = true
-        return result
+        return this.buildInterruptedResult(tid, result, collected, pageByPid, scheduler, totalPages)
       }
 
       if (totalPages > 1) {
@@ -460,27 +523,22 @@ export class ThreadTreeFetchService {
       }
 
       if (this.cancelled || generation !== this.generation) {
-        result.cancelled = true
-        return result
+        return this.buildInterruptedResult(tid, result, collected, pageByPid, scheduler, totalPages)
       }
       if (scheduler.error.length > 0) {
-        result.error = scheduler.error
-        logger.warn('tree-fetch page failed tid=%{public}s: %{public}s', tid, scheduler.error)
-        return result
+        return this.buildFailedResult(tid, result, collected, pageByPid, scheduler, totalPages)
       }
-      collected.sort((a: PostInfo, b: PostInfo): number => a.lou - b.lou)
-      result.posts = collected
-      result.pageByPid = pageByPid
-      result.totalPages = totalPages
-      // worker 完成顺序不确定：跳过页统一按页码升序提交，UI 提示才不会乱序
-      result.skippedPages = scheduler.skippedPages.slice()
-      result.skippedPages.sort((a: number, b: number): number => a - b)
+      this.fillMergedResult(result, collected, pageByPid, scheduler.covered, totalPages)
+      this.fillSkippedPages(result, scheduler)
       if (isSkippedPagesOverwhelming(result.skippedPages.length, totalPages)) {
         // 过半页都空：不是「局部整页被删」，而是帖子状态或抓取链整体异常。
-        // 此时展示残缺的树会误导用户，按整体失败处理（UI 给错误态与重试）
+        // 此时展示残缺的树会误导用户，按整体失败处理（UI 给错误态与重试）。
+        // 这里**不**提供「查看已加载」：数据本身不可信，不是「还没抓完」
         result.ok = false
+        result.partial = false
         result.posts = []
         result.pageByPid = new Map<number, number>()
+        result.loadedPages = 0
         result.error = '有 ' + String(result.skippedPages.length) + ' 页没有可显示的楼层，帖子可能已被删除或屏蔽'
         logger.warn('tree-fetch overwhelmingly empty tid=%{public}s gen=%{public}d skipped=%{public}d pages=%{public}d',
           tid, generation, result.skippedPages.length, totalPages)
@@ -500,14 +558,112 @@ export class ThreadTreeFetchService {
         result.skippedPages.length === 0 ? 'on' : 'off')
       return result
     } catch (e) {
-      result.ok = false
-      result.posts = []
-      result.pageByPid = new Map<number, number>()
+      // 异常同样保留已抓楼层：与「单页失败」同一语义，由 UI 决定是否展示部分数据
       result.error = '全帖加载失败：' + formatError(e)
+      this.fillMergedResult(result, collected, pageByPid, scheduler.covered, totalPages)
+      this.fillSkippedPages(result, scheduler)
+      result.ok = result.posts.length > 0
+      if (!result.ok) {
+        // 没有可提交楼层时 `partial` 无意义：统一成 false，避免三条无数据出口口径不一致
+        result.partial = false
+        result.loadedPages = 0
+      }
       logger.error('tree-fetch failed tid=%{public}s gen=%{public}d: %{public}s',
         tid, generation, formatError(e))
       return result
     }
+  }
+
+  /**
+   * 把当前已抓到的楼层封装成「取消后的部分结果」。
+   *
+   * @param tid - 主题 ID（日志用）
+   * @param result - 结果对象（就地填充）
+   * @param collected - 已合并楼层
+   * @param pageByPid - pid → 页码
+   * @param scheduler - 调度状态（取已覆盖页与中断前的失败原因）
+   * @param totalPages - 服务端总页数
+   * @returns 部分结果；`ok` 取决于是否已抓到楼层
+   */
+  private buildInterruptedResult(tid: string, result: ThreadTreeFetchResult,
+    collected: PostInfo[], pageByPid: Map<number, number>,
+    scheduler: FetchPageScheduler, totalPages: number): ThreadTreeFetchResult {
+    this.fillMergedResult(result, collected, pageByPid, scheduler.covered, totalPages)
+    this.fillSkippedPages(result, scheduler)
+    result.cancelled = true
+    // 中断前已有页失败（先失败、用户随后点「查看已加载」）：保留真实原因，
+    // 页面横幅就能显示「第 X 页加载失败」而不是笼统的「已中断」
+    if (scheduler.error.length > 0) {
+      result.error = scheduler.error
+    }
+    result.ok = result.posts.length > 0
+    logger.info('tree-fetch cancelled tid=%{public}s posts=%{public}d covered=%{public}d/%{public}d',
+      tid, result.posts.length, result.loadedPages, result.totalPages)
+    return result
+  }
+
+  /**
+   * 把当前已抓到的楼层封装成「某页失败后的部分结果」。
+   *
+   * 与失败态的关系：没有楼层时 `ok = false`（页面进错误态）；有楼层时
+   * `ok = true && partial = true`，页面把它挂在错误态的「查看已加载」入口上，
+   * 不自动展示残缺树。
+   *
+   * @param tid - 主题 ID（日志用）
+   * @param result - 结果对象（就地填充）
+   * @param collected - 已合并楼层
+   * @param pageByPid - pid → 页码
+   * @param scheduler - 调度状态（取错误原因与已覆盖页）
+   * @param totalPages - 服务端总页数
+   * @returns 部分结果
+   */
+  private buildFailedResult(tid: string, result: ThreadTreeFetchResult,
+    collected: PostInfo[], pageByPid: Map<number, number>,
+    scheduler: FetchPageScheduler, totalPages: number): ThreadTreeFetchResult {
+    this.fillMergedResult(result, collected, pageByPid, scheduler.covered, totalPages)
+    this.fillSkippedPages(result, scheduler)
+    result.error = scheduler.error
+    result.ok = result.posts.length > 0
+    logger.warn('tree-fetch page failed tid=%{public}s posts=%{public}d covered=%{public}d/%{public}d: %{public}s',
+      tid, result.posts.length, result.loadedPages, result.totalPages, scheduler.error)
+    return result
+  }
+
+  /**
+   * 写入跳过页信息（页码升序）。
+   *
+   * 取消/失败的部分结果同样要带上已发生的跳过页：它们不是「还没抓的页」，
+   * 而是「抓到了但整页没有楼层」——重试不会改变，用户看到的是缺内容而不是缺进度。
+   *
+   * @param result - 结果对象（就地填充）
+   * @param scheduler - 调度状态（取跳过页）
+   */
+  private fillSkippedPages(result: ThreadTreeFetchResult, scheduler: FetchPageScheduler): void {
+    // worker 完成顺序不确定：统一按页码升序提交，UI 提示才不会乱序
+    result.skippedPages = scheduler.skippedPages.slice()
+    result.skippedPages.sort((a: number, b: number): number => a - b)
+  }
+
+  /**
+   * 填充合并结果：排序楼层、写入页码映射与覆盖统计。
+   *
+   * 取消、失败、完整三条出口共用，保证 `loadedPages` / `partial` 的口径在三种情况下
+   * 完全一致（是否完整只由「已覆盖页数」决定，与失败原因无关）。
+   *
+   * @param result - 结果对象（就地填充）
+   * @param collected - 已合并楼层（会按 lou 原地排序）
+   * @param pageByPid - pid → 页码
+   * @param covered - 已覆盖页码
+   * @param totalPages - 服务端总页数
+   */
+  private fillMergedResult(result: ThreadTreeFetchResult, collected: PostInfo[],
+    pageByPid: Map<number, number>, covered: Set<number>, totalPages: number): void {
+    collected.sort((a: PostInfo, b: PostInfo): number => a.lou - b.lou)
+    result.posts = collected
+    result.pageByPid = pageByPid
+    result.totalPages = totalPages > 0 ? totalPages : 1
+    result.loadedPages = covered.size
+    result.partial = derivePartial(result.loadedPages, result.totalPages)
   }
 
   /**
@@ -519,7 +675,7 @@ export class ThreadTreeFetchService {
    * @param token - 会话令牌
    * @param tid - 主题 ID
    * @param generation - 任务代际
-   * @param scheduler - 调度状态（页码游标/停止标记/进度）
+   * @param scheduler - 调度状态（页码游标/停止标记/进度/覆盖页）
    * @param seenPids - 已合并 pid 集合（跨 worker 共享）
    * @param collected - 已合并楼层（跨 worker 共享）
    * @param pageByPid - pid → 页码映射（跨 worker 共享）
@@ -546,6 +702,7 @@ export class ThreadTreeFetchService {
           // 另一个 worker 已判定致命失败或任务已取消时不再记进度（结果随即被丢弃）
           if (!scheduler.stopped && !this.cancelled && generation === this.generation) {
             scheduler.skippedPages.push(page)
+            scheduler.covered.add(page)
             scheduler.done++
             this.notifyProgress(scheduler.done, scheduler.totalPages, onProgress)
             logger.warn('tree-fetch page skipped tid=%{public}s page=%{public}d: %{public}s',
@@ -559,12 +716,16 @@ export class ThreadTreeFetchService {
         }
         return
       }
+      // 取消后仍合并本页：数据已经到手，属于「人工中断后查看已加载」应包含的内容
+      // （否则用户在途的 4 路页会白等）。页面销毁/被抢占时多合并一页也无害——
+      // 结果会按调用方自身代际丢弃，合并的只是本任务局部数组。
+      this.mergePosts(pageResult.posts, page, seenPids, collected, pageByPid)
+      scheduler.covered.add(page)
+      scheduler.done++
+      this.notifyProgress(scheduler.done, scheduler.totalPages, onProgress)
       if (this.cancelled || generation !== this.generation) {
         return
       }
-      this.mergePosts(pageResult.posts, page, seenPids, collected, pageByPid)
-      scheduler.done++
-      this.notifyProgress(scheduler.done, scheduler.totalPages, onProgress)
     }
   }
 
@@ -723,6 +884,10 @@ export class ThreadTreeFetchService {
     result.totalPages = entry.result.totalPages
     result.threadInfo = entry.result.threadInfo
     result.forumName = entry.result.forumName
+    // 缓存只存完整结果（含跳过页的结果不写缓存），这里补齐覆盖口径，
+    // 保证任何拿到结果的地方都不会把它误判成部分数据
+    result.loadedPages = result.totalPages
+    result.partial = false
     return result
   }
 
@@ -734,7 +899,8 @@ export class ThreadTreeFetchService {
    * @param result - 成功抓取结果
    */
   private writeCache(uid: string, tid: string, result: ThreadTreeFetchResult): void {
-    if (!result.ok || result.cancelled) {
+    // 部分结果（人工中断 / 某页失败）绝不进缓存：否则 90 秒内重新进入会直接读到残缺树
+    if (!result.ok || result.cancelled || result.partial) {
       return
     }
     if (result.posts.length > TREE_CACHE_MAX_POSTS) {

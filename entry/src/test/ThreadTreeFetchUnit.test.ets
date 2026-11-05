@@ -1,5 +1,6 @@
 import { describe, it, expect } from '@ohos/hypium'
 import {
+  derivePartial,
   formatPageFailureMessage,
   isSkippedPagesOverwhelming,
   isSkippablePageFailure,
@@ -172,6 +173,38 @@ export default function threadTreeFetchUnitTest(): void {
     it('keepsBoundaryBelowThreshold', 0, (): void => {
       /** 29 页帖缺 14 页（不足一半）：仍按部分完整结果提交。 */
       expect(isSkippedPagesOverwhelming(14, 29)).assertFalse()
+    })
+  })
+
+  describe('threadTreePartialResult', (): void => {
+    it('marksIncompleteWhenPagesRemain', 0, (): void => {
+      /** 只覆盖 1/20 页（人工中断或某页失败后停止）：属于部分结果。 */
+      expect(derivePartial(1, 20)).assertTrue()
+      expect(derivePartial(0, 20)).assertTrue()
+    })
+
+    it('marksCompleteWhenAllPagesCovered', 0, (): void => {
+      /** 全部页覆盖（跳过空页也计覆盖）：不是部分结果。 */
+      expect(derivePartial(20, 20)).assertFalse()
+      expect(derivePartial(21, 20)).assertFalse()
+    })
+
+    it('doesNotMarkPartialWithoutTotal', 0, (): void => {
+      /** 总页数未知时由调用方先判 `ok`，`partial` 保持 false（口径一致）。 */
+      expect(derivePartial(0, 0)).assertFalse()
+      expect(derivePartial(3, -1)).assertFalse()
+    })
+
+    it('fetchResultDefaultsToCompleteShape', 0, (): void => {
+      /**
+       * 默认结果必须是「完整」口径：`partial=false`、`loadedPages=0`。
+       * 这保证任何忘记填字段的路径都不会被页面误判成部分数据。
+       */
+      const result: ThreadTreeFetchResult = new ThreadTreeFetchResult()
+      expect(result.partial).assertFalse()
+      expect(result.loadedPages).assertEqual(0)
+      expect(result.cancelled).assertFalse()
+      expect(result.ok).assertFalse()
     })
   })
 }
