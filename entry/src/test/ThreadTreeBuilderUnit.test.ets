@@ -6,6 +6,8 @@ import {
   expandRoot,
   findRowIndexByPid,
   findRootPidByPid,
+  needsRootQuoteContext,
+  resolveFloorSubject,
   stripQuoteArea
 } from '../main/ets/common/utils/ThreadTreeBuilder'
 import {
@@ -542,6 +544,115 @@ export default function threadTreeBuilderUnitTest(): void {
       expect(child.displayContent).assertEqual(GLUED_REPLY_BODY)
     })
 
+    it('keepsDisplayContentForReplyOnlyFloor', 0, (): void => {
+      /**
+       * 整层只有 Reply to 头、且没有楼层标题：树关系照常建立，
+       * 但 displayContent 必须回退原文，不能剥成空串（否则该层卡片没有任何文字）。
+       */
+      const main: PostInfo = createPost(640, 0, '主楼正文')
+      const rootPost: PostInfo = createPost(641, 1, '根楼层正文')
+      const replyOnly: PostInfo = createPost(642, 2, '[b]Reply to [pid=641,' + String(TID)
+        + ',1]Reply[/pid] Post by [uid=1]甲[/uid] (2026-11-06 15:06)[/b]')
+      const model: ThreadTreeModel = buildThreadTree([main, rootPost, replyOnly], 1)
+
+      expect(model.roots[1].children.length).assertEqual(1)
+      const child: ThreadTreeChild = model.roots[1].children[0]
+      expect(child.post.pid).assertEqual(642)
+      expect(child.parentPid).assertEqual(641)
+      expect(child.displayContent).assertEqual(replyOnly.content)
+    })
+
+    it('clearsDisplayContentWhenSubjectCarriesFloor', 0, (): void => {
+      /**
+       * 真实 4 楼形态（tid 47864458）：正文只有 Reply to 头，文字在楼层标题里。
+       * 标题由卡片单独渲染，正文必须置空——否则树卡片会出现「标题 + Reply to …」两段重复；
+       * 列表模式则显示注入后的 [quote] 块（引用归属头仍是 POST_BY），与树模式口径不同。
+       */
+      const main: PostInfo = createPost(650, 0, '主楼正文')
+      const rootPost: PostInfo = createPost(651, 1, '根楼层正文')
+      const replyOnly: PostInfo = createPost(652, 2, '[b]Reply to [pid=651,' + String(TID)
+        + ',1]Reply[/pid] Post by [uid=1]甲[/uid] (2026-11-06 15:08)[/b]')
+      replyOnly.subject = '这还没反转？你也是6'
+      const model: ThreadTreeModel = buildThreadTree([main, rootPost, replyOnly], 1)
+
+      expect(model.roots[1].children.length).assertEqual(1)
+      const child: ThreadTreeChild = model.roots[1].children[0]
+      expect(child.post.pid).assertEqual(652)
+      expect(child.displayContent).assertEqual('')
+    })
+
+    it('clearsDisplayContentForSubjectOnlyRoot', 0, (): void => {
+      /**
+       * 只有标题的楼层作为根行（引用目标不在树内）：同样只显示标题，
+       * 不把引用头塞进正文（根行由 PostItem 渲染，标题在卡片内单独展示）。
+       */
+      const main: PostInfo = createPost(660, 0, '主楼正文')
+      const rootPost: PostInfo = createPost(661, 1, '[b]Reply to [pid=999,' + String(TID)
+        + ',1]Reply[/pid] Post by [uid=1]甲[/uid] (2026-11-06 15:08)[/b]')
+      rootPost.subject = '这还没反转？你也是6'
+      const model: ThreadTreeModel = buildThreadTree([main, rootPost], 1)
+
+      expect(model.roots.length).assertEqual(2)
+      expect(model.roots[1].post.pid).assertEqual(661)
+      expect(model.roots[1].displayContent).assertEqual('')
+    })
+
+    it('keepsMainFloorBodyWhenSubjectIsTopicTitle', 0, (): void => {
+      /**
+       * 主楼（lou 0）的 subject 是主题标题，由页面标题栏展示，不能当作楼层标题：
+       * 剥离后为空时必须回退原文，不能把主楼正文置空。
+       */
+      const main: PostInfo = createPost(670, 0, '[b]Reply to [pid=999,' + String(TID)
+        + ',1]Reply[/pid] Post by [uid=1]甲[/uid] (2026-11-06 15:08)[/b]')
+      main.subject = '主楼的主题标题'
+      const model: ThreadTreeModel = buildThreadTree([main], 1)
+      expect(model.roots.length).assertEqual(1)
+      expect(model.roots[0].displayContent).assertEqual(main.content)
+    })
+
+    it('keepsBodyWhenFloorHasSubjectAndBody', 0, (): void => {
+      /**
+       * 有标题 + 有正文：正文照常剥离引用头并保留，标题只影响「剥离后为空」的兜底，
+       * 不能因为楼层有标题就把正文清空（回归保护）。
+       */
+      const main: PostInfo = createPost(680, 0, '主楼正文')
+      const rootPost: PostInfo = createPost(681, 1, '根楼层正文')
+      const reply: PostInfo = createPost(682, 2, replyToHeader(681, TID, 1))
+      reply.subject = '楼层标题'
+      const model: ThreadTreeModel = buildThreadTree([main, rootPost, reply], 1)
+
+      expect(model.roots[1].children.length).assertEqual(1)
+      expect(model.roots[1].children[0].displayContent).assertEqual('本层回复正文')
+    })
+
+    it('clearsDisplayContentForQuoteOnlyFloorWithSubject', 0, (): void => {
+      /** 整层只有一个 [quote] 块 + 有楼层标题：同「只有引用头」，正文留空只显示标题 */
+      const main: PostInfo = createPost(690, 0, '主楼正文')
+      const rootPost: PostInfo = createPost(691, 1, '根楼层正文')
+      const quoteOnly: PostInfo = createPost(692, 2, '[quote][pid=691,' + String(TID)
+        + ',1]Reply[/pid] [b]Post by [uid=1]甲[/uid] (2025-01-01):[/b]被引正文[/quote]')
+      quoteOnly.subject = '只有标题'
+      const model: ThreadTreeModel = buildThreadTree([main, rootPost, quoteOnly], 1)
+
+      expect(model.roots[1].children.length).assertEqual(1)
+      expect(model.roots[1].children[0].displayContent).assertEqual('')
+    })
+
+    it('keepsEmptyDisplayContentForBlankNoiseContent', 0, (): void => {
+      /**
+       * 没有引用区、正文只有空白噪音：不属于「剥离后为空」，displayContent 保持空串，
+       * 不能回退成原空白串（否则树行多渲染一个空正文块）。
+       */
+      const main: PostInfo = createPost(700, 0, '主楼正文')
+      const blank: PostInfo = createPost(701, 1, '   ')
+      const breaks: PostInfo = createPost(702, 2, '<br/>')
+      const model: ThreadTreeModel = buildThreadTree([main, blank, breaks], 1)
+
+      expect(model.roots.length).assertEqual(3)
+      expect(model.roots[1].displayContent).assertEqual('')
+      expect(model.roots[2].displayContent).assertEqual('')
+    })
+
     it('treatsLaterTargetAsRoot', 0, (): void => {
       const laterFloor: PostInfo = createPost(205, 5, '后面楼层')
       const earlierFloor: PostInfo = createPost(202, 2, quotePidHeader(205, TID, 1))
@@ -873,14 +984,99 @@ export default function threadTreeBuilderUnitTest(): void {
       expect(stripQuoteArea(content)).assertEqual(content)
     })
 
-    it('returnsEmptyWhenOnlyQuoteRemains', 0, (): void => {
+    it('keepsOriginalWhenOnlyQuoteRemains', 0, (): void => {
+      /** 保守剥离：整层只有引用块时保留原文（剥掉会得到一张空卡片） */
       const content: string = '[quote][pid=101,123456,1]Reply[/pid] 只有引用[/quote]'
-      expect(stripQuoteArea(content)).assertEqual('')
+      expect(stripQuoteArea(content)).assertEqual(content)
+    })
+
+    it('keepsOriginalWhenOnlyReplyToHeaderRemains', 0, (): void => {
+      /**
+       * 真实形态（tid 47864458 的 4 楼）：整层只有一行 Reply to 头、没有任何正文。
+       * 剥离后必须回退原文，否则树模式这一层只剩头像/时间。
+       */
+      const content: string = '[b]Reply to [pid=101,' + String(TID)
+        + ',1]Reply[/pid] Post by [uid=1]甲[/uid] (2026-11-06 15:06)[/b]'
+      expect(stripQuoteArea(content)).assertEqual(content)
+      const ref: ThreadTreeQuoteRef | null = extractPrimaryQuoteRef(content, TID)
+      expect(ref).not().assertNull()
+      expect((ref as ThreadTreeQuoteRef).targetPid).assertEqual(101)
+    })
+
+    it('keepsOriginalWhenOnlyQuoteWithTrailingBreaks', 0, (): void => {
+      /** 引用块之后只有换行/空白（服务端常见尾部排版）同样回退原文 */
+      const content: string = '[quote][pid=102,' + String(TID)
+        + ',1]Reply[/pid] [b]Post by [uid=2]乙[/uid] (2026-01-01):[/b]被引正文[/quote]<br/><br/>'
+      expect(stripQuoteArea(content)).assertEqual(content)
     })
 
     it('keepsPlainContentUnchanged', 0, (): void => {
       const content: string = '普通正文<br/>第二行'
       expect(stripQuoteArea(content)).assertEqual(content)
+    })
+  })
+
+  describe('threadTreeFloorSubject', (): void => {
+    it('returnsEmptyForMainFloorSubject', 0, (): void => {
+      /** 主楼 subject 是主题标题，由页面标题栏展示，不能当楼层标题 */
+      const main: PostInfo = createPost(710, 0, '主楼正文')
+      main.subject = '主题标题'
+      expect(resolveFloorSubject(main)).assertEqual('')
+    })
+
+    it('returnsEmptyForBlankOrEntityOnlySubject', 0, (): void => {
+      /** 纯空白与 &nbsp;（解码后变 NBSP）都算没有标题，避免渲染空标题 */
+      const blank: PostInfo = createPost(711, 1, '正文')
+      blank.subject = '   '
+      expect(resolveFloorSubject(blank)).assertEqual('')
+
+      const entityOnly: PostInfo = createPost(712, 2, '正文')
+      entityOnly.subject = '&nbsp;'
+      expect(resolveFloorSubject(entityOnly)).assertEqual('')
+    })
+
+    it('decodesHtmlEntitiesInFloorSubject', 0, (): void => {
+      const post: PostInfo = createPost(713, 3, '正文')
+      post.subject = 'A &amp; B'
+      expect(resolveFloorSubject(post)).assertEqual('A & B')
+    })
+  })
+
+  describe('threadTreeRootQuoteContext', (): void => {
+    it('needsQuoteContextForFilteredQuoteRoot', 0, (): void => {
+      /** 只看楼主过滤掉引用目标后，普通根行需要补回引用上下文（displayContent 恢复原文） */
+      const main: PostInfo = createPost(720, 0, '主楼正文')
+      const rootPost: PostInfo = createPost(721, 1, '根楼层正文')
+      const reply: PostInfo = createPost(722, 2, quotePidHeader(999, TID, 1))
+      const model: ThreadTreeModel = buildThreadTree([main, rootPost, reply], 1)
+
+      expect(model.roots[2].post.pid).assertEqual(722)
+      expect(needsRootQuoteContext(model.roots[2], model, true)).assertTrue()
+      expect(needsRootQuoteContext(model.roots[2], model, false)).assertFalse()
+    })
+
+    it('skipsQuoteContextForSubjectOnlyRoot', 0, (): void => {
+      /** 只有标题的根行：标题已表达内容，不补 Reply-to 引用头（避免与标题重复） */
+      const main: PostInfo = createPost(730, 0, '主楼正文')
+      const subjectOnly: PostInfo = createPost(731, 1, '[b]Reply to [pid=999,' + String(TID)
+        + ',1]Reply[/pid] Post by [uid=1]甲[/uid] (2026-11-06 15:08)[/b]')
+      subjectOnly.subject = '只有标题'
+      const model: ThreadTreeModel = buildThreadTree([main, subjectOnly], 1)
+
+      expect(model.roots[1].post.pid).assertEqual(731)
+      expect(needsRootQuoteContext(model.roots[1], model, true)).assertFalse()
+    })
+
+    it('skipsQuoteContextForRootWithoutRef', 0, (): void => {
+      /** 没有引用关系的根行（普通根）：不存在「补引用上下文」的需求 */
+      const main: PostInfo = createPost(740, 0, '主楼正文')
+      const rootPost: PostInfo = createPost(741, 1, '根楼层正文')
+      const reply: PostInfo = createPost(742, 2, quotePidHeader(741, TID, 1))
+      const model: ThreadTreeModel = buildThreadTree([main, rootPost, reply], 1)
+
+      const childRoot: ThreadTreeRoot = model.roots[1]
+      expect(childRoot.post.pid).assertEqual(741)
+      expect(needsRootQuoteContext(childRoot, model, true)).assertFalse()
     })
   })
 }

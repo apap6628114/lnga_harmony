@@ -2,7 +2,13 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { buildReplyQuoteContent, fixTruncatedQuoteContent, stripReplyToHeader } from '../src/common/utils/QuoteInjectionCore'
+import {
+  buildReplyQuoteContent,
+  fixTruncatedQuoteContent,
+  isBlankBodyText,
+  stripCommentReplyHeader,
+  stripReplyToHeader,
+} from '../src/common/utils/QuoteInjectionCore'
 
 /** 样本目录（相对 tools/bbcode-ts 运行目录）。 */
 const SAMPLES_DIR: string = join(process.cwd(), 'samples')
@@ -210,5 +216,37 @@ describe('引用注入核心（QuoteInjectionCore）', () => {
     assert.equal(fixTruncatedQuoteContent(truncated, lookup), truncated)
     assert.equal(fixTruncatedQuoteContent(truncated, () => undefined), truncated)
     assert.equal(fixTruncatedQuoteContent('普通正文', lookup), '普通正文')
+  })
+
+  it('stripCommentReplyHeader 只在剥离后仍有正文时去头', () => {
+    /* 有正文：正常剥头（标准形态保留前导 <br/>，与既有行为一致） */
+    const withBody: string =
+      '[b]Reply to [pid=1,2,3]Reply[/pid] Post by [uid=9]甲[/uid] (2025-05-26 17:37)[/b]<br/>评论正文'
+    assert.equal(stripCommentReplyHeader(withBody), '<br/>评论正文')
+    /* 只有回复头：保守回退原文，避免空气泡 */
+    const headerOnly: string =
+      '[b]Reply to [pid=1,2,3]Reply[/pid] Post by [uid=9]甲[/uid] (2025-05-26 17:37)[/b]'
+    assert.equal(stripCommentReplyHeader(headerOnly), headerOnly)
+    /* 头 + 只有空行/占位符：同样回退原文 */
+    const headerWithBreaks: string =
+      '[b]Reply to [pid=1,2,3]Reply[/pid] Post by [uid=9]甲[/uid] (2025-05-26 17:37)[/b]<br/><br/>'
+    assert.equal(stripCommentReplyHeader(headerWithBreaks), headerWithBreaks)
+    const headerWithNbsp: string =
+      '[b]Reply to [pid=1,2,3]Reply[/pid] Post by [uid=9]甲[/uid] (2025-05-26 17:37)[/b]&nbsp;'
+    assert.equal(stripCommentReplyHeader(headerWithNbsp), headerWithNbsp)
+    /* 非 Reply to 开头原样返回 */
+    assert.equal(stripCommentReplyHeader('普通评论正文'), '普通评论正文')
+  })
+
+  it('isBlankBodyText 识别空白/换行/占位符', () => {
+    assert.equal(isBlankBodyText(''), true)
+    assert.equal(isBlankBodyText('   \n\t'), true)
+    assert.equal(isBlankBodyText('<br/>'), true)
+    assert.equal(isBlankBodyText('<br>'), true)
+    assert.equal(isBlankBodyText('<br />'), true)
+    assert.equal(isBlankBodyText('&nbsp;'), true)
+    assert.equal(isBlankBodyText('<br/>&nbsp;<br/>'), true)
+    assert.equal(isBlankBodyText('正文'), false)
+    assert.equal(isBlankBodyText('[s:ac:哭笑]'), false)
   })
 })

@@ -1,5 +1,6 @@
 import { AppColors } from '../constants/Constants'
 import { parseAlterinfoTs, formatTimestampCST } from '../utils/Utils'
+import { resolveFloorSubject } from '../utils/ThreadTreeBuilder'
 import { getCachedBBNodes } from '../../parser/bbcode/BBCodeCache'
 import { BBCodeContentView } from './BBCodeContentView'
 import { PostInfo } from '../../model/PostInfo'
@@ -71,7 +72,8 @@ export struct PostItem {
    * 正文显示内容覆盖（树阅读模式传入「剥离引用区后的正文」）。
    *
    * 空串表示不覆盖、照常渲染 `post.content`（自然列表模式走这条路径，行为不变）。
-   * 引用区已由树的两层关系 + 「回复 @作者 →」表达，树节点正文不再重复显示。
+   * 引用区已由树的两层关系 + 「回复 @作者 →」表达，树节点正文不再重复显示；但整层只有
+   * 引用区时会回退为原文（保守剥离），所以这里收到的仍可能是带引用头的正文。
    *
    * 必须是 `@Prop`：树页刷新后行键值可能不变（pid + rev 相同），LazyForEach 复用
    * 组件实例时只有 `@Prop` 会随新参数更新，普通字段会保留旧值导致正文不刷新。
@@ -112,6 +114,16 @@ export struct PostItem {
               Text(this.getEditTimeDisplay()).fontSize(11).fontColor(AppColors.textTertiary)
             }
           }.margin({ top: 12 })
+
+          if (this.hasPostSubject()) {
+            Text(this.resolveSubjectText())
+              .fontSize(15)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(AppColors.textPrimary)
+              .lineHeight(21)
+              .width('100%')
+              .margin({ top: 10 })
+          }
 
           if (this.showContent) {
             BBCodeContentView({
@@ -206,6 +218,28 @@ export struct PostItem {
         }
       }
       .width('100%').padding({ left: 16, right: 16, top: 16, bottom: 16 }).alignItems(HorizontalAlign.Start)
+  }
+
+  /**
+   * 楼层是否有标题（服务端每层可带 `subject`，多数楼层为空）。
+   *
+   * 主楼（`lou === 0`）的 `subject` 是**主题标题**，页面标题栏已经展示，卡片内不重复；
+   * 判空用 `resolveFloorSubject`（解码 `&nbsp;` 等实体后判空），与树构建器同一口径。
+   */
+  private hasPostSubject(): boolean {
+    return resolveFloorSubject(this.post).length > 0
+  }
+
+  /**
+   * 楼层标题文本（纯文本：官方网页这里是 `<h3 id='postsubject{lou}'>`，不解析 BBCode）。
+   *
+   * 4 楼这类「只写了标题、正文只有引用头」的楼层，标题就是该层唯一的文字，
+   * 客户端此前完全不渲染 `subject`，用户会以为内容被剔除（tid 47864458 的 4 楼）。
+   *
+   * @returns 解码后的楼层标题；主楼或无标题时为空串
+   */
+  private resolveSubjectText(): string {
+    return resolveFloorSubject(this.post)
   }
 
   private getEditTimeDisplay(): string {

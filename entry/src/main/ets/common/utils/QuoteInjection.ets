@@ -1,20 +1,24 @@
 import type { PostInfo } from '../../model/PostInfo'
-import { buildReplyQuoteContent, fixTruncatedQuoteContent, stripReplyToHeader } from './QuoteInjectionCore'
+import {
+  buildReplyQuoteContent,
+  fixTruncatedQuoteContent,
+  stripCommentReplyHeader as stripCommentReplyHeaderCore
+} from './QuoteInjectionCore'
 
 /**
- * 剥离楼中楼评论开头的 Reply to 头（评论行由上层展示「回复 @某人」，正文不再重复头）。
+ * 剥离楼中楼评论开头的 Reply to 头（评论气泡不重复显示回复头）。
  *
- * 边界逻辑下沉在镜像真源 `QuoteInjectionCore.stripReplyToHeader`：按「作者段 + 日期/楼号括号」
- * 定位头结束点（不是 `[/b]`），标准/粘连形态都只去头、保留正文；匹配不到带
- * `[pid=…]`/`Post by` 结构的回复头时原样返回。
+ * 纯字符串逻辑在镜像真源 `QuoteInjectionCore.stripCommentReplyHeader`（Node 侧有回归）：
+ * - 边界按「作者段 + 日期/楼号括号」定位（不是 `[/b]`），标准/粘连形态都只去头、保留正文；
+ * - **保守剥离**：剥离后没有可见正文（只剩空白/`<br/>`/`&nbsp;`）时返回原文，
+ *   整条评论只有回复头时不至于留下空气泡；调用方据此保留 `POST_BY` 节点
+ *   （见 `PostComments.commentNodes`）。
  *
  * @param content - 评论原始正文
- * @returns 用于展示的评论正文
+ * @returns 用于展示的评论正文；只有回复头时返回原文
  */
 export function stripCommentReplyHeader(content: string): string {
-  return stripReplyToHeader(content)
-    .replace(/^[\r\n\s]+/, '')
-    .trim()
+  return stripCommentReplyHeaderCore(content)
 }
 
 /**
@@ -24,13 +28,17 @@ export function stripCommentReplyHeader(content: string): string {
  * 已下沉至 TS 镜像真源 QuoteInjectionCore（Node 侧以真实样本回归），
  * 本文件仅负责 PostInfo 楼层集合的装配与原文查找回调。
  *
+ * **只处理楼层，不处理 `comments`**：评论气泡始终过滤 `[quote]` 块（`PostComments`），
+ * 把评论的 Reply-to 头注入成 `[quote]` 只会掩盖回复头文字、让「只有回复头」的评论
+ * 变成空气泡；评论的回复头由 `stripCommentReplyHeader` 负责展示或不展示。
+ *
  * @param posts - 需要处理的页面帖子
  * @param currentPosts - 当前已加载窗口内的帖子（用于查找引用原文）
  * @param prevPosts - 替换前的帖子（用于查找跨页引用原文）
  */
 export function injectQuoteContent(posts: PostInfo[], currentPosts: PostInfo[], prevPosts?: PostInfo[]): void {
   const origByPid: Map<number, string> = new Map()
-  /** 收集楼层与贴条的原始正文。 */
+  /** 收集楼层与贴条的原始正文（贴条 pid 也可能被楼层引用）。 */
   const collectToMap = (arr: PostInfo[]): void => {
     for (const p of arr) {
       origByPid.set(p.pid, p.content)
@@ -59,11 +67,5 @@ export function injectQuoteContent(posts: PostInfo[], currentPosts: PostInfo[], 
   for (const p of posts) {
     injectReplyQuote(p)
     fixTruncatedQuote(p)
-    if (p.comments) {
-      for (const c of p.comments) {
-        injectReplyQuote(c)
-        fixTruncatedQuote(c)
-      }
-    }
   }
 }

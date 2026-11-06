@@ -1,5 +1,6 @@
 import { AppColors } from '../../constants/Constants'
 import { parseAlterinfoTs, formatTimestampCST } from '../../utils/Utils'
+import { resolveFloorSubject } from '../../utils/ThreadTreeBuilder'
 import { getCachedBBNodes } from '../../../parser/bbcode/BBCodeCache'
 import { BBCodeContentView } from '../BBCodeContentView'
 import { Avatar } from '../Avatar'
@@ -35,8 +36,12 @@ import { appStore } from '../../../store/AppStore'
  *
  * 不渲染签名、投票、贴条、热回复，保持子节点轻量。
  *
- * 引用区不再显示：树的两层关系已表达「回复了谁」，正文使用父组件传入的
- * `displayContent`（已剥离 `[quote]` 块与 `Reply to` 头）；剥离后无正文时不渲染正文块。
+ * 引用区不再重复显示：树的两层关系已表达「回复了谁」，正文使用父组件传入的
+ * `displayContent`（由 `ThreadTreeBuilder.resolveTreeDisplayContent` 产出）：
+ * - 剥离后仍有正文 → 显示剥离后的正文；
+ * - 剥离后为空、有楼层标题 → 空串（只渲染标题，标题就是该层唯一的文字）；
+ * - 剥离后为空、没有标题 → 回退原文（显示引用头/引用块，不吞字）。
+ * 空串只在上面的「标题兜底」或原始正文本身为空时出现，此时不渲染正文块。
  *
  * 视觉定值（设计契约，不得自行改）：
  * - 左侧缩进 40vp（相对屏幕左边距）、右侧 16vp、上下 10vp；
@@ -85,6 +90,9 @@ const CHILD_JUMP_FONT_SIZE: number = 13
 /** 子节点黑名单占位文案字号（vp）。 */
 const CHILD_PLACEHOLDER_FONT_SIZE: number = 13
 
+/** 楼层标题字号（vp，官方网页 `h3#postsubject{lou}`，比正文略大且加粗）。 */
+const CHILD_SUBJECT_FONT_SIZE: number = 15
+
 /** 高亮底色过渡动画时长（毫秒）。 */
 const CHILD_HIGHLIGHT_ANIM_MS: number = 120
 
@@ -94,7 +102,12 @@ export struct ThreadTreeChildItem {
   @Prop child: ThreadTreeChild = new ThreadTreeChild()
   /** 被回复楼层号：0=楼主，-1=未知（不显示 `#N`） */
   @Prop targetLou: number = -1
-  /** 树模式正文（已剥离引用区）；空串表示引用区后没有正文，不渲染正文块 */
+  /**
+   * 树模式正文（已剥离引用区）。
+   *
+   * 空串有两种来源：原始正文本身为空，或剥离后为空且楼层标题已表达内容（只显示标题）；
+   * 两者都不渲染正文块。没有标题时构建器会回退原文，因此这里不会出现「引用区被吞」。
+   */
   @Prop displayContent: string = ''
   /** 是否渲染正文块 */
   @Prop showContent: boolean = true
@@ -163,6 +176,28 @@ export struct ThreadTreeChildItem {
       return formatTimestampCST(post.postdatetimestamp)
     }
     return post.postdate
+  }
+
+  /**
+   * 楼层是否有标题（服务端每层可带 `subject`，多数楼层为空）。
+   *
+   * 主楼（`lou === 0`）不会出现在子节点行；这里复用 `resolveFloorSubject`
+   * （主楼排除 + 实体解码后判空），与树构建器、`PostItem` 同一口径。
+   */
+  private hasPostSubject(): boolean {
+    return resolveFloorSubject(this.child.post).length > 0
+  }
+
+  /**
+   * 楼层标题文本（纯文本，对应官方网页 `h3#postsubject{lou}`）。
+   *
+   * 只有标题、正文只剩引用头的楼层（tid 47864458 的 4 楼）靠它显示正文内容；
+   * 此时树构建器会把 `displayContent` 置空（`ThreadTreeBuilder.resolveTreeDisplayContent`）。
+   *
+   * @returns 解码后的楼层标题；主楼或无标题时为空串
+   */
+  private resolveSubjectText(): string {
+    return resolveFloorSubject(this.child.post)
   }
 
   /**
@@ -349,6 +384,16 @@ export struct ThreadTreeChildItem {
             }
             .margin({ top: 6 })
             .alignItems(VerticalAlign.Center)
+          }
+
+          if (this.hasPostSubject()) {
+            Text(this.resolveSubjectText())
+              .fontSize(CHILD_SUBJECT_FONT_SIZE)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(AppColors.textPrimary)
+              .lineHeight(21)
+              .width('100%')
+              .margin({ top: 8 })
           }
 
           if (this.showContent) {

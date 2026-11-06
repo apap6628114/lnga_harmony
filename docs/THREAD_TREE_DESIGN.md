@@ -143,12 +143,13 @@ NGA 楼层 `content` 中表达「回复了哪一层」的头有四种真实形�
 
 | 形态 | 位置 | 是否回复关系 | 是否从显示正文剥离 |
 | --- | --- | --- | --- |
-| 服务端引用/回复头 | 正文开头 + 块首链接头 | 是 | 是 |
+| 服务端引用/回复头 | 正文开头 + 块首链接头 | 是 | 剥离后仍有正文时是；无正文时按楼层标题兜底 / 回退原文 |
 | 用户把 `[quote]` 当排版容器（无 pid/tid 头） | 任意位置 | 否 | 否（文字不被吞） |
 | 用户复制/手打的引用样式（头在正文中部、或 `[quote]` 块中部才出现链接头） | 正文中部 | 否 | 否 |
 
 `stripQuoteArea` 与 `extractPrimaryQuoteRef` 共用同一次「头部引用区扫描」（`scanLeadingQuoteArea`），
-保证「建了边的引用块一定会被剥离」「没建边的用户引用样式一定不会被吞」。
+保证「建了边的引用块一定进入剥离判定」「没建边的用户引用样式一定不会被吞」；
+剥离后没有正文时不会吞掉该层唯一的文字（按楼层标题兜底或回退原文，见 §3.3.1 第 6 条）。
 
 **硬约束**：不得修改 `entry/src/main/ets/common/utils/QuoteInjectionCore.ets`（TS 镜像真源），
 新解析器写在独立新文件里（不在 `tools/bbcode-ts/src` 镜像清单内）。
@@ -276,8 +277,12 @@ Stack
 
 ### 3.2 根节点行
 
-直接复用 `PostItem`（完整楼层卡片：头像、楼主标记、正文、附件、签名、投票栏、贴条、热回复）。
+直接复用 `PostItem`（完整楼层卡片：头像、楼主标记、**楼层标题**、正文、附件、签名、投票栏、贴条、热回复）。
 与列表模式的区别只在「行序」与「所在页面」；不做额外视觉标记，靠子节点缩进与折叠行表达树形态。
+楼层标题（`subject`）非空时显示在时间行与正文之间（对齐官方网页 `h3#postsubject{lou}`），
+列表模式与树页根行走同一个 `PostItem`，行为一致。**主楼（`lou === 0`）除外**：它的 `subject`
+是主题标题、页面标题栏已经展示，卡片内不重复；判定统一走 `ThreadTreeBuilder.resolveFloorSubject`
+（主楼排除 + HTML 实体解码后判空）。
 
 ### 3.3 子节点行（`common/components/thread-tree/ThreadTreeChildItem.ets`）
 
@@ -287,6 +292,7 @@ Stack
 头像 24  用户名 [楼主] [备注]                         #当前楼层号
 时间 [编辑时间]
 回复 @被回复者 #被回复楼层号  →（仅回复更深祖先时显示）
+楼层标题（subject 非空时，纯文本）
 正文（已剥离引用区）
 附件 / 动作栏
 ```
@@ -299,16 +305,23 @@ Stack
   一级回复」，再写「回复楼主 / 回复根作者」是冗余噪音；只有跳过中间楼层、回复更深祖先的楼层
   才显示。例：`#3 回复 #2`（#2 是根）→ #3 不显示；`#4 回复 #3` → #4 显示「回复 @#3 作者」。
   该标志由 `flattenThreadTree` 按 `child.parentPid !== rootPid` 计算，随行数据下发。
-- 时间行 → 回复关系行（可选）→ 正文（`BBCodeContentView`）→ 附件（`PostAttachments`）→ 操作栏（`PostVoteBar`）。
+- 时间行 → 回复关系行（可选）→ **楼层标题**（`subject` 非空时）→ 正文（`BBCodeContentView`）→
+  附件（`PostAttachments`）→ 操作栏（`PostVoteBar`）。楼层标题对应官方网页
+  `<h3 id='postsubject{lou}'>`（15vp、Medium、`textPrimary`），纯文本渲染（HTML 实体解码，不解析 BBCode）。
 - 正文使用父组件传入的 `displayContent`（已剥离引用区）：树的两层关系已表达「回复了谁」，
-  正文不再重复显示 `[quote]` 块 / `Reply to` 头；剥离后无正文时不渲染正文块。
-- 不渲染签名/投票/贴条/热回复。黑名单作者 → 保留头部、正文区替换为「该用户已被屏蔽」。
+  正文不再重复显示 `[quote]` 块 / `Reply to` 头。**整层只有引用区时按标题兜底**（§3.3.1 第 6 条）：
+  - 有楼层标题 → `displayContent` 置空，正文块不渲染，标题作为该层唯一文字（头像/时间/附件/动作栏照常）；
+  - 没有标题 → `displayContent` 回退原文，至少保留引用头，不让整层空白。
+- 不渲染签名/投票/贴条/热回复。黑名单作者 → 保留头部、正文区替换为「该用户已被屏蔽」
+  （标题与正文一起被占位替换，不单独显示标题）。
 - 视觉：左侧 `padding 40`、左侧 2vp 竖线、**无卡片底色**（透明；层级只靠缩进与竖线表达）、
   高亮 `selectionTint`（2 秒自动清除）。
 
-### 3.3.1 引用区剥离（`stripQuoteArea`）
+### 3.3.1 引用区剥离（`resolveTreeDisplayContent` / `stripQuoteArea`）
 
-树模式所有节点（含根行）正文统一经**头部引用区扫描**（`scanLeadingQuoteArea`，`stripQuoteArea` 的同一套判定）处理：
+树模式所有节点（含根行）正文统一经**头部引用区扫描**（`scanLeadingQuoteArea`）处理，
+再由 `resolveTreeDisplayContent` 决定显示内容；`stripQuoteArea` 是同一套判定的通用剥离入口
+（测试/诊断用，树模式不直接调用）。
 
 1. 只剥离**服务端引用区**：正文开头（允许前导空白 / `<br/>` / `&nbsp;`）的
    `[b]Reply to …[/b]` 回复头（pid 与 `[tid]Topic[/tid]` 两种），或块首就是 `[pid=…]`/`[tid=…]`
@@ -321,10 +334,20 @@ Stack
    真实数据形态（tid 47855036 的 16 楼），以 `[/b]` 为界会把正文整段吞掉、整层看不见内容；
 5. 剥离后清理开头的空白与 `<br/>`，其余正文格式原样保留；粘连形态下正文末尾残留的头部 `[/b]`
    一并去掉（正文自带的 `[b]…[/b]` 保留）；
-6. **不剥离**：正文中部出现的 `[quote]` 块、开头没有链接头的 `[quote]`（用户把 `[quote]` 当排版容器）、
+6. **保守剥离（剥离后必须有正文）**：引用区之后没有任何可见正文的楼层——`content` 只有
+   `[b]Reply to …[/b]` 头、只有一个 `[quote]` 块，或只剩空白/`<br/>`/`&nbsp;`（真实数据如
+   tid 47864458 的 4 楼：整层只有一行 Reply to 头）——按**楼层标题**兜底（`resolveTreeDisplayContent`）：
+   - 楼层标题非空（`resolveFloorSubject`：主楼排除、HTML 实体解码后判空）→ 正文置空，
+     标题作为该层唯一文字（标题与引用头同时显示会重复）；
+   - 标题也为空 → 回退原文，保留引用头/引用块，不让整层空白。
+   `stripQuoteArea`（通用剥离，无楼层上下文）同样在剥离后为空时返回原文。
+   「剥离后为空」只在**确实识别并剥离了引用区**（`scan.ref !== null`）时成立：正文本身只有
+   空白噪音时不属于引用区，displayContent 保持空串（不渲染空正文块）。
+   这是「宁可漏剥，不可吞正文」原则的延伸；
+7. **不剥离**：正文中部出现的 `[quote]` 块、开头没有链接头的 `[quote]`（用户把 `[quote]` 当排版容器）、
    未闭合的 `[quote]` 块、缺 `[/b]` 闭合或 `[/b]` 不在末尾的 Reply to 头——这些要么是用户正文，
    要么无法确定边界，删掉会造成「文字被吞」的意外表现；
-7. 平衡扫描与标签比较按**原串下标**逐字符进行（不做整串 `toLowerCase`），避免 `İ` 等字符小写化
+8. 平衡扫描与标签比较按**原串下标**逐字符进行（不做整串 `toLowerCase`），避免 `İ` 等字符小写化
    变长导致剥离位置切在字符中间；单遍 O(n)，长引用块不会退化成 O(n²)。
 
 剥离结果缓存在 `ThreadTreeRoot/ThreadTreeChild.displayContent`，由 `flattenThreadTree` 复制到行上；
@@ -500,7 +523,7 @@ Stack
 
 ## 6. 测试与门禁
 
-`entry/src/test/ThreadTreeBuilderUnit.test.ets`（65 例，在 `List.test.ets` 注册）覆盖：
+`entry/src/test/ThreadTreeBuilderUnit.test.ets`（80 例，在 `List.test.ets` 注册）覆盖：
 
 1. 引用头提取：quote 头 / Reply to 头（pid 与 `[tid]Topic[/tid]` 两种，标准形态与**粘连形态**）/
    主楼 Topic 头 / `[pid=0]` 主楼哨兵 / 匿名 uid / 跨帖 / 多引用取第一 / 无引用 / 头部前空白 /
@@ -516,7 +539,12 @@ Stack
    正文以 `[color=…]` 开头 / 正文以普通括号开头 / `[/B]` 大写闭合）、
    `[/b]` 后直接正文、嵌套服务端块按深度平衡剥离、主楼引用块剥离、用户排版引用（含嵌套）保留、
    服务端块后的用户引用样式保留、连续两个服务端块只剥第一个、正文中部引用不动、未闭合块提取但不剥离、
-   约 8K 字符长引用块线性完成、仅引用时返回空串。
+   约 8K 字符长引用块线性完成；**仅引用 / 仅回复头 / 引用块后只剩 `<br/>` 时回退原文**；
+7. **楼层标题兜底**（本次新增）：只有标题 → 正文置空（只有引用头 / 只有 `[quote]` 块两种形态）；
+   有标题且有正文 → 正文照常保留；无标题 → 回退原文；主楼 `subject`（主题标题）不当楼层标题；
+   空白噪音正文（`'   '` / `<br/>`）保持空串不回退；
+8. **楼层标题判定**：`resolveFloorSubject` 主楼排除、空/纯空白/`&nbsp;` 判空、HTML 实体解码；
+9. **只看楼主根行上下文**：`needsRootQuoteContext` 过滤后普通根行需补、只有标题的根行不补、无引用根行不补。
 
 门禁：`hvigorw assembleHap` 编译通过 + `hvigorw test` 通过 + `node scripts/check-eol.mjs` 通过；
 镜像 `sync-to-ets.mjs --dry` 0 修改。
@@ -726,3 +754,47 @@ Stack
     - 保留：列表尾部中性文案「已加载 n/N 页（缺页时附说明）」、错误态「查看已加载」入口、
       `missingFloorHint`（部分数据下不谎报楼层已删除）；
     - 文档 D14/§3.1/§3.5.1 同步改为「不做常驻提醒」。
+19. **楼层标题展示 + 保守剥离（2026-11，线上反馈 tid 47864458 的 4 楼）**：
+    - 现象：4 楼回复 2 楼但只点了回复、没有写正文，`content` 只有一行
+      `[b]Reply to [pid=…]Reply[/pid] Post by [uid=…]…[/uid] (日期)[/b]`。树页构建模型时
+      剥离引用区得到空串，子行 `showContent=false`，整层只剩头像/时间，用户描述为
+      「非标准的回复结构导致剔除了全部文本」；
+    - 数据核对（JSON `__output=8` / HTML 降级双通道一致）：4 楼 **`subject` = 「这还没反转？你也是6」**，
+      `content` 只有引用头（NGA 的 `content_length` 字段是纯文本长度 36，与 BBCode 原文长度不同，
+      不作为判据）。官方网页该层渲染为
+      `<h3 id='postsubject4'>这还没反转？你也是6</h3>` + `<span id='postcontent4'>[b]Reply to …[/b]</span>`
+      —— 用户看到的「正文」实际是楼层标题；客户端历史上**从不渲染楼层 `subject`**，
+      列表/树两种模式都看不到它，树模式再叠加「剥离后空正文」，于是整层空白；
+    - 修复 1（楼层标题）：`PostItem` 与 `ThreadTreeChildItem` 在时间行之后、正文之前显示
+      `subject`（纯文本 + HTML 实体解码，15vp Medium，对齐官方 `h3#postsubject{lou}`）；
+      列表模式、树页根行、树子行统一生效。判定收敛到 `ThreadTreeBuilder.resolveFloorSubject`：
+      **主楼（`lou === 0`）排除**（其 `subject` 是主题标题，页面标题栏已展示），实体解码后判空
+      （`&nbsp;` 不算标题）；
+    - 修复 2（保守剥离）：树构建改用 `resolveTreeDisplayContent`——引用区之后没有可见正文时，
+      有楼层标题 → 正文置空（只显示标题，避免与引用头重复）；标题也为空 → 回退原文
+      （保留引用头，不让整层空白）。`stripQuoteArea` 通用剥离在为空时同样回退原文；
+      「为空」只在确实识别并剥离了引用区（`scan.ref !== null`）时成立，正文本身只有空白噪音时不回退；
+      空白判定复用 `QuoteInjectionCore.isBlankBodyText`（空白/`<br>`/`&nbsp;`）；
+      只看楼主的根行上下文判定抽成 `ThreadTreeBuilder.needsRootQuoteContext`（纯函数），
+      「只有标题」的根行不再补回引用上下文；
+    - 普通列表模式（`ThreadPanel`）自始至终不调用引用区剥离，`PostItem.displayContent` 只在树页传入、
+      缺省为空串即回退 `post.content`；列表页看不到 4 楼那句是「标题未渲染」，不是被剔除影响；
+      列表页对 Reply to 头走的是引用注入（展开成 `[quote]` 块并填入被引用楼正文）；
+    - 修复 3（评论区同策略）：`QuoteInjectionCore.stripCommentReplyHeader`（已从 adapter 下沉到
+      TS 镜像真源，Node 侧有回归）在剥离后没有可见正文（`isBlankBodyText`）时返回原文；
+      `PostComments.commentNodes` 改为按「过滤后是否还有可渲染节点」回退——只有回复头（保留
+      `POST_BY`）或只剩 `[quote]` 块时不再留下空气泡；`injectQuoteContent` **不再处理 `comments`**
+      （评论气泡始终过滤 `[quote]`，注入只会把 Reply-to 头改写成隐藏块、让保守兜底失效）；
+    - 朗读 / AI 总结：楼层标题非空时前置（标题-only 楼层只读标题，不再把 Reply-to 头当正文念）；
+    - 文档：§2.1 剥离约束、§3.2 / §3.3 / §3.3.1 第 6 条、§6 测试清单同步更新；
+    - 单测：树构建器 80 例（新增 `keepsBodyWhenFloorHasSubjectAndBody`、
+      `clearsDisplayContentForQuoteOnlyFloorWithSubject`、`keepsEmptyDisplayContentForBlankNoiseContent`、
+      `threadTreeFloorSubject` 3 例、`threadTreeRootQuoteContext` 3 例；剥离侧
+      `keepsOriginalWhenOnlyQuoteRemains` / `keepsOriginalWhenOnlyReplyToHeaderRemains` /
+      `keepsOriginalWhenOnlyQuoteWithTrailingBreaks`）；评论侧新增
+      `keepsCommentReplyHeaderWhenNoBodyRemains`（只有头 / 头+空行 / 头+`&nbsp;` 回退原文，
+      有正文仍正常剥头）与 `leavesCommentsOutOfQuoteInjection`（评论不被注入改写、楼层仍注入）；
+      Node 侧 `quote-injection.test.ts` 新增 `stripCommentReplyHeader` 与 `isBlankBodyText` 用例；
+    - TS 镜像样本：`samples/tid47864458-lou4-replyto-only.txt`（真实 `content`）已登记
+      `samples.lst` 并生成快照，`npm test` 249 通过——快照证明该 `content` 解析结果只有一个
+      `POST_BY` 节点、没有任何正文文本（`subject` 不属于 BBCode 正文，UI 层由上述修复覆盖）。

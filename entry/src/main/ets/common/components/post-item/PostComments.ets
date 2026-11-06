@@ -58,20 +58,6 @@ function filterBBTags(nodes: BBNode[], skipTypes: BBNodeType[]): BBNode[] {
 }
 
 /**
- * 剥离回复头（如 [b]Reply to ... [/b]）。
- *
- * 头与正文的切分按「作者段 + 日期/楼号括号」定位（`stripCommentReplyHeader`）：
- * 粘连形态 `[b]Reply to … (日期)正文[/b]` 下正文夹在头与 `[/b]` 之间，
- * 按 `[/b]` 截取会把评论正文整段丢掉。
- *
- * @param content 评论原始正文
- * @returns 用于展示的评论正文
- */
-function stripPostByHeader(content: string): string {
-  return stripCommentReplyHeader(content)
-}
-
-/**
  * 帖子评论区子组件。
  */
 @Component
@@ -97,6 +83,50 @@ export struct PostComments {
   private isCommentBlacklisted(comment: PostInfo): boolean {
     return this.blacklistVersion >= 0 &&
       appStore.settingsStore.isBlacklisted(String(comment.authorid))
+  }
+
+  /**
+   * 评论正文节点。
+   *
+   * 回复头正常剥离后不再显示（评论气泡上方没有树关系，头本身是噪音）。但有两种情况
+   * 过滤后什么也不剩，必须回退到未过滤节点，避免空气泡：
+   * - 整条评论只有回复头：`stripCommentReplyHeader` 保守回退原文（`POST_BY` 必须保留）；
+   * - 评论只剩一个 `[quote]` 块（用户引用别人但自己没写）：引用块就是唯一内容。
+   *
+   * 不能用「`display === comment.content`」推断回退：列表页历史上会先把评论的
+   * Reply-to 头注入成 `[quote]`（已停止注入，但旧调用方/缓存数据仍可能如此），
+   * 仅按入参是否原样返回判断会漏掉「只剩 QUOTE」的情形。
+   *
+   * @param comment - 评论
+   * @returns 用于渲染的 BBCode 节点
+   */
+  private commentNodes(comment: PostInfo): BBNode[] {
+    const display: string = stripCommentReplyHeader(comment.content)
+    const nodes: BBNode[] = getCachedBBNodes(display)
+    const filtered: BBNode[] = filterBBTags(nodes, [BBNodeType.QUOTE, BBNodeType.POST_BY])
+    if (this.hasRenderableNode(filtered)) {
+      return filtered
+    }
+    return filterBBTags(nodes, [])
+  }
+
+  /**
+   * 节点里是否还有可渲染内容（非文本节点，或含非空白文字的文本节点）。
+   *
+   * @param nodes - 已过滤的节点
+   * @returns 至少有一个可见内容时返回 true
+   */
+  private hasRenderableNode(nodes: BBNode[]): boolean {
+    for (let i: number = 0; i < nodes.length; i++) {
+      const node: BBNode = nodes[i]
+      if (node.type !== BBNodeType.TEXT) {
+        return true
+      }
+      if (node.text.length > 0 && node.text.trim().length > 0) {
+        return true
+      }
+    }
+    return false
   }
 
   build() {
@@ -147,10 +177,7 @@ export struct PostComments {
                   .textAlign(TextAlign.Center)
               } else {
                 BBCodeContentView({
-                  nodes: filterBBTags(
-                    getCachedBBNodes(stripPostByHeader(c.content)),
-                    [BBNodeType.QUOTE, BBNodeType.POST_BY]
-                  ),
+                  nodes: this.commentNodes(c),
                   onImageClick: this.onImageClick,
                   onLinkClick: this.onLinkClick,
                 }).width('100%')

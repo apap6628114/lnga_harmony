@@ -299,3 +299,39 @@ export function fixTruncatedQuoteContent(targetContent: string,
   }
   return targetContent.substring(0, headerEnd + 4) + '\n' + cleanedFull + targetContent.substring(quoteEnd)
 }
+
+/** 剥离后只剩空白/换行/占位符的判定：等同于「没有可见正文」。 */
+const BLANK_BODY_PATTERN: RegExp = /^(?:\s|<br\s*\/?>|&nbsp;|\u00a0)*$/i
+
+/**
+ * 判断文本是否「没有可见正文」（只剩空白、`<br>`/`<br/>`、`&nbsp;`、`\u00a0`）。
+ *
+ * 服务端常见尾部排版 `<br/><br/>`，`String.trim()` 不会去掉这些标签；
+ * 楼层「只剩引用区」与评论「只剩回复头」的保守回退共用这一判定。
+ *
+ * @param text 待判断文本
+ * @returns 没有任何可见正文时为 true
+ */
+export function isBlankBodyText(text: string): boolean {
+  return BLANK_BODY_PATTERN.test(text)
+}
+
+/**
+ * 剥离楼中楼评论开头的 Reply to 头（评论气泡不重复显示回复头）。
+ *
+ * 边界与 {@link stripReplyToHeader} 一致（作者段 + 日期/楼号括号，支持匿名头）。
+ * **保守剥离（剥离后必须有正文）**：剥离后没有可见正文（{@link isBlankBodyText}）
+ * 时返回原文——整条评论只有回复头时，回复头就是唯一的文字，剥掉会留下空气泡；
+ * 楼层「只有引用区」的处理与这里保持一致（`ThreadTreeBuilder.resolveTreeDisplayContent`）。
+ *
+ * @param content 评论原始正文
+ * @returns 用于展示的评论正文；只有回复头时返回原文
+ */
+export function stripCommentReplyHeader(content: string): string {
+  const stripped: string = stripReplyToHeader(content)
+  const trimmed: string = stripped.replace(/^[\r\n\s]+/, '').trim()
+  if (isBlankBodyText(trimmed) && content.trim().length > 0) {
+    return content
+  }
+  return trimmed
+}

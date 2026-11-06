@@ -1,4 +1,6 @@
 import { PostInfo } from '../../model/PostInfo'
+import { unescapeHtml } from '../../parser/_shared/HtmlEntityCodec'
+import { isBlankBodyText } from './QuoteInjectionCore'
 import {
   ThreadTreeChild,
   ThreadTreeModel,
@@ -1004,7 +1006,7 @@ export function buildThreadTree(posts: PostInfo[], totalPages: number): ThreadTr
     const post: PostInfo = sorted[i]
     /** 一次扫描同时得到「引用关系」与「剥离引用区后的正文」，两者判定完全一致 */
     const scan: LeadingQuoteScan = scanLeadingQuoteArea(post.content, currentTid)
-    displayContentOfPid.set(post.pid, stripScannedBody(post.content, scan))
+    displayContentOfPid.set(post.pid, resolveTreeDisplayContent(post, scan))
     if (i === mainIndex) {
       continue
     }
@@ -1163,6 +1165,39 @@ export function flattenThreadTree(model: ThreadTreeModel): void {
 }
 
 /**
+ * 只看楼主时，是否要给「被引用楼层已被过滤掉」的根行补回引用上下文。
+ *
+ * 只看楼主会过滤掉非楼主楼层，原本作为父节点的楼层不在树里，根行会失去
+ * 「回复了谁」的提示；此函数判断哪些根行需要把 `displayContent` 恢复为原始正文
+ * （含引用块），由页面按返回值统一改模型。
+ *
+ * 不补的情况：未开启只看楼主、主楼引用、引用目标仍在树里、以及**只有楼层标题**的
+ * 根行（正文剥离后为空、标题已表达内容，补回引用头会与标题重复）。
+ *
+ * @param root - 根节点
+ * @param model - 当前树模型
+ * @param authorOnly - 是否开启只看楼主
+ * @returns 需要补回引用上下文时返回 true
+ */
+export function needsRootQuoteContext(root: ThreadTreeRoot, model: ThreadTreeModel,
+  authorOnly: boolean): boolean {
+  if (!authorOnly) {
+    return false
+  }
+  const ref: ThreadTreeQuoteRef | null = root.ref
+  if (ref === null || ref.isTopicRef || ref.targetPid <= 0) {
+    return false
+  }
+  if (model.postByPid.has(ref.targetPid)) {
+    return false
+  }
+  if (root.displayContent.length === 0 && resolveFloorSubject(root.post).length > 0) {
+    return false
+  }
+  return root.displayContent !== root.post.content
+}
+
+/**
  * 展开指定根的全部子节点（只改模型状态，不重算 rows、不通知数据源）。
  *
  * @param model - 两层树模型
@@ -1226,11 +1261,36 @@ export function findRootPidByPid(model: ThreadTreeModel, pid: number): number {
 const LEADING_BREAK_PATTERN: RegExp = /^(?:\s|<br\s*\/?>|\u00a0)+/i
 
 /**
+ * 楼层标题（HTML 实体解码后的纯文本）；主楼与无标题返回空串。
+ *
+ * 服务端每层可带 `subject`：主楼（`lou === 0`）的值是**主题标题**（页面标题栏已展示），
+ * 其余楼层是楼层标题（官方网页 `<h3 id='postsubject{lou}'>`）。
+ * 4 楼这类「只写了标题、正文只有引用头」的楼层，标题就是该层唯一的文字
+ * （tid 47864458 的 4 楼），列表/树卡片与 {@link resolveTreeDisplayContent} 都依赖它。
+ *
+ * **解码后再判空**：`&nbsp;` / `&emsp;` 这类实体解码后只剩空白，不能当标题渲染，
+ * 也不能当作「有标题」把正文置空（否则卡片会变成空白）。
+ *
+ * @param post - 楼层
+ * @returns 楼层标题文本；主楼或无标题时为空串
+ */
+export function resolveFloorSubject(post: PostInfo): string {
+  if (post.lou === 0) {
+    return ''
+  }
+  const text: string = unescapeHtml(post.subject).trim()
+  return text.length > 0 ? text : ''
+}
+
+/**
  * 按扫描结果截取树模式正文（跳过引用区、清掉粘连头残留的 `[/b]`、清理前导换行）。
+ *
+ * 纯剥离：引用区之后没有任何正文时返回空串。是否需要回退原文/用楼层标题兜底
+ * 由调用方决定（树构建见 {@link resolveTreeDisplayContent}，通用剥离见 {@link stripQuoteArea}）。
  *
  * @param content - 楼层原始 BBCode 正文
  * @param scan - 头部引用区扫描结果
- * @returns 树模式要显示的正文
+ * @returns 剥离引用区后的正文；引用区后没有正文时为空串
  */
 function stripScannedBody(content: string, scan: LeadingQuoteScan): string {
   const end: number = scan.bodyEnd >= 0 ? scan.bodyEnd : content.length
@@ -1240,7 +1300,35 @@ function stripScannedBody(content: string, scan: LeadingQuoteScan): string {
 }
 
 /**
- * 去掉正文开头的服务端引用区，返回树模式要显示的正文。
+ * 树模式正文：剥离引用区，并处理「整层只有引用区」的保守兜底。
+ *
+ * 真实数据存在「只点了回复、没有写正文」的楼层（`content` 只有一行
+ * `[b]Reply to …[/b]`，如 tid 47864458 的 4 楼），剥离后这一层只剩引用头。
+ * 这类楼层的文字信息在 `subject`（楼层标题）里，列表/树卡片会单独渲染标题：
+ * - 有楼层标题（{@link resolveFloorSubject} 非空）：正文返回空串，卡片只显示标题，
+ *   避免标题与「Reply to …」重复；
+ * - 没有楼层标题：回退原文，至少保留引用头（不吞文字，且不至于整层空白）。
+ *
+ * 回退只针对**确实识别并剥离了引用区**（`scan.ref !== null`）的楼层：正文本身只有空白
+ * 噪音（`'   '` / `<br/>`）时 `bodyStart` 也会被推到末尾，那不属于引用区，照旧返回空串。
+ *
+ * @param post - 楼层（正文 + 标题）
+ * @param scan - 头部引用区扫描结果
+ * @returns 树模式要显示的正文；引用区后没有正文且没有楼层标题时返回原文
+ */
+function resolveTreeDisplayContent(post: PostInfo, scan: LeadingQuoteScan): string {
+  const stripped: string = stripScannedBody(post.content, scan)
+  if (scan.ref !== null && scan.bodyStart > 0 && isBlankBodyText(stripped)) {
+    return resolveFloorSubject(post).length > 0 ? '' : post.content
+  }
+  return stripped
+}
+
+/**
+ * 去掉正文开头的服务端引用区，返回剥离后的正文（通用剥离，树模式不走这里）。
+ 
+ * 树模式渲染见 {@link resolveTreeDisplayContent}：它在剥离后为空时会用楼层标题兜底。
+ * 本函数保留给测试/诊断与未来通用调用，语义是「能剥就剥，剥完为空则回退原文」。
  *
  * 树的两层父子关系 + 子节点「回复 @作者 →」已经表达「这层回复了谁」，
  * 正文里再显示一遍引用块既冗余又占屏幕，故树模式渲染前统一剥离。
@@ -1254,14 +1342,21 @@ function stripScannedBody(content: string, scan: LeadingQuoteScan): string {
  * 不剥离的情况（保留原文，文字不被吞原则）：
  * - 正文中部的 `[quote]` 块（用户正文里复制/排版的引用样式）；
  * - 正文开头**没有链接头**的 `[quote]` 块（用户把 `[quote]` 当排版容器）；
- * - 未闭合的 `[quote]` 块（数据异常，宁可原样展示）。
+ * - 未闭合的 `[quote]` 块（数据异常，宁可原样展示）；
+ * - **引用区之后没有正文**（整层只有 `Reply to` 头或只有 `[quote]` 块）：剥掉后该层将
+ *   没有任何文字，故返回原文（保守剥离）。
  *
  * @param content - 楼层原始 BBCode 正文
- * @returns 剥离引用区后的正文；引用区后没有正文时返回空串
+ * @returns 剥离引用区后的正文；引用区后没有正文时返回原文
  */
 export function stripQuoteArea(content: string): string {
   if (content.length === 0) {
     return content
   }
-  return stripScannedBody(content, scanLeadingQuoteArea(content, 0))
+  const scan: LeadingQuoteScan = scanLeadingQuoteArea(content, 0)
+  const stripped: string = stripScannedBody(content, scan)
+  if (scan.ref !== null && scan.bodyStart > 0 && isBlankBodyText(stripped)) {
+    return content
+  }
+  return stripped
 }

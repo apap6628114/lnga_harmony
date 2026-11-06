@@ -36,6 +36,7 @@ import { withTimeout } from '../common/utils/TimeoutUtils'
 import { resolveKeyboardAppearance } from '../common/utils/KeyboardAppearanceUtils'
 import { ANONYMOUS_NAME_PREFIX } from '../parser/AnonymousParser'
 import { bbNodesToPlainText } from '../common/utils/Utils'
+import { resolveFloorSubject } from '../common/utils/ThreadTreeBuilder'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
 import { TtsMediaMetadata } from '../common/media/TtsAvSessionController'
 import { TtsPlayer } from '../common/media/TtsPlayer'
@@ -2309,7 +2310,9 @@ export struct ThreadPanel {
       appStore.showToast(aiValidationMessage)
       return
     }
-    const plainText: string = bbNodesToPlainText(getCachedBBNodes(p.content))
+    const subject: string = resolveFloorSubject(p)
+    const bodyText: string = bbNodesToPlainText(getCachedBBNodes(p.content))
+    const plainText: string = subject.length > 0 ? subject + '\n' + bodyText : bodyText
     if (plainText.trim().length === 0) {
       appStore.showToast('该楼层没有可处理的内容')
       return
@@ -2629,7 +2632,9 @@ export struct ThreadPanel {
                   this.beginAiSummarize(p)
                 },
                 onReadAloud: (p: PostInfo): void => {
-                  const plainText: string = bbNodesToPlainText(getCachedBBNodes(p.content))
+                  const subject: string = resolveFloorSubject(p)
+                  const bodyText: string = bbNodesToPlainText(getCachedBBNodes(p.content))
+                  const plainText: string = subject.length > 0 ? subject + '。' + bodyText : bodyText
                   if (plainText.trim().length === 0) {
                     appStore.showToast('该楼层没有可朗读的内容')
                     return

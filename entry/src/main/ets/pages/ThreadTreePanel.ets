@@ -52,7 +52,9 @@ import {
   buildThreadTree,
   flattenThreadTree,
   expandRoot,
-  findRootPidByPid
+  findRootPidByPid,
+  needsRootQuoteContext,
+  resolveFloorSubject
 } from '../common/utils/ThreadTreeBuilder'
 import { threadTreeFetchService, ThreadTreeFetchResult } from '../service/ThreadTreeFetchService'
 import { ThreadTreeDataSource } from '../common/datasource/ThreadTreeDataSource'
@@ -695,17 +697,13 @@ export struct ThreadTreePanel {
     let changed: boolean = false
     for (let i: number = 0; i < model.roots.length; i++) {
       const root: ThreadTreeRoot = model.roots[i]
-      const ref: ThreadTreeQuoteRef | null = root.ref
-      if (ref === null || ref.isTopicRef || ref.targetPid <= 0) {
+      // 判定逻辑抽在 ThreadTreeBuilder.needsRootQuoteContext（纯函数，可单测）：
+      // 只有标题的根行不补引用上下文，避免与标题重复。
+      if (!needsRootQuoteContext(root, model, this.authorOnly)) {
         continue
       }
-      if (model.postByPid.has(ref.targetPid)) {
-        continue
-      }
-      if (root.displayContent !== root.post.content) {
-        root.displayContent = root.post.content
-        changed = true
-      }
+      root.displayContent = root.post.content
+      changed = true
     }
     return changed
   }
@@ -1668,7 +1666,12 @@ export struct ThreadTreePanel {
    * @param displayContent - 树模式正文（已剥离引用区）；传空串时读原始 content
    */
   private readAloud(p: PostInfo, displayContent: string = ''): void {
-    const source: string = displayContent.length > 0 ? displayContent : p.content
+    const subject: string = resolveFloorSubject(p)
+    let source: string = displayContent.length > 0 ? displayContent : p.content
+    if (subject.length > 0) {
+      // 标题-only 楼层（displayContent 为空）：标题就是该层唯一文字，不念 Reply-to 头
+      source = displayContent.length > 0 ? subject + '。' + source : subject
+    }
     const plainText: string = bbNodesToPlainText(getCachedBBNodes(source))
     if (plainText.trim().length === 0) {
       appStore.showToast('该楼层没有可朗读的内容')
@@ -1695,7 +1698,9 @@ export struct ThreadTreePanel {
       appStore.showToast(aiValidationMessage)
       return
     }
-    const plainText: string = bbNodesToPlainText(getCachedBBNodes(p.content))
+    const subject: string = resolveFloorSubject(p)
+    const bodyText: string = bbNodesToPlainText(getCachedBBNodes(p.content))
+    const plainText: string = subject.length > 0 ? subject + '\n' + bodyText : bodyText
     if (plainText.trim().length === 0) {
       appStore.showToast('该楼层没有可处理的内容')
       return

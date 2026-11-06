@@ -182,5 +182,55 @@ export default function quoteInjectionUnitTest(): void {
 
       expect(stripCommentReplyHeader('普通评论正文')).assertEqual('普通评论正文')
     })
+
+    it('keepsCommentReplyHeaderWhenNoBodyRemains', 0, (): void => {
+      /**
+       * 保守剥离：评论整条只有回复头时回退原文，不能把气泡剥成空。
+       * 与楼层「只有引用区」的处理一致（`PostComments.commentNodes` 会保留 POST_BY 节点）。
+       */
+      const headerOnly: string =
+        '[b]Reply to [pid=1,2,3]Reply[/pid] Post by [uid=9]甲[/uid] (2025-05-26 17:37)[/b]'
+      expect(stripCommentReplyHeader(headerOnly)).assertEqual(headerOnly)
+
+      /* 头 + 尾部空行：剥离后只剩 <br/>，同样视为没有正文 */
+      const headerWithBreaks: string =
+        '[b]Reply to [pid=1,2,3]Reply[/pid] Post by [uid=9]甲[/uid] (2025-05-26 17:37)[/b]<br/><br/>'
+      expect(stripCommentReplyHeader(headerWithBreaks)).assertEqual(headerWithBreaks)
+
+      /* 头 + 只有 &nbsp;：同样是「没有可见正文」 */
+      const headerWithNbsp: string =
+        '[b]Reply to [pid=1,2,3]Reply[/pid] Post by [uid=9]甲[/uid] (2025-05-26 17:37)[/b]&nbsp;'
+      expect(stripCommentReplyHeader(headerWithNbsp)).assertEqual(headerWithNbsp)
+
+      /* 有正文时仍正常剥头（回归保护） */
+      const withBody: string =
+        '[b]Reply to [pid=1,2,3]Reply[/pid] Post by [uid=9]甲[/uid] (2025-05-26 17:37)[/b]<br/>评论正文'
+      expect(stripCommentReplyHeader(withBody)).assertEqual('<br/>评论正文')
+    })
+
+    it('leavesCommentsOutOfQuoteInjection', 0, (): void => {
+      /**
+       * 评论气泡始终过滤 [quote]：对评论做引用注入只会把 Reply-to 头改写成隐藏的
+       * [quote] 块，让「只有回复头」的评论失去唯一的可见文字（空气泡）。
+       * 楼层仍需注入（列表页显示引用块）。
+       */
+      const header: string =
+        '[b]Reply to [pid=900,47475364,1]Reply[/pid] Post by [uid=9]乙[/uid] (2025-05-26 17:37)[/b]'
+      const comment: PostInfo = makePost(901, 1, header)
+      const floorContent: string =
+        '[b]Reply to [pid=900,47475364,1]Reply[/pid] Post by [uid=9]甲[/uid] (2025-05-26 17:37)[/b]<br/>楼层正文'
+      const floor: PostInfo = makePost(902, 1, floorContent)
+      const target: PostInfo = makePost(900, 0, '被引用楼层正文')
+      floor.comments = [comment]
+      const posts: PostInfo[] = [floor, target]
+
+      injectQuoteContent(posts, posts)
+
+      /** 评论正文不得被改写成 [quote] */
+      expect(comment.content).assertEqual(header)
+      /** 楼层仍正常注入（转成 [quote] 块并填入被引用正文） */
+      expect(floor.content.startsWith('[quote][pid=900,47475364,1]Reply[/pid]')).assertTrue()
+      expect(floor.content.includes('被引用楼层正文')).assertTrue()
+    })
   })
 }
