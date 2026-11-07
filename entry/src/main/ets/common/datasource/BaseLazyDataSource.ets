@@ -100,8 +100,9 @@ export class BaseLazyDataSource<T> implements IDataSource {
    *
    * @param index - 目标下标
    * @param item - 新元素
+   * @param key - 新键（子类可用来同步 LazyForEach 的键；基类忽略）
    */
-  updateAt(index: number, item: T): void {
+  updateAt(index: number, item: T, key: string = ''): void {
     if (index < 0 || index >= this.dataList.length) {
       return
     }

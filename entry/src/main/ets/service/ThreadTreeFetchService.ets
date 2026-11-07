@@ -486,20 +486,8 @@ export class ThreadTreeFetchService {
       denied.error = '请先登录'
       return denied
     }
-    // 上一个树页面可能尚未退场（快速切帖 / 返回再进入）：先请求它取消并等它结束，
-    // 否则会以「已有任务进行中」把新页面直接拒掉（旧任务最多再等当前批次请求返回）
-    const previousTask: Promise<ThreadTreeFetchResult> | null = this.activeTask
-    if (previousTask !== null) {
-      this.cancelled = true
-      logger.info('tree-fetch await previous owner=%{public}s tid=%{public}s',
-        this.activeOwner, this.activeTid)
-      try {
-        await previousTask
-      } catch (e) {
-        logger.warn('tree-fetch previous task error: %{public}s', formatError(e))
-      }
-    }
-
+    // 缓存读取必须排在「等待上一个任务退场」之前：它只读无副作用，
+    // 不该为了等另一个页面的抓取（最坏 15s 超时）牺牲 90 秒内秒开
     if (!forceRefresh) {
       const cached: ThreadTreeFetchResult | null = this.readCache(session.uid, tid)
       if (cached !== null) {
@@ -523,6 +511,20 @@ export class ThreadTreeFetchService {
           }
         }
         return cached
+      }
+    }
+
+    // 上一个树页面可能尚未退场（快速切帖 / 返回再进入）：先请求它取消并等它结束，
+    // 否则会以「已有任务进行中」把新页面直接拒掉（旧任务最多再等当前批次请求返回）
+    const previousTask: Promise<ThreadTreeFetchResult> | null = this.activeTask
+    if (previousTask !== null) {
+      this.cancelled = true
+      logger.info('tree-fetch await previous owner=%{public}s tid=%{public}s',
+        this.activeOwner, this.activeTid)
+      try {
+        await previousTask
+      } catch (e) {
+        logger.warn('tree-fetch previous task error: %{public}s', formatError(e))
       }
     }
 
@@ -634,13 +636,10 @@ export class ThreadTreeFetchService {
       this.fillSkippedPages(result, scheduler)
       if (isSkippedPagesOverwhelming(result.skippedPages.length, totalPages)) {
         // 过半页都空：不是「局部整页被删」，而是帖子状态或抓取链整体异常。
-        // 此时展示残缺的树会误导用户，按整体失败处理（UI 给错误态与重试）。
-        // 这里**不**提供「查看已加载」：数据本身不可信，不是「还没抓完」
+        // 此时不写缓存、按失败上报，由页面决定提示；但**不清空已提交内容**——
+        // 那些楼层已经通过 onCommit 渲染在屏幕上了，result 与它保持一致才不矛盾。
         result.ok = false
         result.partial = false
-        result.posts = []
-        result.pageByPid = new Map<number, number>()
-        result.loadedPages = 0
         result.error = '有 ' + String(result.skippedPages.length) + ' 页没有可显示的楼层，帖子可能已被删除或屏蔽'
         logger.warn('tree-fetch overwhelmingly empty tid=%{public}s gen=%{public}d skipped=%{public}d pages=%{public}d',
           tid, generation, result.skippedPages.length, totalPages)
@@ -737,7 +736,9 @@ export class ThreadTreeFetchService {
     }
     try {
       const commit: ThreadTreeCommit = new ThreadTreeCommit()
-      commit.posts = posts
+      // 传快照：后续页会继续 push `collected`，活引用会让旧 commit 对象悄悄变长，
+      // 而它的 committedPages 不变，页面拿到的就不是「那一刻的前缀」
+      commit.posts = posts.slice()
       commit.committedPages = scheduler.commitUpTo
       commit.totalPages = totalPages
       commit.threadInfo = scheduler.threadInfo
@@ -815,9 +816,18 @@ export class ThreadTreeFetchService {
    * @param scheduler - 调度状态（取跳过页）
    */
   private fillSkippedPages(result: ThreadTreeFetchResult, scheduler: FetchPageScheduler): void {
-    // worker 完成顺序不确定：统一按页码升序提交，UI 提示才不会乱序
-    result.skippedPages = scheduler.skippedPages.slice()
-    result.skippedPages.sort((a: number, b: number): number => a - b)
+    // worker 完成顺序不确定：统一按页码升序提交，UI 提示才不会乱序。
+    // 只报**已提交范围内**的缺页：乱序缓冲里可能有尚未提交页的空页，
+    // 提前报出来会变成「提示第 10 页缺楼层，但只加载到第 7 页」。
+    const pages: number[] = []
+    for (let i: number = 0; i < scheduler.skippedPages.length; i++) {
+      const page: number = scheduler.skippedPages[i]
+      if (page <= scheduler.commitUpTo) {
+        pages.push(page)
+      }
+    }
+    pages.sort((a: number, b: number): number => a - b)
+    result.skippedPages = pages
   }
 
   /**
@@ -874,9 +884,10 @@ export class ThreadTreeFetchService {
       const page: number = scheduler.nextPage
       scheduler.nextPage++
       const pageResult: ThreadResult = await this.fetchPage(token, tid, page)
-      // 取消/代际失效：**丢弃在途页**。增量模型下「停止即冻结」——页面已经
-      // 停在点击那一刻的内容上，不能因为某页恰好返回又长出一截
-      if (this.cancelled || generation !== this.generation) {
+      // 取消/代际失效/其他 worker 已判定致命失败：**丢弃在途页**。
+      // 增量模型下「停止即冻结」——页面已经停在点击那一刻的内容上，
+      // 不能因为某页恰好返回又长出一截，也不能让失败后仍在途的页继续推进水位。
+      if (this.cancelled || generation !== this.generation || scheduler.stopped) {
         return
       }
       if (!pageResult.ok) {

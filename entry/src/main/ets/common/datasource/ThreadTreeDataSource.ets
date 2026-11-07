@@ -82,16 +82,58 @@ export class ThreadTreeDataSource extends BaseLazyDataSource<ThreadTreeRow> {
   }
 
   /**
+   * 追加行（树页不使用：增量统一走 {@link applyRowOps}）。
+   *
+   * 覆盖基类实现的原因：基类走 `onDataAdd`，一旦被调用就与 `onDatasetChange`
+   * 混用，违反 LazyForEach 的官方约束。这里保守地退化为整表重载。
+   *
+   * @param list - 追加的行
+   */
+  appendAll(list: ThreadTreeRow[]): void {
+    const merged: ThreadTreeRow[] = this.dataList.slice()
+    for (let i: number = 0; i < list.length; i++) {
+      merged.push(list[i])
+    }
+    this.replaceAll(merged)
+  }
+
+  /**
+   * 头部插入行（树页不使用，理由同 {@link appendAll}）。
+   *
+   * @param list - 插入的行
+   */
+  prependAll(list: ThreadTreeRow[]): void {
+    const merged: ThreadTreeRow[] = list.slice()
+    for (let i: number = 0; i < this.dataList.length; i++) {
+      merged.push(this.dataList[i])
+    }
+    this.replaceAll(merged)
+  }
+
+  /**
    * 替换指定下标的行（内容变化，行数不变）。
+   *
+   * 必须带上新键：树页的 `rowKey` 含 `rev` / 高亮后缀，内容变化时键会变；
+   * 不传 key 时框架沿用旧键，会与 keyGenerator 分叉，下一次增量提交因键不匹配退 RELOAD。
    *
    * @param index - 目标下标
    * @param item - 新行
+   * @param key - 该行的新键（与 LazyForEach 的 keyGenerator 一致）
    */
-  updateAt(index: number, item: ThreadTreeRow): void {
+  updateAt(index: number, item: ThreadTreeRow, key: string = ''): void {
     if (index < 0 || index >= this.dataList.length) {
       return
     }
     this.dataList[index] = item
+    if (key.length > 0) {
+      const changed: DataChangeOperation = {
+        type: DataOperationType.CHANGE,
+        index: index,
+        key: key
+      }
+      this.notifyDatasetChange([changed])
+      return
+    }
     const change: DataChangeOperation = { type: DataOperationType.CHANGE, index: index }
     this.notifyDatasetChange([change])
   }
@@ -100,7 +142,8 @@ export class ThreadTreeDataSource extends BaseLazyDataSource<ThreadTreeRow> {
    * 按 diff 结果增量更新行序列。
    *
    * `ops` 的索引全部相对**旧序列**（`RowOp.index`），与 LazyForEach 的
-   * `DataOperation` 语义一致；调用方负责先把 `dataList` 换成新序列。
+   * `DataOperation` 语义一致；**本方法自己负责**把 `dataList` 换成 `nextRows`
+   * （先换数据再通知，和 LazyForEach 取数时机一致）。
    *
    * @param nextRows - 新的完整行序列
    * @param ops - diff 产出的操作（可含 RELOAD）

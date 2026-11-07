@@ -106,10 +106,16 @@ export function computeTreeRowDiff(oldRows: ThreadTreeRow[], newRows: ThreadTree
 
   let i: number = 0
   let j: number = 0
+  // 同一批操作里，一个 ADD 的 index 不能再出现 CHANGE：
+  // LazyForEach 规定「多个操作指向同一 index 只有第一个生效」，CHANGE 会被静默丢弃。
+  const addIndexes: Set<number> = new Set<number>()
   while (i < newRows.length) {
     const newRow: ThreadTreeRow = newRows[i]
     if (j < oldRows.length && keyOf(newRow) === keyOf(oldRows[j])) {
       if (!sameRowContent(oldRows[j], newRow)) {
+        if (addIndexes.has(j)) {
+          return buildReloadResult()
+        }
         result.ops.push(new RowOp(RowOpKind.CHANGE, j, 1))
       }
       i++
@@ -117,6 +123,7 @@ export function computeTreeRowDiff(oldRows: ThreadTreeRow[], newRows: ThreadTree
       continue
     }
     // 新行在旧序列的当前位置没有对应项：按「在旧索引 j 处插入」记录
+    addIndexes.add(j)
     const ops: RowOp[] = result.ops
     const last: RowOp | undefined = ops.length > 0 ? ops[ops.length - 1] : undefined
     if (last !== undefined && last.kind === RowOpKind.ADD && last.index === j) {
@@ -130,10 +137,19 @@ export function computeTreeRowDiff(oldRows: ThreadTreeRow[], newRows: ThreadTree
   if (j !== oldRows.length) {
     // 旧序列有行在新序列里找不到（删除/移动/重排）：保守退回整表重载。
     // 单调增量下不应出现，只有展开/折叠、只看楼主切换等显式动作才会走到这里。
-    const reload: RowDiffResult = new RowDiffResult()
-    reload.needReload = true
-    reload.ops.push(new RowOp(RowOpKind.RELOAD, 0, 0))
-    return reload
+    return buildReloadResult()
   }
   return result
+}
+
+/**
+ * 构造「整表重载」结果。
+ *
+ * @returns 只含一条 RELOAD 的 diff 结果
+ */
+function buildReloadResult(): RowDiffResult {
+  const reload: RowDiffResult = new RowDiffResult()
+  reload.needReload = true
+  reload.ops.push(new RowOp(RowOpKind.RELOAD, 0, 0))
+  return reload
 }

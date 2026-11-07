@@ -79,9 +79,7 @@ import {
 } from '../common/utils/ThreadTreeLocatePolicy'
 import {
   computeTreeRowDiff,
-  RowDiffResult,
-  RowOp,
-  RowOpKind
+  RowDiffResult
 } from '../common/utils/ThreadTreeRowDiff'
 
 const logger = new Logger(DOMAIN_UI, 'ThreadTreePanel')
@@ -130,14 +128,17 @@ const TREE_BANNER_TEXT_MAX_W: number = 150
  * - 设置「帖子默认样式 = 递进树」：打开帖子时直接挂载本页（仍是同一个 `Screen.thread` 条目）；
  * - 本页「切换为列表阅读」/ 加载中的「以常规列表打开」：终止全帖抓取并替换为列表页。
  *
- * 全帖抓取可能持续数十秒（4 路并发 + 限流），因此**加载期有三种出口**（不强迫用户等完整抓取）：
- * - 「查看已加载 n/N 页」：中断抓取，把已抓楼层送进树（`partialData`）；
- * - 「取消」：放弃这次阅读并退出（`routerStore.back()`）；
- * - 「以常规列表打开」：换成列表样式阅读。
+ * 全帖抓取可能持续数十秒（4 路并发 + 限流）。本页采用**增量加载**
+ * （`docs/THREAD_TREE_INCREMENTAL_LOAD_DESIGN.md`）：
+ * - 第 1 页到达即渲染，后续按页号顺序增量追加；
+ * - 加载期间顶部胶囊显示「已加载 n/N 页」并可随时停止；**胶囊只做进度，不承载定位动作**；
+ * - 定位（恢复进度 / 路由 pid / 点击未加载楼层）统一为「待定位目标」，到达后由 Toast
+ *   提供「前往查看」；未到达时不提供任何跳转动作；
+ * - 失败时保留已渲染内容 + 错误条；「取消」只在第 1 页到达前出现（退出页面）。
  *
- * 部分数据**不做断点续传、也不挂常驻提醒**：中断是用户自己的决定，不需要再被告知一次；
- * 只在列表尾部用一句中性的「已加载 n/N 页」标识内容边界（替代「已加载全部回复」），
- * 不弹 Toast、不加横幅。想拿全内容走「刷新递进树」整帖重抓。
+ * 部分数据**不做断点续传、也不挂常驻提醒**：停止是用户自己的决定，不再重复告知；
+ * 只在列表尾部用一句中性的「已加载 n/N 页」标识内容边界（替代「已加载全部回复」）。
+ * 想拿全内容走「刷新递进树」整帖重抓。
  */
 @Component
 export struct ThreadTreePanel {
@@ -188,7 +189,7 @@ export struct ThreadTreePanel {
    */
   @State skippedPageHint: string = ''
   /**
-   * 当前树是否只覆盖**部分页**（加载中人工中断，或某页失败后用户选择查看已加载数据）。
+   * 当前树是否只覆盖**部分页**（用户主动停止，或某页失败但已有内容可读）。
    *
    * 刻意**不做常驻提醒**：中断是用户自己的操作，页面上不再挂横幅/弹 Toast；
    * 这个标志只用于两件事：
@@ -344,8 +345,7 @@ export struct ThreadTreePanel {
   /** 用户是否真正移动过视口（手势滚动或点过「前往」）：进度记录的必要条件。 */
   private viewportMoved: boolean = false
   /** 是否有一次增量提交已排程（合并同一宏任务内的多次回调）。 */
-  private commitScheduled: boolean = false
-  /** 待提交的楼层前缀（服务层 collected 的同一引用）。 */
+  private commitScheduled: boolean = false  /** 待提交的楼层前缀（服务层 collected 的同一引用）。 */
   private pendingCommitPosts: PostInfo[] = []
   /** 待提交的已提交页数。 */
   private pendingCommitPages: number = 0
@@ -364,6 +364,14 @@ export struct ThreadTreePanel {
 
   /** 就绪 Toast 的延时器。 */
   private targetToastTimer: number = -1
+  /** 就绪 Toast 因用户正在滚动而挂起（`onScrollStop` 补发）。 */
+  private targetToastPending: boolean = false
+  /** 挂起的 Toast 是否是「查看全部」（只看楼主过滤）。 */
+  private targetToastFiltered: boolean = false
+  /** 排程提交的定时器（刷新/切帖时必须能取消）。 */
+  private commitTimer: number = -1
+  /** 用户主动停止：收尾结果只记日志，不再改状态。 */
+  private stoppedByUser: boolean = false
   /** 首屏 300ms 延迟器。 */
   private bannerDelayTimer: number = -1
   /** 锚点事务：是否待恢复。 */
@@ -412,9 +420,12 @@ export struct ThreadTreePanel {
     this.progressRecordTimer = -1
     clearTimeout(this.bannerDelayTimer)
     this.bannerDelayTimer = -1
-
     clearTimeout(this.targetToastTimer)
     this.targetToastTimer = -1
+    clearTimeout(this.commitTimer)
+    this.commitTimer = -1
+    this.commitScheduled = false
+    this.targetToastPending = false
     this.appendAnchorPending = false
     this.appendAnchorScheduled = false
     // 使在途的定位目标失效：页面销毁后不得再定位
@@ -466,8 +477,14 @@ export struct ThreadTreePanel {
     this.pendingCommitPages = 0
     this.commitScheduled = false
     this.commitDeferred = false
+    clearTimeout(this.commitTimer)
+    this.commitTimer = -1
+    clearTimeout(this.targetToastTimer)
+    this.targetToastTimer = -1
+    this.targetToastPending = false
     this.frozen = false
     this.stopping = false
+    this.stoppedByUser = false
     this.viewportMoved = false
     this.threadFid = 0
     // 与 aboutToAppear 同源：先回到路由身份（可能为空），抓取结果返回后再覆盖
@@ -499,11 +516,13 @@ export struct ThreadTreePanel {
     this.commitDeferred = false
     this.appendAnchorPending = false
     this.appendAnchorScheduled = false
+    clearTimeout(this.commitTimer)
+    this.commitTimer = -1
     clearTimeout(this.bannerDelayTimer)
     this.bannerDelayTimer = -1
-
     clearTimeout(this.targetToastTimer)
     this.targetToastTimer = -1
+    this.targetToastPending = false
     if (this.highlightTimer >= 0) {
       clearTimeout(this.highlightTimer)
       this.highlightTimer = -1
@@ -534,6 +553,10 @@ export struct ThreadTreePanel {
 
     clearTimeout(this.targetToastTimer)
     this.targetToastTimer = -1
+    clearTimeout(this.commitTimer)
+    this.commitTimer = -1
+    this.targetToastPending = false
+    this.stoppedByUser = false
     this.stopping = false
     this.frozen = false
     this.commitScheduled = false
@@ -556,12 +579,14 @@ export struct ThreadTreePanel {
     this.bannerMode = TreeBannerMode.HIDDEN
     this.phase = TreePagePhase.ENTERING
     this.committedPages = 0
-    this.targetPage = -1
     if (this.pendingTarget === null) {
       this.targetState = LocateState.NONE
       this.targetLabel = ''
+      this.targetPage = -1
     } else {
+      // 刷新保留了目标：状态重判，刻度仍用目标自己的页码（不能清成 -1）
       this.targetState = LocateState.WAITING
+      this.targetPage = this.pendingTarget.page
     }
     if (this.threadTid.length === 0) {
       threadTreeFetchService.cancel(this.treeOwner)
@@ -744,8 +769,14 @@ export struct ThreadTreePanel {
       return
     }
     this.commitScheduled = true
-    setTimeout((): void => {
+    const generation: number = this.fetchGeneration
+    this.commitTimer = setTimeout((): void => {
+      this.commitTimer = -1
       this.commitScheduled = false
+      // 排程期间可能已刷新/切帖：旧排程必须作废，否则会用空的前缀提交
+      if (generation !== this.fetchGeneration) {
+        return
+      }
       this.flushCommit()
     }, 0)
   }
@@ -758,6 +789,9 @@ export struct ThreadTreePanel {
    */
   private flushCommit(): void {
     if (this.frozen) {
+      return
+    }
+    if (this.pendingCommitPages <= 0) {
       return
     }
     if (this.scrolling) {
@@ -858,26 +892,10 @@ export struct ThreadTreePanel {
     }
     this.commitScheduled = false
     this.commitDeferred = false
-    if (this.stopping) {
-      // 用户在停止过渡里：立即落定，不再应用结果
-      this.stopping = false
-      this.frozen = true
-      this.isLoading = false
-      if (!this.treeReady) {
-        this.phase = TreePagePhase.FAILED
-        this.hasError = true
-        this.errorMsg = '已停止加载'
-        this.bannerErrorText = this.errorMsg
-      } else {
-        this.phase = TreePagePhase.STOPPED
-        this.partialData = true
-        this.partialLoadedPages = this.committedPages
-        this.partialTotalPages = this.totalPages
-      }
-      this.evaluatePendingTarget()
-      this.refreshBanner()
-      logger.info('tree-panel stopped tid=%{public}s pages=%{public}d',
-        this.threadTid, this.committedPages)
+    // 用户已点停止：状态在 {@link stopLoading} 里即时落定，这里只记日志
+    if (this.stoppedByUser) {
+      logger.info('tree-panel stop settled tid=%{public}s pages=%{public}d cancelled=%{public}s',
+        this.threadTid, this.committedPages, String(result.cancelled))
       return
     }
     // 被其他页面/任务抢占（平板多列）：不是用户的阅读决定，内容保留、只切错误条
@@ -888,6 +906,7 @@ export struct ThreadTreePanel {
       this.hasError = !this.treeReady
       this.bannerErrorText = '加载被其他操作中断'
       this.errorMsg = this.bannerErrorText
+      this.clearPendingTarget(LocateState.NONE)
       this.refreshBanner()
       logger.info('tree-panel preempted tid=%{public}s loaded=%{public}d',
         this.threadTid, result.loadedPages)
@@ -905,8 +924,16 @@ export struct ThreadTreePanel {
       }
       this.pageByPid = result.pageByPid
       this.totalPages = result.totalPages
-      // 结果里的 posts 是权威前缀：补齐最后一次提交（通常与上一次相同，幂等）
-      this.applyCommit(result.posts, result.loadedPages)
+      // 结果里的 posts 是权威前缀。两种情况下必须在这里补一次 apply：
+      // 1) 还没建过树（缓存命中时 onCommit 排程的 setTimeout 晚于本微任务，
+      //    若只按 loadedPages 判定会永远跳过，页面空白）；
+      // 2) 最后一页只走了结果、没走 onCommit。
+      // 收尾是最后一次提交，直接应用（中途提交才遵守拖拽互斥）。
+      if (!this.treeReady || result.loadedPages > this.committedPages) {
+        this.pendingCommitPosts = result.posts
+        this.pendingCommitPages = result.loadedPages
+        this.applyCommit(result.posts, result.loadedPages)
+      }
     }
     this.frozen = true
     this.isLoading = false
@@ -920,24 +947,37 @@ export struct ThreadTreePanel {
         this.partialLoadedPages = result.loadedPages
         this.partialTotalPages = result.totalPages
       }
-      this.evaluatePendingTarget()
+      this.applySkippedPages(result.skippedPages, false)
+      this.clearPendingTarget(LocateState.NONE)
       this.refreshBanner()
       logger.warn('tree-panel load failed tid=%{public}s loaded=%{public}d',
         this.threadTid, result.loadedPages)
       return
     }
     if (result.partial) {
-      this.phase = TreePagePhase.STOPPED
+      // 有内容但没抓全：**不是**用户停止（用户停止已在 stopLoading 落定），
+      // 而是某页失败或被抢占 —— 保留内容 + 错误条 + 重试（§3.8）。
+      this.phase = TreePagePhase.FAILED
       this.partialData = true
       this.partialLoadedPages = result.loadedPages
       this.partialTotalPages = result.totalPages
+      this.bannerErrorText = result.cancelled
+        ? '加载被其他操作中断'
+        : (result.error.length > 0 ? result.error : '加载未完成')
+      this.errorMsg = this.bannerErrorText
+      this.hasError = false
       this.applySkippedPages(result.skippedPages, false)
+      this.clearPendingTarget(LocateState.NONE)
     } else {
       this.phase = TreePagePhase.COMPLETE
       this.partialData = false
       this.partialLoadedPages = 0
       this.partialTotalPages = 0
       this.applySkippedPages(result.skippedPages, true)
+      // 目标仍未就绪（所在页被跳过）已经没有机会了；READY 的保留给 Toast 点击
+      if (this.targetState !== LocateState.READY) {
+        this.clearPendingTarget(LocateState.MISSING)
+      }
     }
     this.evaluatePendingTarget()
     this.refreshBanner()
@@ -997,7 +1037,7 @@ export struct ThreadTreePanel {
    * 纯插入 → `onDatasetChange` 的 ADD（让 `maintainVisibleContentPosition` 生效）；
    * 无法用增量表达（展开/折叠、只看楼主切换）→ RELOAD 兜底。
    */
-  private applyRowsToDataSource(): void {
+  private applyRowsToDataSource(skipAnchor: boolean = false): void {
     const model: ThreadTreeModel | null = this.treeModel
     if (model === null) {
       this.treeDataSource.replaceAll([])
@@ -1006,7 +1046,7 @@ export struct ThreadTreePanel {
     }
     const next: ThreadTreeRow[] = model.rows
     const old: ThreadTreeRow[] = this.lastRows
-    const anchor: RowAnchor = this.captureAnchor(old)
+    const anchor: RowAnchor = skipAnchor ? new RowAnchor() : this.captureAnchor(old)
     if (old.length === 0) {
       this.treeDataSource.replaceAll(next)
       this.lastRows = next
@@ -1084,8 +1124,9 @@ export struct ThreadTreePanel {
       this.appendAnchorPid = -1
       this.appendAnchorOffset = 0
       const newIndex: number = this.treeDataSource.findIndexByPid(pid)
-      if (newIndex < 0 || newIndex === oldIndex) {
-        // 锚点不存在（被过滤/被删）或位置未变（插入在视口内/下方）：不滚动
+      // 只有「锚点之前插入了行」才需要补偿；newIndex 变小说明行被删除/重排，
+      // 滚动反而会把用户带偏（§4.5）
+      if (newIndex < 0 || newIndex <= oldIndex) {
         return
       }
       const contentStart: number = NAV_BAR_H + this.statusBarHeight
@@ -1164,11 +1205,19 @@ export struct ThreadTreePanel {
    */
   private showTargetToast(filtered: boolean): void {
     const target: LocateTarget | null = this.pendingTarget
-    if (target === null || this.scrolling) {
+    if (target === null) {
       return
     }
+    // 用户正在拖拽/惯性滚动：挂起到 onScrollStop 补发，不能直接丢掉
+    // （就绪只会在状态变化时判定一次，丢掉就再也没有第二次机会）
+    if (this.scrolling) {
+      this.targetToastPending = true
+      this.targetToastFiltered = filtered
+      return
+    }
+    this.targetToastPending = false
     const baseText: string = filtered
-      ? '上次阅读位置不在只看楼主视图内'
+      ? (target.source === LocateSource.RESUME ? '上次阅读位置不在只看楼主视图内' : '目标楼层不在只看楼主视图内')
       : (target.source === LocateSource.RESUME ? '检测到上次阅读进度' : '目标楼层已加载')
     const action: string = filtered ? '查看全部' : '前往查看'
     clearTimeout(this.targetToastTimer)
@@ -1300,22 +1349,36 @@ export struct ThreadTreePanel {
     if (this.phase !== TreePagePhase.STREAMING && this.phase !== TreePagePhase.ENTERING) {
       return
     }
-    this.stopping = true
-    // 停止即冻结：不让收尾期间到达的页再长出来（服务层也会丢弃在途页，这里是页面侧双保险）
+    // 点击即冻结：状态立刻落定，不等在途请求（最坏要等单页 15s 超时）。
+    // 服务层随后返回的结果只记日志（finishFetch 见 stoppedByUser 直接 return）。
+    this.stoppedByUser = true
     this.frozen = true
-    this.refreshBanner()
+    clearTimeout(this.commitTimer)
+    this.commitTimer = -1
+    this.commitScheduled = false
+    this.commitDeferred = false
+    this.pendingCommitPages = 0
+    this.isLoading = false
+    if (!this.treeReady) {
+      this.phase = TreePagePhase.FAILED
+      this.hasError = true
+      this.errorMsg = '已停止加载'
+      this.bannerErrorText = this.errorMsg
+    } else {
+      this.phase = TreePagePhase.STOPPED
+      this.partialData = true
+      this.partialLoadedPages = this.committedPages
+      this.partialTotalPages = this.totalPages
+      this.hasError = false
+    }
+    this.stopping = false
+    this.clearPendingTarget(LocateState.NONE)
     threadTreeFetchService.cancel(this.treeOwner)
+    this.refreshBanner()
     logger.info('tree-panel stop tid=%{public}s pages=%{public}d/%{public}d',
       this.threadTid, this.committedPages, this.totalPages)
   }
 
-  /**
-   * 应用结果的部分数据状态（只服务列表尾部文案与「未加载页」相关的提示口径）。
-   *
-   * 不做任何常驻提醒：横幅、Toast 都不发；中断是用户自己的决定。
-   *
-   * @param result - 已提交的抓取结果
-   */
   /**
    * 应用本次抓取的缺页信息：写入常驻提示，必要时弹一次 Toast。
    *
@@ -1357,27 +1420,6 @@ export struct ThreadTreePanel {
       return '第 ' + shown.join('、') + ' 页缺少楼层'
     }
     return '共 ' + String(skippedPages.length) + ' 页缺少楼层（如第 ' + shown.join('、') + ' 页）'
-  }
-
-  /**
-   * 按当前过滤状态重建树模型并替换数据源。
-   *
-   * 「只看楼主」在树内不是列表级过滤，而是**用楼主楼层重建一棵树**：被过滤掉的
-   * 非楼主楼层不再参与父子关系，原来回复它们的楼主楼层按「引用目标不在树内」提升为根
-   * （`buildThreadTree` 的既有语义），因此不会出现悬空子行或错误的折叠计数。
-   */
-  private rebuildTree(): void {
-    const posts: PostInfo[] = this.filteredPosts()
-    const model: ThreadTreeModel = buildThreadTree(posts, this.totalPages)
-    this.pageByPid.forEach((page: number, pid: number): void => {
-      model.pageByPid.set(pid, page)
-    })
-    // buildThreadTree 内部已 flatten；只看楼主补回根行引用上下文时才需要再摊平一次
-    if (this.restoreRootQuoteContext(model)) {
-      flattenThreadTree(model)
-    }
-    this.treeModel = model
-    this.treeDataSource.replaceAll(model.rows)
   }
 
   /**
@@ -1512,7 +1554,8 @@ export struct ThreadTreePanel {
    */
   private ensureRowVisible(pid: number): boolean {
     const model: ThreadTreeModel | null = this.treeModel
-    if (model === null || pid <= 0) {
+    // pid = 0 是主楼的合法值（HTML 通道），只有负数才是「无目标」
+    if (model === null || pid < 0) {
       return false
     }
     if (this.treeDataSource.findIndexByPid(pid) >= 0) {
@@ -1579,7 +1622,10 @@ export struct ThreadTreePanel {
       const mappedPage: number | undefined = this.pageByPid.get(pid)
       const targetPage: number = mappedPage !== undefined ? mappedPage : -1
       this.registerTarget(pid, targetPage, -1, LocateSource.USER, true)
-      appStore.showToast('该楼层尚未加载，正在加载中…')
+      const progressText: string = targetPage > 0
+        ? '该楼层在第 ' + String(targetPage) + ' 页，已加载到 ' + String(this.committedPages) + ' 页'
+        : '该楼层尚未加载，已加载到 ' + String(this.committedPages) + ' 页'
+      appStore.showToast(progressText)
       return
     }
     if (this.ensureRowVisible(pid)) {
@@ -1636,7 +1682,7 @@ export struct ThreadTreePanel {
     row.highlighted = true
     row.rev++
     this.highlightPid = pid
-    this.treeDataSource.updateAt(index, row)
+    this.treeDataSource.updateAt(index, row, this.rowKey(row))
     this.highlightTimer = setTimeout((): void => {
       this.highlightTimer = -1
       const targetPid: number = this.highlightPid
@@ -1654,7 +1700,7 @@ export struct ThreadTreePanel {
       }
       current.highlighted = false
       current.rev++
-      this.treeDataSource.updateAt(currentIndex, current)
+      this.treeDataSource.updateAt(currentIndex, current, this.rowKey(current))
     }, 2000)
   }
 
@@ -1763,14 +1809,15 @@ export struct ThreadTreePanel {
   // ==================== 阅读进度（树内锚点） ====================
 
   /**
-   * 树内阅读进度记录是否有效（开关开启、已登录、树已就绪、首轮定位已完成）。
+   * 树内阅读进度记录是否有效（开关开启、已登录、树已就绪、目标不在等待中、用户移动过视口）。
    *
    * @returns 是否可以记录
    */
   private shouldRecordProgress(): boolean {
-    // 有目标在等 / 待用户决定：等待期用户往下翻只是「先看看」，
-    // 不能因此把上次进度覆盖成第 3 页（§3.6.6）
-    if (this.pendingTarget !== null) {
+    // 目标还在等数据：等待期用户往下翻只是「先看看」，不能因此把上次进度覆盖成第 3 页。
+    // 只拦 WAITING —— 目标已就绪/被过滤时用户已经能去，若继续阻塞记录，用户不点 Toast
+    // 就会整场都不落盘（目标也可能一直挂着）。
+    if (this.targetState === LocateState.WAITING) {
       return false
     }
     // 用户没有真正移动过视口：停在顶部不算「读到这」
@@ -1823,7 +1870,8 @@ export struct ThreadTreePanel {
     entry.pid = post.pid
     entry.rootPid = row.rootPid
     const mappedPage: number | undefined = this.pageByPid.get(post.pid)
-    entry.page = mappedPage !== undefined && mappedPage > 0 ? mappedPage : 1
+    // 页码未知时写 -1：写 1 会让下次恢复误判「目标页已提交」，把好好的楼层判成不存在
+    entry.page = mappedPage !== undefined && mappedPage > 0 ? mappedPage : -1
     appStore.saveTreeReadingProgress(appStore.auth.uid, entry)
   }
 
@@ -1844,7 +1892,7 @@ export struct ThreadTreePanel {
    * 加载中取消：终止抓取并退出递进树页面。
    *
    * 递进树条目替代了列表页，页面栈里没有「原来的视图」可退：取消的语义就是放弃这次
-   * 阅读，与系统返回一致。已抓数据直接丢弃（想留着看请用「查看已加载」）。
+   * 阅读，与系统返回一致。已抓数据直接丢弃。
    */
   private cancelLoadingAndExit(): void {
     this.cancelWork()
@@ -2107,11 +2155,11 @@ export struct ThreadTreePanel {
       }
       if (linkTid === this.threadTid && linkPid.length > 0) {
         const linkPidNumber: number = parseInt(linkPid, 10)
-        if (this.treeModel !== null && this.treeModel.postByPid.has(linkPidNumber)) {
+        if (Number.isFinite(linkPidNumber) && linkPidNumber >= 0) {
+          // 与子节点「→」同一入口：已加载就定位，未加载就登记为等待目标
           this.treeJumpToPid(linkPidNumber)
           return
         }
-        // 目标不在树里时不能一律说「不在递进树中」：部分数据下它可能只是还没加载
         appStore.showToast(this.missingFloorHint())
         return
       }
@@ -2668,7 +2716,8 @@ export struct ThreadTreePanel {
       return
     }
     this.rebuildTreePreservingState()
-    this.applyRowsToDataSource()
+    // 只看楼主切换后自己会按中心行定位，跳过锚点补偿，避免「补偿 + 居中」双跳
+    this.applyRowsToDataSource(true)
     this.evaluatePendingTarget()
     if (!this.listMounted) {
       return
@@ -2866,7 +2915,7 @@ export struct ThreadTreePanel {
       .padding({ left: 14, right: 10, top: 8, bottom: 8 })
       .borderRadius(16)
       .backgroundColor(AppColors.toastBg)
-      .constraintSize({ maxWidth: '92%' })
+      .constraintSize({ maxWidth: '88%' })
       .position({ x: 12, y: this.statusBarHeight + NAV_BAR_H + 8 })
       .hitTestBehavior(HitTestMode.Transparent)
       .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
@@ -3140,6 +3189,10 @@ export struct ThreadTreePanel {
         this.commitDeferred = false
         this.scheduleCommit()
       }
+      // 就绪 Toast 也可能因滚动被挂起：停手后补发
+      if (this.targetToastPending) {
+        this.showTargetToast(this.targetToastFiltered)
+      }
     })
     .onAppear((): void => {
       this.listMounted = true
@@ -3147,6 +3200,8 @@ export struct ThreadTreePanel {
     })
     .onDisAppear((): void => {
       this.listMounted = false
+      // 列表在拖拽中被卸载时 onScrollStop 不会再触发，必须复位，否则提交永远被推迟
+      this.scrolling = false
     })
     .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
   }
@@ -3158,14 +3213,17 @@ export struct ThreadTreePanel {
    * 明确提示已到结尾，避免用户继续下拉等待不存在的分页。
    *
    * 两种不完整情况都在这条常驻行里表达（读完全程时一定看得见）：
-   * - 部分数据（中断/失败后查看已加载）：文案给出已加载范围；
+   * - 部分数据（用户停止 / 页面失败）：文案给出已加载范围；
    * - 有缺页（服务端空页）：把缺页信息并入文案（Toast 会被后续提示覆盖）。
    */
   @Builder
   LoadEndFooter() {
     ListItem() {
       Column() {
-        Row() {
+        Row({ space: 8 }) {
+          if (this.phase === TreePagePhase.STREAMING) {
+            LoadingProgress().width(14).height(14).color(AppColors.textTertiary)
+          }
           Text(this.loadEndText()).fontSize(13).fontColor(AppColors.textTertiary)
         }
         .width('100%').justifyContent(FlexAlign.Center)
@@ -3192,11 +3250,20 @@ export struct ThreadTreePanel {
       return '正在加载…'
     }
     if (this.phase === TreePagePhase.FAILED && this.treeReady) {
-      return '已加载 ' + String(this.committedPages) + '/' + String(this.totalPages) +
-        ' 页（加载中断）'
+      const progress: string = '已加载 ' + String(this.committedPages) + '/' +
+        String(this.totalPages) + ' 页'
+      if (this.skippedPageHint.length > 0) {
+        return progress + '（' + this.skippedPageHint + '）'
+      }
+      return progress + '（加载中断）'
     }
     if (this.phase === TreePagePhase.STOPPED) {
-      return '已加载 ' + String(this.committedPages) + '/' + String(this.totalPages) + ' 页'
+      const progress: string = '已加载 ' + String(this.committedPages) + '/' +
+        String(this.totalPages) + ' 页'
+      if (this.skippedPageHint.length > 0) {
+        return progress + '（' + this.skippedPageHint + '）'
+      }
+      return progress
     }
     if (this.skippedPageHint.length === 0) {
       return '已加载全部回复'

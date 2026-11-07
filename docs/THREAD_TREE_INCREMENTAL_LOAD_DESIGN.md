@@ -156,8 +156,8 @@ ENTERING ──第1页到达──▶ STREAMING ──全部页覆盖──▶ C
 
 | 状态 | 内容 | 进度提示 | 可做的操作 |
 | --- | --- | --- | --- |
-| `ENTERING` | 空（居中 LoadingProgress + 「正在加载帖子…」；400ms 延迟淡入） | 无胶囊 | 取消（退出）、以常规列表打开 |
-| `STREAMING` | **第 1 页起的树**，持续增长 | **顶部胶囊**（n/N + 停止；有定位目标时带目标态） | 停止、读、**目标就绪后「前往」**、回复、切列表、切只看楼主 |
+| `ENTERING` | 空（居中 LoadingProgress + 「正在加载第 1 页…」；300ms 延迟淡入） | 无胶囊 | 取消（退出）、以常规列表打开 |
+| `STREAMING` | **第 1 页起的树**，持续增长 | **顶部胶囊**（n/N + 停止；目标未到时可带等待文案） | 停止、读、回复、切列表、切只看楼主；定位由 **Toast** 提示（不是胶囊） |
 | `COMPLETE` | 全帖树 | **胶囊淡出**（加载结束即消失） | 全部 |
 | `STOPPED` | 已提交部分的树 | 胶囊淡出，尾部标注 | 刷新（整帖重抓）、切列表 |
 | `FAILED`（有内容） | 已提交部分的树 | **错误条**（常驻，含重试） | 重试、刷新、切列表 |
@@ -280,21 +280,22 @@ class LocateTarget {
 }
 ```
 
-| 来源 | 何时登记 | 优先级 | 说明 |
+| 来源 | 何时登记 | 覆盖规则 | 说明 |
 | --- | --- | --- | --- |
-| `resume` | 进入时读到 `tree_reading_progress` | 低 | 路由带 pid 时不登记 |
-| `route` | 路由 `threadPid` 非空（引用 `→` / 同帖链接 / 深链） | 高 | 覆盖 resume |
-| `user` | 加载中点了未加载楼层的 `→` / 同帖链接 | 中 | 覆盖 resume；同一时刻只保留一个（后到替换） |
+| `resume` | 进入时读到 `tree_reading_progress` | **不能覆盖任何已有目标** | 路由带 pid 时不登记 |
+| `route` | 路由 `threadPid` 非空（引用 `→` / 同帖链接 / 深链） | 覆盖 resume | 进入时的明确意图 |
+| `user` | 加载中点了未加载楼层的 `→` / 同帖链接 | **总是覆盖**（含 route） | 用户当下意图优先级最高；同一时刻只保留一个 |
 
 **同一时刻只有一个目标**（`pendingTarget`）。三种来源共享同一套「等待 → 就绪 → 用户决定」流程，只有文案不同。
+`canOverrideTarget` 的规则即上表：`resume` 只在无目标时生效，`route`/`user` 都可覆盖当前目标。
 
 #### 3.6.2 目标生命周期
 
 ```
-(none) ──登记──▶ WAITING ──目标 pid 进入模型──▶ READY ──用户点「前往」──▶ ACTIVATED（跳转 + 清除）
-                    │                              ├─用户点 × / 30s 无操作──▶ DISMISSED（清除）
-                    ├─目标页已提交但 pid 不在──▶ MISSING（清除，低打扰说明）
-                    └─加载结束仍未到──▶ 冻结（见规则 3）
+(none) ──登记──▶ WAITING ──目标 pid 进入模型──▶ READY ──Toast「前往查看」──▶ ACTIVATED（跳转 + 清除）
+                    │                              └─用户忽略 Toast ──▶ 保留到加载结束（不阻塞进度）
+                    ├─目标页已提交但 pid 不在──▶ MISSING（静默清除）
+                    └─加载结束（停止/失败）──▶ 静默清除
 ```
 
 判定规则：
@@ -309,9 +310,9 @@ class LocateTarget {
 5. **`pid = 0` 是合法值**：HTML 通道的主楼 pid 为 0，判定与定位都要按「主楼 / 第一行」处理，不能把 0 当"无目标"（现有 `treeJumpToPid` 里 `pid <= 0` 直接滚顶部的写法要改为 `pid < 0`）。
 6. **MISSING 只能在「目标页已提交」之后判定**：加载中找不到只能说「还没加载」，不能说「不存在」（沿用 `missingFloorHint` 的三态口径）。
 7. **加载结束时目标仍未到**：
-   - `COMPLETE` + 目标页已提交 → 楼层确实不在（删楼/屏蔽）→ 文案「上次阅读位置不在了」，静默清除；
-   - `COMPLETE` + 目标页未提交（该页被跳过/失败）→ 文案「上次阅读位置所在页未加载」+ 刷新；
-   - `STOPPED` / `FAILED` → 不再变化，胶囊直接淡出（用户已决定不等），目标若仍 `WAITING` 则随页面状态静默失效。
+   - `COMPLETE` + 目标页已提交 → 楼层确实不在（删楼/屏蔽）→ **静默清除**；
+   - `COMPLETE` + 目标页未提交（该页被跳过/失败）→ **静默清除**（胶囊已消失，不再给刷新入口）；
+   - `STOPPED` / `FAILED` → **静默清除**（用户已决定不等）。
 8. **用户点了未加载楼层的 `→`**：分两种时机——
    - 仍在 `STREAMING`：立即登记 `user` 目标（替换当前），胶囊切 `LOADING_WAIT`，并 Toast 说明「第 40 楼在第 12 页之外，已加载到 9 页」——**让"点不动"变成一个明确的等待态**，而不是无响应；
    - 已 `STOPPED` / `FAILED` / `COMPLETE`：不会再加载了，直接按 `missingFloorHint` 给结论（已停止→「不在已加载的 n/N 页内」；完成→「不存在/已删除」），**不要登记一个永远等不到的目标**。
@@ -366,7 +367,7 @@ class LocateTarget {
 
 ```
 canRecord = 设置开启 && treeReady && !navigationPending && !compensating
-          && pendingTarget === null        // 有目标在等 / 待用户决定时不记
+          && targetState != WAITING          // 目标还在等数据时不记
           && viewportMoved                 // 用户真的动过视口（手势滚动，或点了「前往」）
 ```
 
@@ -663,7 +664,7 @@ private appendAnchorScheduled: boolean = false
 ### 4.7 预热与解析
 
 - 服务层在 `tryCommit` 成功时对该页楼层调用 `preWarmBatch(contents, taskpool.Priority.HIGH)`（不 await）。
-- **节流**：连续推进多页时合并成一批（一次最多 2 页），并跳过已经预热过的 pid（页面维护 `warmedPids: Set<number>`）；长帖 100 页会产生 100 次 taskpool 任务，不节流会与主线程争抢。
+- **节流**：一次水位推进里最多预热 2 页（`TREE_WARMUP_PAGES_PER_COMMIT`）；长帖 100 页会产生 100 次 taskpool 任务，不节流会与主线程争抢。
 - 预热异常一律吞掉：缓存未命中时渲染层会同步解析，只退化为该路径，不能影响抓取流程。
 - 保留完成后对首屏 60 楼的既有预热（重复命中缓存，无副作用）。
 
@@ -693,7 +694,7 @@ private appendAnchorScheduled: boolean = false
 | `common/utils/ThreadTreeLocatePolicy.ets`（新） | 纯函数：目标登记优先级（route > user > resume）、就绪判定、MISSING 判定、胶囊文案与状态（可单测） |
 | `common/model` 或 `model/ThreadTree.ets` | 新增 `LocateTarget` / `TargetState`（数据结构，先行冻结） |
 | `common/datasource/BaseLazyDataSource.ets` | 新增 `notifyDatasetChange` |
-| `common/datasource/ThreadTreeDataSource.ets` | `replaceAll` 改 RELOAD 操作；新增 `applyIncremental` |
+| `common/datasource/ThreadTreeDataSource.ets` | `replaceAll` 改 RELOAD 操作；新增 `applyRowOps`；覆盖 `appendAll`/`prependAll` 避免混用 `onDataAdd` |
 | `common/utils/ThreadTreeRowDiff.ets`（新） | 纯函数：old rows → new rows ⇒ `DataOperation[]` + 锚点位移量（可单测） |
 | `common/utils/ThreadTreeBuilder.ets` | 新增 `restoreRootState`（或放页面侧）；建树逻辑不变 |
 | `entry/src/test/ThreadTreeIncrementalUnit.test.ets`（新） | 水位/diff/状态合并/文案/对拍；`ThreadTreeLocatePolicy` 的状态迁移与文案 |
@@ -807,7 +808,7 @@ private appendAnchorScheduled: boolean = false
 
 | 阶段 | 内容 | 产出 |
 | --- | --- | --- |
-| **P0** | 服务层水位 + `onCommit` + 每页预热（含节流）；页面 `phase` 状态机 + 缓存快路径 + 增量提交管线 + T1–T5 时序约束；胶囊（`LOADING`/`LOADING_WAIT`/`READY`/`STOPPING`/`ERROR`）；停止；尾部四态；浏览历史 `totalRows` 口径 | 核心体验可用 |
+| **P0** | 服务层水位 + `onCommit` + 每页预热（含节流）；页面 `phase` 状态机 + 缓存快路径 + 增量提交管线 + T1–T5 时序约束；胶囊（`LOADING`/`LOADING_WAIT`/`STOPPING`/`ERROR`）；停止即时落定；尾部四态；浏览历史 `totalRows` 口径 | 核心体验可用 |
 | **P1** | 数据源 `onDatasetChange` + 行 diff + 锚点事务；展开状态保留；失败/错误条；`pendingTarget` 全状态（含 `FILTERED`/`MISSING`）与判定表；进度记录新门禁；`missingFloorHint` 四态 | 视口稳定 + 定位正确 |
 | **P2** | 贴底跟随；增量建树器（若实测不足）；刷新方式（单独立项，见 §3.11） | 体验打磨 |
 
@@ -866,18 +867,18 @@ P0 内部建议按这个顺序落地，便于中途验证：
 1. **提交载荷用对象**：`ThreadTreeCommit { posts, committedPages, totalPages, threadInfo, totalRows, forumName, pageByPid }`，不是三元组——首次提交需要 `threadInfo`/`totalRows`（写浏览历史）与 `pageByPid`（进度记录），分开传会多一轮状态。
 2. **停止时服务层直接丢弃在途页**（`worker` 在 `await` 返回后先判 `cancelled` 再决定是否入缓冲）：增量模型下「停止即冻结」，不再沿用旧的「取消时仍合并在途页」语义。
 3. **页面 `frozen` 双保险**：`stopLoading()` 立刻置位，迟到的 `onCommit`/`finishFetch` 不再改内容。
-4. **删除旧路径**：`scheduleNavigation` / `applyNavigation` / `resolveNavigationPid` / `tryRestoreTreeProgress` / `resumeTreeProgress` / `goToResumedPosition` / `applyTreeResume` / `beginViewLoaded` / `commitFailedPartial` / `recordBrowseHistory` 及相关字段已移除（无开关，避免死代码）。
-5. **胶囊图标不用图片资源**：就绪用文本 `↓`、错误用 `!`、加载用 `LoadingProgress`，避免新增未存在的 `$r` 资源导致编译失败。
+4. **删除旧路径**：`scheduleNavigation` / `applyNavigation` / `resolveNavigationPid` / `tryRestoreTreeProgress` / `resumeTreeProgress` / `goToResumedPosition` / `applyTreeResume` / `beginViewLoaded` / `commitFailedPartial` / `recordBrowseHistory` 及相关字段已移除（无开关，避免死代码）；`rebuildTree()` 亦已删除。
+5. **胶囊图标不用图片资源**：错误用文本 `!`、加载/停止中均用 `LoadingProgress`，避免新增未存在的 `$r` 资源导致编译失败（v5 已去掉 `READY` 态，不再有 `↓`）。
 6. **多列覆盖时不弹 Toast 的判定未实现**（§4.11 E5 降级）：当前只在 `scrolling` 时不弹；没有可靠的页面可见性信号，接受多列下可能多弹一次。
-7. **刷新仍整页重来**（§3.11 既定结论），刷新前的中心楼层登记为 `RESUME` 目标，等数据到达后由用户「前往」。
+7. **刷新仍整页重来**（§3.11 既定结论），刷新前的中心楼层登记为 `RESUME` 目标，等数据到达后由 Toast「前往查看」承担定位。
 8. **`pageByPid` 随每次提交下发**（新增字段）：否则增量期间的进度记录只能用第 1 页的映射，恢复时目标页码会错。
 
 ### 10.3 门禁结果
 
 | 项 | 结果 |
 | --- | --- |
-| `assembleHap`（DevEco，`--no-daemon`） | **BUILD SUCCESSFUL** |
-| Hypium Local Test | **Tests run: 887, Failure: 0, Error: 0, Pass: 887**（含新增 24 例） |
+| `assembleHap`（DevEco，`--no-daemon`） | **BUILD SUCCESSFUL**（review 修复后复跑） |
+| Hypium Local Test | **Tests run: 887, Failure: 0, Error: 0, Pass: 887**（含新增 24 例；review 修复后复跑） |
 | `node scripts/check-eol.mjs` | **OK（全 LF）** |
 | `tools/bbcode-ts` 镜像 `sync-to-ets.mjs --dry` | **0 修改** |
 
@@ -894,4 +895,48 @@ P0 内部建议按这个顺序落地，便于中途验证：
 - **定位入口回到 Toast**：READY → 「检测到上次阅读进度（或目标楼层已加载）· 前往查看」；FILTERED → 「上次阅读位置不在只看楼主视图内 · 查看全部」（点击后关闭只看楼主并立即定位）；MISSING → 静默清除。
 - **30 秒自动收起移除**（Toast 自身 4.3 秒消失；胶囊随加载结束消失）。
 - **保留 LOADING_WAIT 与目标刻度**：它只表达「还差多少」，属于等待期感知，不构成定位动作；目标到达后刻度消失、文案回到纯进度。
-- 代码同步：esolveBannerMode 在 COMPLETE / STOPPED / ENTERING 一律返回 HIDDEN；页面删除 scheduleBannerDismiss 与 annerDismissTimer；showTargetReadyToast 改为 showTargetToast(filtered) 同时承担「前往查看」与「查看全部」。
+- 代码同步：resolveBannerMode 在 COMPLETE / STOPPED / ENTERING 一律返回 HIDDEN；页面删除 scheduleBannerDismiss 与 bannerDismissTimer；showTargetReadyToast 改为 showTargetToast(filtered) 同时承担「前往查看」与「查看全部」。
+
+### 10.6 独立 Agent review 修复（2026-11-07）
+
+三个独立审查（数据层 / 页面层 / 契约与规范）后修复：
+
+**页面状态机**
+
+1. **滚动中不丢 Toast**：`showTargetToast` 在 `scrolling` 时置 `targetToastPending`，`onScrollStop` 补发（就绪只判定一次，丢掉就再没机会）。
+2. **结束态清理目标**：`STOPPED` / `FAILED` 静默清除 `pendingTarget`；`COMPLETE` 只保留 `READY`（供 Toast 点击），其余清除。
+3. **进度记录门禁收紧**：从「有目标就不记」改为「只在 `WAITING` 不记」——否则用户不点 Toast 就整场不落盘，`aboutToDisappear` 的补记也失效。
+4. **停止即时落定**：`stopLoading` 立即写 `phase` / 清目标 / 清排程，`finishFetch` 见 `stoppedByUser` 只记日志（不再卡在「正在停止…」等 15s 超时）。
+5. **有内容的页失败/被抢占 → `FAILED`**：`partial` 不再伪装成用户停止，错误条与「重试」可达（符合 §3.8 与 D14 修订）。
+6. **排程提交可取消、带代际**：新增 `commitTimer`，`loadTree` / `cancelWork` / `onThreadChanged` 清理；回调校验 generation，`flushCommit` 拒绝空前缀（避免刷新/切帖后用空前缀提交、串写旧帖历史）。
+7. **收尾提交遵守拖拽互斥**：`finishFetch` 在 `scrolling` 时只更新 pending 并 `commitDeferred`，等 `onScrollStop` 再补。
+8. **正文同帖链接与 `→` 同入口**：未加载时登记 `user` 目标并提示「在第 X 页，已加载到 Y 页」。
+9. **锚点只在 `newIndex > oldIndex` 补偿**；只看楼主切换跳过锚点事务（避免「补偿 + 居中」双跳）。
+10. **边界**：`ensureRowVisible` 允许 `pid = 0`（主楼）；`recordTreeProgress` 页码未知写 `-1`；`onDisAppear` 复位 `scrolling`；`targetPage` 在刷新保留目标时不被清成 `-1`。
+
+**规范 / 契约**
+
+11. 测试文件 6 处 `//` 注释改为块注释；删除死方法 `rebuildTree()` 与未使用的 `RowOp` / `RowOpKind` import。
+12. `ThreadTreeDataSource` 覆盖 `appendAll` / `prependAll`（基类走 `onDataAdd`，与 `onDatasetChange` 混用会违反官方约束）；修正「调用方负责换 dataList」的错误注释。
+13. 文件头与残留注释按增量模型重写（去掉「三种出口」「查看已加载」「首轮定位」）。
+14. 胶囊宽度上限改 `88%`；尾部 `STREAMING` 增加 16vp `LoadingProgress`。
+
+**数据层（独立 Agent 第二轮）**
+
+15. **缓存命中空白页（P0）**：服务层在 `fetchAll` 内同步调 `onCommit` 再返回结果，而页面的 `.then(finishFetch)` 是微任务、先于 `setTimeout(0)` 的排程执行；`finishFetch` 看到 `loadedPages > committedPages` 为假就跳过 `applyCommit` 并置 `frozen`，排程随后被冻结 → `treeReady` 永远 false。修法：`finishFetch` 的补提交条件改为 `!treeReady || loadedPages > committedPages`。
+16. **行 diff 同 index 冲突**：折叠行前插入子行时会产生 `ADD@j` 与 `CHANGE@j`，而官方规定同 index 只有第一条生效，CHANGE 会被静默丢弃。修法：diff 记录本批 ADD 的 index，CHANGE 撞同 index 即整体退 `RELOAD`（新增回归用例 `addAndChangeOnSameIndex_fallsBackToReload`）。
+17. **缓存读取前移**：`readCache` 原排在「等待上一个任务退场」之后，缓存命中要等别的页面抓完（最坏 15s+）。改为先行读取，命中即返回。
+18. **提交载荷传快照**：`ThreadTreeCommit.posts` 改为 `slice()`，避免后续页继续 push 让旧 commit 对象悄悄变长。
+19. **过半空页不再清空已提交内容**：该分支只置 `ok=false` 与错误文案，不再把 `posts`/`pageByPid`/`loadedPages` 清零（那些楼层已经渲染在屏幕上）。
+20. **缺页提示只报已提交范围**：`fillSkippedPages` 过滤 `page <= commitUpTo`，避免「提示第 10 页缺楼层，但只加载到第 7 页」。
+21. **失败后丢弃在途页**：worker 在 `await` 返回后同样判 `scheduler.stopped`，不再入缓冲/推进水位。
+22. **`updateAt` 带键**：`CHANGE` 操作补 `key`（树页 `rowKey` 含 `rev`/高亮后缀），否则框架缓存键与 keyGenerator 分叉；基类 `updateAt` 增加可选 `key` 参数保持签名兼容。
+23. `targetPageRatio` 在页码越界时返回 `-1`（记录过期，不画在 100%）。
+
+**未修（已知限制，留待真机判断）**
+
+- 高亮/展开会改变 `rowKey`，下一次提交时 diff 退化为 RELOAD 并清掉高亮（高亮本就在 2s 后消失，影响有限）；
+- 胶囊动作触摸区约 25vp（设计目标 ≥40），需要真机手感确认后再决定是否加 `responseRegion`；
+- 「（等待第 k 页）」文案与进度条 `animateTo` 平滑未实现；
+- 多列覆盖时的 Toast 可见性判断未做（只在滚动中挂起）；
+- 水位推进（乱序只提交连续前缀）仍内嵌在服务层，未抽成纯函数做单测；`rowKey` 也未抽公共纯函数，测试用的是简化键。

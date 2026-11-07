@@ -143,14 +143,11 @@ export function targetPageRatio(targetPage: number, totalPages: number): number 
   if (targetPage <= 0 || totalPages <= 0) {
     return -1
   }
-  const ratio: number = targetPage / totalPages
-  if (ratio < 0) {
-    return 0
+  // 页码越界说明记录已过期（帖子被合并/删页）：画在 100% 会误导，按未知处理
+  if (targetPage > totalPages) {
+    return -1
   }
-  if (ratio > 1) {
-    return 1
-  }
-  return ratio
+  return targetPage / totalPages
 }
 
 /**

@@ -88,7 +88,7 @@ export default function threadTreeIncrementalUnitTest(): void {
     })
 
     it('decideTargetState_filteredWhenOnlyInAllPosts', 0, (): void => {
-      // 只看楼主把目标过滤掉了：模型里没有、全量里有 —— 不能判成 MISSING
+      /* 只看楼主把目标过滤掉了：模型里没有、全量里有，不能判成 MISSING */
       expect(decideTargetState(true, false, 3, 5, false)).assertEqual(LocateState.FILTERED)
     })
 
@@ -138,7 +138,7 @@ export default function threadTreeIncrementalUnitTest(): void {
         .assertEqual(TreeBannerMode.LOADING)
       expect(resolveBannerMode(TreePagePhase.STREAMING, LocateState.WAITING, false))
         .assertEqual(TreeBannerMode.LOADING_WAIT)
-      // 目标就绪/被过滤都不再由胶囊承载（「前往」交给 Toast），胶囊回到纯进度
+      /* 目标就绪/被过滤都不再由胶囊承载（「前往」交给 Toast），胶囊回到纯进度 */
       expect(resolveBannerMode(TreePagePhase.STREAMING, LocateState.READY, false))
         .assertEqual(TreeBannerMode.LOADING)
       expect(resolveBannerMode(TreePagePhase.STREAMING, LocateState.FILTERED, false))
@@ -146,7 +146,7 @@ export default function threadTreeIncrementalUnitTest(): void {
     })
 
     it('resolveBannerMode_completeCombinations', 0, (): void => {
-      // 加载结束后进度条一律消失：就绪/缺失都由 Toast 承担
+      /* 加载结束后进度条一律消失：就绪/缺失都由 Toast 承担 */
       expect(resolveBannerMode(TreePagePhase.COMPLETE, LocateState.NONE, false))
         .assertEqual(TreeBannerMode.HIDDEN)
       expect(resolveBannerMode(TreePagePhase.COMPLETE, LocateState.READY, false))
@@ -161,17 +161,17 @@ export default function threadTreeIncrementalUnitTest(): void {
 
     it('shouldShowBanner_shortPostSuppressedWithoutTarget', 0, (): void => {
       expect(shouldShowBanner(TreeBannerMode.LOADING, 2, false, true)).assertFalse()
-      // 有目标时不受短帖抑制：目标可能就在第 1 页
+      /* 有目标时不受短帖抑制：目标可能就在第 1 页 */
       expect(shouldShowBanner(TreeBannerMode.LOADING_WAIT, 2, true, true)).assertTrue()
     })
 
     it('shouldShowBanner_delayGate', 0, (): void => {
       expect(shouldShowBanner(TreeBannerMode.LOADING, 29, false, false)).assertFalse()
       expect(shouldShowBanner(TreeBannerMode.LOADING, 29, false, true)).assertTrue()
-      // 错误/停止不受延迟门禁影响
+      /* 错误/停止不受延迟门禁影响 */
       expect(shouldShowBanner(TreeBannerMode.ERROR, 29, false, false)).assertTrue()
       expect(shouldShowBanner(TreeBannerMode.STOPPING, 29, false, false)).assertTrue()
-      // 隐藏态永远不显示
+      /* 隐藏态永远不显示 */
       expect(shouldShowBanner(TreeBannerMode.HIDDEN, 29, true, true)).assertFalse()
     })
 
@@ -180,7 +180,8 @@ export default function threadTreeIncrementalUnitTest(): void {
       expect(targetPageRatio(0, 29)).assertEqual(-1)
       expect(targetPageRatio(10, 0)).assertEqual(-1)
       expect(targetPageRatio(10, 29) > 0.3 && targetPageRatio(10, 29) < 0.4).assertTrue()
-      expect(targetPageRatio(99, 29)).assertEqual(1)
+      /* 页码越界视为记录过期，按未知处理，不画在 100% */
+      expect(targetPageRatio(99, 29)).assertEqual(-1)
     })
 
     it('formatters_matchDesignedCopy', 0, (): void => {
@@ -278,6 +279,25 @@ export default function threadTreeIncrementalUnitTest(): void {
       expect(result.ops.length).assertEqual(0)
     })
 
+    it('addAndChangeOnSameIndex_fallsBackToReload', 0, (): void => {
+      /* 折叠行前插入子行时，MORE 的计数也在变：ADD@1 与 CHANGE@1 同 index，
+         官方规定同 index 只有第一条生效，必须整体重载 */
+      const oldRows: ThreadTreeRow[] = [
+        createRow(1, ThreadTreeRowKind.ROOT),
+        createMoreRow(1, 3)
+      ]
+      const next: ThreadTreeRow[] = [
+        createRow(1, ThreadTreeRowKind.ROOT),
+        createRow(2, ThreadTreeRowKind.CHILD),
+        createRow(3, ThreadTreeRowKind.CHILD),
+        createMoreRow(1, 5)
+      ]
+      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, keyOf)
+      expect(result.needReload).assertTrue()
+      expect(result.ops.length).assertEqual(1)
+      expect(result.ops[0].kind).assertEqual(RowOpKind.RELOAD)
+    })
+
     it('moreRowCountChange_producesChange', 0, (): void => {
       const oldRows: ThreadTreeRow[] = [
         createRow(1, ThreadTreeRowKind.ROOT),
@@ -294,8 +314,7 @@ export default function threadTreeIncrementalUnitTest(): void {
       expect(result.ops[0].index).assertEqual(1)
     })
 
-    it('deletionFallsBackToReload', 0, (): void => {
-      const oldRows: ThreadTreeRow[] = [
+    it('deletionFallsBackToReload', 0, (): void => {      const oldRows: ThreadTreeRow[] = [
         createRow(1, ThreadTreeRowKind.ROOT),
         createRow(2, ThreadTreeRowKind.CHILD)
       ]
