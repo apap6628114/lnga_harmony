@@ -70,12 +70,12 @@ import {
   canActivateTarget,
   canOverrideTarget,
   decideTargetState,
+  formatCompactProgress,
   formatLoadingText,
   formatTargetLabel,
   formatWaitTargetText,
   resolveBannerMode,
-  shouldShowBanner,
-  targetPageRatio
+  shouldShowBanner
 } from '../common/utils/ThreadTreeLocatePolicy'
 import {
   computeTreeRowDiff,
@@ -99,14 +99,6 @@ class RowAnchor {
 }
 
 /**
- * 顶部胶囊的延迟显示时间（ms）。
- *
- * 短帖（1~2 页）在一秒内就抓完，立刻显示胶囊只会闪一下；延迟到 300ms 后
- * 仍在加载才淡入，快路径永远不会看到它。
- */
-const TREE_BANNER_DELAY_MS: number = 300
-
-/**
  * 进入阶段加载态的延迟淡入时间（ms）。
  *
  * 与列表页（`ThreadPanel.loadPosts` 的 REPLACE 分支）同一节奏：第 1 页在 400ms 内
@@ -114,12 +106,42 @@ const TREE_BANNER_DELAY_MS: number = 300
  */
 const ENTERING_LOADING_DELAY_MS: number = 400
 
+/**
+ * 点击「停止」后「正在停止…」的展示时长（ms）。
+ *
+ * 冻结与取消是同步的（不等在途请求），这道延迟只给点击一个**可见反馈**：胶囊先变
+ * 「正在停止…」，随后转入常驻 `LOADED`（`12/29`）。过渡期间不接受任何提交。
+ */
+const TREE_STOP_SETTLE_MS: number = 300
 
-/** 胶囊内细进度条宽度（vp）。 */
-const TREE_BANNER_BAR_W: number = 60
 
-/** 胶囊文案的最大宽度（vp）：给「停止/前往」留出触摸区。 */
-const TREE_BANNER_TEXT_MAX_W: number = 150
+/**
+ * 进度胶囊的 HDS 材质块尺寸、间距与字号（vp）。
+ *
+ * 与列表页右下角页码指示器**同款**（`ThreadPanel.PAGE_BAR_*`）：材质块高 40（与回复按钮等高、
+ * 底边对齐，真机实测见 `docs/IMMERSIVE_LIGHT_DESIGN.md` §12.9），两端内边距 10，内容再做
+ * -4vp 垂直补偿（HDS 内容区与材质块不同心）。
+ *
+ * **间距全部显式**：图标 / 数字 / 动作之间统一 `TREE_BANNER_GAP`；数字宽度由
+ * `MeasureUtils.measureText` 实测（不是估算），材质块宽度 = 各段相加，内容正好铺满。
+ */
+const TREE_BANNER_H: number = 40
+const TREE_BANNER_PAD: number = 10
+const TREE_BANNER_CONTENT_OFFSET_Y: number = -4
+const TREE_BANNER_FONT: number = 14
+/** 加载图标（`LoadingProgress`）与失败前缀 `!` 的宽度。 */
+const TREE_BANNER_ICON_W: number = 14
+/** 图标 / 数字 / 动作之间的统一间距。 */
+const TREE_BANNER_GAP: number = 6
+/** 停止图标尺寸（同时也是它占用的行内布局宽度，视觉间距因此精确等于 GAP）。 */
+const TREE_BANNER_STOP_ICON: number = 16
+/** 「重试」文字宽度（2 个 14fp 汉字）；布局宽 = 文字宽，视觉间距同样精确等于 GAP。 */
+const TREE_BANNER_RETRY_W: number = 28
+/**
+ * 动作触摸区边长（vp）：布局宽只取图标/文字的实际宽度（保证视觉间距精准），
+ * 热区用 `responseRegion` 外扩到 40×40，不参与布局。
+ */
+const TREE_BANNER_TOUCH: number = 40
 
 /**
  * 帖子「两层递进树」阅读页面（与列表页互斥的独立页面组件）。
@@ -139,7 +161,8 @@ const TREE_BANNER_TEXT_MAX_W: number = 150
  * 全帖抓取可能持续数十秒（4 路并发 + 限流）。本页采用**增量加载**
  * （`docs/THREAD_TREE_INCREMENTAL_LOAD_DESIGN.md`）：
  * - 第 1 页到达即渲染，后续按页号顺序增量追加；
- * - 加载期间顶部胶囊显示「已加载 n/N 页」并可随时停止；**胶囊只做进度，不承载定位动作**；
+ * - 加载期间底部进度胶囊（与列表页页码条同款 HDS 材质）显示 `n/N` + 停止，可随时停止；
+ *   **胶囊只做进度，不承载定位动作**；
  * - 定位（恢复进度 / 路由 pid / 点击未加载楼层）统一为「待定位目标」，到达后由 Toast
  *   提供「前往查看」；未到达时不提供任何跳转动作；
  * - 失败时保留已渲染内容 + 错误条；第 1 页到达前的加载屏与列表页同构（只有居中加载圈，
@@ -239,7 +262,7 @@ export struct ThreadTreePanel {
   @State committedPages: number = 0
   /** 是否正在停止（点了停止、等待收尾的短暂过渡）。 */
   @State stopping: boolean = false
-  /** 顶部胶囊当前状态，见 `TreeBannerMode`。 */
+  /** 进度胶囊当前状态，见 `TreeBannerMode`。 */
   @State bannerMode: number = TreeBannerMode.HIDDEN
   /** 胶囊是否可见（叠加 300ms 延迟门禁后的结果）。 */
   @State bannerVisible: boolean = false
@@ -255,12 +278,18 @@ export struct ThreadTreePanel {
    * 停止渲染，数值留待下次 `loadTree` 重置。
    */
   @State enteringLoadingOpacity: number = 0
-  /** 加载态 300ms 延迟是否已到（防短帖闪一下）。 */
-  @State bannerDelayElapsed: boolean = false
-  /** 目标页码（画进度条刻度用，未知为 -1）。 */
-  @State targetPage: number = -1
   /** 本次加载失败原因（错误条文案）。 */
   @State bannerErrorText: string = ''
+  /**
+   * 胶囊数字区的实测宽度（vp，`MeasureUtils.measureText`）。
+   *
+   * 数字态按**最大可能文本**（`total/total`）测量，同一帖子内不变：`6/10 → 10/10` 时
+   * 数字区不伸缩、停止按钮不跳动。测量失败（UI 上下文未就绪）时由 {@link bannerTextWidth}
+   * 按字符数兜底，不会出现宽度为 0 的胶囊。
+   */
+  @State bannerTextW: number = 0
+  /** 上次测量用的文本（同一文本不重复测量；测量失败不缓存，下次重试）。 */
+  private bannerMeasuredText: string = ''
 
   @StorageProp('statusBarHeight') statusBarHeight: number = 0
   @StorageProp('navBarHeight') navBarHeight: number = 0
@@ -381,10 +410,10 @@ export struct ThreadTreePanel {
   private targetToastFiltered: boolean = false
   /** 排程提交的定时器（刷新/切帖时必须能取消）。 */
   private commitTimer: number = -1
+  /** 停止过渡计时器：「正在停止…」→ `STOPPED`（`LOADED`）。切页/刷新时取消。 */
+  private stopSettleTimer: number = -1
   /** 用户主动停止：收尾结果只记日志，不再改状态。 */
   private stoppedByUser: boolean = false
-  /** 胶囊延迟显示计时器（300ms，防短帖闪一下）。 */
-  private bannerDelayTimer: number = -1
   /** 进入阶段加载态延迟淡入计时器（400ms；离开 `ENTERING` 后回调自然作废）。 */
   private enteringLoadingTimer: number = -1
   /** 锚点事务：是否待恢复。 */
@@ -431,14 +460,14 @@ export struct ThreadTreePanel {
     this.recordTreeProgress()
     clearTimeout(this.progressRecordTimer)
     this.progressRecordTimer = -1
-    clearTimeout(this.bannerDelayTimer)
-    this.bannerDelayTimer = -1
     clearTimeout(this.enteringLoadingTimer)
     this.enteringLoadingTimer = -1
     clearTimeout(this.targetToastTimer)
     this.targetToastTimer = -1
     clearTimeout(this.commitTimer)
     this.commitTimer = -1
+    clearTimeout(this.stopSettleTimer)
+    this.stopSettleTimer = -1
     this.commitScheduled = false
     this.targetToastPending = false
     this.appendAnchorPending = false
@@ -485,7 +514,6 @@ export struct ThreadTreePanel {
     this.pendingTarget = null
     this.targetState = LocateState.NONE
     this.targetLabel = ''
-    this.targetPage = -1
     this.lastRows = []
     this.allPids = new Set<number>()
     this.pendingCommitPosts = []
@@ -494,6 +522,8 @@ export struct ThreadTreePanel {
     this.commitDeferred = false
     clearTimeout(this.commitTimer)
     this.commitTimer = -1
+    clearTimeout(this.stopSettleTimer)
+    this.stopSettleTimer = -1
     clearTimeout(this.targetToastTimer)
     this.targetToastTimer = -1
     this.targetToastPending = false
@@ -533,8 +563,8 @@ export struct ThreadTreePanel {
     this.appendAnchorScheduled = false
     clearTimeout(this.commitTimer)
     this.commitTimer = -1
-    clearTimeout(this.bannerDelayTimer)
-    this.bannerDelayTimer = -1
+    clearTimeout(this.stopSettleTimer)
+    this.stopSettleTimer = -1
     clearTimeout(this.enteringLoadingTimer)
     this.enteringLoadingTimer = -1
     clearTimeout(this.targetToastTimer)
@@ -565,13 +595,13 @@ export struct ThreadTreePanel {
     const generation: number = this.fetchGeneration
     clearTimeout(this.progressRecordTimer)
     this.progressRecordTimer = -1
-    clearTimeout(this.bannerDelayTimer)
-    this.bannerDelayTimer = -1
 
     clearTimeout(this.targetToastTimer)
     this.targetToastTimer = -1
     clearTimeout(this.commitTimer)
     this.commitTimer = -1
+    clearTimeout(this.stopSettleTimer)
+    this.stopSettleTimer = -1
     this.targetToastPending = false
     this.stoppedByUser = false
     this.stopping = false
@@ -591,19 +621,18 @@ export struct ThreadTreePanel {
     this.viewportMoved = false
     this.readingResumeHandled = false
     this.bannerErrorText = ''
-    this.bannerDelayElapsed = false
     this.bannerVisible = false
     this.bannerMode = TreeBannerMode.HIDDEN
+    this.bannerTextW = 0
+    this.bannerMeasuredText = ''
     this.phase = TreePagePhase.ENTERING
     this.committedPages = 0
     if (this.pendingTarget === null) {
       this.targetState = LocateState.NONE
       this.targetLabel = ''
-      this.targetPage = -1
     } else {
-      // 刷新保留了目标：状态重判，刻度仍用目标自己的页码（不能清成 -1）
+      // 刷新保留了目标：状态重判（胶囊只显示进度，不画目标刻度）
       this.targetState = LocateState.WAITING
-      this.targetPage = this.pendingTarget.page
     }
     if (this.threadTid.length === 0) {
       threadTreeFetchService.cancel(this.treeOwner)
@@ -632,20 +661,16 @@ export struct ThreadTreePanel {
     this.partialTotalPages = 0
     logger.info('tree-panel load start tid=%{public}s gen=%{public}d refresh=%{public}s',
       fetchTid, generation, String(keepSubject))
-    // 加载态 300ms 延迟：短帖（1~2 页）在一秒内结束时不闪一下 loading
-    this.bannerDelayTimer = setTimeout((): void => {
-      this.bannerDelayTimer = -1
-      if (generation !== this.fetchGeneration) {
-        return
-      }
-      this.bannerDelayElapsed = true
-      this.refreshBanner()
-    }, TREE_BANNER_DELAY_MS)
     threadTreeFetchService.fetchAll(this.treeOwner, fetchTid, (_done: number, total: number): void => {
       if (generation !== this.fetchGeneration) {
         return
       }
       this.progressTotal = total
+      if (this.totalPages <= 0) {
+        // 总页数还没随提交落地（第 1 页未回）：先用 onProgress 的 total 兜底刷新，
+        // 否则胶囊要等到首次提交才出现
+        this.refreshBanner()
+      }
     }, keepSubject, (commit: ThreadTreeCommit): void => {
       this.onFetchCommit(commit, generation)
     }).then((result: ThreadTreeFetchResult): void => {
@@ -764,7 +789,6 @@ export struct ThreadTreePanel {
     target.label = formatTargetLabel(source, -1)
     this.pendingTarget = target
     this.targetLabel = target.label
-    this.targetPage = page
     this.targetState = decideTargetState(this.allPids.has(pid),
       this.treeModel !== null && this.treeModel.postByPid.has(pid), page, this.committedPages,
       this.phase === TreePagePhase.COMPLETE)
@@ -1228,7 +1252,8 @@ export struct ThreadTreePanel {
   /**
    * 目标可操作时弹一次 Toast（「前往查看」/「查看全部」）。
    *
-   * 胶囊在「已到」之后立刻回到纯进度、加载结束后消失，因此定位入口只由 Toast 承担。
+   * 胶囊在「已到」之后立刻回到纯进度（结束后只显示 `N/X`），不承载任何定位动作，
+   * 因此定位入口只由 Toast 承担。
    * 用户正在滚动时不弹：手势中弹窗会被误触，也打断阅读。
    *
    * @param filtered - 目标是否被「只看楼主」过滤
@@ -1331,7 +1356,10 @@ export struct ThreadTreePanel {
   /**
    * 清除待定位目标。
    *
-   * @param state - 清除后的状态（`NONE` / `DISMISSED` / `MISSING`）
+   * 没有「忽略目标」的独立入口：用户要放弃等待就点胶囊的「停止」（`stopLoading` 里同样清目标），
+   * 所以 `DISMISSED` 状态当前没有入口。
+   *
+   * @param state - 清除后的状态（`NONE` / `MISSING`）
    */
   private clearPendingTarget(state: number): void {
 
@@ -1340,34 +1368,26 @@ export struct ThreadTreePanel {
     this.pendingTarget = null
     this.targetState = state
     this.targetLabel = ''
-    this.targetPage = -1
     this.refreshBanner()
-  }
-
-  /** 用户点了胶囊上的「×」：忽略本次定位。 */
-  private dismissPendingTarget(): void {
-    const target: LocateTarget | null = this.pendingTarget
-    if (target === null) {
-      return
-    }
-    logger.info('tree-panel target dismissed pid=%{public}d', target.pid)
-    this.clearPendingTarget(LocateState.DISMISSED)
   }
 
   /**
    * 刷新胶囊状态与可见性（所有状态变化的唯一出口）。
+   *
+   * 加载结束（完成/停止）转为常驻的 `LOADED`（只显示 `N/X`）；只有 `ENTERING` 不渲染。
+   * 末尾同步刷新数字区实测宽度，保证材质块宽度与内容一致。
    */
   private refreshBanner(): void {
     const hasTarget: boolean = this.pendingTarget !== null
     const state: number = hasTarget ? this.targetState : LocateState.NONE
     const mode: number = resolveBannerMode(this.phase, state, this.stopping)
     this.bannerMode = mode
-    this.bannerVisible = shouldShowBanner(mode, this.totalPages, hasTarget,
-      this.bannerDelayElapsed)
+    this.bannerVisible = shouldShowBanner(mode, this.totalPages)
+    this.updateBannerTextWidth()
   }
 
   /**
-   * 停止加载（顶部胶囊「停止」）。
+   * 停止加载（底部进度胶囊「停止」）。
    *
    * 立即反馈（胶囊转「正在停止…」）但不等待网络：服务层在途请求自然收尾，
    * 页面在 {@link finishFetch} 里落定。**终止后不提供继续**。
@@ -1379,7 +1399,7 @@ export struct ThreadTreePanel {
     if (this.phase !== TreePagePhase.STREAMING && this.phase !== TreePagePhase.ENTERING) {
       return
     }
-    // 点击即冻结：状态立刻落定，不等在途请求（最坏要等单页 15s 超时）。
+    // 点击即冻结：不再接受任何提交，不等在途请求（最坏要等单页 15s 超时）。
     // 服务层随后返回的结果只记日志（finishFetch 见 stoppedByUser 直接 return）。
     this.stoppedByUser = true
     this.frozen = true
@@ -1388,21 +1408,43 @@ export struct ThreadTreePanel {
     this.commitScheduled = false
     this.commitDeferred = false
     this.pendingCommitPages = 0
+    threadTreeFetchService.cancel(this.treeOwner)
+    this.clearPendingTarget(LocateState.NONE)
     if (!this.treeReady) {
+      // 内容还没上屏：直接落错误态（全屏，没有胶囊可展示过渡）
       this.phase = TreePagePhase.FAILED
       this.errorMsg = '已停止加载'
       this.bannerErrorText = this.errorMsg
-    } else {
+      this.refreshBanner()
+      logger.info('tree-panel stop tid=%{public}s pages=%{public}d/%{public}d',
+        this.threadTid, this.committedPages, this.totalPages)
+      return
+    }
+    // 有内容：先给「正在停止…」的可见反馈（`TREE_STOP_SETTLE_MS`），再落定到 STOPPED/LOADED
+    this.stopping = true
+    this.refreshBanner()
+    this.stopSettleTimer = setTimeout((): void => {
+      this.stopSettleTimer = -1
+      this.settleStopped()
+    }, TREE_STOP_SETTLE_MS)
+  }
+
+  /**
+   * 停止过渡结束：落定 `STOPPED`，胶囊转入常驻 `LOADED`（`12/29`），尾部标注已加载范围。
+   *
+   * 过渡期间（`stopping = true`）胶囊显示「正在停止…」，`frozen` 已阻止任何提交；
+   * 这里只改页面状态，不碰服务层（取消早已完成）。
+   */
+  private settleStopped(): void {
+    this.stopping = false
+    if (this.phase !== TreePagePhase.STOPPED) {
       this.phase = TreePagePhase.STOPPED
       this.partialData = true
       this.partialLoadedPages = this.committedPages
       this.partialTotalPages = this.totalPages
     }
-    this.stopping = false
-    this.clearPendingTarget(LocateState.NONE)
-    threadTreeFetchService.cancel(this.treeOwner)
     this.refreshBanner()
-    logger.info('tree-panel stop tid=%{public}s pages=%{public}d/%{public}d',
+    logger.info('tree-panel stop settled tid=%{public}s pages=%{public}d/%{public}d',
       this.threadTid, this.committedPages, this.totalPages)
   }
 
@@ -2796,10 +2838,6 @@ export struct ThreadTreePanel {
         .width('100%').position({ x: 0, y: 0 })
 
       if (this.treeReady) {
-        this.ProgressBanner()
-      }
-
-      if (this.treeReady) {
         this.BottomBar()
       }
     }
@@ -2831,7 +2869,7 @@ export struct ThreadTreePanel {
   /**
    * 无内容可展示时的失败态（第 1 页失败 / 停止在第一页到达前）。
    *
-   * 已经有内容时**不再进这一屏**：内容保留，由顶部胶囊的错误条告知（§3.8）。
+   * 已经有内容时**不再进这一屏**：内容保留，由底部进度胶囊的错误态告知（§3.8）。
    */
   @Builder
   ErrorState() {
@@ -2851,120 +2889,234 @@ export struct ThreadTreePanel {
   }
 
   /**
-   * 顶部进度胶囊（单一载体，按状态换内容，不堆第二条）。
+   * 加载进度胶囊（与列表页页码指示器**同款**：页面底部、HDS 沉浸光感材质）。
    *
-   * 位置固定在标题栏下缘、绝对定位**不占布局**：出现/消失都不会推挤列表，
-   * 也就不会造成内容位移。三种感知都挂在这里（§3.6.4）：
-   * - 我在等什么 → 文案（目标标签）；
-   * - 还差多少 → 细进度条 + 目标刻度；
-   * - 现在能不能去 → 有没有「前往」这个动作。
+   * 位置与 `ThreadPanel.BottomBar` 的页码条一致——底部栏内、回复按钮左侧，材质块高 40、
+   * 与回复按钮底边对齐。表达只剩「进度数字 + 动作」，没有进度条与目标刻度：
+   * - 加载中 / 等待定位目标 → `12/29` + 停止（等待目标没有独立的取消入口，停止即放弃）；
+   * - 停止中 → `正在停止…`；
+   * - 失败 → `加载失败` + 重试（详细原因见尾部文案与无障碍描述）。
+   *
+   * **加载结束（完成/停止）后转为常驻的 `LOADED`**（`ThreadTreeLocatePolicy.resolveBannerMode`
+   * 返回 `LOADED`）：只显示 `N/X`，没有图标、没有动作；只有 `ENTERING` 不渲染。
+   *
+   * 视觉不写长句——「在等什么」「为什么失败」只进 `accessibilityText`，这是数字 + 动作
+   * 指示器的最小表达。HDS 硬约束见 `docs/IMMERSIVE_LIGHT_DESIGN.md` §12.9：`barWidth` 显式、
+   * 内容宽度与材质块对齐（数字宽实测、动作按实际宽度紧跟，**不用 SpaceBetween 把动作推到最右**）、
+   * 动作不传宿主 `onTap`（命中区只包住图标/文字，避免点数字也触发「停止」）、
+   * 动作容器写 `'100%'` 高度（写死 40 会被 HDS 内容区顶偏）、内容整体 `offset` 垂直补偿。
    */
   @Builder
   ProgressBanner() {
-    if (this.bannerVisible) {
-      Row({ space: 8 }) {
-        if (this.bannerMode === TreeBannerMode.ERROR) {
-          Text('!').fontSize(13).fontColor(AppColors.destructive).fontWeight(FontWeight.Bold)
-        } else {
-          LoadingProgress().width(14).height(14).color(AppColors.white)
-        }
-        Text(this.bannerText())
-          .fontSize(13)
-          .fontColor(this.bannerMode === TreeBannerMode.ERROR ? AppColors.destructive : AppColors.white)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .constraintSize({ maxWidth: TREE_BANNER_TEXT_MAX_W })
-        if (this.bannerShowsProgressBar()) {
-          Stack({ alignContent: Alignment.Start }) {
-            Row()
-              .width(TREE_BANNER_BAR_W).height(4)
-              .borderRadius(2)
-              .backgroundColor('#33FFFFFF')
-            Row()
-              .width(this.bannerFillWidth()).height(4)
-              .borderRadius(2)
-              .backgroundColor(AppColors.primary)
-            if (this.bannerTargetRatio() >= 0) {
-              Row()
-                .width(2).height(8)
-                .backgroundColor(AppColors.toastAccent)
-                .offset({ x: this.bannerTargetRatio() * TREE_BANNER_BAR_W })
-            }
+    Stack() {
+      HdsMaterialHost({ barWidth: this.bannerBarWidth(), barHeight: TREE_BANNER_H }) {
+        Row({ space: TREE_BANNER_GAP }) {
+          if (this.bannerMode === TreeBannerMode.ERROR) {
+            Text('!').fontSize(TREE_BANNER_FONT).fontColor(AppColors.destructive)
+              .fontWeight(FontWeight.Bold).width(TREE_BANNER_ICON_W)
+              .textAlign(TextAlign.Center)
+          } else if (this.bannerMode !== TreeBannerMode.LOADED) {
+            LoadingProgress().width(TREE_BANNER_ICON_W).height(TREE_BANNER_ICON_W)
+              .color(UIMaterialManager.adaptiveForeground)
           }
-          .width(TREE_BANNER_BAR_W).height(8)
-        }
-        if (this.bannerPrimaryAction().length > 0) {
-          Text(this.bannerPrimaryAction())
-            .fontSize(13)
-            .fontColor(this.bannerMode === TreeBannerMode.ERROR ? AppColors.destructive : AppColors.white)
-            .fontWeight(FontWeight.Medium)
-            .padding({ left: 6, right: 4, top: 6, bottom: 6 })
+          Text(this.bannerText())
+            .fontSize(TREE_BANNER_FONT)
+            .fontColor(this.bannerMode === TreeBannerMode.ERROR
+              ? AppColors.destructive : UIMaterialManager.adaptiveForeground)
+            .width(this.bannerTextWidth())
+            .textAlign(TextAlign.Start)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          if (this.bannerMode === TreeBannerMode.LOADING ||
+            this.bannerMode === TreeBannerMode.LOADING_WAIT) {
+            // 停止：SVG 图标。**布局宽 = 图标宽**（视觉间距精确等于 GAP），
+            // 40×40 热区用 responseRegion 外扩、不占布局（容器高走 '100%'，见文件头 §12.9 的坑）
+            Stack() {
+              Image($r('app.media.icon_stop'))
+                .width(TREE_BANNER_STOP_ICON).height(TREE_BANNER_STOP_ICON)
+                .fillColor(UIMaterialManager.adaptiveForeground)
+                .draggable(false)
+            }
+            .width(TREE_BANNER_STOP_ICON).height('100%')
+            .alignContent(Alignment.Center)
             .hitTestBehavior(HitTestMode.Block)
-            .onClick((): void => {
-              this.onBannerPrimaryAction()
+            .responseRegion({
+              x: -(TREE_BANNER_TOUCH - TREE_BANNER_STOP_ICON) / 2,
+              y: 0,
+              width: TREE_BANNER_TOUCH,
+              height: TREE_BANNER_TOUCH
             })
-        }
-        if (this.bannerSecondaryAction().length > 0) {
-          Text(this.bannerSecondaryAction())
-            .fontSize(13)
-            .fontColor(this.bannerMode === TreeBannerMode.ERROR ? AppColors.textSecondary
-              : AppColors.destructive)
-            .padding({ left: 4, right: 2, top: 6, bottom: 6 })
-            .hitTestBehavior(HitTestMode.Block)
             .onClick((): void => {
-              this.onBannerSecondaryAction()
+              this.stopLoading()
             })
+          } else if (this.bannerMode === TreeBannerMode.ERROR) {
+            Text('重试')
+              .fontSize(TREE_BANNER_FONT)
+              .fontColor(AppColors.destructive)
+              .fontWeight(FontWeight.Medium)
+              .width(TREE_BANNER_RETRY_W).height('100%')
+              .textAlign(TextAlign.Center)
+              .hitTestBehavior(HitTestMode.Block)
+              .responseRegion({
+                x: -(TREE_BANNER_TOUCH - TREE_BANNER_RETRY_W) / 2,
+                y: 0,
+                width: TREE_BANNER_TOUCH,
+                height: TREE_BANNER_TOUCH
+              })
+              .onClick((): void => {
+                this.loadTree(true)
+              })
+          }
         }
+        // 内容宽度 = 材质块宽度（首尾各离边 TREE_BANNER_PAD）；写 '100%' 会跟着 HDS 页签项偏移（§12.9）。
+        // 各段宽度都是显式值（数字实测、动作为图标/文字实际宽），Row 的 space 提供统一间距。
+        .width(this.bannerBarWidth())
+        .height('100%')
+        .constraintSize({ minHeight: TREE_BANNER_H })
+        .padding({ left: TREE_BANNER_PAD, right: TREE_BANNER_PAD, top: 0, bottom: 0 })
+        .alignItems(VerticalAlign.Center)
+        .offset({ y: TREE_BANNER_CONTENT_OFFSET_Y })
+        .accessibilityText(this.bannerAccessibilityText())
       }
-      .padding({ left: 14, right: 10, top: 8, bottom: 8 })
-      .borderRadius(16)
-      .backgroundColor(AppColors.toastBg)
-      .constraintSize({ maxWidth: '88%' })
-      .position({ x: 12, y: this.statusBarHeight + NAV_BAR_H + 8 })
-      .hitTestBehavior(HitTestMode.Transparent)
-      .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
-      .accessibilityText(this.bannerAccessibilityText())
     }
+    .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
   }
 
   /**
-   * 胶囊主文案。
+   * 材质块宽度（vp）：显式数值，由内容各段相加（HDS 悬浮栏不能由内容撑开，§12.9）。
    *
-   * @returns 文案
+   * - `LOADED`：数字区 + 两端 padding（无图标、无动作）；
+   * - 加载中：图标 + 间距 + 数字区 + 间距 + 停止按钮；
+   * - 停止中：图标 + 间距 + 数字区；
+   * - 失败：图标 + 间距 + 数字区 + 间距 + 重试按钮。
+   *
+   * @returns 材质块宽度
    */
-  private bannerText(): string {
-    const label: string = this.targetLabel.length > 0 ? this.targetLabel : '目标楼层'
+  private bannerBarWidth(): number {
+    let width: number = TREE_BANNER_PAD * 2 + this.bannerTextWidth()
+    if (this.bannerMode !== TreeBannerMode.LOADED) {
+      width += TREE_BANNER_ICON_W + TREE_BANNER_GAP
+    }
+    if (this.bannerMode === TreeBannerMode.LOADING || this.bannerMode === TreeBannerMode.LOADING_WAIT) {
+      width += TREE_BANNER_GAP + TREE_BANNER_STOP_ICON
+    } else if (this.bannerMode === TreeBannerMode.ERROR) {
+      width += TREE_BANNER_GAP + TREE_BANNER_RETRY_W
+    }
+    return width
+  }
+
+  /**
+   * 数字区 / 文案宽度（vp）。
+   *
+   * 优先用 {@link bannerTextW}（`MeasureUtils.measureText` 实测）；测量尚未完成（UI 上下文
+   * 未就绪）时按字符类型兜底，保证胶囊不会缩成 0 宽。
+   *
+   * @returns 文本宽度
+   */
+  private bannerTextWidth(): number {
+    if (this.bannerTextW > 0) {
+      return this.bannerTextW
+    }
+    return this.estimateTextWidth(this.bannerMeasureText())
+  }
+
+  /**
+   * 兜底估算（仅在 `measureText` 失败时使用）：CJK 按 14vp/字、其余按 8vp/字。
+   *
+   * 宁可略宽也不能偏窄——偏窄会让文字被省略。旧实现统一按 8vp/字，中文文案
+   * （「加载失败」「正在停止…」）会被估成实际宽度的一半。
+   *
+   * @param text - 待估算文本
+   * @returns 估算宽度（vp）
+   */
+  private estimateTextWidth(text: string): number {
+    let width: number = 0
+    for (let i: number = 0; i < text.length; i++) {
+      width += text.charCodeAt(i) > 255 ? 14 : 8
+    }
+    return width
+  }
+
+  /**
+   * 用于测量宽度的文本。
+   *
+   * 数字态取**最大可能文本** `total/total`（`committed ≤ total`，位数相同或更少）：
+   * 同一帖子内宽度固定，`6/10 → 10/10` 时数字区不伸缩、停止按钮不跳动。
+   *
+   * @returns 待测量文本（空串表示无需测量）
+   */
+  private bannerMeasureText(): string {
     if (this.bannerMode === TreeBannerMode.ERROR) {
-      return this.bannerErrorText.length > 0 ? this.bannerErrorText : '加载失败'
+      return '加载失败'
     }
     if (this.bannerMode === TreeBannerMode.STOPPING) {
       return '正在停止…'
     }
-    // 只有「还没到」时才展示目标；到了由 Toast 提示，胶囊回到纯进度
-    if (this.bannerMode === TreeBannerMode.LOADING_WAIT) {
-      return formatWaitTargetText(label, this.committedPages, this.totalPages)
+    const total: number = this.totalPages > 0 ? this.totalPages : this.progressTotal
+    if (total <= 0) {
+      return ''
     }
-    return formatLoadingText(this.committedPages, this.totalPages)
+    return formatCompactProgress(total, total)
   }
 
-  /** @returns 是否显示进度条 */
-  private bannerShowsProgressBar(): boolean {
-    return this.bannerMode === TreeBannerMode.LOADING ||
-      this.bannerMode === TreeBannerMode.LOADING_WAIT
+  /**
+   * 重新测量文案宽度（状态或总页数变化时由 {@link refreshBanner} 调用）。
+   *
+   * 同一文本不重复测量（每次进度提交都会走一遍 refreshBanner）；测量失败不缓存文本，
+   * 下次刷新会重试。
+   */
+  private updateBannerTextWidth(): void {
+    const text: string = this.bannerMeasureText()
+    if (text.length === 0) {
+      this.bannerTextW = 0
+      this.bannerMeasuredText = ''
+      return
+    }
+    if (text === this.bannerMeasuredText && this.bannerTextW > 0) {
+      return
+    }
+    const width: number = this.measureTextVp(text)
+    this.bannerTextW = width
+    this.bannerMeasuredText = width > 0 ? text : ''
   }
 
-  /** @returns 进度条填充宽度（vp） */
-  private bannerFillWidth(): number {
-    if (this.totalPages <= 0) {
+  /**
+   * 用 UIContext 的 `MeasureUtils.measureText` 实测文本宽度并换算成 vp。
+   *
+   * 与 `Text` 渲染用同一套字体度量，宽度不是估算值——这是材质块能贴合内容的前提。
+   * 测量失败（UI 上下文未就绪 / 字体服务异常）返回 0，由 {@link bannerTextWidth} 兜底。
+   *
+   * @param text - 待测量文本
+   * @returns 宽度（vp）；失败为 0
+   */
+  private measureTextVp(text: string): number {
+    try {
+      const px: number = this.getUIContext().getMeasureUtils().measureText({
+        textContent: text,
+        fontSize: TREE_BANNER_FONT
+      })
+      return Math.ceil(this.getUIContext().px2vp(px))
+    } catch (e) {
+      logger.warn('tree-panel measure banner text failed: %{public}s', formatError(e))
       return 0
     }
-    const ratio: number = Math.max(0, Math.min(1, this.committedPages / this.totalPages))
-    return Math.round(TREE_BANNER_BAR_W * ratio)
   }
 
-  /** @returns 目标刻度比例；不画刻度返回 -1 */
-  private bannerTargetRatio(): number {
-    return targetPageRatio(this.targetPage, this.totalPages)
+  /**
+   * 胶囊主文案（**视觉极简**：只有「已提交页/总页数」，失败时只有「加载失败」）。
+   *
+   * @returns 文案
+   */
+  private bannerText(): string {
+    if (this.bannerMode === TreeBannerMode.ERROR) {
+      return '加载失败'
+    }
+    if (this.bannerMode === TreeBannerMode.STOPPING) {
+      return '正在停止…'
+    }
+    // 总页数在第 1 页提交前未知：用 onProgress 的 total 兜底，避免闪出「12/0」
+    const total: number = this.totalPages > 0 ? this.totalPages : this.progressTotal
+    return formatCompactProgress(this.committedPages, total)
   }
 
   /** @returns 主动作文案（空串表示无；胶囊不提供「前往」，那是 Toast 的职责） */
@@ -2978,38 +3130,41 @@ export struct ThreadTreePanel {
     return ''
   }
 
-  /** @returns 次动作文案（空串表示无） */
-  private bannerSecondaryAction(): string {
-    return this.bannerMode === TreeBannerMode.LOADING_WAIT ? '×' : ''
-  }
-
-  /** 主动作分发（胶囊只做进度相关动作，不做「前往」）。 */
-  private onBannerPrimaryAction(): void {
-    if (this.bannerMode === TreeBannerMode.LOADING || this.bannerMode === TreeBannerMode.LOADING_WAIT) {
-      this.stopLoading()
-      return
-    }
-    if (this.bannerMode === TreeBannerMode.ERROR) {
-      this.loadTree(true)
-    }
-  }
-
-  /** 次动作分发：取消本次等待的目标（不影响已经加载的内容）。 */
-  private onBannerSecondaryAction(): void {
-    this.dismissPendingTarget()
-  }
-
   /**
    * 胶囊的无障碍描述。
    *
    * @returns 描述文本
    */
   private bannerAccessibilityText(): string {
+    const text: string = this.bannerA11yText()
     const action: string = this.bannerPrimaryAction()
     if (action.length === 0) {
-      return this.bannerText()
+      return text
     }
-    return this.bannerText() + '，双击' + action
+    return text + '，双击' + action
+  }
+
+  /**
+   * 胶囊的**完整语义**（读屏用）。
+   *
+   * 视觉层只显示 `12/29`（见 {@link bannerText}），读屏用户拿不到视觉上下文，
+   * 必须用完整句子补回「在加载什么、在等什么、为什么失败」——同一份口径，两种表达。
+   *
+   * @returns 完整描述
+   */
+  private bannerA11yText(): string {
+    if (this.bannerMode === TreeBannerMode.ERROR) {
+      return this.bannerErrorText.length > 0 ? this.bannerErrorText : '加载失败'
+    }
+    if (this.bannerMode === TreeBannerMode.LOADING_WAIT) {
+      const label: string = this.targetLabel.length > 0 ? this.targetLabel : '目标楼层'
+      return formatWaitTargetText(label, this.committedPages, this.totalPages)
+    }
+    if (this.bannerMode === TreeBannerMode.LOADING || this.bannerMode === TreeBannerMode.LOADING_WAIT ||
+      this.bannerMode === TreeBannerMode.LOADED) {
+      return formatLoadingText(this.committedPages, this.totalPages)
+    }
+    return this.bannerText()
   }
 
   /**
@@ -3276,11 +3431,20 @@ export struct ThreadTreePanel {
   }
 
   /**
-   * 底部悬浮回复按钮（回复主题）。
+   * 底部悬浮栏：加载进度胶囊 + 回复按钮。
+   *
+   * 与列表页 `ThreadPanel.BottomBar` 同构（页码条 + 回复按钮）：两块都是 HDS 材质宿主、
+   * 高 40、`Row({ space: 8 })` 并排、底边对齐；右/左手握持只影响整排的起始侧。
+   * 进度胶囊在加载中与加载结束后**都常驻**（结束后只显示 `N/X`），宽度随内容变化：
+   * 右手握持时回复按钮固定贴右、胶囊只在它左侧伸缩（回复按钮不位移）；左手握持整排从左排起，
+   * 胶囊变窄时回复按钮会左移（与列表页页码条同一行为）。
    */
   @Builder
   BottomBar() {
     Row({ space: 8 }) {
+      if (this.bannerVisible) {
+        this.ProgressBanner()
+      }
       HdsMaterialHost({
         barWidth: 40,
         barHeight: 40,
@@ -3297,6 +3461,7 @@ export struct ThreadTreePanel {
       }
     }
     .width('100%').padding({ left: 16, right: 16, bottom: 16 + this.navBarHeight })
+    .alignItems(VerticalAlign.Center)
     .justifyContent(this.holdingStatus === HoldingHandStatus.LEFT_HAND_HELD ? FlexAlign.Start : FlexAlign.End)
   }
 }

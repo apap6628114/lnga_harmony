@@ -1177,6 +1177,7 @@ Release 清单内的组件（`Slider` / `Toggle` / `Select`）仍走通用属性
 | `TopicListPanel.FloatingActions` 发帖 / 刷新 | 44×44 | `onTap`（宿主绑定 `onTabBarClick`） |
 | `ThreadPanel.BottomBar` 回复按钮 | 40×40 | 同上 |
 | `ThreadPanel.BottomBar` 页码指示器 | `pageBarWidth()` × 40 | **不传 `onTap`**：块内页码格与「到」各自持有 `onClick` / `bindPopup` |
+| `ThreadTreePanel.BottomBar` 加载进度胶囊 | `bannerBarWidth()` × 40（数字宽度 `measureText` 实测 + 图标/停止按钮显式宽度） | **不传 `onTap`**：块内「停止图标（32×40）/ 重试（38×40）」各自持有 `onClick`（整块命中会误触停止） |
 | `PanelNavBar.iconPod` 返回 / 主右侧 / 次右侧按钮 | `TITLE_POD_SIZE`（36×36） | **一律不传 `onTap`**：内容节点持有 `onClick` / `bindMenu`（与迁移前的自绘底板逐条等价） |
 | `WebViewPanel` 网页前进 / 后退按钮 | `FAB_SIZE`（44×44） | **不传 `onTap`**：内容节点持有 `onClick` / `accessibilityText`；**禁用态的变淡写在宿主外层容器上**（见下文"禁用态"一条） |
 

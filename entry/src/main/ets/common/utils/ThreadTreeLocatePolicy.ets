@@ -81,8 +81,9 @@ export function canActivateTarget(state: number): boolean {
  * 计算胶囊状态。
  *
  * 胶囊**只承载加载进度与「停止」**，不承载定位动作（「前往」由 Toast 承担）。
- * 目标未就绪时额外显示「载入到哪」，就绪后立刻回到普通进度；加载一结束
- * （完成/停止）胶囊即消失。
+ * 目标未就绪时视觉只多一个停止按钮（文案仍是 `12/29`，见 `formatCompactProgress`），
+ * 就绪后立刻回到普通进度。**加载结束（完成/停止）不隐藏**，转为常驻的 `LOADED`
+ * （只显示 `29/29` / `12/29`）；只有 `ENTERING`（树未上屏、底部栏不存在）才是 `HIDDEN`。
  *
  * @param phase - 页面阶段（`TreePagePhase`）
  * @param targetState - 目标状态（无目标时传 `LocateState.NONE`）
@@ -96,11 +97,15 @@ export function resolveBannerMode(phase: number, targetState: number, stopping: 
   if (phase === TreePagePhase.FAILED) {
     return TreeBannerMode.ERROR
   }
-  // 只在加载中显示：COMPLETE / STOPPED / ENTERING 一律隐藏（完成后消失）
+  // 加载结束：胶囊常驻显示「已加载范围」，不再消失
+  if (phase === TreePagePhase.COMPLETE || phase === TreePagePhase.STOPPED) {
+    return TreeBannerMode.LOADED
+  }
+  // 只剩 ENTERING：树还没上屏，底部栏整体不渲染
   if (phase !== TreePagePhase.STREAMING) {
     return TreeBannerMode.HIDDEN
   }
-  // 目标未就绪时给「还差多少」的感知；就绪后由 Toast 提示，胶囊回到纯进度
+  // 目标未就绪时给「还在等」的读屏语义；就绪后由 Toast 提示，胶囊回到纯进度
   if (targetState === LocateState.WAITING) {
     return TreeBannerMode.LOADING_WAIT
   }
@@ -108,28 +113,25 @@ export function resolveBannerMode(phase: number, targetState: number, stopping: 
 }
 
 /**
- * 胶囊是否应该出现（防闪烁门禁）。
+ * 胶囊是否应该出现。
+ *
+ * 只要**总页数已知**（`totalPages > 0`）就显示——单页帖也显示 `1/1`。`ERROR` 必须被看见，
+ * 不受该规则限制；`ENTERING`（`HIDDEN`）不显示。
+ *
+ * 旧版的「300ms 延迟淡入 + 短帖抑制」已移除：胶囊加载结束后常驻，不再有「闪一下」问题。
  *
  * @param mode - 胶囊状态
  * @param totalPages - 服务端总页数（0 表示未知）
- * @param hasTarget - 是否有待处理目标
- * @param delayElapsed - 加载态 300ms 延迟是否已到
  * @returns 应显示时为 true
  */
-export function shouldShowBanner(mode: number, totalPages: number, hasTarget: boolean,
-  delayElapsed: boolean): boolean {
+export function shouldShowBanner(mode: number, totalPages: number): boolean {
   if (mode === TreeBannerMode.HIDDEN) {
     return false
   }
-  // 错误与停止是瞬时/需被看见的状态，不受延迟门禁影响
-  if (mode === TreeBannerMode.ERROR || mode === TreeBannerMode.STOPPING) {
+  if (mode === TreeBannerMode.ERROR) {
     return true
   }
-  // 纯加载态：短帖（<=2 页）抓取在一秒内结束，胶囊只会闪一下，不显示
-  if (!hasTarget && totalPages > 0 && totalPages <= 2) {
-    return false
-  }
-  return delayElapsed
+  return totalPages > 0
 }
 
 /**
@@ -151,7 +153,30 @@ export function targetPageRatio(targetPage: number, totalPages: number): number 
 }
 
 /**
- * 「已加载 n/N 页」文案。口径固定为**已提交页**（用户看到的内容）。
+ * 胶囊的**视觉**文案：只有「已提交页/总页数」，不写任何说明词。
+ *
+ * 胶囊要像页码指示器那样轻——数字本身就是主体，不占宽、不抢阅读注意力：
+ * - 视觉层不表达「在等什么」「还差多少」（进度条与目标刻度已移除，见设计文档 §3.3）；
+ * - 这两项语义交给 {@link formatWaitTargetText}，只在读屏时出现。
+ *
+ * 口径与 {@link formatLoadingText} 完全一致：`n = committedPages`（已提交页）。
+ *
+ * @param committedPages - 已提交页数
+ * @param totalPages - 总页数（未知时传 0）
+ * @returns `12/29`；总页数未知时退化为已提交页数（不显示 `12/0`）
+ */
+export function formatCompactProgress(committedPages: number, totalPages: number): string {
+  if (totalPages <= 0) {
+    return String(committedPages)
+  }
+  return String(committedPages) + '/' + String(totalPages)
+}
+
+/**
+ * 「已加载 n/N 页」完整文案（**无障碍描述 / 日志**用）。
+ *
+ * 视觉层已改用 {@link formatCompactProgress}（胶囊只显示数字）；读屏需要完整语义，
+ * 由本函数承担。口径固定为**已提交页**（用户看到的内容）。
  *
  * @param committedPages - 已提交页数
  * @param totalPages - 总页数
@@ -162,7 +187,7 @@ export function formatLoadingText(committedPages: number, totalPages: number): s
 }
 
 /**
- * 等待定位目标的文案（「还差多少」的核心表达）。
+ * 等待定位目标的完整文案（**无障碍描述**用；胶囊视觉层只显示数字与刻度）。
  *
  * @param label - 目标标签（「上次阅读位置」/「第 812 楼」）
  * @param committedPages - 已提交页数

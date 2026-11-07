@@ -3,6 +3,7 @@ import {
   canActivateTarget,
   canOverrideTarget,
   decideTargetState,
+  formatCompactProgress,
   formatFilteredText,
   formatLoadingText,
   formatMissingText,
@@ -145,34 +146,39 @@ export default function threadTreeIncrementalUnitTest(): void {
         .assertEqual(TreeBannerMode.LOADING)
     })
 
-    it('resolveBannerMode_completeCombinations', 0, (): void => {
-      /* 加载结束后进度条一律消失：就绪/缺失都由 Toast 承担 */
+    it('resolveBannerMode_completeKeepsLoadedBanner', 0, (): void => {
+      /* 加载结束不消失：任意目标状态都转为常驻的 LOADED（只显示 `N/X`） */
       expect(resolveBannerMode(TreePagePhase.COMPLETE, LocateState.NONE, false))
-        .assertEqual(TreeBannerMode.HIDDEN)
+        .assertEqual(TreeBannerMode.LOADED)
       expect(resolveBannerMode(TreePagePhase.COMPLETE, LocateState.READY, false))
-        .assertEqual(TreeBannerMode.HIDDEN)
+        .assertEqual(TreeBannerMode.LOADED)
       expect(resolveBannerMode(TreePagePhase.COMPLETE, LocateState.WAITING, false))
-        .assertEqual(TreeBannerMode.HIDDEN)
+        .assertEqual(TreeBannerMode.LOADED)
+      expect(resolveBannerMode(TreePagePhase.COMPLETE, LocateState.FILTERED, false))
+        .assertEqual(TreeBannerMode.LOADED)
       expect(resolveBannerMode(TreePagePhase.COMPLETE, LocateState.MISSING, false))
-        .assertEqual(TreeBannerMode.HIDDEN)
+        .assertEqual(TreeBannerMode.LOADED)
       expect(resolveBannerMode(TreePagePhase.STOPPED, LocateState.READY, false))
-        .assertEqual(TreeBannerMode.HIDDEN)
+        .assertEqual(TreeBannerMode.LOADED)
+      /* 停止过渡态优先于阶段判定 */
+      expect(resolveBannerMode(TreePagePhase.STOPPED, LocateState.READY, true))
+        .assertEqual(TreeBannerMode.STOPPING)
     })
 
-    it('shouldShowBanner_shortPostSuppressedWithoutTarget', 0, (): void => {
-      expect(shouldShowBanner(TreeBannerMode.LOADING, 2, false, true)).assertFalse()
-      /* 有目标时不受短帖抑制：目标可能就在第 1 页 */
-      expect(shouldShowBanner(TreeBannerMode.LOADING_WAIT, 2, true, true)).assertTrue()
-    })
-
-    it('shouldShowBanner_delayGate', 0, (): void => {
-      expect(shouldShowBanner(TreeBannerMode.LOADING, 29, false, false)).assertFalse()
-      expect(shouldShowBanner(TreeBannerMode.LOADING, 29, false, true)).assertTrue()
-      /* 错误/停止不受延迟门禁影响 */
-      expect(shouldShowBanner(TreeBannerMode.ERROR, 29, false, false)).assertTrue()
-      expect(shouldShowBanner(TreeBannerMode.STOPPING, 29, false, false)).assertTrue()
-      /* 隐藏态永远不显示 */
-      expect(shouldShowBanner(TreeBannerMode.HIDDEN, 29, true, true)).assertFalse()
+    it('shouldShowBanner_visibleWheneverTotalKnown', 0, (): void => {
+      /* 单页帖也显示 `1/1`；加载结束的 LOADED 同样常驻 */
+      expect(shouldShowBanner(TreeBannerMode.LOADING, 1)).assertTrue()
+      expect(shouldShowBanner(TreeBannerMode.LOADING, 2)).assertTrue()
+      expect(shouldShowBanner(TreeBannerMode.LOADED, 1)).assertTrue()
+      expect(shouldShowBanner(TreeBannerMode.LOADED, 29)).assertTrue()
+      /* 停止过渡与错误必须被看见，不受总页数限制 */
+      expect(shouldShowBanner(TreeBannerMode.STOPPING, 29)).assertTrue()
+      expect(shouldShowBanner(TreeBannerMode.ERROR, 1)).assertTrue()
+      expect(shouldShowBanner(TreeBannerMode.ERROR, 0)).assertTrue()
+      /* 隐藏态永远不显示；总页数未知（第 1 页未回）同样不显示 */
+      expect(shouldShowBanner(TreeBannerMode.HIDDEN, 29)).assertFalse()
+      expect(shouldShowBanner(TreeBannerMode.LOADING, 0)).assertFalse()
+      expect(shouldShowBanner(TreeBannerMode.LOADED, 0)).assertFalse()
     })
 
     it('targetPageRatio_clampsAndReportsUnknown', 0, (): void => {
@@ -182,6 +188,13 @@ export default function threadTreeIncrementalUnitTest(): void {
       expect(targetPageRatio(10, 29) > 0.3 && targetPageRatio(10, 29) < 0.4).assertTrue()
       /* 页码越界视为记录过期，按未知处理，不画在 100% */
       expect(targetPageRatio(99, 29)).assertEqual(-1)
+    })
+
+    it('formatCompactProgress_digitsOnly', 0, (): void => {
+      expect(formatCompactProgress(12, 29)).assertEqual('12/29')
+      /* 总页数未知时退化为已提交页数：绝不显示 12/0 */
+      expect(formatCompactProgress(12, 0)).assertEqual('12')
+      expect(formatCompactProgress(0, 29)).assertEqual('0/29')
     })
 
     it('formatters_matchDesignedCopy', 0, (): void => {
