@@ -202,10 +202,12 @@ ENTERING ──第1页到达──▶ STREAMING ──全部页覆盖──▶ C
 | `ERROR` | ! | 加载失败 | 重试（文字，38×40） | 重试 |
 
 - **停止用 SVG 图标**（`app.media.icon_stop`，圆角方块）：不再用「停止」文字，胶囊更短，且图标与数字的间距恒定。
-- **数字宽度实测**：`MeasureUtils.measureText` 按 14fp 测「`total/total`」的宽度（**同一帖子内固定**），
-  材质块宽 = `padding×2 + 图标 + gap + 数字 + [gap + 动作]`，内容正好铺满、不会出现右侧空白；
-  按最大文本测量，`6/10 → 10/10` 时数字区不伸缩、停止图标不跳动。
-- **间距常量**：两端 `PAD = 10`、段间 `GAP = 6`、加载图标 14、停止按钮 32×40（图标 16 居中）、重试 38×40。
+- **数字宽度实测**：`MeasureUtils.measureText` 按 14fp 测**当前文本**（`committed/total`）的宽度，
+  材质块宽 = `padding×2 + 图标 + gap + 数字 + [gap + 动作]`，内容正好铺满、右侧不留空白。
+  数字进位（9→10 等）时胶囊随内容变宽、动作右移，属正常排版。
+  **不要按 `total/total` 预留**：长帖（如 5138 页）早期 `8/5138` 会在数字右侧空出一大段（真机已复现）。
+- **间距常量**：两端 `PAD = 10`、段间 `GAP = 6`、加载图标 14、停止图标 16、重试文字 28；
+  停止/重试的 40×40 热区用 `responseRegion` 外扩，不占布局。
 - `barWidth` 必须是**显式数值**（HDS 悬浮栏不能由内容撑开，§12.9）。
 - 动作元素自己 `onClick`、**不传宿主 `onTap`**：宿主 `onTap` 是整块命中，点数字也会触发「停止」，容易误触。
 - 内容用**显式宽度 = `barWidth`** 铺满 + 两端 `padding`；写 `'100%'` 会跟随 HDS 页签项偏移（§12.9 真机现象）。
@@ -733,7 +735,7 @@ private appendAnchorScheduled: boolean = false
 | E1 | `ThreadTreePanel.aboutToDisappear` | 清理新增的所有定时器：就绪 Toast 延时、锚点 `scheduled`、首屏延迟；`pendingTarget` 置空 |
 | E2 | 全页 | 用 `phase` 取代 `isLoading` 的加载态语义；`BottomBar` 条件从 `treeReady && !isLoading` 改为 `phase !== ENTERING`；保留 `treeReady` 作为"至少有一页数据" |
 | E3 | `loadTree(true)`（刷新） | 保留 `pendingTarget`（重置为 WAITING 重新判定）、保留 `refreshAnchorPid`、重置 `viewportMoved`；刷新期间不记录进度 |
-| E4 | 胶囊 | 数字宽度用 `MeasureUtils.measureText` 实测（同一帖子内按 `total/total` 固定），材质块宽度由各段显式相加；文案 `maxLines(1) + TextOverflow.Ellipsis`；系统字号放大时数字可省略，但不能顶掉「停止图标/重试」 |
+| E4 | 胶囊 | 数字宽度用 `MeasureUtils.measureText` 按**当前文本**实测，材质块宽度由各段显式相加；文案 `maxLines(1) + TextOverflow.Ellipsis`；系统字号放大时数字可省略，但不能顶掉「停止图标/重试」 |
 | E5 | Toast | 只在页面处于前台栈顶时弹（多列覆盖时属于后台，不抢当前页面的 Toast）；没有可靠的可见性信号时降级为「不弹」 |
 | E6 | 日志 | 新增 `tree-commit page=.. rows=.. ops=add:3/change:1/reload:0 anchor=..`、`tree-target state=.. pid=.. page=..`、`tree-anchor restore from=.. to=..`——线上问题只能靠这三类日志定位 |
 | E7 | `missingFloorHint` | 从三态扩为四态：加载中（还没到）/ 被只看楼主过滤 / 已停止且不在已加载页内 / 确实不存在 |
@@ -1077,9 +1079,9 @@ P0 内部建议按这个顺序落地，便于中途验证：
     布局宽 = 图标宽 16（视觉间距精确等于 GAP），40×40 热区用 `responseRegion` 外扩；
     错误态仍用「重试」文字（布局宽 28，热区同样外扩到 40×40）。
   - **数字宽度不再估算**：用 `MeasureUtils.measureText`（`UIContext`，since 12）按 14fp 实测
-    `total/total` 的宽度（px → vp 向上取整），缓存进 `@State bannerTextW`；材质块宽度 =
+    **当前文本**的宽度（px → vp 向上取整），缓存进 `@State bannerTextW`；材质块宽度 =
     `padding×2 + 图标 + gap + 数字 + [gap + 动作]`。测量失败（UI 上下文未就绪）按字符类型兜底，
-    不会出现 0 宽胶囊。
+    不会出现 0 宽胶囊。（v14 修正：v12 曾按 `total/total` 预留，长帖早期会空出一段，见 §10.14。）
   - 间距常量：两端 `PAD = 10`、段间 `GAP = 6`、图标 14、停止图标 16、重试文字 28。
 - 单测：`resolveBannerMode_completeKeepsLoadedBanner` 恢复；`shouldShowBanner` 增加 `LOADED` 断言。
 - 门禁：`assembleHap`（DevEco，`--no-daemon`，debug）**BUILD SUCCESSFUL in 27s 315ms**；Hypium Local Test
@@ -1140,3 +1142,17 @@ P0 内部建议按这个顺序落地，便于中途验证：
 - `assembleHap`（DevEco，`--no-daemon`，debug）**BUILD SUCCESSFUL in 25s 679ms**；
 - Hypium Local Test **Tests run: 888, Failure: 0, Error: 0, Pass: 888**；
 - `node scripts/check-eol.mjs` 全 LF；`tools/bbcode-ts` 镜像 `--dry` 0 修改。
+
+### 10.14 v14 修正：胶囊数字宽度按当前文本实测（2026-11-08）
+
+- 真机反馈（5138 页的长帖）：**停止加载后胶囊显示 `8/5138`，右侧却空出一大段**。
+- 原因：v12 为了让停止图标位置稳定，按**最大可能文本** `total/total`（`5138/5138`，9 字符）
+  测量并固定数字区宽度；实际显示 `8/5138`（6 字符），差值变成数字右侧的空白。
+- 修正：`bannerMeasureText` 改为按**当前文本**（`committed/total`）测量——数字与停止图标之间
+  始终只隔 `GAP = 6`，材质块宽度贴合内容，LOADED 态同理。
+  代价：数字进位（9→10、99→100）时胶囊随内容变宽、动作右移，属正常排版；
+  不再牺牲早期页面的紧凑度去换动作位置稳定。
+- 单测无变化（测量与布局不在 Local Test 覆盖范围）。
+- 门禁：`assembleHap`（DevEco，`--no-daemon`，debug）**BUILD SUCCESSFUL in 27s 004ms**；
+  Hypium Local Test **Tests run: 888, Failure: 0, Error: 0, Pass: 888**；
+  `node scripts/check-eol.mjs` 全 LF；`tools/bbcode-ts` 镜像 `--dry` 0 修改。

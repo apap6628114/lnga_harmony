@@ -283,9 +283,9 @@ export struct ThreadTreePanel {
   /**
    * 胶囊数字区的实测宽度（vp，`MeasureUtils.measureText`）。
    *
-   * 数字态按**最大可能文本**（`total/total`）测量，同一帖子内不变：`6/10 → 10/10` 时
-   * 数字区不伸缩、停止按钮不跳动。测量失败（UI 上下文未就绪）时由 {@link bannerTextWidth}
-   * 按字符数兜底，不会出现宽度为 0 的胶囊。
+   * 按**当前文本**（`committed/total`）测量：数字与停止图标之间恒定 `GAP`，不预留未来位数
+   * （预留会让 `8/5138` 这类早期进度右侧空出一段）。测量失败（UI 上下文未就绪）时由
+   * {@link bannerTextWidth} 按字符类型兜底，不会出现宽度为 0 的胶囊。
    */
   @State bannerTextW: number = 0
   /** 上次测量用的文本（同一文本不重复测量；测量失败不缓存，下次重试）。 */
@@ -3040,8 +3040,9 @@ export struct ThreadTreePanel {
   /**
    * 用于测量宽度的文本。
    *
-   * 数字态取**最大可能文本** `total/total`（`committed ≤ total`，位数相同或更少）：
-   * 同一帖子内宽度固定，`6/10 → 10/10` 时数字区不伸缩、停止按钮不跳动。
+   * 数字态按**当前文本**（`committed/total`）测量：数字与停止图标之间恒定 `GAP`，
+   * 不预留未来位数。按 `total/total` 预留会让 `8/5138` 这类早期进度在数字右侧空出一大段
+   * （5138 页的帖已实测到）。数字进位（9→10 等）时胶囊随内容变宽、动作右移，属正常排版。
    *
    * @returns 待测量文本（空串表示无需测量）
    */
@@ -3056,7 +3057,7 @@ export struct ThreadTreePanel {
     if (total <= 0) {
       return ''
     }
-    return formatCompactProgress(total, total)
+    return formatCompactProgress(this.committedPages, total)
   }
 
   /**
