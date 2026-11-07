@@ -1,5 +1,14 @@
 /**
- * 设置面板
+ * 设置面板。
+ *
+ * 列表按「分组」组织（容器见 `common/components/SettingGroup.ets`）：
+ * 外观 → 阅读 → 显示与加载 → 内容过滤 → 智能与语音 → 交互与设备 → 数据与存储 →
+ * 账号 → 高级，退出登录独立成块放在最后。**分组不渲染组标题**，只靠卡片边界与留白
+ * 分隔；下面的分组名只用于代码组织与后续维护，不上屏。
+ *
+ * 排序依据：高频在上、组内由粗到细（如阅读组按「结构 → 翻页 → 预取 → 续读」）、
+ * 不可逆动作最后且与普通工具项分开。新增设置项时先判断归属组，**不要**按功能上线
+ * 顺序往列表末尾追加（旧版就是这样堆出 8 个无语义块、首屏全是低频项的）。
  */
 
 
@@ -19,6 +28,7 @@ import { TipsDialog, SelectDialog, CustomContentDialog } from '@kit.ArkUI'
 import { ActionOption, CredentialPasswordContent, SelectRadioResult } from '../common/dialogs/Dialogs'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { SettingRow, SettingToggleRow, SettingPickerRow } from '../common/components/SettingRow'
+import { SettingGroup, SettingGroupDivider, SettingDangerRow } from '../common/components/SettingGroup'
 import { serializeCredentialExport } from '../common/security/CredentialExportCrypto'
 import { storageStatistics } from '@kit.CoreFileKit'
 import { BusinessError } from '@kit.BasicServicesKit'
@@ -39,6 +49,10 @@ export struct SettingsPanel {
   @StorageProp('aiConfigVersion') @Watch('onAiConfigVersionChange') aiConfigVersion: number = 0
   /** 当前帖子内容字号，用于响应字体设置页的实时更新。 */
   @StorageProp('contentFontSize') contentFontSize: number = 15
+  /** 当前帖子列表字号，与内容字号一起显示在「字体大小」行（字体页有两档）。 */
+  @StorageProp('topicFontSize') topicFontSize: number = 15
+  /** 视频默认静音（全局播放策略，此处与播放器内的喇叭按钮同源）。 */
+  @StorageProp('videoMuted') videoMuted: boolean = false
   /**
    * 本地数据迁移状态（`MigrationStatus` 字符串值，见 AppStorageKeys）。
    *
@@ -529,6 +543,16 @@ export struct SettingsPanel {
     this.imageStrategyDialogController?.open()
   }
 
+  /**
+   * 「字体大小」行的当前值。
+   *
+   * 字体设置页把「帖子内容」与「帖子列表」分成两档独立可调，只显示内容字号会让
+   * 用户以为列表字号没调整（原先只显示 contentFontSize）。
+   */
+  private fontSizeBadge(): string {
+    return `帖子 ${this.contentFontSize} / 列表 ${this.topicFontSize}`
+  }
+
   private updateAiBadge(): void {
     const profile: AiProviderProfile | null = appStore.settingsStore.getActiveAiProfile()
     if (profile) {
@@ -545,271 +569,19 @@ export struct SettingsPanel {
       Column() {
         Scroll(this.scroller) {
           Column() {
-            // ---- 主题选择 ----
-            Column() {
-              Text('主题选择').fontSize(15).fontColor(AppColors.textSecondary)
-                .width('100%').padding({ bottom: 10 })
-
-              Row() {
-                ForEach(THEME_OPTIONS, (theme: ThemeOption) => {
-                  this.ThemeCard(theme)
-                }, (theme: ThemeOption) => theme.name)
-              }
-              .width('100%')
-            }
-            .width('92%')
-            .backgroundColor(AppColors.bgTertiary)
-            .borderRadius(12)
-            .padding(12)
-            .margin({ top: 16 })
-
-            // ---- Block 1: 黑名单管理 / 用户备注 / 关键词屏蔽 / 自动签到 ----
-            Column() {
-              SettingRow({
-                iconRes: $r('app.media.settings_blacklist'), iconColor: SettingsIconColors.blacklist, label: '黑名单管理',
-                onAction: () => {
-                  routerStore.navigateActivity(Screen.blacklist())
-                }
-              })
-
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              SettingRow({
-                iconRes: $r('app.media.settings_user_notes'), iconColor: SettingsIconColors.userNotes, label: '用户备注',
-                onAction: () => {
-                  routerStore.navigateActivity(Screen.notes())
-                }
-              })
-
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              SettingRow({
-                iconRes: $r('app.media.settings_keyword_filter'), iconColor: SettingsIconColors.keywordFilter, label: '关键词屏蔽',
-                onAction: () => {
-                  routerStore.navigateActivity(Screen.filterKeywords())
-                }
-              })
-
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              SettingToggleRow({
-                iconRes: $r('app.media.settings_auto_checkin'), iconColor: SettingsIconColors.autoCheckin, label: '自动签到',
-                isOn: appStore.settings.autoCheckin,
-                onChange: (v: boolean) => {
-                  appStore.settingsStore.setAutoCheckin(v)
-                }
-              })
-
-            }
-            .width('92%')
-            .backgroundColor(AppColors.bgTertiary)
-            .borderRadius(12)
-            .margin({ top: 12 })
-
-            // ---- Block 2: AI 配置 / 智感握姿 / 语音朗读 ----
-            Column() {
-              SettingPickerRow({
-                iconRes: $r('app.media.settings_ai_config'), iconColor: SettingsIconColors.aiConfig, label: 'AI 配置',
-                badgeText: this.aiProviderBadge,
-                onAction: () => {
-                  routerStore.navigateActivity(Screen.aiSettings())
-                }
-              })
-
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              SettingToggleRow({
-                iconRes: $r('app.media.settings_smart_grip'), iconColor: SettingsIconColors.smartGrip, label: '智感握姿',
-                isOn: appStore.settings.smartGrip,
-                onChange: (v: boolean) => {
-                  appStore.settingsStore.setSmartGrip(v)
-                }
-              })
-
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              SettingRow({
-                iconRes: $r('app.media.settings_tts'), iconColor: SettingsIconColors.tts, label: '语音朗读',
-                onAction: () => {
-                  routerStore.navigateActivity(Screen.ttsSettings())
-                }
-              })
-            }
-            .width('92%')
-            .backgroundColor(AppColors.bgTertiary)
-            .borderRadius(12)
-            .margin({ top: 12 })
-
-            // ---- Block 3A: 显示签名 / 图片加载模式 ----
-            Column() {
-              SettingToggleRow({
-                iconRes: $r('app.media.settings_signature'), iconColor: SettingsIconColors.signature, label: '显示签名',
-                isOn: appStore.settings.showSignature,
-                onChange: (v: boolean) => {
-                  appStore.settingsStore.setShowSignature(v)
-                }
-              })
-
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              SettingPickerRow({
-                iconRes: $r('app.media.settings_image_loading'), iconColor: SettingsIconColors.imageLoading, label: '图片加载模式',
-                badgeText: this.imageStrategyBadge,
-                onAction: () => {
-                  this.showImageStrategyPicker()
-                }
-              })
-
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              // 显示帖子预览图：本开关决定"这块 UI 存不存在"；上方「图片加载模式」处于被动态
-              // （手动加载 / 仅 WiFi 下的蜂窝）时同样整块不渲染——列表里不放占位块，
-              // 要么显示原图、要么什么都不显示（见 TopicCardComponent.shouldRenderPreview 与 K40）
-              SettingToggleRow({
-                iconRes: $r('app.media.settings_topic_preview'), iconColor: SettingsIconColors.topicPreview,
-                label: '显示帖子预览图',
-                isOn: appStore.settings.showTopicPreview,
-                onChange: (v: boolean) => {
-                  appStore.settingsStore.setShowTopicPreview(v)
-                }
-              })
-
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              SettingPickerRow({
-                iconRes: $r('app.media.settings_font_size'), iconColor: SettingsIconColors.fontSize, label: '字体大小',
-                badgeText: `${this.contentFontSize}`,
-                onAction: () => {
-                  routerStore.navigateActivity(Screen.fontSizeSettings())
-                }
-              })
-
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              SettingPickerRow({
-                iconRes: $r('app.media.settings_thread_navigation'), iconColor: SettingsIconColors.threadNavigation, label: '帖子楼层导航',
-                badgeText: this.threadNavBadge,
-                onAction: () => {
-                  this.showThreadNavPicker()
-                }
-              })
-
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              SettingPickerRow({
-                iconRes: $r('app.media.settings_thread_tree'), iconColor: SettingsIconColors.threadRender, label: '帖子阅读样式',
-                badgeText: this.threadRenderBadge,
-                onAction: () => {
-                  this.showThreadRenderPicker()
-                }
-              })
-
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              SettingPickerRow({
-                iconRes: $r('app.media.settings_page_prefetch'), iconColor: SettingsIconColors.pagePrefetch, label: '预加载页数',
-                badgeText: this.prefetchPageBadge,
-                onAction: () => {
-                  this.showPrefetchPagePicker()
-                }
-              })
-
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              SettingToggleRow({
-                iconRes: $r('app.media.settings_reading_progress'), iconColor: SettingsIconColors.readingProgress, label: '记录阅读进度',
-                isOn: appStore.settings.recordReadingProgress,
-                onChange: (v: boolean) => {
-                  appStore.settingsStore.setRecordReadingProgress(v)
-                }
-              })
-
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              SettingToggleRow({
-                iconRes: $r('app.media.settings_internal_browser'), iconColor: SettingsIconColors.internalBrowser, label: '内置网页浏览',
-                isOn: appStore.settings.useInternalWebView,
-                onChange: (v: boolean) => {
-                  appStore.settingsStore.setUseInternalWebView(v)
-                }
-              })
-
-            }
-            .width('92%')
-            .backgroundColor(AppColors.bgTertiary)
-            .borderRadius(12)
-            .margin({ top: 12 })
-
-            // ---- Block 3B: 调试模式 ----
-            Column() {
-              SettingToggleRow({
-                iconRes: $r('app.media.settings_debug_mode'), iconColor: SettingsIconColors.debugMode, label: '调试模式',
-                isOn: appStore.settings.debugMode,
-                onChange: (v: boolean) => {
-                  appStore.settingsStore.setDebugMode(v)
-                }
-              })
-            }
-            .width('92%')
-            .backgroundColor(AppColors.bgTertiary)
-            .borderRadius(12)
-            .margin({ top: 12 })
-
-            // ---- Block 3B2: 数据管理（持久化统一治理入口） ----
-            Column() {
-              SettingRow({
-                iconRes: $r('app.media.settings_data_management'),
-                iconColor: SettingsIconColors.dataManagement,
-                label: '数据管理',
-                badge: this.migrationStatus === 'partial' || this.migrationStatus === 'failed' ? '!' : '',
-                onAction: () => {
-                  routerStore.navigateActivity(Screen.dataManagement())
-                }
-              })
-            }
-            .width('92%')
-            .backgroundColor(AppColors.bgTertiary)
-            .borderRadius(12)
-            .margin({ top: 12 })
-
-            // ---- Block 3C: 导出账号凭证 / 清除缓存 / 退出登录 ----
-            Column() {
-              SettingRow({
-                iconRes: $r('app.media.settings_credential_export'), iconColor: SettingsIconColors.credentialExport, label: '导出账号凭证',
-                onAction: () => {
-                  this.handleExport()
-                }
-              })
-
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              SettingPickerRow({
-                iconRes: $r('app.media.settings_clear_cache'), iconColor: SettingsIconColors.clearCache, label: '清除缓存',
-                badgeText: this.cacheSizeText,
-                onAction: () => {
-                  this.clearCacheDialogController?.open()
-                }
-              })
-
-              Divider().margin({ left: 60 }).color(AppColors.separator)
-
-              Row() {
-                Stack() {
-                  Image($r('app.media.settings_logout')).width(17).height(17).fillColor(AppColors.white)
-                }
-                .width(29).height(29).borderRadius(6).backgroundColor(AppColors.destructive).margin({ right: 12 })
-
-                Text('退出登录').fontSize(17).fontColor(AppColors.destructive).layoutWeight(1)
-              }
-              .width('100%').height(44).padding({ left: 16, right: 16 }).alignItems(VerticalAlign.Center)
-              .onClick(() => {
-                this.logoutDialogController?.open()
-              })
-            }
-            .width('92%')
-            .backgroundColor(AppColors.bgTertiary)
-            .borderRadius(12)
-            .margin({ top: 12 })
+            /* 分组顺序：外观 → 阅读 → 显示与加载 → 内容过滤 → 智能与语音 → 交互与设备
+               → 数据与存储 → 账号 → 高级 → 退出登录。
+               排序依据：高频在上、组内由粗到细、不可逆动作最后且独立成块。 */
+            SettingGroup({ content: (): void => { this.appearanceContent() } })
+            SettingGroup({ content: (): void => { this.readingContent() } })
+            SettingGroup({ content: (): void => { this.displayContent() } })
+            SettingGroup({ content: (): void => { this.filterContent() } })
+            SettingGroup({ content: (): void => { this.assistantContent() } })
+            SettingGroup({ content: (): void => { this.deviceContent() } })
+            SettingGroup({ content: (): void => { this.storageContent() } })
+            SettingGroup({ content: (): void => { this.accountContent() } })
+            SettingGroup({ content: (): void => { this.advancedContent() } })
+            SettingGroup({ topMargin: 32, content: (): void => { this.logoutContent() } })
           }
           .width('100%').alignItems(HorizontalAlign.Center).padding({ bottom: 32 })
         }
@@ -840,6 +612,263 @@ export struct SettingsPanel {
         .width('100%').position({ x: 0, y: 0 })
     }
     .width('100%').height('100%')
+  }
+
+  // ==================== 各分组内容 ====================
+
+  /** 「外观」组：主题 + 字体大小，最常调的两项放首屏。 */
+  @Builder
+  appearanceContent() {
+    Column() {
+      Row() {
+        ForEach(THEME_OPTIONS, (theme: ThemeOption) => {
+          this.ThemeCard(theme)
+        }, (theme: ThemeOption) => theme.name)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(12)
+
+    SettingGroupDivider()
+
+    SettingPickerRow({
+      iconRes: $r('app.media.settings_font_size'), iconColor: SettingsIconColors.fontSize, label: '字体大小',
+      badgeText: this.fontSizeBadge(),
+      onAction: () => {
+        routerStore.navigateActivity(Screen.fontSizeSettings())
+      }
+    })
+  }
+
+  /** 「阅读」组：决定帖子怎么读（结构 → 翻页 → 预取 → 续读）。 */
+  @Builder
+  readingContent() {
+    SettingPickerRow({
+      iconRes: $r('app.media.settings_thread_tree'), iconColor: SettingsIconColors.threadRender, label: '帖子阅读样式',
+      badgeText: this.threadRenderBadge,
+      onAction: () => {
+        this.showThreadRenderPicker()
+      }
+    })
+
+    SettingGroupDivider()
+
+    SettingPickerRow({
+      iconRes: $r('app.media.settings_thread_navigation'), iconColor: SettingsIconColors.threadNavigation,
+      label: '帖子楼层导航',
+      badgeText: this.threadNavBadge,
+      onAction: () => {
+        this.showThreadNavPicker()
+      }
+    })
+
+    SettingGroupDivider()
+
+    SettingPickerRow({
+      iconRes: $r('app.media.settings_page_prefetch'), iconColor: SettingsIconColors.pagePrefetch, label: '预加载页数',
+      badgeText: this.prefetchPageBadge,
+      onAction: () => {
+        this.showPrefetchPagePicker()
+      }
+    })
+
+    SettingGroupDivider()
+
+    SettingToggleRow({
+      iconRes: $r('app.media.settings_reading_progress'), iconColor: SettingsIconColors.readingProgress,
+      label: '记录阅读进度',
+      isOn: appStore.settings.recordReadingProgress,
+      onChange: (v: boolean) => {
+        appStore.settingsStore.setRecordReadingProgress(v)
+      }
+    })
+  }
+
+  /** 「显示与加载」组：先定加载策略，再定显示什么（三个与图片/正文显示相关的项相邻）。 */
+  @Builder
+  displayContent() {
+    SettingPickerRow({
+      iconRes: $r('app.media.settings_image_loading'), iconColor: SettingsIconColors.imageLoading, label: '图片加载模式',
+      badgeText: this.imageStrategyBadge,
+      onAction: () => {
+        this.showImageStrategyPicker()
+      }
+    })
+
+    SettingGroupDivider()
+
+    SettingToggleRow({
+      iconRes: $r('app.media.settings_topic_preview'), iconColor: SettingsIconColors.topicPreview,
+      label: '显示帖子预览图',
+      isOn: appStore.settings.showTopicPreview,
+      onChange: (v: boolean) => {
+        appStore.settingsStore.setShowTopicPreview(v)
+      }
+    })
+
+    SettingGroupDivider()
+
+    SettingToggleRow({
+      iconRes: $r('app.media.settings_signature'), iconColor: SettingsIconColors.signature, label: '显示签名',
+      isOn: appStore.settings.showSignature,
+      onChange: (v: boolean) => {
+        appStore.settingsStore.setShowSignature(v)
+      }
+    })
+  }
+
+  /** 「内容过滤」组：设置一次就长期生效的屏蔽管理。 */
+  @Builder
+  filterContent() {
+    SettingRow({
+      iconRes: $r('app.media.settings_blacklist'), iconColor: SettingsIconColors.blacklist, label: '黑名单管理',
+      onAction: () => {
+        routerStore.navigateActivity(Screen.blacklist())
+      }
+    })
+
+    SettingGroupDivider()
+
+    SettingRow({
+      iconRes: $r('app.media.settings_user_notes'), iconColor: SettingsIconColors.userNotes, label: '用户备注',
+      onAction: () => {
+        routerStore.navigateActivity(Screen.notes())
+      }
+    })
+
+    SettingGroupDivider()
+
+    SettingRow({
+      iconRes: $r('app.media.settings_keyword_filter'), iconColor: SettingsIconColors.keywordFilter, label: '关键词屏蔽',
+      onAction: () => {
+        routerStore.navigateActivity(Screen.filterKeywords())
+      }
+    })
+  }
+
+  /** 「智能与语音」组：内容消费侧的助手能力。 */
+  @Builder
+  assistantContent() {
+    SettingPickerRow({
+      iconRes: $r('app.media.settings_ai_config'), iconColor: SettingsIconColors.aiConfig, label: 'AI 配置',
+      badgeText: this.aiProviderBadge,
+      onAction: () => {
+        routerStore.navigateActivity(Screen.aiSettings())
+      }
+    })
+
+    SettingGroupDivider()
+
+    SettingRow({
+      iconRes: $r('app.media.settings_tts'), iconColor: SettingsIconColors.tts, label: '语音朗读',
+      onAction: () => {
+        routerStore.navigateActivity(Screen.ttsSettings())
+      }
+    })
+  }
+
+  /** 「交互与设备」组：感知与本机行为（持握识别、外链打开方式、视频播放策略）。 */
+  @Builder
+  deviceContent() {
+    SettingToggleRow({
+      iconRes: $r('app.media.settings_smart_grip'), iconColor: SettingsIconColors.smartGrip, label: '智感握姿',
+      isOn: appStore.settings.smartGrip,
+      onChange: (v: boolean) => {
+        appStore.settingsStore.setSmartGrip(v)
+      }
+    })
+
+    SettingGroupDivider()
+
+    SettingToggleRow({
+      iconRes: $r('app.media.settings_internal_browser'), iconColor: SettingsIconColors.internalBrowser,
+      label: '内置网页浏览',
+      isOn: appStore.settings.useInternalWebView,
+      onChange: (v: boolean) => {
+        appStore.settingsStore.setUseInternalWebView(v)
+      }
+    })
+
+    SettingGroupDivider()
+
+    /* 与播放器右上角喇叭按钮同源：两边都写 `videoMuted`，任一处切换这里与播放器都会同步。 */
+    SettingToggleRow({
+      iconRes: $r('app.media.icon_volume_off'), iconColor: SettingsIconColors.videoMuted, label: '视频默认静音',
+      isOn: this.videoMuted,
+      onChange: (v: boolean) => {
+        appStore.settingsStore.setVideoMuted(v)
+      }
+    })
+  }
+
+  /** 「数据与存储」组：数据治理与占用清理相邻，不再被其它项隔开。 */
+  @Builder
+  storageContent() {
+    SettingRow({
+      iconRes: $r('app.media.settings_data_management'), iconColor: SettingsIconColors.dataManagement,
+      label: '数据管理',
+      badge: this.migrationStatus === 'partial' || this.migrationStatus === 'failed' ? '!' : '',
+      onAction: () => {
+        routerStore.navigateActivity(Screen.dataManagement())
+      }
+    })
+
+    SettingGroupDivider()
+
+    SettingPickerRow({
+      iconRes: $r('app.media.settings_clear_cache'), iconColor: SettingsIconColors.clearCache, label: '清除缓存',
+      badgeText: this.cacheSizeText,
+      onAction: () => {
+        this.clearCacheDialogController?.open()
+      }
+    })
+  }
+
+  /** 「账号」组：随账号走的自动化与凭证迁移。 */
+  @Builder
+  accountContent() {
+    SettingToggleRow({
+      iconRes: $r('app.media.settings_auto_checkin'), iconColor: SettingsIconColors.autoCheckin, label: '自动签到',
+      isOn: appStore.settings.autoCheckin,
+      onChange: (v: boolean) => {
+        appStore.settingsStore.setAutoCheckin(v)
+      }
+    })
+
+    SettingGroupDivider()
+
+    SettingRow({
+      iconRes: $r('app.media.settings_credential_export'), iconColor: SettingsIconColors.credentialExport,
+      label: '导出账号凭证',
+      onAction: () => {
+        this.handleExport()
+      }
+    })
+  }
+
+  /** 「高级」组：放在最底部，避免普通用户误触。 */
+  @Builder
+  advancedContent() {
+    SettingToggleRow({
+      iconRes: $r('app.media.settings_debug_mode'), iconColor: SettingsIconColors.debugMode, label: '调试模式',
+      isOn: appStore.settings.debugMode,
+      onChange: (v: boolean) => {
+        appStore.settingsStore.setDebugMode(v)
+      }
+    })
+  }
+
+  /** 退出登录：危险动作独立成块（不渲染组标题），与普通工具项分开。 */
+  @Builder
+  logoutContent() {
+    SettingDangerRow({
+      iconRes: $r('app.media.settings_logout'),
+      label: '退出登录',
+      onAction: () => {
+        this.logoutDialogController?.open()
+      }
+    })
   }
 
   @Builder

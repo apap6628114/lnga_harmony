@@ -230,6 +230,13 @@ export class SettingsIconColors {
   static readonly threadRender: string = '#0891B2'
   /** 内置网页浏览的浏览器蓝色。 */
   static readonly internalBrowser: string = '#1D4ED8'
+  /**
+   * 视频默认静音的暗红色。
+   *
+   * 取暗红（而非 `destructive` 资源色）是因为"静音/喇叭被划掉"在图标语义里天然是红色，
+   * 但它只是普通设置项，不能与退出登录等危险动作共用同一种警示色，故用更深的固定值区分。
+   */
+  static readonly videoMuted: string = '#B91C1C'
   /** 调试模式的终端石灰绿。 */
   static readonly debugMode: string = '#65A30D'
   /** 账号凭证导出的安全青色。 */
