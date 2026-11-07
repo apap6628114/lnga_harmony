@@ -122,6 +122,25 @@ export class BaseLazyDataSource<T> implements IDataSource {
   }
 
   /**
+   * 通知所有监听器执行一批增量操作（`DataChangeListener.onDatasetChange`）。
+   *
+   * **官方约束（API 12+）**：同一个 LazyForEach 上，`onDatasetChange` 不能与
+   * `onDataAdd` / `onDataChange` / `onDataReloaded` 混用；一次批量里若含 RELOAD
+   * 操作，其余操作都不生效。因此一旦某个数据源改用本方法，它的**所有**通知
+   * 都必须走这里（全量替换用一条 `{ type: RELOAD }`）。
+   *
+   * 典型用途：`List` 的 `maintainVisibleContentPosition(true)` 只对 LazyForEach
+   * 的**增量插入/删除**生效，对 `onDataReloaded` 不生效。
+   *
+   * @param operations - 操作列表（索引均相对**修改前**的数据序列）
+   */
+  protected notifyDatasetChange(operations: DataOperation[]): void {
+    for (let i = 0; i < this.listeners.length; i++) {
+      this.listeners[i].onDatasetChange(operations)
+    }
+  }
+
+  /**
    * 通知所有监听器在指定下标处发生了增量新增。
    *
    * @param index - 新增元素下标

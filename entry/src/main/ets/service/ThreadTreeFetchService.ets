@@ -39,8 +39,13 @@ const TREE_RETRY_BACKOFF_MS: number = 400
  */
 const TREE_BATCH_MAX_IN_WINDOW: number = 180
 
-/** 抓取完成后做首屏正文预热的楼层数上限（只预热首屏，不预热全量）。 */
-const TREE_WARMUP_POST_LIMIT: number = 60
+/**
+ * 单次水位推进里最多预热几页。
+ *
+ * 一次 `commitReadyPages` 可能连续提交多页（前面慢页补齐后一次性放行）；
+ * 对每一页都 `preWarmBatch` 会让 taskpool 排队，反而拖慢渲染。
+ */
+const TREE_WARMUP_PAGES_PER_COMMIT: number = 2
 
 /** 命中风控时的统一提示文案（不自动重试，避免加深限流）。 */
 const TREE_THROTTLE_HINT: string = '访问过于频繁，请稍后再试'
@@ -127,6 +132,14 @@ export class ThreadTreeFetchResult {
   forumName: string = ''
 
   /**
+   * 服务端总楼层数（取自第 1 页 `pagination.totalRows`）。
+   *
+   * 增量加载时页面第一次提交只有 20 楼左右，写浏览历史不能拿已加载楼层数当总数，
+   * 否则这个帖子在历史里会被记成"20 楼"。
+   */
+  totalRows: number = 0
+
+  /**
    * 是否只覆盖**部分页**（人工中断，或某页失败但已有楼层可读）。
    *
    * `ok = true && partial = true` 时 `posts` 仍是**可直接建树的可用数据**，只是不完整：
@@ -140,8 +153,43 @@ export class ThreadTreeFetchResult {
    */
   partial: boolean = false
 
-  /** 已覆盖页数（成功抓取页 + 跳过空页；不含未派发页）。 */
+  /**
+   * 已**提交**页数（连续前缀；含跳过的空页，不含仍在乱序缓冲里的页）。
+   *
+   * 增量模型下它就是「页面能展示的内容边界」：进度文案、尾部文案、部分数据
+   * 提示都以此为准；已抓但尚未提交的页不计入，保证 `n/N` 与用户看到的内容一致。
+   */
   loadedPages: number = 0
+}
+
+/**
+ * 一次「水位提交」的载荷：页面据此增量建树。
+ *
+ * 与最终结果 {@link ThreadTreeFetchResult} 的区别：这是**过程回调**，每推进一段
+ * 连续页就发一次，`posts` 是按页序连续的前缀（可直接建树），`committedPages`
+ * 是已提交页数（= 页面能展示的页数）。
+ */
+export class ThreadTreeCommit {
+  /** 已提交的连续前缀楼层（按 lou 升序；与结果对象共享同一数组引用）。 */
+  posts: PostInfo[] = []
+
+  /** 已提交页数（连续前缀）。 */
+  committedPages: number = 0
+
+  /** 服务端总页数（至少为 1）。 */
+  totalPages: number = 0
+
+  /** 主题元数据（第 1 页提交起可用）。 */
+  threadInfo: ThreadInfo | null = null
+
+  /** 服务端总楼层数（写浏览历史用，不能用已加载楼层数代替）。 */
+  totalRows: number = 0
+
+  /** 版块名（第 1 页响应）。 */
+  forumName: string = ''
+
+  /** 楼层 pid → 服务端页码（与结果对象共享同一映射）。 */
+  pageByPid: Map<number, number> = new Map<number, number>()
 }
 
 /**
@@ -255,9 +303,36 @@ class FetchPageScheduler {
    * 已覆盖页码（成功抓取页 + 跳过空页）。
    *
    * 与 `done` 的区别：`done` 只用于进度展示，`covered` 是**内容覆盖的事实来源**
-   * （`loadedPages` / `partial` 由它派生，取消时判断「是否已有完整数据」也用它）。
+   * （取消时判断「是否还有页没到」也用它）。
    */
   covered: Set<number> = new Set<number>()
+
+  /**
+   * 已完成但**尚未提交**的页楼层（乱序缓冲）。
+   *
+   * 4 路并发会乱序完成；只有按页号连续的前缀才能提交给页面（否则树里会出现
+   * 「第 5 页的楼先出现、第 4 页的楼后插入中间」的错位）。
+   */
+  pagePosts: Map<number, PostInfo[]> = new Map<number, PostInfo[]>()
+
+  /**
+   * 已提交到的页号（连续前缀，0 表示第 1 页都还没提交）。
+   *
+   * 页面可见内容的边界：`loadedPages` / `partial` / 进度文案都以它为准。
+   */
+  commitUpTo: number = 0
+
+  /** 主题元数据（第 1 页返回后填充，随每次提交下发给页面）。 */
+  threadInfo: ThreadInfo | null = null
+
+  /** 服务端总楼层数（第 1 页 `pagination.totalRows`）。 */
+  totalRows: number = 0
+
+  /** 版块名（第 1 页响应）。 */
+  forumName: string = ''
+
+  /** 楼层 pid → 服务端页码（与结果对象共享同一映射）。 */
+  pageByPid: Map<number, number> = new Map<number, number>()
 }
 
 /** 全帖结果缓存条目。 */
@@ -389,13 +464,16 @@ export class ThreadTreeFetchService {
    * @param tid - 主题 ID
    * @param onProgress - 每页完成回调（done 已完成页数，total 总页数）
    * @param forceRefresh - 为 true 时跳过短时缓存，强制重新抓取（刷新/回复后刷新）
+   * @param onCommit - 水位推进回调：`posts` 是**按页序连续的前缀**（可直接建树），
+   *   `committedPages` 是已提交页数（= 页面能展示的页数）。取消后不再回调
    * @returns 抓取结果；调用方提交前应校验自身代际/帖子是否已变化。
    *   被取消时若已抓到楼层，同样返回 `ok = true` 的部分结果（`cancelled = true`），
    *   由调用方决定提交还是丢弃——这是「人工中断后看已有数据」的数据来源
    */
   async fetchAll(owner: string, tid: string,
     onProgress?: (done: number, total: number) => void,
-    forceRefresh: boolean = false): Promise<ThreadTreeFetchResult> {
+    forceRefresh: boolean = false,
+    onCommit?: (commit: ThreadTreeCommit) => void): Promise<ThreadTreeFetchResult> {
     if (tid.length === 0) {
       const invalid: ThreadTreeFetchResult = new ThreadTreeFetchResult()
       invalid.error = '帖子参数无效'
@@ -429,6 +507,21 @@ export class ThreadTreeFetchService {
         cached.generation = this.generation
         logger.info('tree-fetch cache hit tid=%{public}s posts=%{public}d pages=%{public}d',
           tid, cached.posts.length, cached.totalPages)
+        if (onCommit !== undefined) {
+          try {
+            const commit: ThreadTreeCommit = new ThreadTreeCommit()
+            commit.posts = cached.posts
+            commit.committedPages = cached.totalPages
+            commit.totalPages = cached.totalPages
+            commit.threadInfo = cached.threadInfo
+            commit.totalRows = cached.totalRows
+            commit.forumName = cached.forumName
+            commit.pageByPid = cached.pageByPid
+            onCommit(commit)
+          } catch (e) {
+            logger.warn('tree-fetch cache commit callback failed: %{public}s', formatError(e))
+          }
+        }
         return cached
       }
     }
@@ -440,7 +533,7 @@ export class ThreadTreeFetchService {
     this.activeOwner = owner
     this.activeTid = tid
     const task: Promise<ThreadTreeFetchResult> = this.runFetch(token, tid, generation,
-      session.uid, onProgress, forceRefresh)
+      session.uid, onProgress, forceRefresh, onCommit)
     this.activeTask = task
     try {
       return await task
@@ -474,13 +567,14 @@ export class ThreadTreeFetchService {
    */
   private async runFetch(token: string, tid: string, generation: number, uid: string,
     onProgress?: (done: number, total: number) => void,
-    forceRefresh: boolean = false): Promise<ThreadTreeFetchResult> {
+    forceRefresh: boolean = false,
+    onCommit?: (commit: ThreadTreeCommit) => void): Promise<ThreadTreeFetchResult> {
     const result: ThreadTreeFetchResult = new ThreadTreeFetchResult()
     result.generation = generation
     const seenPids: Set<number> = new Set<number>()
     const collected: PostInfo[] = []
-    const pageByPid: Map<number, number> = new Map<number, number>()
     const scheduler: FetchPageScheduler = new FetchPageScheduler()
+    const pageByPid: Map<number, number> = scheduler.pageByPid
     let totalPages: number = 1
 
     logger.info(
@@ -503,21 +597,29 @@ export class ThreadTreeFetchService {
       this.mergePosts(first.posts, 1, seenPids, collected, pageByPid)
       result.threadInfo = first.threadInfo
       result.forumName = first.forumName
+      result.totalRows = first.pagination.totalRows
       totalPages = first.pagination.totalPages > 0 ? first.pagination.totalPages : 1
       scheduler.totalPages = totalPages
+      scheduler.threadInfo = first.threadInfo
+      scheduler.totalRows = first.pagination.totalRows
+      scheduler.forumName = first.forumName
       scheduler.covered.add(1)
+      scheduler.commitUpTo = 1
       scheduler.done = 1
       this.notifyProgress(scheduler.done, totalPages, onProgress)
       if (this.cancelled || generation !== this.generation) {
         return this.buildInterruptedResult(tid, result, collected, pageByPid, scheduler, totalPages)
       }
+      // 第 1 页就是「进入即可读」的数据来源：先提交一页，页面马上能建树
+      this.preWarmPage(first.posts)
+      this.notifyCommit(collected, scheduler, totalPages, onCommit)
 
       if (totalPages > 1) {
         const workers: Promise<void>[] = []
         const workerCount: number = Math.min(TREE_PAGE_CONCURRENCY, totalPages - 1)
         for (let i: number = 0; i < workerCount; i++) {
           workers.push(this.fetchWorker(token, tid, generation, scheduler,
-            seenPids, collected, pageByPid, onProgress))
+            seenPids, collected, pageByPid, onProgress, onCommit))
         }
         await Promise.all(workers)
       }
@@ -528,7 +630,7 @@ export class ThreadTreeFetchService {
       if (scheduler.error.length > 0) {
         return this.buildFailedResult(tid, result, collected, pageByPid, scheduler, totalPages)
       }
-      this.fillMergedResult(result, collected, pageByPid, scheduler.covered, totalPages)
+      this.fillMergedResult(result, collected, pageByPid, scheduler, totalPages)
       this.fillSkippedPages(result, scheduler)
       if (isSkippedPagesOverwhelming(result.skippedPages.length, totalPages)) {
         // 过半页都空：不是「局部整页被删」，而是帖子状态或抓取链整体异常。
@@ -545,8 +647,7 @@ export class ThreadTreeFetchService {
         return result
       }
       result.ok = true
-      /** 预热不阻塞结果提交：页面先渲染首屏，解析在 taskpool 里并行补齐缓存 */
-      this.warmUp(collected)
+      // 预热已按页在提交时完成（见 commitReadyPages），这里不再整帖预热
       if (result.skippedPages.length === 0) {
         this.writeCache(uid, tid, result)
       }
@@ -560,7 +661,7 @@ export class ThreadTreeFetchService {
     } catch (e) {
       // 异常同样保留已抓楼层：与「单页失败」同一语义，由 UI 决定是否展示部分数据
       result.error = '全帖加载失败：' + formatError(e)
-      this.fillMergedResult(result, collected, pageByPid, scheduler.covered, totalPages)
+      this.fillMergedResult(result, collected, pageByPid, scheduler, totalPages)
       this.fillSkippedPages(result, scheduler)
       result.ok = result.posts.length > 0
       if (!result.ok) {
@@ -571,6 +672,81 @@ export class ThreadTreeFetchService {
       logger.error('tree-fetch failed tid=%{public}s gen=%{public}d: %{public}s',
         tid, generation, formatError(e))
       return result
+    }
+  }
+
+  /**
+   * 按页号顺序提交「连续的已抓前缀」。
+   *
+   * 4 路并发会乱序完成，只有按页号连续的前缀才能交给页面：否则树里会出现
+   * 「第 5 页的楼先出现、第 4 页的楼后插到中间」的错位，破坏增量插入的单调性。
+   *
+   * @param scheduler - 调度状态（水位与乱序缓冲）
+   * @param seenPids - 已合并 pid 集合
+   * @param collected - 已提交楼层（始终是有序前缀）
+   * @param pageByPid - pid → 页码
+   * @param onCommit - 水位推进回调
+   * @returns 本次是否推进了水位
+   */
+  private commitReadyPages(scheduler: FetchPageScheduler, seenPids: Set<number>,
+    collected: PostInfo[], pageByPid: Map<number, number>,
+    onCommit?: (commit: ThreadTreeCommit) => void): boolean {
+    let advanced: boolean = false
+    let warmed: number = 0
+    while (scheduler.commitUpTo < scheduler.totalPages) {
+      const next: number = scheduler.commitUpTo + 1
+      if (scheduler.covered.has(next)) {
+        // 空页：已覆盖但没有楼层可提交，水位照常推进
+        scheduler.commitUpTo = next
+        advanced = true
+        continue
+      }
+      const posts: PostInfo[] | undefined = scheduler.pagePosts.get(next)
+      if (posts === undefined) {
+        break
+      }
+      scheduler.pagePosts.delete(next)
+      this.mergePosts(posts, next, seenPids, collected, pageByPid)
+      scheduler.covered.add(next)
+      scheduler.commitUpTo = next
+      advanced = true
+      // 预热节流：一次推进多页时最多预热 2 页，其余交给渲染层同步解析
+      if (warmed < TREE_WARMUP_PAGES_PER_COMMIT) {
+        this.preWarmPage(posts)
+        warmed++
+      }
+    }
+    if (advanced && !this.cancelled) {
+      this.notifyCommit(collected, scheduler, scheduler.totalPages, onCommit)
+    }
+    return advanced
+  }
+
+  /**
+   * 发布一次水位推进；回调异常被隔离，不影响抓取流程。
+   *
+   * @param posts - 已提交的连续前缀
+   * @param scheduler - 调度状态（取已提交页数与元数据）
+   * @param totalPages - 总页数
+   * @param onCommit - 回调（可为 undefined）
+   */
+  private notifyCommit(posts: PostInfo[], scheduler: FetchPageScheduler, totalPages: number,
+    onCommit?: (commit: ThreadTreeCommit) => void): void {
+    if (onCommit === undefined) {
+      return
+    }
+    try {
+      const commit: ThreadTreeCommit = new ThreadTreeCommit()
+      commit.posts = posts
+      commit.committedPages = scheduler.commitUpTo
+      commit.totalPages = totalPages
+      commit.threadInfo = scheduler.threadInfo
+      commit.totalRows = scheduler.totalRows
+      commit.forumName = scheduler.forumName
+      commit.pageByPid = scheduler.pageByPid
+      onCommit(commit)
+    } catch (e) {
+      logger.warn('tree-fetch commit callback failed: %{public}s', formatError(e))
     }
   }
 
@@ -588,7 +764,7 @@ export class ThreadTreeFetchService {
   private buildInterruptedResult(tid: string, result: ThreadTreeFetchResult,
     collected: PostInfo[], pageByPid: Map<number, number>,
     scheduler: FetchPageScheduler, totalPages: number): ThreadTreeFetchResult {
-    this.fillMergedResult(result, collected, pageByPid, scheduler.covered, totalPages)
+    this.fillMergedResult(result, collected, pageByPid, scheduler, totalPages)
     this.fillSkippedPages(result, scheduler)
     result.cancelled = true
     // 中断前已有页失败（先失败、用户随后点「查看已加载」）：保留真实原因，
@@ -620,7 +796,7 @@ export class ThreadTreeFetchService {
   private buildFailedResult(tid: string, result: ThreadTreeFetchResult,
     collected: PostInfo[], pageByPid: Map<number, number>,
     scheduler: FetchPageScheduler, totalPages: number): ThreadTreeFetchResult {
-    this.fillMergedResult(result, collected, pageByPid, scheduler.covered, totalPages)
+    this.fillMergedResult(result, collected, pageByPid, scheduler, totalPages)
     this.fillSkippedPages(result, scheduler)
     result.error = scheduler.error
     result.ok = result.posts.length > 0
@@ -648,22 +824,24 @@ export class ThreadTreeFetchService {
    * 填充合并结果：排序楼层、写入页码映射与覆盖统计。
    *
    * 取消、失败、完整三条出口共用，保证 `loadedPages` / `partial` 的口径在三种情况下
-   * 完全一致（是否完整只由「已覆盖页数」决定，与失败原因无关）。
+   * 完全一致：**只由「已提交页数」决定**，与失败原因无关。已抓但尚未提交的页
+   * （乱序缓冲里的）不计入，保证「页面看到的 n/N」与内容边界一致。
    *
    * @param result - 结果对象（就地填充）
-   * @param collected - 已合并楼层（会按 lou 原地排序）
+   * @param collected - 已提交楼层（会按 lou 原地排序）
    * @param pageByPid - pid → 页码
-   * @param covered - 已覆盖页码
+   * @param scheduler - 调度状态（取已提交页数）
    * @param totalPages - 服务端总页数
    */
   private fillMergedResult(result: ThreadTreeFetchResult, collected: PostInfo[],
-    pageByPid: Map<number, number>, covered: Set<number>, totalPages: number): void {
+    pageByPid: Map<number, number>, scheduler: FetchPageScheduler, totalPages: number): void {
     collected.sort((a: PostInfo, b: PostInfo): number => a.lou - b.lou)
     result.posts = collected
     result.pageByPid = pageByPid
     result.totalPages = totalPages > 0 ? totalPages : 1
-    result.loadedPages = covered.size
-    result.partial = derivePartial(result.loadedPages, result.totalPages)
+    result.totalRows = scheduler.totalRows
+    result.loadedPages = scheduler.commitUpTo
+    result.partial = derivePartial(scheduler.commitUpTo, result.totalPages)
   }
 
   /**
@@ -684,7 +862,8 @@ export class ThreadTreeFetchService {
   private async fetchWorker(token: string, tid: string, generation: number,
     scheduler: FetchPageScheduler, seenPids: Set<number>, collected: PostInfo[],
     pageByPid: Map<number, number>,
-    onProgress?: (done: number, total: number) => void): Promise<void> {
+    onProgress?: (done: number, total: number) => void,
+    onCommit?: (commit: ThreadTreeCommit) => void): Promise<void> {
     while (true) {
       if (scheduler.stopped || this.cancelled || generation !== this.generation) {
         return
@@ -695,18 +874,24 @@ export class ThreadTreeFetchService {
       const page: number = scheduler.nextPage
       scheduler.nextPage++
       const pageResult: ThreadResult = await this.fetchPage(token, tid, page)
+      // 取消/代际失效：**丢弃在途页**。增量模型下「停止即冻结」——页面已经
+      // 停在点击那一刻的内容上，不能因为某页恰好返回又长出一截
+      if (this.cancelled || generation !== this.generation) {
+        return
+      }
       if (!pageResult.ok) {
         if (isSkippablePageFailure(pageResult)) {
           // 该页是「合法空页」（整页楼位全部不可见）：跳过继续抓其余页。
           // 一页楼位全空不该让整帖不可读；跳过页会在结果里如实上报给 UI。
-          // 另一个 worker 已判定致命失败或任务已取消时不再记进度（结果随即被丢弃）
-          if (!scheduler.stopped && !this.cancelled && generation === this.generation) {
+          if (!scheduler.stopped) {
             scheduler.skippedPages.push(page)
             scheduler.covered.add(page)
             scheduler.done++
             this.notifyProgress(scheduler.done, scheduler.totalPages, onProgress)
             logger.warn('tree-fetch page skipped tid=%{public}s page=%{public}d: %{public}s',
               tid, page, pageResult.error)
+            // 空页也占水位：它后面已到达的页可以立即提交
+            this.commitReadyPages(scheduler, seenPids, collected, pageByPid, onCommit)
           }
           continue
         }
@@ -716,16 +901,11 @@ export class ThreadTreeFetchService {
         }
         return
       }
-      // 取消后仍合并本页：数据已经到手，属于「人工中断后查看已加载」应包含的内容
-      // （否则用户在途的 4 路页会白等）。页面销毁/被抢占时多合并一页也无害——
-      // 结果会按调用方自身代际丢弃，合并的只是本任务局部数组。
-      this.mergePosts(pageResult.posts, page, seenPids, collected, pageByPid)
-      scheduler.covered.add(page)
+      // 先入乱序缓冲，再由 commitReadyPages 按页号顺序提交连续前缀
+      scheduler.pagePosts.set(page, pageResult.posts)
       scheduler.done++
       this.notifyProgress(scheduler.done, scheduler.totalPages, onProgress)
-      if (this.cancelled || generation !== this.generation) {
-        return
-      }
+      this.commitReadyPages(scheduler, seenPids, collected, pageByPid, onCommit)
     }
   }
 
@@ -833,27 +1013,30 @@ export class ThreadTreeFetchService {
   }
 
   /**
-   * 预热首屏楼层的 BBCode 解析缓存（最多 {@link TREE_WARMUP_POST_LIMIT} 条）。
+   * 预热一页楼层的 BBCode 解析缓存。
    *
-   * **不等待完成**：预热只影响首屏正文解析耗时，不应把已经抓完的数据继续扣在
-   * 「加载中」。缓存未命中时渲染层会同步解析，预热失败也只退化为该路径。
+   * **不等待完成**：预热只影响该页渲染时的正文解析耗时，不能阻塞提交。
+   * 缓存未命中时渲染层会同步解析，预热失败也只退化为该路径。
    *
-   * @param posts - 合并后的全帖楼层（按 lou 升序）
+   * 增量模型下「提交哪页预热哪页」：如果只在全部抓完后预热前 60 楼，
+   * 后续页的正文解析会同步砸在插入行的渲染帧里。
+   *
+   * @param posts - 该页楼层
    */
-  private warmUp(posts: PostInfo[]): void {
-    const count: number = Math.min(TREE_WARMUP_POST_LIMIT, posts.length)
-    if (count <= 0) {
+  private preWarmPage(posts: PostInfo[]): void {
+    if (posts.length === 0) {
       return
     }
-    const warmupPosts: PostInfo[] = []
-    for (let i: number = 0; i < count; i++) {
-      warmupPosts.push(posts[i])
+    try {
+      const contents: string[] = collectPostContents(posts, false)
+      if (contents.length === 0) {
+        return
+      }
+      preWarmBatch(contents, taskpool.Priority.HIGH)
+    } catch (e) {
+      // 预热是纯优化：失败只退化为渲染层同步解析，不能影响抓取流程
+      logger.warn('tree-fetch prewarm failed: %{public}s', formatError(e))
     }
-    const contents: string[] = collectPostContents(warmupPosts, false)
-    if (contents.length === 0) {
-      return
-    }
-    preWarmBatch(contents, taskpool.Priority.HIGH)
   }
 
   /**
@@ -884,6 +1067,7 @@ export class ThreadTreeFetchService {
     result.totalPages = entry.result.totalPages
     result.threadInfo = entry.result.threadInfo
     result.forumName = entry.result.forumName
+    result.totalRows = entry.result.totalRows
     // 缓存只存完整结果（含跳过页的结果不写缓存），这里补齐覆盖口径，
     // 保证任何拿到结果的地方都不会把它误判成部分数据
     result.loadedPages = result.totalPages
