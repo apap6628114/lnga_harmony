@@ -106,6 +106,14 @@ class RowAnchor {
  */
 const TREE_BANNER_DELAY_MS: number = 300
 
+/**
+ * 进入阶段加载态的延迟淡入时间（ms）。
+ *
+ * 与列表页（`ThreadPanel.loadPosts` 的 REPLACE 分支）同一节奏：第 1 页在 400ms 内
+ * 到达时（含 90 秒缓存命中）用户直接看到内容，不会先闪一下 loading；超过才淡入。
+ */
+const ENTERING_LOADING_DELAY_MS: number = 400
+
 
 /** 胶囊内细进度条宽度（vp）。 */
 const TREE_BANNER_BAR_W: number = 60
@@ -126,7 +134,7 @@ const TREE_BANNER_TEXT_MAX_W: number = 150
  * - 列表页更多菜单「切换为递进树阅读」：替换当前列表页（列表页实例随替换销毁），
  *   返回直接回主题列表，不会再退回列表阅读；
  * - 设置「帖子默认样式 = 递进树」：打开帖子时直接挂载本页（仍是同一个 `Screen.thread` 条目）；
- * - 本页「切换为列表阅读」/ 加载中的「以常规列表打开」：终止全帖抓取并替换为列表页。
+ * - 本页「切换为列表阅读」：终止全帖抓取并替换为列表页（加载中也可用，见更多菜单）。
  *
  * 全帖抓取可能持续数十秒（4 路并发 + 限流）。本页采用**增量加载**
  * （`docs/THREAD_TREE_INCREMENTAL_LOAD_DESIGN.md`）：
@@ -134,7 +142,8 @@ const TREE_BANNER_TEXT_MAX_W: number = 150
  * - 加载期间顶部胶囊显示「已加载 n/N 页」并可随时停止；**胶囊只做进度，不承载定位动作**；
  * - 定位（恢复进度 / 路由 pid / 点击未加载楼层）统一为「待定位目标」，到达后由 Toast
  *   提供「前往查看」；未到达时不提供任何跳转动作；
- * - 失败时保留已渲染内容 + 错误条；「取消」只在第 1 页到达前出现（退出页面）。
+ * - 失败时保留已渲染内容 + 错误条；第 1 页到达前的加载屏与列表页同构（只有居中加载圈，
+ *   400ms 延迟淡入，无任何页内出口，退出走返回键）。
  *
  * 部分数据**不做断点续传、也不挂常驻提醒**：停止是用户自己的决定，不再重复告知；
  * 只在列表尾部用一句中性的「已加载 n/N 页」标识内容边界（替代「已加载全部回复」）。
@@ -162,15 +171,9 @@ export struct ThreadTreePanel {
   /** 路由请求的初始页码（> 1 表示有明确翻页意图，不恢复进度）。 */
   @Prop threadPage: number = 1
 
-  /** 全帖抓取中。 */
-  @State isLoading: boolean = true
-  /** 抓取失败。 */
-  @State hasError: boolean = false
-  /** 抓取失败原因。 */
+  /** 抓取失败原因（错误态文案 / 错误条文案）。 */
   @State errorMsg: string = ''
-  /** 抓取进度：已完成页数。 */
-  @State progressDone: number = 0
-  /** 抓取进度：总页数（第 1 页返回后确定）。 */
+  /** 抓取进度：总页数（第 1 页返回后确定；`formatLoadingText` 的兜底值）。 */
   @State progressTotal: number = 0
   /** 页面标题（加载完成后取主题标题）。 */
   @State threadSubject: string = '递进树'
@@ -244,6 +247,14 @@ export struct ThreadTreePanel {
   @State targetState: number = LocateState.NONE
   /** 目标展示标签（「上次阅读位置」/「第 812 楼」）。 */
   @State targetLabel: string = ''
+  /**
+   * 进入阶段加载态的不透明度（与列表页 `ThreadPanel.loadingContentOpacity` 同构）。
+   *
+   * `ENTERING` 从 0 开始，400ms 后仍在加载才淡入：第 1 页（含 90 秒缓存命中）在 400ms
+   * 内到达时用户直接看到内容，不会先闪一下 loading。离开 `ENTERING` 后由 `phase` 门禁
+   * 停止渲染，数值留待下次 `loadTree` 重置。
+   */
+  @State enteringLoadingOpacity: number = 0
   /** 加载态 300ms 延迟是否已到（防短帖闪一下）。 */
   @State bannerDelayElapsed: boolean = false
   /** 目标页码（画进度条刻度用，未知为 -1）。 */
@@ -372,8 +383,10 @@ export struct ThreadTreePanel {
   private commitTimer: number = -1
   /** 用户主动停止：收尾结果只记日志，不再改状态。 */
   private stoppedByUser: boolean = false
-  /** 首屏 300ms 延迟器。 */
+  /** 胶囊延迟显示计时器（300ms，防短帖闪一下）。 */
   private bannerDelayTimer: number = -1
+  /** 进入阶段加载态延迟淡入计时器（400ms；离开 `ENTERING` 后回调自然作废）。 */
+  private enteringLoadingTimer: number = -1
   /** 锚点事务：是否待恢复。 */
   private appendAnchorPending: boolean = false
   /** 锚点事务：锚点楼层 pid。 */
@@ -420,6 +433,8 @@ export struct ThreadTreePanel {
     this.progressRecordTimer = -1
     clearTimeout(this.bannerDelayTimer)
     this.bannerDelayTimer = -1
+    clearTimeout(this.enteringLoadingTimer)
+    this.enteringLoadingTimer = -1
     clearTimeout(this.targetToastTimer)
     this.targetToastTimer = -1
     clearTimeout(this.commitTimer)
@@ -520,6 +535,8 @@ export struct ThreadTreePanel {
     this.commitTimer = -1
     clearTimeout(this.bannerDelayTimer)
     this.bannerDelayTimer = -1
+    clearTimeout(this.enteringLoadingTimer)
+    this.enteringLoadingTimer = -1
     clearTimeout(this.targetToastTimer)
     this.targetToastTimer = -1
     this.targetToastPending = false
@@ -590,8 +607,8 @@ export struct ThreadTreePanel {
     }
     if (this.threadTid.length === 0) {
       threadTreeFetchService.cancel(this.treeOwner)
-      this.isLoading = false
-      this.hasError = true
+      // 没有 tid 不可能有内容：直接落错误态，不能停在 ENTERING 的加载屏上
+      this.phase = TreePagePhase.FAILED
       this.errorMsg = '缺少帖子 ID'
       return
     }
@@ -602,11 +619,10 @@ export struct ThreadTreePanel {
       this.registerTarget(refreshAnchorPid, -1, -1, LocateSource.RESUME, true)
     }
     const fetchTid: string = this.threadTid
-    this.isLoading = true
-    this.hasError = false
     this.errorMsg = ''
-    this.progressDone = 0
     this.progressTotal = 0
+    // 进入阶段的加载屏与列表页同节奏：400ms 后才淡入，快路径不闪
+    this.resetEnteringLoading()
     this.treeReady = false
     this.treeDataSource.clear()
     // 上一轮的缺页/部分数据提示属于旧结果：新一轮抓取重新判定
@@ -625,11 +641,10 @@ export struct ThreadTreePanel {
       this.bannerDelayElapsed = true
       this.refreshBanner()
     }, TREE_BANNER_DELAY_MS)
-    threadTreeFetchService.fetchAll(this.treeOwner, fetchTid, (done: number, total: number): void => {
+    threadTreeFetchService.fetchAll(this.treeOwner, fetchTid, (_done: number, total: number): void => {
       if (generation !== this.fetchGeneration) {
         return
       }
-      this.progressDone = done
       this.progressTotal = total
     }, keepSubject, (commit: ThreadTreeCommit): void => {
       this.onFetchCommit(commit, generation)
@@ -641,13 +656,34 @@ export struct ThreadTreePanel {
       }
       this.stopping = false
       this.frozen = true
-      this.isLoading = false
       this.phase = TreePagePhase.FAILED
       this.errorMsg = formatError(error)
       this.bannerErrorText = this.errorMsg
       this.refreshBanner()
       logger.error('tree-panel load failed tid=%{public}s: %{public}s', fetchTid, formatError(error))
     })
+  }
+
+  /**
+   * 重置进入阶段的加载态：回到不可见，并在 400ms 后仍在 `ENTERING` 时淡入。
+   *
+   * 与列表页 `ThreadPanel` 的首屏加载同一节奏：第 1 页在 400ms 内到达时（含 90 秒缓存
+   * 命中）用户直接看到内容，不会先闪一下 loading。计时器回调里判 `phase`，离开
+   * `ENTERING`（第 1 页已提交 / 失败 / 停止）后自然作废，无需在每条路径上逐个清理。
+   */
+  private resetEnteringLoading(): void {
+    clearTimeout(this.enteringLoadingTimer)
+    this.enteringLoadingTimer = -1
+    this.enteringLoadingOpacity = 0
+    this.enteringLoadingTimer = setTimeout((): void => {
+      this.enteringLoadingTimer = -1
+      if (this.phase !== TreePagePhase.ENTERING) {
+        return
+      }
+      this.getUIContext()?.animateTo({ duration: 150, curve: Curve.EaseInOut }, (): void => {
+        this.enteringLoadingOpacity = 1
+      })
+    }, ENTERING_LOADING_DELAY_MS)
   }
 
   /**
@@ -820,7 +856,6 @@ export struct ThreadTreePanel {
       // 首次提交只登记目标，不滚动：增量模型下「跳转」必须等目标真正进入树
       this.recordBrowseHistoryOfCommit(posts)
       this.syncTrackedOnOpen()
-      this.isLoading = false
       this.phase = TreePagePhase.STREAMING
     }
     this.rebuildTreePreservingState()
@@ -901,9 +936,7 @@ export struct ThreadTreePanel {
     // 被其他页面/任务抢占（平板多列）：不是用户的阅读决定，内容保留、只切错误条
     if (result.cancelled && !result.ok) {
       this.frozen = true
-      this.isLoading = false
       this.phase = TreePagePhase.FAILED
-      this.hasError = !this.treeReady
       this.bannerErrorText = '加载被其他操作中断'
       this.errorMsg = this.bannerErrorText
       this.clearPendingTarget(LocateState.NONE)
@@ -936,10 +969,8 @@ export struct ThreadTreePanel {
       }
     }
     this.frozen = true
-    this.isLoading = false
     if (!result.ok) {
       this.phase = TreePagePhase.FAILED
-      this.hasError = true
       this.errorMsg = result.error.length > 0 ? result.error : '加载失败'
       this.bannerErrorText = this.errorMsg
       if (this.treeReady) {
@@ -965,7 +996,6 @@ export struct ThreadTreePanel {
         ? '加载被其他操作中断'
         : (result.error.length > 0 ? result.error : '加载未完成')
       this.errorMsg = this.bannerErrorText
-      this.hasError = false
       this.applySkippedPages(result.skippedPages, false)
       this.clearPendingTarget(LocateState.NONE)
     } else {
@@ -1358,10 +1388,8 @@ export struct ThreadTreePanel {
     this.commitScheduled = false
     this.commitDeferred = false
     this.pendingCommitPages = 0
-    this.isLoading = false
     if (!this.treeReady) {
       this.phase = TreePagePhase.FAILED
-      this.hasError = true
       this.errorMsg = '已停止加载'
       this.bannerErrorText = this.errorMsg
     } else {
@@ -1369,7 +1397,6 @@ export struct ThreadTreePanel {
       this.partialData = true
       this.partialLoadedPages = this.committedPages
       this.partialTotalPages = this.totalPages
-      this.hasError = false
     }
     this.stopping = false
     this.clearPendingTarget(LocateState.NONE)
@@ -1887,17 +1914,6 @@ export struct ThreadTreePanel {
   }
 
   // ==================== 交互 ====================
-
-  /**
-   * 加载中取消：终止抓取并退出递进树页面。
-   *
-   * 递进树条目替代了列表页，页面栈里没有「原来的视图」可退：取消的语义就是放弃这次
-   * 阅读，与系统返回一致。已抓数据直接丢弃。
-   */
-  private cancelLoadingAndExit(): void {
-    this.cancelWork()
-    routerStore.back()
-  }
 
   /**
    * 回复/编辑发送成功后刷新全帖树。
@@ -2735,7 +2751,8 @@ export struct ThreadTreePanel {
   /**
    * 终止递进树工作并切换为列表阅读。
    *
-   * 更多菜单「切换为列表阅读」与加载态「以常规列表打开」共用：
+   * 入口只有更多菜单「切换为列表阅读」（`ENTERING` 阶段菜单就可用，因此加载中的
+   * 用户同样能切走；页内不再有「以常规列表打开」按钮）：
    * 1. 先 `cancelWork()`：取消在途抓取并推进抓取代际，在途页结果不再提交任何状态；
    * 2. 再 `navigateActivity(screen, true)` **原地替换**当前栈条目——递进树条目随替换移除、
    *    页面实例销毁，栈里只保留列表页一种阅读样式，返回不会退回递进树。
@@ -2792,31 +2809,18 @@ export struct ThreadTreePanel {
   /**
    * 进入阶段（第 1 页未回）的加载态。
    *
-   * 增量模型下这一屏通常只出现不到一秒（第 1 页一到就切到树），保留两个出口是
-   * 为了首屏请求卡满超时（15s + 重试）时用户仍能退出或换列表阅读。
-   * 「查看已加载」在增量模型下没有意义（第 1 页到达即已展示），已移除（修订 D11）。
+   * 与列表页 `ThreadPanel.LoadingState` **完全同构**：只有居中加载圈，不提供任何页内
+   * 出口——退出走标题栏返回 / 系统返回手势（`aboutToDisappear` 里的 `cancelWork()`
+   * 会终止在途抓取、不泄漏请求），切换列表走更多菜单「切换为列表阅读」（`ENTERING`
+   * 阶段即可用）。增量模型下这一屏通常只出现不到一秒（第 1 页一到即切到树），因此再叠
+   * 一道 400ms 延迟淡入（`enteringLoadingOpacity`）：缓存命中 / 快路径完全不闪 loading。
    */
   @Builder
   LoadingState() {
     Column() {
-      LoadingStateView()
-      Text('正在加载第 1 页…')
-        .fontSize(14).fontColor(AppColors.textSecondary).margin({ top: 12 })
-      Row({ space: 8 }) {
-        Text('取消')
-          .fontSize(14).fontColor(AppColors.destructive)
-          .padding({ top: 6, bottom: 6, left: 12, right: 12 })
-          .onClick((): void => {
-            this.cancelLoadingAndExit()
-          })
-        Text('以常规列表打开')
-          .fontSize(14).fontColor(AppColors.primary)
-          .padding({ top: 6, bottom: 6, left: 12, right: 12 })
-          .onClick((): void => {
-            this.replaceWithListReading()
-          })
-      }
-      .margin({ top: 16 })
+      Column() {
+        LoadingStateView()
+      }.opacity(this.enteringLoadingOpacity)
     }
     .width('100%').layoutWeight(1)
     .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)

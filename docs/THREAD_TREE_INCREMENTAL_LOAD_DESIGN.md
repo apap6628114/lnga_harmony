@@ -156,7 +156,7 @@ ENTERING ──第1页到达──▶ STREAMING ──全部页覆盖──▶ C
 
 | 状态 | 内容 | 进度提示 | 可做的操作 |
 | --- | --- | --- | --- |
-| `ENTERING` | 空（居中 LoadingProgress + 「正在加载第 1 页…」；300ms 延迟淡入） | 无胶囊 | 取消（退出）、以常规列表打开 |
+| `ENTERING` | 空（居中 LoadingProgress；**400ms 延迟淡入**，与列表页同节奏） | 无胶囊 | 无页内出口（退出走返回键；切换列表走更多菜单「切换为列表阅读」） |
 | `STREAMING` | **第 1 页起的树**，持续增长 | **顶部胶囊**（n/N + 停止；目标未到时可带等待文案） | 停止、读、回复、切列表、切只看楼主；定位由 **Toast** 提示（不是胶囊） |
 | `COMPLETE` | 全帖树 | **胶囊淡出**（加载结束即消失） | 全部 |
 | `STOPPED` | 已提交部分的树 | 胶囊淡出，尾部标注 | 刷新（整帖重抓）、切列表 |
@@ -843,7 +843,7 @@ P0 内部建议按这个顺序落地，便于中途验证：
 **已同步到旧契约**：
 
 1. **D14 修订**：自动失败的部分结果，在「内容已可见」时保留内容 + 顶部错误条（`THREAD_TREE_DESIGN.md` 已加说明）。
-2. **D11 修订**：`ENTERING` 只保留「取消」与「以常规列表打开」（`THREAD_TREE_DESIGN.md` 已加说明）。
+2. **D11 修订**：`ENTERING` 的页内出口已全部移除，加载屏与列表页 `ThreadPanel.LoadingState` 同构（居中加载圈 + 400ms 延迟淡入）；退出走返回键，切换列表走更多菜单（`THREAD_TREE_DESIGN.md` D11 / §3.5 已加说明）。
 
 ---
 
@@ -940,3 +940,22 @@ P0 内部建议按这个顺序落地，便于中途验证：
 - 「（等待第 k 页）」文案与进度条 `animateTo` 平滑未实现；
 - 多列覆盖时的 Toast 可见性判断未做（只在滚动中挂起）；
 - 水位推进（乱序只提交连续前缀）仍内嵌在服务层，未抽成纯函数做单测；`rowKey` 也未抽公共纯函数，测试用的是简化键。
+
+### 10.7 v6 调整：进入加载态收敛到列表页同款（2026-11-08）
+
+- 用户反馈：增量模型下第 1 页通常不到一秒就到，`ENTERING` 屏仍摆着「取消」「以常规列表打开」
+  两个文字按钮、外加「正在加载第 1 页…」，像一次决策页；与列表页的极简加载不一致。
+- `LoadingState()` 改为与 `ThreadPanel.LoadingState` **完全同构**：只有居中 `LoadingStateView`，
+  外层 `opacity` 走新增的 `enteringLoadingOpacity`；进入时置 0，400ms 后仍在 `ENTERING` 才
+  `animateTo(150ms)` 淡入（`ENTERING_LOADING_DELAY_MS`），与列表页 `loadPosts` 的 400ms 节奏一致。
+  这条同时补上了 §3.2 第 2 点本来就要求、但 v4 实现时漏做的「400ms 后才淡入 loading」。
+- 出口：`cancelLoadingAndExit()` 删除（唯一调用点就是那个按钮）；退出走标题栏返回 / 系统返回手势
+  （`aboutToDisappear` 里的 `cancelWork()` 保证在途抓取不泄漏），切换列表走更多菜单
+  「切换为列表阅读」（`ENTERING` 阶段菜单即可用，见 `moreMenuItems()`）。
+- 残渣清理：`isLoading` / `hasError` / `progressDone` 三个 UI 不再读取的状态删除（加载态语义
+  统一由 `phase` 承担，即 §4.11 E2 的要求）；`threadTid` 为空时直接落 `FAILED`，不再停在
+  `ENTERING` 加载屏。
+- 门禁：`assembleHap`（DevEco，`--no-daemon`，debug）**BUILD SUCCESSFUL in 22s 611ms**；
+  `node scripts/check-eol.mjs` 全 LF；`tools/bbcode-ts` 镜像 `--dry` 0 修改（本次未触碰镜像文件）。
+  未跑 Hypium：本次只有页面 UI/状态整理，没有纯逻辑或测试用例变更。
+- 未做真机验收：400ms 门禁的实际观感（长帖首屏卡住时是否仍需要页内出口）留待体验后决定。
