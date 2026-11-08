@@ -81,6 +81,12 @@ import {
   computeTreeRowDiff,
   RowDiffResult
 } from '../common/utils/ThreadTreeRowDiff'
+import {
+  mergeTreePage,
+  LocalMergeResult,
+  MergePageDecision,
+  resolveMergePage
+} from '../common/utils/ThreadTreeLocalMerge'
 
 const logger = new Logger(DOMAIN_UI, 'ThreadTreePanel')
 
@@ -96,6 +102,37 @@ class RowAnchor {
   pid: number = -1
   oldIndex: number = -1
   offset: number = 0
+}
+
+/** 提交类型：决定回复/编辑成功后局部刷新抓哪一页。 */
+class TreeSubmitKind {
+  /** 楼层回复 / 主题回复：新楼层必在末页 */
+  static readonly REPLY: number = 0
+  /** 编辑：被编辑楼层在其所属页 */
+  static readonly EDIT: number = 1
+}
+
+/**
+ * 一次「提交成功」的上下文（回复与编辑共用同一套局部刷新流程）。
+ *
+ * 只承载**已有的事实**（服务端返回的新 pid、编辑目标 pid、提交正文），
+ * 不含任何对楼层号/正文的猜测——局部合并的数据一律来自服务端那一页。
+ */
+class TreeSubmitContext {
+  /** 提交类型，见 {@link TreeSubmitKind} */
+  kind: number = TreeSubmitKind.REPLY
+
+  /** 服务端返回的新楼层 pid（回复；响应未携带时为 0） */
+  newPid: number = 0
+
+  /** 编辑目标楼层 pid（编辑；回复为 0） */
+  editPid: number = 0
+
+  /** 用户提交的正文（编辑的旧缓存保护用；其余场景空串） */
+  text: string = ''
+
+  /** 成功提示文案 */
+  toast: string = ''
 }
 
 /**
@@ -1082,6 +1119,16 @@ export struct ThreadTreePanel {
     }
     // 统一次摊平：build 内部已摊平过一次，但上面改过 displayContent / expanded
     flattenThreadTree(next)
+    // 高亮态跨重建保留：行键含 `_h` 后缀，重建丢掉高亮会让 diff 认不出旧行 → 整表 RELOAD
+    if (this.highlightPid > 0) {
+      for (let i: number = 0; i < next.rows.length; i++) {
+        const row: ThreadTreeRow = next.rows[i]
+        if (row.post !== null && row.post.pid === this.highlightPid) {
+          row.highlighted = true
+          break
+        }
+      }
+    }
     this.treeModel = next
   }
 
@@ -1733,6 +1780,11 @@ export struct ThreadTreePanel {
   /**
    * 高亮命中的子节点行，2 秒后清除。
    *
+   * 只改 `highlighted`，**不递增 `rev`**：`rowKey` 已含 `_h` 后缀，键会因高亮变化；
+   * 而 `rev` 是「所属根的展开代际」（`flattenThreadTree` 用它统一给整组行换键），
+   * 给单个子行 `rev++` 会让 `lastRows` 与下一次重建的行键分叉，把增量 diff 逼成整表
+   * RELOAD。`updateAt` 带新键即可精确重建这一行。
+   *
    * @param pid - 命中楼层 pid
    */
   private highlightRow(pid: number): void {
@@ -1749,7 +1801,6 @@ export struct ThreadTreePanel {
       this.highlightTimer = -1
     }
     row.highlighted = true
-    row.rev++
     this.highlightPid = pid
     this.treeDataSource.updateAt(index, row, this.rowKey(row))
     this.highlightTimer = setTimeout((): void => {
@@ -1768,7 +1819,6 @@ export struct ThreadTreePanel {
         return
       }
       current.highlighted = false
-      current.rev++
       this.treeDataSource.updateAt(currentIndex, current, this.rowKey(current))
     }, 2000)
   }
@@ -1958,17 +2008,163 @@ export struct ThreadTreePanel {
   // ==================== 交互 ====================
 
   /**
-   * 回复/编辑发送成功后刷新全帖树。
+   * 提交成功后的刷新入口：能局部合并就只抓一页，否则退回整帖重抓。
    *
-   * @param successText - 成功提示
+   * 不 await：编辑器不必等补页完成才关闭；合并过程抛错会自动退回整帖重抓。
+   *
+   * @param ctx - 提交上下文
    */
-  private refreshAfterSubmit(successText: string): void {
-    appStore.showToast(successText)
-    this.loadTree(true)
+  private consumeSubmitResult(ctx: TreeSubmitContext): void {
+    appStore.showToast(ctx.toast)
+    this.mergeAfterSubmit(ctx).catch((e: Error): void => {
+      logger.warn('tree-panel local merge failed: %{public}s', formatError(e))
+      this.loadTree(true)
+    })
+  }
+
+  /**
+   * 用「一页服务端数据」局部刷新树（回复 / 编辑共用）。
+   *
+   * 前置条件（任一不满足即退回整帖重抓）：
+   * - 树已完整加载到末页：否则这页会打破 `allPosts` 的连续前缀，
+   *   `pageByPid` / 定位判定 / 进度胶囊全部失真；
+   * - 编辑目标页已知（`pageByPid` 命中）；
+   * - 补页往返期间没有切帖/离开（抓取代际未变）。
+   *
+   * 抓末页用 `'e'` 而不是本地 `totalPages`：新回复可能把末页顶到下一页。
+   *
+   * @param ctx - 提交上下文
+   */
+  private async mergeAfterSubmit(ctx: TreeSubmitContext): Promise<void> {
+    if (this.phase !== TreePagePhase.COMPLETE || this.committedPages < this.totalPages
+      || this.treeModel === null) {
+      this.loadTree(true)
+      return
+    }
+    let page: string = 'e'
+    if (ctx.kind === TreeSubmitKind.EDIT) {
+      const mapped: number | undefined = this.pageByPid.get(ctx.editPid)
+      if (mapped === undefined || mapped <= 0) {
+        // 页码未知：不猜，整帖重抓
+        this.loadTree(true)
+        return
+      }
+      page = String(mapped)
+    }
+    const generation: number = this.fetchGeneration
+    const result: ThreadResult = await threadTreeFetchService.fetchSinglePage(this.threadTid, page)
+    if (generation !== this.fetchGeneration || this.treeModel === null) {
+      return
+    }
+    if (!result.ok) {
+      this.loadTree(true)
+      return
+    }
+    // 页号/水位一致性：补页只允许覆盖「已提交页 + 1」，越界说明中间页有缺口或分页已变
+    const isEdit: boolean = ctx.kind === TreeSubmitKind.EDIT
+    const decision: MergePageDecision = resolveMergePage(isEdit, page, result.pagination.page,
+      this.committedPages)
+    if (!decision.accept) {
+      logger.warn('tree-panel merge page rejected tid=%{public}s page=%{public}s: %{public}s',
+        this.threadTid, page, decision.reason)
+      this.loadTree(true)
+      return
+    }
+    this.applyMergedPage(result, decision.pageNo, ctx)
+  }
+
+  /**
+   * 把补页结果合并进当前树并做增量通知。
+   *
+   * 只做「新增 + 同 pid 替换」，不删除不移动——否则行 diff 会退化为整表 RELOAD
+   * （见 `ThreadTreeLocalMerge` 文件头）。页号已由 `resolveMergePage` 校验。
+   *
+   * @param result - 补页结果（末页或编辑目标所在页）
+   * @param pageNo - 该页页码（已校验）
+   * @param ctx - 提交上下文
+   */
+  private applyMergedPage(result: ThreadResult, pageNo: number, ctx: TreeSubmitContext): void {
+    const isEdit: boolean = ctx.kind === TreeSubmitKind.EDIT
+    const guardPid: number = isEdit ? ctx.editPid : 0
+    const guardContent: string = isEdit ? ctx.text.replace(/\n/g, '<br/>') : ''
+    const merged: LocalMergeResult = mergeTreePage(this.allPosts, result.posts, guardPid, guardContent)
+    this.allPosts = merged.posts
+    // 拷贝后写：this.pageByPid 可能直接指向抓取服务/缓存的 Map，原地 set 会污染它们
+    const nextPageByPid: Map<number, number> = new Map<number, number>()
+    this.pageByPid.forEach((value: number, pid: number): void => {
+      nextPageByPid.set(pid, value)
+    })
+    for (let i: number = 0; i < result.posts.length; i++) {
+      nextPageByPid.set(result.posts[i].pid, pageNo)
+    }
+    this.pageByPid = nextPageByPid
+    this.committedPages = Math.max(this.committedPages, pageNo)
+    // 只在 COMPLETE 下合并：**不采纳**「服务端说还有更多页」——那会让完成态与已提交页数
+    // 脱节（胶囊显示未加载页）。多出来的页留给下一次补页或重新进入。
+    this.totalPages = Math.max(this.totalPages, this.committedPages)
+    // 抓取请求固定用空黑名单，提交时按当前黑名单统一补齐（与 applyCommit 同口径）
+    applyBlacklistStateToPosts(this.allPosts, appStore.settingsStore.getBlacklistIds())
+    this.rebuildAllPidIndex(this.allPosts)
+    this.rebuildTreePreservingState()
+    // 回复要主动定位 → 关掉锚点补偿；编辑原地生效 → 保留锚点（重排时补偿不跳）
+    this.applyRowsToDataSource(!isEdit)
+    this.refreshBanner()
+    logger.info('tree-panel merge tid=%{public}s page=%{public}d added=%{public}d replaced=%{public}d',
+      this.threadTid, pageNo, merged.addedPids.length, merged.replacedPids.length)
+    const target: number = isEdit ? ctx.editPid : ctx.newPid
+    if (target <= 0 || !merged.contains(target)) {
+      if (isEdit) {
+        // 编辑目标不在返回页：本地正文仍是旧版、pageByPid 也可能已错，只能整帖重抓纠正
+        logger.warn('tree-panel edit target missing page=%{public}d pid=%{public}d',
+          pageNo, ctx.editPid)
+        this.loadTree(true)
+        return
+      }
+      // 服务端还没刷出这一楼（审核 / CDN 延迟）：不制造幽灵数据，也不整帖重抓
+      appStore.showToast('内容已提交，稍后刷新可见')
+      return
+    }
+    if (isEdit) {
+      // 编辑原地生效，不移动视口
+      return
+    }
+    if (this.treeModel === null || !this.treeModel.postByPid.has(target)) {
+      // 数据合并成功但树里不可见：只看楼主把非楼主楼层过滤掉了
+      appStore.showToast('已回复，当前只看楼主视图不显示你的回复')
+      return
+    }
+    this.focusPost(target)
+  }
+
+  /**
+   * 定位并高亮指定楼层（必要时展开所属根）。
+   *
+   * 用户正在拖拽/惯性滚动时不抢手势：只高亮，不滚动。
+   *
+   * @param pid - 目标楼层 pid
+   */
+  private focusPost(pid: number): void {
+    let index: number = this.treeDataSource.findIndexByPid(pid)
+    if (index < 0) {
+      if (!this.ensureRowVisible(pid)) {
+        return
+      }
+      index = this.treeDataSource.findIndexByPid(pid)
+    }
+    if (index < 0) {
+      return
+    }
+    if (!this.scrolling) {
+      this.viewportMoved = true
+      this.scroller.scrollToIndex(index, false, ScrollAlign.CENTER)
+    }
+    this.highlightRow(pid)
   }
 
   /**
    * 发送楼层回复 / 主题回复（编辑器在全局浮层中）。
+   *
+   * 成功后只抓末页做局部合并（`consumeSubmitResult`），不再重建整帖。
    *
    * @param text - 回复正文
    * @param isAnony - 是否匿名
@@ -1985,11 +2181,18 @@ export struct ThreadTreePanel {
       appStore.showToast(result.error || '操作失败')
       throw new Error(result.error || '操作失败')
     }
-    this.refreshAfterSubmit('回复成功')
+    const ctx: TreeSubmitContext = new TreeSubmitContext()
+    ctx.kind = TreeSubmitKind.REPLY
+    const parsedPid: number = result.pid.length > 0 ? parseInt(result.pid, 10) : 0
+    ctx.newPid = Number.isFinite(parsedPid) && parsedPid > 0 ? parsedPid : 0
+    ctx.toast = '回复成功'
+    this.consumeSubmitResult(ctx)
   }
 
   /**
    * 发送编辑修改。
+   *
+   * 成功后只抓被编辑楼层所在页做局部合并（`consumeSubmitResult`），不再重建整帖。
    *
    * @param text - 新正文
    * @param isAnony - 是否匿名
@@ -2006,7 +2209,13 @@ export struct ThreadTreePanel {
       appStore.showToast(result.error || '编辑失败')
       throw new Error(result.error || '编辑失败')
     }
-    this.refreshAfterSubmit('编辑成功')
+    const target: PostInfo | null = replyManager.targetPost
+    const ctx: TreeSubmitContext = new TreeSubmitContext()
+    ctx.kind = TreeSubmitKind.EDIT
+    ctx.editPid = target !== null ? target.pid : 0
+    ctx.text = text
+    ctx.toast = '编辑成功'
+    this.consumeSubmitResult(ctx)
   }
 
   /**

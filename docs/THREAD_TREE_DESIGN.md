@@ -648,7 +648,8 @@ Stack
       `treeBatchThrottler`（4 并发 / 250ms / 180 次每 60 秒），不再由业务层 sleep 硬编码；
       单页失败重试前退避 400ms；在途请求全部完成/取消后才返回，取消语义不变；
     - 成功结果按「账号 uid + tid」缓存 90 秒（最多 2 帖、单帖 > 3000 楼不缓存），
-      列表 ↔ 树切换后再进入秒开；菜单刷新 / 回复后刷新 / 错误态重试传 `forceRefresh` 强制重抓；
+      列表 ↔ 树切换后再进入秒开；菜单刷新 / 错误态重试传 `forceRefresh` 强制重抓
+      （回复/编辑不再整帖重抓，改为单页局部合并，见 §14）；
     - 首屏 BBCode 预热改为后台执行（`preWarmBatch` 不 await），不再阻塞「加载完成 → 首屏渲染」；
     - 引用关系提取与引用区剥离统一为「头部引用区扫描」（`scanLeadingQuoteArea`）：只认正文开头、
       只认 `[quote]` 块首链接头；正文中部/无链接头的引用样式不建边、不剥离，
@@ -820,3 +821,22 @@ Stack
       （加载态语义统一由 `phase` 承担，对应 `THREAD_TREE_INCREMENTAL_LOAD_DESIGN.md` §4.11 E2）；
       `threadTid` 为空时直接落 `FAILED`，不再停在 `ENTERING` 加载屏；
     - 文档：D11 括号说明、§3.5 提示，以及 `THREAD_TREE_INCREMENTAL_LOAD_DESIGN.md` §3.1 / §9 / §10 同步。
+21. **回复 / 编辑后改为单页局部合并（2026-11-08）**：
+    - 用户反馈：在长帖里发一条回复，整棵树被清空、回到顶部、再等几十秒重抓全帖，无法接受；
+    - 根因：`refreshAfterSubmit()` 直接 `loadTree(true)`，而 `loadTree` 会 `clear()` 数据源、
+      重置水位与滚动锚点、重新 `fetchAll` 全帖（N 页请求）；
+    - 方案：回复抓 `page=e`、编辑抓 `pageByPid.get(pid)`，只取 1 页服务端数据，由
+      `ThreadTreeLocalMerge.mergeTreePage` 按 pid 合并（新增追加、同 pid 替换、不删除不移动），
+      再走既有 `rebuildTreePreservingState` + `applyRowsToDataSource` 增量通知；
+      **不做本地乐观插入**（树页乐观要新增行 + 估楼号，会破坏 `allPosts` 连续前缀与行 diff 超序列前提）；
+    - 水位校验：新增纯函数 `resolveMergePage`——回复末页只能等于 `committedPages` 或 `+1`，
+      编辑的服务端自报页码必须等于请求页；合并后保持 `committedPages == totalPages`，
+      不采纳「服务端说还有更多页」；任一校验不过 → 退回 `loadTree(true)`；
+    - 交互：回复成功后展开所属根 → 居中 → 高亮（手势中不抢滚动）；编辑原地生效、不动视口；
+      末页查不到自己那楼（审核 / CDN 延迟）只提示「内容已提交，稍后刷新可见」，不制造幽灵数据；
+      只看楼主过滤掉新楼时提示「已回复，当前只看楼主视图不显示你的回复」；
+    - 顺带修复：`highlightRow` 去掉多余的 `rev++`（行键已含 `_h`），并在
+      `rebuildTreePreservingState` 末尾按 `highlightPid` 回填新行 `highlighted`——否则任何
+      高亮窗口内的重建都会因行键丢失 `_h` 而退化成整表 RELOAD；
+    - 测试：新增 `ThreadTreeLocalMergeUnit`（合并语义 12 例 + 页号决策 8 例 + 合并建树 diff 2 例），
+      Hypium 全量 910 例通过；文档同步 `THREAD_TREE_INCREMENTAL_LOAD_DESIGN.md` §3.7 / §3.9 / §3.11。

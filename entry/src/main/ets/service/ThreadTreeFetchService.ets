@@ -457,6 +457,43 @@ export class ThreadTreeFetchService {
   }
 
   /**
+   * 抓取单页（`'e'` 表示末页），供回复/编辑后的局部刷新使用。
+   *
+   * 与全帖抓取的区别：
+   * - **不参与抓取代际**：不递增 `generation`、不取消在途任务、不写 `activeTask`，
+   *   页面侧只需自己校验页面代际（切帖/离开）；
+   * - **不写缓存**：单页结果不是全帖结论，写进缓存会让下一次进入读到残缺树；
+   * - 复用本实例的限流（`treeBatchThrottler`）、单页超时与「失败重试一次」语义。
+   *
+   * @param tid - 主题 ID
+   * @param page - 页码数字串；`'e'` 表示末页
+   * @returns 页面结果；未登录或重试后仍失败时 `ok = false`
+   */
+  async fetchSinglePage(tid: string, page: string): Promise<ThreadResult> {
+    const token: string = appStore.auth.token
+    const session = appStore.getSession(token)
+    if (!session) {
+      const denied: ThreadResult = new ThreadResult()
+      denied.error = '请先登录'
+      return denied
+    }
+    if (tid.length === 0) {
+      const invalid: ThreadResult = new ThreadResult()
+      invalid.error = '帖子参数无效'
+      return invalid
+    }
+    let result: ThreadResult = await this.requestPage(token, tid, page)
+    if (result.ok || result.emptyPage || looksLikeThrottle(result.error)) {
+      return result
+    }
+    logger.warn('tree-fetch single page retry tid=%{public}s page=%{public}s: %{public}s',
+      tid, page, result.error)
+    await this.sleep(TREE_RETRY_BACKOFF_MS)
+    result = await this.requestPage(token, tid, page)
+    return result
+  }
+
+  /**
    * 抓取全帖并合并。
    *
    * @param owner - 调用页面实例标识（用于精确取消/串行化，不能用 tid 代替：
@@ -933,7 +970,7 @@ export class ThreadTreeFetchService {
    * @returns 页面结果；重试后仍失败时 `ok = false`
    */
   private async fetchPage(token: string, tid: string, page: number): Promise<ThreadResult> {
-    let result: ThreadResult = await this.requestPage(token, tid, page)
+    let result: ThreadResult = await this.requestPage(token, tid, String(page))
     if (result.ok) {
       return result
     }
@@ -951,7 +988,7 @@ export class ThreadTreeFetchService {
     if (this.cancelled) {
       return result
     }
-    result = await this.requestPage(token, tid, page)
+    result = await this.requestPage(token, tid, String(page))
     return result
   }
 
@@ -960,16 +997,16 @@ export class ThreadTreeFetchService {
    *
    * @param token - 会话令牌
    * @param tid - 主题 ID
-   * @param page - 页码（从 1 开始）
+   * @param page - 页码（数字串；`'e'` 表示末页）
    * @returns 页面结果；超时或异常时返回 `ok = false` 的结果对象
    */
-  private async requestPage(token: string, tid: string, page: number): Promise<ThreadResult> {
+  private async requestPage(token: string, tid: string, page: string): Promise<ThreadResult> {
     const emptyBlacklist: Set<string> = new Set<string>()
     const emptyKeywords: string[] = []
     const emptyNotes: Record<string, string> = {}
     try {
       const result: ThreadResult = await withTimeout<ThreadResult>(
-        getThread(token, tid, '', '', String(page), emptyBlacklist, emptyKeywords, emptyNotes,
+        getThread(token, tid, '', '', page, emptyBlacklist, emptyKeywords, emptyNotes,
           treeBatchThrottler),
         TREE_PAGE_TIMEOUT_MS
       )
@@ -977,7 +1014,8 @@ export class ThreadTreeFetchService {
     } catch (e) {
       const failed: ThreadResult = new ThreadResult()
       failed.ok = false
-      failed.error = '第 ' + String(page) + ' 页请求超时或异常：' + formatError(e)
+      const pageLabel: string = page === 'e' ? '末页' : '第 ' + page + ' 页'
+      failed.error = pageLabel + '请求超时或异常：' + formatError(e)
       return failed
     }
   }
