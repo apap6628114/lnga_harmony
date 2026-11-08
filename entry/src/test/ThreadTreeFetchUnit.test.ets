@@ -3,9 +3,9 @@ import {
   derivePartial,
   formatPageFailureMessage,
   isSkippedPagesOverwhelming,
-  isSkippablePageFailure,
-  ThreadTreeFetchResult
+  isSkippablePageFailure
 } from '../main/ets/service/ThreadTreeFetchService'
+import { ThreadTreeFetchResult } from '../main/ets/model/ThreadTreeFetch'
 import { ThreadResult } from '../main/ets/model/ThreadResult'
 import {
   isEmptyWholePage,

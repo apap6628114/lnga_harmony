@@ -493,7 +493,8 @@ Stack
   页间 `setTimeout(0)` 让出一帧，首屏在读到第 1 页后立即提交；
 - 楼层合并走纯函数 `mergeSavedThreadPage`（pid 去重、`lou` 升序），与在线
   `ThreadTreeFetchService.mergePosts` 同口径，父子关系与在线阅读一致；`pageByPid` 只记
-  首次出现的页（与在线「重复 pid 跳过」一致）；
+  首次出现的页（与在线「重复 pid 跳过」一致）；每页解析后后台预热该页 BBCode
+  （`preWarmSavedTreePage`，与在线 `preWarmPage` 同策略）；
 - 返回 `ThreadTreeFetchResult` 同形状结果，`onCommit` 水位提交：树页复用**同一条**增量提交
   管线（`onFetchCommit → applyCommit → finishFetch`），不新增第二套渲染逻辑；
 - **不检查登录**：存档是设备级数据，未登录也可读；
@@ -531,6 +532,18 @@ totalPages)` 生成常驻文案（树列表上方的固定条 `ArchiveCoverageBa
 - 菜单按 §3.6 裁剪；标题加 `[离线]` 前缀（与列表页同一条规则）；
 - 树内跳转/同帖链接找不到楼层时提示「该楼层不在离线存档范围内」，不谎报「已删除」；
 - 一次性引导不弹、不置位（回看场景，不消耗用户唯一一次在线引导）。
+
+**持久化兼容（`startPage` 是可选字段）**
+
+- 走现有 JSON 文件域，**不提升 `SAVED_THREAD_SCHEMA_VERSION`**：提升会让旧导出文件被
+  `importContent` 直接拒绝，反而是兼容性倒退；
+- 读取侧：`reload` / `save` / `importContent` 统一经 `normalizeArchive` 规整
+  （缺失、负数、小数、字符串、Infinity → 1），**只修内存对象、不回写磁盘**；
+- 导出/备份：收藏保存页导出与数据管理备份都按对象字段原样序列化；备份导入的
+  `planFileDomainWrites` 逐字段复制，新字段随对象保留；
+- 旧版本：旧 App 读到多出的字段直接忽略；新 App 读旧文件时字段缺失按 1 处理；
+- 旧版离线导出文件转换与迁移（目录搬移 + `isFilePayloadValid`）只校验 tid / rawPages，
+  新字段不参与校验，旧数据照常通过。
 
 ## 4. 页面接入（路由层）
 
@@ -638,7 +651,9 @@ totalPages)` 生成常驻文案（树列表上方的固定条 `ArchiveCoverageBa
 | --- | --- |
 | `model/ThreadTree.ets` | Lead（先行冻结） |
 | `common/utils/ThreadTreeBuilder.ets` + `entry/src/test/ThreadTreeBuilderUnit.test.ets` + `List.test.ets` 注册 | 数据层成员 |
-| `service/ThreadTreeFetchService.ets` | 数据层成员 |
+| `service/ThreadTreeFetchService.ets`（结果类型已抽到 `model/ThreadTreeFetch.ets`，此处 re-export） | 数据层成员 |
+| `model/ThreadTreeFetch.ets`（全帖结果 / 水位提交载荷形状，在线抓取与离线存档共用） | 数据层成员 |
+| `common/utils/SavedThreadPageUtils.ets`（存档页数 / `startPage` 规整） | 数据层成员 |
 | `entry/src/test/ThreadTreeFetchUnit.test.ets`（异常页跳过 + 部分数据覆盖单测） | 数据层成员 |
 | `common/datasource/ThreadTreeDataSource.ets` | 数据层成员 |
 | `store/ThreadTreeProgressStore.ets` + `PersistenceCatalog` 注册 + `DomainMergers` / 数据管理页 / 单测接线 | 数据层成员 |

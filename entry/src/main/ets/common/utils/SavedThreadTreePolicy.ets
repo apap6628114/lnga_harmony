@@ -16,36 +16,7 @@
  */
 
 import type { PostInfo } from '../../model/PostInfo'
-
-/**
- * 把任意来源的页数字段规整为非负整数。
- *
- * 存档文件是外部可控输入（导入 / 旧版本 / 手工编辑）：字段可能是字符串、负数、
- * 小数或 `Infinity`（`1e999` 这类 JSON 数字会解析成 Infinity）。页数参与区间
- * 文案与算术，必须先落到有限整数。
- *
- * @param value - 原始字段值
- * @returns 非负整数；无法解析或非有限值时返回 0
- */
-function normalizePageCount(value: number): number {
-  const parsed: number = Math.floor(Number(value))
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
-}
-
-/**
- * 把存档的 `startPage` 规整为合法页码。
- *
- * 存档文件是外部可控输入（导入 / 旧版本 / 手工编辑），字段可能缺失、为负数、
- * 为小数、为 `Infinity` 甚至是字符串。**必须转成 number 再用**：`startPage` 会参与
- * `startPage + 存档页序 - 1` 的算术，字符串会让它变成拼接（`'5' + 1 - 1` 得 50）。
- *
- * @param startPage - 原始字段值（运行时可能是任意类型）
- * @returns 合法起始页（1 起）；无法解析时返回 1
- */
-export function resolveArchiveStartPage(startPage: number): number {
-  const parsed: number = Math.floor(Number(startPage))
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
-}
+import { normalizePageCount, resolveArchiveStartPage } from './SavedThreadPageUtils'
 
 /**
  * 生成离线存档树的覆盖范围提示。
@@ -92,26 +63,37 @@ export function buildArchiveCoverageHint(savedPages: number, startPage: number,
 /**
  * 把一页存档楼层合并进累积数组（按 pid 去重、按 `lou` 升序）。
  *
- * 按页序调用时绝大多数楼层落在末尾（NGA 的 `lou` 单调递增），因此插入点通常就是
- * 数组末尾；只有存档页之间出现重排/重复时才需要线性找位置。已存在的 pid 直接跳过
- * （增量翻页期间楼层漂移会在两页里出现同一楼）。
+ * 按页序调用时绝大多数楼层落在末尾（NGA 的 `lou` 单调递增），因此先走 O(1) 的
+ * 「追加到末尾」快速路径；只有存档页之间出现重排时才线性找插入位置。已存在的 pid
+ * 直接跳过（增量翻页期间楼层漂移会在两页里出现同一楼）。
+ *
+ * 每页调用一次，`collected` 的 pid 集合在本次调用内建一次（O(n)），避免逐楼扫描
+ * 整个累积数组（长帖下是 O(pages × posts²)）。
  *
  * @param collected - 累积楼层（原地修改，作为树页增量提交的同一引用）
  * @param incoming - 本页解析出的楼层（按页内顺序）
  * @returns 新增楼层数（0 表示整页都是重复内容）
  */
 export function mergeSavedThreadPage(collected: PostInfo[], incoming: PostInfo[]): number {
+  if (incoming.length === 0) {
+    return 0
+  }
+  const existing: Set<number> = new Set<number>()
+  for (let i: number = 0; i < collected.length; i++) {
+    existing.add(collected[i].pid)
+  }
   let added: number = 0
   for (let i: number = 0; i < incoming.length; i++) {
     const post: PostInfo = incoming[i]
-    let duplicated: boolean = false
-    for (let j: number = 0; j < collected.length; j++) {
-      if (collected[j].pid === post.pid) {
-        duplicated = true
-        break
-      }
+    if (existing.has(post.pid)) {
+      continue
     }
-    if (duplicated) {
+    existing.add(post.pid)
+    const last: PostInfo | undefined = collected.length > 0 ? collected[collected.length - 1] : undefined
+    if (last === undefined || last.lou <= post.lou) {
+      // 常规路径：页内楼号递增、页间楼号更大，直接追加
+      collected.push(post)
+      added++
       continue
     }
     let insertAt: number = collected.length

@@ -16,6 +16,7 @@
  * 建树算法与渲染管线全部复用在线那一套，不需要网络也不需要登录。
  */
 
+import { taskpool } from '@kit.ArkTS'
 import { appStore } from '../store/AppStore'
 import { fetchThreadRaw, fillThreadResult } from './api/ThreadApi'
 import { savedThreadProgress } from '../common/media/SavedThreadProgress'
@@ -24,12 +25,14 @@ import { ThreadResult } from '../model/ThreadResult'
 import { SavedThread } from '../model/SavedThread'
 import { Logger, DOMAIN_SERVICE, formatError } from '../common/utils/Logger'
 import { mergeSavedThreadPage } from '../common/utils/SavedThreadTreePolicy'
+import { collectPostContents } from '../common/utils/PostWarmup'
+import { preWarmBatch } from '../parser/bbcode/BBCodeCache'
 
 /**
- * 只复用「全帖树结果 / 水位提交载荷」的数据形状，本文件不调用任何在线抓取逻辑。
- * 若将来需要消除这层模块依赖，可把这两个类抽到独立的 model 文件。
+ * 只复用「全帖树结果 / 水位提交载荷」的数据形状（model 层，无运行时依赖），
+ * 本文件不调用任何在线抓取逻辑。
  */
-import { ThreadTreeCommit, ThreadTreeFetchResult } from './ThreadTreeFetchService'
+import { ThreadTreeCommit, ThreadTreeFetchResult } from '../model/ThreadTreeFetch'
 
 const logger = new Logger(DOMAIN_SERVICE, 'SavedThreadService')
 
@@ -324,6 +327,30 @@ function yieldToUi(): Promise<void> {
 }
 
 /**
+ * 预热一页楼层的 BBCode 解析缓存（不等待完成）。
+ *
+ * 与在线全帖抓取同一策略：提交哪页预热哪页。离线解析本身很快，但正文解析仍在
+ * 渲染帧里发生；预热到行组件执行 `getCachedBBNodes` 时，长帖首屏不会卡在同步解析上。
+ * 预热是纯优化，失败只退化为渲染层同步解析。
+ *
+ * @param posts - 该页楼层
+ */
+function preWarmSavedTreePage(posts: PostInfo[]): void {
+  if (posts.length === 0) {
+    return
+  }
+  try {
+    const contents: string[] = collectPostContents(posts, false)
+    if (contents.length === 0) {
+      return
+    }
+    preWarmBatch(contents, taskpool.Priority.HIGH)
+  } catch (e) {
+    logger.warn('saved tree prewarm failed: %{public}s', formatError(e))
+  }
+}
+
+/**
  * 离线树数据源：把整份存档逐页解释为**全帖楼层**，供 `ThreadTreePanel` 建树。
  *
  * 与在线 `ThreadTreeFetchService.fetchAll` 的返回形状/提交语义保持一致，树页因此
@@ -412,6 +439,8 @@ export async function getSavedThreadTreeResult(tid: string,
         result.totalRows = pageResult.pagination.totalRows
       }
       mergeSavedThreadPage(collected, pageResult.posts)
+      // 提交哪页预热哪页（后台，不等待）：长帖首屏的正文解析不落在渲染帧
+      preWarmSavedTreePage(pageResult.posts)
       for (let i: number = 0; i < pageResult.posts.length; i++) {
         const pid: number = pageResult.posts[i].pid
         // 与在线 `mergePosts` 同口径：重复 pid 跳过，页映射也只记首次出现的页

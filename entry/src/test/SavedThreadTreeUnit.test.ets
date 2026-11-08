@@ -2,9 +2,9 @@ import { describe, expect, it } from '@ohos/hypium'
 import { PostInfo } from '../main/ets/model/PostInfo'
 import {
   buildArchiveCoverageHint,
-  mergeSavedThreadPage,
-  resolveArchiveStartPage
+  mergeSavedThreadPage
 } from '../main/ets/common/utils/SavedThreadTreePolicy'
+import { resolveArchiveStartPage } from '../main/ets/common/utils/SavedThreadPageUtils'
 
 /**
  * 离线存档 → 递进树 纯逻辑单元测试。

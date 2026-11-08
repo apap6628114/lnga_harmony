@@ -24,7 +24,7 @@ import {
   SavedThreadExportFile,
   SAVED_THREAD_SCHEMA_VERSION
 } from '../model/SavedThread'
-import { resolveArchiveStartPage } from '../common/utils/SavedThreadTreePolicy'
+import { resolveArchiveStartPage } from '../common/utils/SavedThreadPageUtils'
 
 const logger = new Logger(DOMAIN_STORE, 'SavedThreadStore')
 

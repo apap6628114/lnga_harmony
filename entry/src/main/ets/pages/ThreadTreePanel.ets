@@ -39,10 +39,8 @@ import { HoldingHandMonitor, HoldingHandStatus } from '../common/managers/Holdin
 import { SaveThreadContent } from '../common/dialogs/SaveThreadDialogs'
 import { ThreadTrackContent } from '../common/dialogs/ThreadTrackDialogs'
 import { savedThreadService, SaveThreadOutcome, getSavedThreadTreeResult } from '../service/SavedThreadService'
-import {
-  buildArchiveCoverageHint,
-  resolveArchiveStartPage
-} from '../common/utils/SavedThreadTreePolicy'
+import { buildArchiveCoverageHint } from '../common/utils/SavedThreadTreePolicy'
+import { resolveArchiveStartPage } from '../common/utils/SavedThreadPageUtils'
 import { TrackRequest, TrackResult } from '../store/TrackedThreadStore'
 import { TrackedThread, TRACK_DEFAULT_KEEP_DAYS, TRACK_MAX_COUNT } from '../model/TrackedThread'
 import { ThreadTreeProgressEntry } from '../store/ThreadTreeProgressStore'
@@ -62,7 +60,8 @@ import {
   needsRootQuoteContext,
   resolveFloorSubject
 } from '../common/utils/ThreadTreeBuilder'
-import { threadTreeFetchService, ThreadTreeFetchResult, ThreadTreeCommit } from '../service/ThreadTreeFetchService'
+import { threadTreeFetchService } from '../service/ThreadTreeFetchService'
+import { ThreadTreeCommit, ThreadTreeFetchResult } from '../model/ThreadTreeFetch'
 import { ThreadTreeDataSource } from '../common/datasource/ThreadTreeDataSource'
 import {
   LocateSource,
