@@ -2830,19 +2830,18 @@ export struct ThreadPanel {
         this.loadPosts(1, ThreadLoadMode.REPLACE)
       }
     })
-    if (!this.isSavedSource()) {
-      // 两种阅读样式**互斥**：原地替换当前列表页条目（列表页实例随替换销毁，
-      // 销毁前由 `aboutToDisappear` 补记阅读进度），返回直接回主题列表。
-      // **不携带当前楼层**：两种样式各有独立的阅读进度（列表 reading_progress /
-      // 树 tree_reading_progress），切换后由目标页恢复它自己的进度；
-      // 只看楼主、楼主身份与路由来源随路由透传。
-      items.push({
-        label: '切换为递进树阅读',
-        action: (): void => {
-          this.switchToTreeReading()
-        }
-      })
-    }
+    // 两种阅读样式**互斥**：原地替换当前列表页条目（列表页实例随替换销毁，
+    // 销毁前由 `aboutToDisappear` 补记阅读进度），返回直接回主题列表。
+    // **不携带当前楼层**：两种样式各有独立的阅读进度（列表 reading_progress /
+    // 树 tree_reading_progress），切换后由目标页恢复它自己的进度；
+    // 只看楼主、楼主身份与路由来源随路由透传。
+    // 离线存档来源同样可切：树页对 SAVED 使用本地存档数据源（不联网、不要求登录）。
+    items.push({
+      label: '切换为递进树阅读',
+      action: (): void => {
+        this.switchToTreeReading()
+      }
+    })
     items.push({
       label: '从网页打开',
       action: (): void => {
@@ -2874,6 +2873,9 @@ export struct ThreadPanel {
    * **不携带列表当前楼层**：树页按自己的 `tree_reading_progress` 恢复（无记录则顶部）；
    * 只看楼主、楼主身份与路由来源随路由透传——树页抓完全帖前也能维持过滤状态，
    * 加载中再切回列表时不会把「只看楼主」丢掉。
+   *
+   * 离线存档来源同样走这里：树页对 `ThreadSource.SAVED` 用本地存档数据源
+   * （`getSavedThreadTreeResult`），不需要网络与登录。
    */
   private switchToTreeReading(): void {
     routerStore.navigateActivity(
@@ -2890,7 +2892,8 @@ export struct ThreadPanel {
    *
    * 触发条件（全部满足才弹）：
    * - 设备上从未提示过（meta 中的 `treeGuideAcknowledged`，跨启动有效、不随登出重置）；
-   * - 当前是普通在线帖子页，不是离线存档（离线存档没有全帖抓取来源，按设计不提供树入口）；
+   * - 当前是普通在线帖子页，不是离线存档（离线回看不是「发现新功能」的场景，
+   *   且存档树入口已在更多菜单里，弹引导反而打断回看）；
    * - 当前不在递进树默认样式下（默认树样式的用户打开帖子直接进树页，由树页侧静默置位）。
    *
    * **先置位、再弹窗**：标记是同步内存赋值，多列 / 多实例同时到达首屏时，后到的实例

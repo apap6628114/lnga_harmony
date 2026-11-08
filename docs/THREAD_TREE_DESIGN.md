@@ -18,7 +18,7 @@
 | 样式 | 页面组件 | 数据来源 | 列表结构 | 页面栈 |
 | --- | --- | --- | --- | --- |
 | 列表（LIST） | `pages/ThreadPanel.ets`（现有，不改动窗口语义） | 连续分页窗口（`ThreadPaginationManager`） | 自然楼层顺序，`PostItem` | `Screen.thread`（`threadForceList=true` 时强制列表） |
-| 递进树（TREE） | `pages/ThreadTreePanel.ets`（新增） | 一次性全帖抓取（`ThreadTreeFetchService`，独立数据） | 两层扁平树（根行 + 子行 + 折叠行） | `Screen.threadTree` / 默认样式下的 `Screen.thread`（两种样式互斥，同一栈条目） |
+| 递进树（TREE） | `pages/ThreadTreePanel.ets`（新增） | 在线：一次性全帖抓取（`ThreadTreeFetchService`，独立数据）；离线存档：本地 `rawPages` 逐页解释（`getSavedThreadTreeResult`） | 两层扁平树（根行 + 子行 + 折叠行） | `Screen.threadTree` / 默认样式下的 `Screen.thread`（两种样式互斥，同一栈条目） |
 
 **页面隔离原则（本次设计的核心）**：
 
@@ -51,8 +51,11 @@
    新功能说明弹窗（标题「新增阅读方式：递进树」，内容为"树是什么 + 从哪里进"）。主按钮「试试递进树」
    直接替换为树页（与更多菜单同一路由语义），次按钮「知道了」仅关闭。
    弹窗打开**之前**先把 meta 里的 `treeGuideAcknowledged` 置 true 并异步持久化——**全局只提示一次**，跨启动有效。
-   离线存档来源（无树入口）不弹也**不置位**，用户下次在线打开时仍会看到唯一一次引导；
+   离线存档来源（回看场景）不弹也**不置位**，用户下次在线打开时仍会看到唯一一次引导；
    默认样式已是递进树的用户打开帖子直接进树页，由树页侧静默置位，不再打扰。
+5. **离线存档来源**：列表页与树页的更多菜单都提供「切换为递进树阅读 / 切换为列表阅读」，
+   默认样式为递进树时打开存档直接进树页。树页对 `ThreadSource.SAVED` 使用**本地存档数据源**
+   （逐页解释 `rawPages`，不联网、不要求登录），见 §3.10。
 
 ### 1.3 决策表（实现必须遵守）
 
@@ -63,7 +66,7 @@
 | D3 | 第二层 = 根的任意深度后代，**平铺**在根下，按楼层号升序 | 每条子节点显示它**直接回复的那一层**（可能不是根） |
 | D4 | 折叠：某根的后代总数 > 3 时，默认显示前 2 条，其余折叠为一行「共 N 条回复，点击查看」；≤ 3 时全部显示 | 展开后显示全部，不再二次折叠；展开状态在当前树页会话内保留 |
 | D5 | 树页提供「只看楼主」，按楼主楼层**重建树**而不是列表级隐藏 | 过滤后非楼主楼层不参与父子关系，引用它们的楼主楼层按「目标不在树内」提升为根（`buildThreadTree` 既有语义）；主楼恒保留；被过滤父楼层的根行保留原始正文（含引用块）以维持“回复了谁”的上下文。列表页与树页的只看楼主状态、楼主身份随「切换阅读方式」路由透传（抓取结果返回前用路由身份，返回后以 `threadInfo` 为准） |
-| D6 | 离线存档来源不提供树入口 | 列表页菜单不出现「切换为递进树阅读」（离线存档没有网络来源可供全帖抓取） |
+| D6 | 离线存档来源**提供树阅读**，数据源为本地存档 | 列表页与树页菜单都保留「切换为递进树阅读」；树页对 `ThreadSource.SAVED` 走 `getSavedThreadTreeResult`（逐页 `fillThreadResult` + 同一套 `buildThreadTree`），**不需要网络与登录**。存档可能只含部分页：树只按存档页构建，树列表上方常驻覆盖范围提示，缺页处的引用目标按 D2 提升为根。离线树不写阅读进度/浏览历史、不推进跟踪已读、发帖成功不补页（与列表页离线口径一致）；一次性引导对离线来源不弹、不置位（回看场景），见 §3.10 |
 | D7 | 树页**独立记录/恢复**自己的阅读进度 | 记录树内锚点行（pid / 所属根 / 页码；不记录会漂移的扁平行下标），存于独立域 `tree_reading_progress`，不与列表页的 `reading_progress` 互相覆盖；恢复交互与列表页一致（Toast「前往查看」后定位） |
 | D8 | 全帖抓取不应用黑名单/关键词过滤 | 保证引用图完整；黑名单遮蔽仍由 `PostItem`/`ThreadTreeChildItem` 渲染层判断 |
 | D9 | 跳转 `→` 在树内定位 | 目标被折叠时展开其所属根再定位；目标为被删楼层/不存在 → Toast；目标为主楼 → 定位第一行 |
@@ -433,8 +436,9 @@ Stack
 > 两种阅读样式互斥：切换一律原地替换当前栈条目（`navigateActivity(screen, true)`），
 > 被替换的页面实例销毁，返回直接回上一层，不会退回另一种阅读样式。
 
-离线存档来源的列表页不出现 1/2/3/5（存档无网络来源），保留 4/6/7/8；裁剪后的顺序为
-「在线模式打开 / 只看楼主 / 刷新帖子 / 从网页打开 / 分享」，「刷新」仍留在视图组末尾。
+离线存档来源（列表页与树页同一套裁剪）不出现 1/2/3 与刷新（存档没有可重抓的在线来源），
+首项换成「在线模式打开」，保留 4/5/7/8；裁剪后的顺序为「在线模式打开 / 只看楼主 /
+切换阅读方式 / 从网页打开 / 分享」，切换项两页按当前样式命名（§3.10）。
 
 ### 3.7 阅读进度（树内锚点，独立域）
 
@@ -477,6 +481,57 @@ Stack
 - 滚动时同步标题渐变并 `dismissAnalyzerSessions()`（与列表页一致，图片识图选取态不跨滚动存活）；
 - 底部回复按钮按握姿（`HoldingHandStatus`）贴左/贴右，`PostItem` / `ThreadTreeChildItem` 同步传入握姿。
 
+### 3.10 离线存档树（数据源分叉）
+
+离线存档本身就是**保存时刻的全帖快照**（`SavedThread.rawPages` 每页一项，保存时用空黑名单/
+空关键词校验，不做过滤），构树不需要网络：树页对 `ThreadSource.SAVED` 不再排除，而是把
+数据源换成 `SavedThreadService.getSavedThreadTreeResult`。
+
+**数据源（`getSavedThreadTreeResult`）**
+
+- 逐页 `getRawPage` + `fillThreadResult`（空黑名单/关键词/备注，与保存侧同口径，保证引用图完整）；
+  页间 `setTimeout(0)` 让出一帧，首屏在读到第 1 页后立即提交；
+- 楼层合并走纯函数 `mergeSavedThreadPage`（pid 去重、`lou` 升序），与在线
+  `ThreadTreeFetchService.mergePosts` 同口径，父子关系与在线阅读一致；`pageByPid` 只记
+  首次出现的页（与在线「重复 pid 跳过」一致）；
+- 返回 `ThreadTreeFetchResult` 同形状结果，`onCommit` 水位提交：树页复用**同一条**增量提交
+  管线（`onFetchCommit → applyCommit → finishFetch`），不新增第二套渲染逻辑；
+- **不检查登录**：存档是设备级数据，未登录也可读；
+- **可取消**：`shouldCancel` 每页开头询问一次，页面销毁 / 点停止 / 刷新 / 切帖时立即终止
+  （只靠回调层的代际拦截会让旧解析把整份存档跑完，长存档下重复进入会叠加多条循环）；
+- 页数口径：`totalPages = loadedPages = savedPages`，`partial = false`——胶囊与尾部只表达
+  **存档边界**，不表示服务端还有多少页；单页解析失败记入 `skippedPages`（尾部「存档第 X 页
+  缺少楼层」），整份存档都解析不出楼层才 `ok = false`。
+
+**覆盖范围提示**
+
+存档允许只保存部分页（保存弹窗可选页范围），缺页处的引用目标会按 D2 提升为顶层根——那是
+**存档边界**，不是帖子的真实讨论结构。`buildArchiveCoverageHint(savedPages, startPage,
+totalPages)` 生成常驻文案（树列表上方的固定条 `ArchiveCoverageBar`；**不放进 List**：
+静态 `ListItem` 会占掉 `LazyForEach` 的全局索引，`scrollToIndex` 定位会整体偏移一行）：
+
+- 全帖（从第 1 页起且覆盖到保存时刻总页数）→ 空串，不提示；
+- 部分页 → 「离线存档仅含前 N 页 / 第 x-y 页（原帖共 m 页），未保存页里的引用会显示为顶层楼层」。
+
+`SavedThread.startPage` 记录保存范围起点。存档文件是外部可控输入：`startPage` / 页数
+可能缺失、为负数、小数、`Infinity` 或字符串——统一由 `resolveArchiveStartPage` /
+`normalizePageCount` 转成有限整数再用（字符串直接参与 `startPage + 存档页序 - 1` 会变成
+拼接），倒挂区间钳到起始页。**存档页序 ≠ 线上页码**：页面内的胶囊、缺页文案与跳转提示
+一律用存档页序并标明「存档第 X 页」；只有覆盖条区间与回复引用头的 C 段用
+`startPage + 存档页序 - 1` 换算成线上页码。
+
+**标题联动**：覆盖条把树 List 推到标题区下方，List 内容不会再滚入标题栏，因此有条时
+`titleScrollEffectProgress` 恒为 0（否则初始 `yOffset = 0` 会被算成「已滚满」，
+标题栏 tint 与该值驱动的列表顶部渐变模糊会盖住提示条和树首行）。
+
+**与列表页离线口径一致的行为**
+
+- 不写 `tree_reading_progress`、不写浏览历史、不推进跟踪已读（`isResumeAllowedSource` 也排除 SAVED）；
+- 回复/编辑成功后只提示「离线存档不包含新楼层」，不补页、不整帖重抓（存档不会因发帖更新）；
+- 菜单按 §3.6 裁剪；标题加 `[离线]` 前缀（与列表页同一条规则）；
+- 树内跳转/同帖链接找不到楼层时提示「该楼层不在离线存档范围内」，不谎报「已删除」；
+- 一次性引导不弹、不置位（回看场景，不消耗用户唯一一次在线引导）。
+
 ## 4. 页面接入（路由层）
 
 ### 4.1 路由
@@ -499,6 +554,8 @@ Stack
 
 - `'thread'` 条目：`appStore.settings.threadRenderMode === ThreadRenderMode.TREE` → 挂载 `ThreadTreePanel(authorOnlyInit=screen.threadAuthorOnly, authorIdInit=screen.threadAuthorId, authorKeyInit=screen.threadAuthorKey, threadSource=screen.threadSource, threadPage=screen.threadPage)`，
   否则挂载 `ThreadPanel`（分页/定位语义不变，仅新增 `authorOnlyInit / authorIdInit / authorKeyInit` 三项路由透传）；
+  **离线存档来源同样按默认样式分流**（`shouldUseTreeRender` 不再排除 `ThreadSource.SAVED`），
+  树页按来源把数据源分叉为本地存档（§3.10）；
 - `'threadTree'` 条目：挂载 `ThreadTreePanel(authorOnlyInit=screen.threadAuthorOnly, authorIdInit=screen.threadAuthorId, authorKeyInit=screen.threadAuthorKey, threadSource=screen.threadSource, threadPage=screen.threadPage)`
   （由列表页切换时**原地替换**而来，与列表页互斥：列表页实例已在替换时销毁）；
 - TTS 停止判定把 `threadTree` 也视为帖子类页面（替换条目会改变条目 id，因此切换阅读样式即停止朗读）。
@@ -506,12 +563,13 @@ Stack
 ### 4.3 列表页入口（`ThreadPanel.ets`）
 
 `moreMenuItems()` 与树页**同序同构**（§3.6）：在线来源依次为 收藏 / 离线保存 / 跟踪 /
-只看楼主 / 切换为递进树阅读 / 刷新帖子 / 从网页打开 / 分享；离线存档来源去掉网络相关项
-（在线模式打开 / 只看楼主 / 刷新帖子 / 从网页打开 / 分享）。
+只看楼主 / 切换为递进树阅读 / 刷新帖子 / 从网页打开 / 分享；离线存档来源去掉网络相关项，
+换成「在线模式打开 / 只看楼主 / 切换为递进树阅读 / 从网页打开 / 分享」。
 「切换为递进树阅读」以
 `routerStore.navigateActivity(Screen.threadTree(this.threadTid, '', this.authorOnly, this.threadSource, this.threadAuthorId, this.threadAuthorKey), true)`
 **原地替换**当前列表页条目（列表页实例销毁）：
 不把列表当前楼层带进树页，树页按自己的进度恢复（无记录则顶部）。
+**离线存档来源同样显示该入口**：树页按 `threadSource` 分叉为本地存档数据源（§3.10）。
 列表页只新增了「刷新帖子」与本项，不改分页/定位/进度逻辑。
 
 ## 5. 设置链路（单一 owner）
@@ -569,6 +627,11 @@ Stack
 总页数未知 → 不判部分），以及 `ThreadTreeFetchResult` 默认值为「完整」口径
 （`partial=false`、`loadedPages=0`，防止漏填被误判部分数据）。
 
+离线存档树的纯逻辑由 `entry/src/test/SavedThreadTreeUnit.test.ets`（在 `List.test.ets` 注册）覆盖：
+覆盖范围提示（全帖不提示 / 前 N 页 / 起点非第 1 页的线上页码区间 / `totalPages` 缺失兜底 /
+空存档 / 起始页超过总页数的倒挂区间 / 页数多于总页数的脏数据）、`startPage` 规整
+（0 / 负数 / NaN / Infinity / 小数）、跨页合并（`lou` 升序 / pid 去重 / 乱序插入 / 空页）。
+
 ## 7. 文件清单与写入归属
 
 | 文件 | 归属 |
@@ -581,6 +644,9 @@ Stack
 | `store/ThreadTreeProgressStore.ets` + `PersistenceCatalog` 注册 + `DomainMergers` / 数据管理页 / 单测接线 | 数据层成员 |
 | `common/components/thread-tree/ThreadTreeChildItem.ets` / `ThreadTreeMoreItem.ets` | UI 层成员 |
 | `common/utils/ThreadTreeGuidePolicy.ets` + `entry/src/test/ThreadTreeGuideUnit.test.ets`（一次性引导触发策略与单测） | Lead |
+| `common/utils/SavedThreadTreePolicy.ets` + `entry/src/test/SavedThreadTreeUnit.test.ets`（离线存档树：覆盖范围提示 + 跨页合并） | Lead |
+| `service/SavedThreadService.ets`（新增 `getSavedThreadTreeResult` 本地树数据源） | Lead |
+| `model/SavedThread.ets` / `store/SavedThreadStore.ets`（`startPage` 字段与旧存档规整） | Lead |
 | `pages/ThreadTreePanel.ets`（独立树阅读页面） | Lead |
 | `pages/ActivityRouter.ets` / `store/RouterStore.ets`（路由类型与分流） | Lead |
 | `pages/ThreadPanel.ets`（更多菜单同构 + 刷新项） | Lead |
@@ -608,6 +674,15 @@ Stack
    保持「缺页即失败」（存档语义要求完整，不能静默丢页），而保存弹窗默认结束页 = 服务端总页数。
    因此遇到「某页整页不可见」时，同一页面里的树阅读可以跳过该页，但离线保存会失败并提示
    「第 X 页没有楼层，帖子可能已失效」。若线上高频出现，应在保存对话框先探测空页并排除该页范围。
+9. **离线存档树的边界是存档而不是帖子**：只保存部分页时，树只能覆盖存档页；缺页处的引用目标
+   按 D2 提升为顶层根，页面用树列表上方的覆盖范围提示说明这一点（不提示"楼层已删除"）。
+   `SavedThread.startPage` 是新增字段，旧存档一律按 1 处理——老存档若确实从中间页保存，
+   区间提示会偏保守（显示"前 N 页"），但不会越界。存档页序与线上页码是两套编号，
+   页面内统一用存档页序（文案标明「存档第 X 页」），覆盖条区间与回复引用头 C 段用线上页码。
+10. **保存时 `totalPages` 缺失会让部分存档被判成「全帖」**：`SavedThreadService.fillMetadata`
+    在首屏响应没有 `pagination.totalPages` 时兜底为 `savedPages`，于是 `buildArchiveCoverageHint`
+    认为已覆盖到末页、不显示覆盖条。这是保存侧的既有兜底（导入的旧存档同样可能缺该字段），
+    本次未引入"是否到末页"的额外探测；若线上出现，应在保存对话框记录实际末页状态。
 
 ## 9. 实现落地差异（交付时校准）
 
@@ -626,7 +701,7 @@ Stack
      只有 @Prop 会随新参数更新，普通字段会保留旧值导致正文不刷新；
    - 树 List 启用 `maintainVisibleContentPosition(true)`：展开折叠行（整体 replaceAll）时视口不跳动；
    - 加载态「取消」与「以常规列表打开」在总页数未知（第 1 页未返回）时都可用；
-   - 「切换为递进树阅读」菜单项只在在线来源显示（离线存档不出现该入口）。
+   - 「切换为递进树阅读」菜单项在线与离线来源都显示（离线树走本地存档数据源，见 §3.10）。
 10. 调研临时产物（`docs/research/samples/` 抓取样本与分析脚本、B 站现场截图，约 4.6MB）已在交付前清理；
     三份调研报告（引用格式统计、B 站交互规则、工程接入地图）保留，作为解析规则与参数的依据。
 11. **细节调整（与列表页对齐）**：

@@ -10,6 +10,10 @@
  * 打开（离线）：getSavedThreadResult 从存档读取指定页的同形状 JSON，交给
  * 当前版本的 fillThreadResult 解释——与在线 getThread 走同一条渲染管线，
  * 表现一致；只看楼主改为客户端过滤，总页数限定为实际保存页数。
+ *
+ * 树阅读（离线）：getSavedThreadTreeResult 把整份存档逐页解释为全帖楼层，供
+ * `ThreadTreePanel` 建树——数据源从「在线抓全帖」换成「本地存档」，引用关系、
+ * 建树算法与渲染管线全部复用在线那一套，不需要网络也不需要登录。
  */
 
 import { appStore } from '../store/AppStore'
@@ -19,6 +23,13 @@ import { PostInfo } from '../model/PostInfo'
 import { ThreadResult } from '../model/ThreadResult'
 import { SavedThread } from '../model/SavedThread'
 import { Logger, DOMAIN_SERVICE, formatError } from '../common/utils/Logger'
+import { mergeSavedThreadPage } from '../common/utils/SavedThreadTreePolicy'
+
+/**
+ * 只复用「全帖树结果 / 水位提交载荷」的数据形状，本文件不调用任何在线抓取逻辑。
+ * 若将来需要消除这层模块依赖，可把这两个类抽到独立的 model 文件。
+ */
+import { ThreadTreeCommit, ThreadTreeFetchResult } from './ThreadTreeFetchService'
 
 const logger = new Logger(DOMAIN_SERVICE, 'SavedThreadService')
 
@@ -149,6 +160,8 @@ export class SavedThreadService {
       thread.tid = tid
       thread.savedAt = Date.now()
       thread.savedPages = totalPages
+      // 保存范围的起始页：离线树据此给出准确的覆盖范围提示（存档页序 ≠ 线上页码）
+      thread.startPage = startPage
       thread.rawPages = rawPages
       thread.lastLou = lastLou
       if (firstResult !== null) {
@@ -293,5 +306,163 @@ export async function getSavedThreadResult(tid: string, page: number,
       tid, page, formatError(e))
     result.error = '存档数据无法解析'
   }
+  return result
+}
+
+/**
+ * 让出一帧：长帖存档可能有上百页，同步解析全部页会卡住首屏与滚动。
+ *
+ * 用 `setTimeout(0)`（宏任务）而不是 `Promise.resolve()`（微任务）：微任务不把控制权
+ * 交还 UI 线程，连续上百页的解析仍会表现成一帧卡顿。
+ */
+function yieldToUi(): Promise<void> {
+  return new Promise<void>((resolve: () => void): void => {
+    setTimeout((): void => {
+      resolve()
+    }, 0)
+  })
+}
+
+/**
+ * 离线树数据源：把整份存档逐页解释为**全帖楼层**，供 `ThreadTreePanel` 建树。
+ *
+ * 与在线 `ThreadTreeFetchService.fetchAll` 的返回形状/提交语义保持一致，树页因此
+ * 可以复用同一条增量提交管线（`onCommit` 水位推进 + 结果收尾），差别只有：
+ * - 数据来自本地存档（`rawPages`），**不需要网络、不需要登录**；
+ * - 解析用空黑名单/关键词/备注，与保存侧同口径，保证引用图完整（黑名单遮蔽由
+ *   渲染层 `PostInfo`/`PostItem` 承担，见 D8）；
+ * - `totalPages` / `loadedPages` 用**存档页数**（胶囊与尾部文案只表达存档边界）；
+ * - 每页之间让出一帧，首屏在读到第 1 页后立即提交。
+ *
+ * 单页解析失败（存档某页损坏）按「跳过该页」处理并记入 `skippedPages`——与在线
+ * 「整页不可见」的降级语义一致：一页坏数据不该让整帖不可读，尾部文案会标明缺页。
+ * 整份存档都解析不出楼层时 `ok = false`。
+ *
+ * @param tid - NGA 主题 ID
+ * @param onProgress - 每页完成回调（done 已解析页数，total 存档页数）
+ * @param onCommit - 水位推进回调：`posts` 是按存档页序连续的前缀，可直接建树
+ * @param shouldCancel - 取消检查（每页开头询问一次）：页面销毁 / 停止 / 刷新时返回 true，
+ *   解析立即终止并返回已处理的部分结果。**没有它，旧解析会在页面销毁后继续跑完**——
+ *   回调虽被代际拦截，CPU 与页面实例闭包仍会被占住，长存档下重复进入还会叠加多条解析。
+ * @returns 与在线全帖抓取同形状的结果
+ */
+export async function getSavedThreadTreeResult(tid: string,
+  onProgress?: (done: number, total: number) => void,
+  onCommit?: (commit: ThreadTreeCommit) => void,
+  shouldCancel?: () => boolean): Promise<ThreadTreeFetchResult> {
+  const result: ThreadTreeFetchResult = new ThreadTreeFetchResult()
+  const archive: SavedThread | null = appStore.savedThreadStore.getByTid(tid)
+  if (archive === null) {
+    result.error = '离线存档不存在或已被删除'
+    return result
+  }
+  const totalPages: number = archive.savedPages > 0 ? archive.savedPages : archive.rawPages.length
+  if (totalPages <= 0) {
+    result.error = '离线存档没有可阅读的内容'
+    return result
+  }
+  // 与保存侧同口径：空黑名单 / 空关键词 / 空备注，保证引用图与全部楼层都在
+  const emptyBlacklist: Set<string> = new Set<string>()
+  const emptyKeywords: string[] = []
+  const emptyNotes: Record<string, string> = {}
+  const collected: PostInfo[] = []
+  const pageByPid: Map<number, number> = new Map<number, number>()
+  const skippedPages: number[] = []
+  for (let page: number = 1; page <= totalPages; page++) {
+    if (shouldCancel !== undefined && shouldCancel()) {
+      result.cancelled = true
+      result.pageByPid = pageByPid
+      result.totalPages = totalPages
+      result.loadedPages = page - 1
+      result.skippedPages = skippedPages
+      result.partial = page - 1 < totalPages
+      if (collected.length > 0) {
+        // 已解析到的楼层仍是可用数据（与在线取消语义一致），是否提交由调用方决定
+        result.posts = collected
+        result.ok = true
+      } else {
+        result.error = '已取消'
+      }
+      logger.info('saved tree source cancelled tid=%{public}s page=%{public}d posts=%{public}d',
+        tid, page, collected.length)
+      return result
+    }
+    const raw: Record<string, Object> | null = appStore.savedThreadStore.getRawPage(tid, page)
+    let pageResult: ThreadResult | null = null
+    if (raw !== null) {
+      const parsed: ThreadResult = new ThreadResult()
+      try {
+        fillThreadResult(raw, parsed, emptyBlacklist, emptyKeywords, emptyNotes)
+        if (parsed.ok && parsed.posts.length > 0) {
+          pageResult = parsed
+        }
+      } catch (e) {
+        logger.warn('saved tree page parse failed tid=%{public}s page=%{public}d: %{public}s',
+          tid, page, formatError(e))
+      }
+    }
+    if (pageResult === null) {
+      // 缺页 / 损坏页：跳过并记录，绝不伪造或中断整棵树（一页坏数据不该让整帖不可读）
+      skippedPages.push(page)
+    } else {
+      if (result.threadInfo === null) {
+        // 第 1 页（或首个可解析页）承担主题元数据：标题 / 楼主身份 / 总楼层数
+        result.threadInfo = pageResult.threadInfo
+        result.forumName = pageResult.forumName
+        result.totalRows = pageResult.pagination.totalRows
+      }
+      mergeSavedThreadPage(collected, pageResult.posts)
+      for (let i: number = 0; i < pageResult.posts.length; i++) {
+        const pid: number = pageResult.posts[i].pid
+        // 与在线 `mergePosts` 同口径：重复 pid 跳过，页映射也只记首次出现的页
+        if (!pageByPid.has(pid)) {
+          pageByPid.set(pid, page)
+        }
+      }
+      if (onCommit !== undefined) {
+        try {
+          const commit: ThreadTreeCommit = new ThreadTreeCommit()
+          // 与抓取服务一致：载荷与累积数组共享同一引用（页面按引用直接建树）
+          commit.posts = collected
+          commit.committedPages = page
+          commit.totalPages = totalPages
+          commit.threadInfo = result.threadInfo
+          commit.totalRows = result.totalRows
+          commit.forumName = result.forumName
+          commit.pageByPid = pageByPid
+          onCommit(commit)
+        } catch (e) {
+          logger.warn('saved tree commit callback failed tid=%{public}s page=%{public}d: %{public}s',
+            tid, page, formatError(e))
+        }
+      }
+    }
+    // 跳过的页同样推进进度并让出：胶囊的 n/N 必须能走到 N，解析也不能独占 UI 线程
+    if (onProgress !== undefined) {
+      try {
+        onProgress(page, totalPages)
+      } catch (e) {
+        // 与在线 `notifyProgress` 一致：回调异常不能把整份解析判成失败
+        logger.warn('saved tree progress callback failed tid=%{public}s page=%{public}d: %{public}s',
+          tid, page, formatError(e))
+      }
+    }
+    await yieldToUi()
+  }
+  result.pageByPid = pageByPid
+  result.totalPages = totalPages
+  // 跳过的页也算「已处理」（与在线 `derivePartial` 的覆盖口径一致）：胶囊显示 N/N，
+  // 缺页由尾部文案表达，不把用户拖进"永远加载不完"的错误态
+  result.loadedPages = totalPages
+  result.skippedPages = skippedPages
+  result.partial = false
+  if (collected.length === 0) {
+    result.error = '离线存档数据无法解析'
+    return result
+  }
+  result.posts = collected
+  result.ok = true
+  logger.info('saved tree source ready tid=%{public}s pages=%{public}d posts=%{public}d skipped=%{public}d',
+    tid, totalPages, collected.length, skippedPages.length)
   return result
 }

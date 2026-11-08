@@ -22,7 +22,7 @@
 | 维度 | `pages/ThreadPanel.ets`（**普通列表**） | `pages/ThreadTreePanel.ets`（**递进树**，本文对象） |
 | --- | --- | --- |
 | 阅读形态 | 自然楼层顺序，一页 20 楼 | 两层扁平树（根行 + 子行 + 折叠行） |
-| 数据来源 | 连续分页窗口 `ThreadPaginationManager`（按页请求，双向追加/前插） | 全帖抓取 `ThreadTreeFetchService` + `buildThreadTree` |
+| 数据来源 | 连续分页窗口 `ThreadPaginationManager`（按页请求，双向追加/前插） | 在线：全帖抓取 `ThreadTreeFetchService`；离线存档：本地 `rawPages`（`getSavedThreadTreeResult`，同形状结果 + 同一 `onCommit` 管线）+ `buildThreadTree` |
 | 列表数据源 | `PostInfoDataSource`（`PostInfo[]`） | `ThreadTreeDataSource`（`ThreadTreeRow[]`） |
 | 阅读进度域 | `reading_progress`（页码 + 楼层锚点） | `tree_reading_progress`（pid / rootPid / page） |
 | 加载态 | 首屏 `LoadingState`（400ms 延迟淡入）+ 底部「加载更多」 | 全屏 `LoadingState`（三出口）→ **本文要改成增量** |

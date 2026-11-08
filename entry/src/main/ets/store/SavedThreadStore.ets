@@ -24,6 +24,7 @@ import {
   SavedThreadExportFile,
   SAVED_THREAD_SCHEMA_VERSION
 } from '../model/SavedThread'
+import { resolveArchiveStartPage } from '../common/utils/SavedThreadTreePolicy'
 
 const logger = new Logger(DOMAIN_STORE, 'SavedThreadStore')
 
@@ -144,6 +145,9 @@ export class SavedThreadStore {
     if (thread.savedPages <= 0 || thread.savedPages !== thread.rawPages.length) {
       thread.savedPages = thread.rawPages.length
     }
+    // 旧存档（v2 早期 / 导入文件）没有 startPage：按从第 1 页起处理。
+    // 页码区间提示因此可能偏保守，但绝不越界。外部导入可能是字符串/负数，统一转 number
+    thread.startPage = resolveArchiveStartPage(thread.startPage)
     const lou: number = thread.lastLou
     if (lou === undefined || lou === null || lou <= 0) {
       thread.lastLou = 0

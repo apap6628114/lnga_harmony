@@ -53,6 +53,7 @@ import threadTreeGuideUnitTest from './ThreadTreeGuideUnit.test';
 import threadTreeFetchUnitTest from './ThreadTreeFetchUnit.test';
 import threadTreeIncrementalUnitTest from './ThreadTreeIncrementalUnit.test';
 import threadTreeLocalMergeUnitTest from './ThreadTreeLocalMergeUnit.test';
+import savedThreadTreeUnitTest from './SavedThreadTreeUnit.test';
 
 /**
  * 注册全部本地单元测试。
@@ -113,4 +114,5 @@ export default function testsuite(): void {
   threadTreeFetchUnitTest();
   threadTreeIncrementalUnitTest();
   threadTreeLocalMergeUnitTest();
+  savedThreadTreeUnitTest();
 }

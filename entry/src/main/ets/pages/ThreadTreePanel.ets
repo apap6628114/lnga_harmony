@@ -10,6 +10,7 @@ import { ThreadResult } from '../model/ThreadResult'
 import type { PostReplyResult } from '../model/ThreadResult'
 import type { ThreadInfo } from '../model/Thread'
 import type { PostInfo } from '../model/PostInfo'
+import type { SavedThread } from '../model/SavedThread'
 import { VoteResult } from '../model/NgaApiResults'
 import { FavoriteMembershipState } from '../model/Favorite'
 import { getCachedBBNodes } from '../parser/bbcode/BBCodeCache'
@@ -37,7 +38,11 @@ import { dismissAnalyzerSessions } from '../common/media/ImageAnalyzerSession'
 import { HoldingHandMonitor, HoldingHandStatus } from '../common/managers/HoldingHandMonitor'
 import { SaveThreadContent } from '../common/dialogs/SaveThreadDialogs'
 import { ThreadTrackContent } from '../common/dialogs/ThreadTrackDialogs'
-import { savedThreadService, SaveThreadOutcome } from '../service/SavedThreadService'
+import { savedThreadService, SaveThreadOutcome, getSavedThreadTreeResult } from '../service/SavedThreadService'
+import {
+  buildArchiveCoverageHint,
+  resolveArchiveStartPage
+} from '../common/utils/SavedThreadTreePolicy'
 import { TrackRequest, TrackResult } from '../store/TrackedThreadStore'
 import { TrackedThread, TRACK_DEFAULT_KEEP_DAYS, TRACK_MAX_COUNT } from '../model/TrackedThread'
 import { ThreadTreeProgressEntry } from '../store/ThreadTreeProgressStore'
@@ -251,6 +256,22 @@ export struct ThreadTreePanel {
    * 不知情的情况下读一份缺页的树。
    */
   @State skippedPageHint: string = ''
+  /**
+   * 离线存档树的覆盖范围提示（空串表示全帖存档，不提示）。
+   *
+   * 存档允许只保存部分页，树只按存档页构建：缺页处的引用目标会按「目标不在树内」
+   * 提升为顶层楼层（`buildThreadTree` D2 语义），那是**存档边界**而不是帖子的真实
+   * 讨论结构。文案由纯函数 `buildArchiveCoverageHint` 生成，作为树列表上方的固定条常驻展示，
+   * 避免残树被误读。
+   */
+  @State archiveCoverageHint: string = ''
+  /**
+   * 离线存档的保存范围起始页（1 起）。
+   *
+   * 存档页序（1..savedPages）与线上页码是两套编号：发回复时引用头里的 C 段
+   * （被引用楼层页码，官方客户端会填）必须用**线上页码**，不能把存档页序写进去。
+   */
+  private archiveStartPage: number = 1
   /**
    * 当前树是否只覆盖**部分页**（用户主动停止，或某页失败但已有内容可读）。
    *
@@ -472,8 +493,11 @@ export struct ThreadTreePanel {
      * 一次性引导的置位（见 `ThreadPanel.maybeShowTreeReadingGuide`）：
      * 直接以递进树进入的用户**已经在用它**，再弹「存在递进树模式」只是打扰；
      * 这里静默置位，保证之后即使切到列表阅读也不会再被引导一次。
+     *
+     * **离线存档不置位**：与列表页 `ThreadTreeGuidePolicy` 同一口径——离线回看不是
+     * 「发现新功能」的场景，不该消耗用户唯一一次在线引导。
      */
-    if (!appStore.treeGuideAcknowledged) {
+    if (!appStore.treeGuideAcknowledged && !this.isSavedSource()) {
       appStore.acknowledgeTreeGuide().catch((e: Error): void => {
         logger.warn('acknowledge tree guide failed: %{public}s', formatError(e))
       })
@@ -544,6 +568,8 @@ export struct ThreadTreePanel {
     this.treeDataSource.clear()
     this.totalPages = 0
     this.skippedPageHint = ''
+    this.archiveCoverageHint = ''
+    this.archiveStartPage = 1
     this.partialData = false
     this.partialLoadedPages = 0
     this.partialTotalPages = 0
@@ -693,9 +719,17 @@ export struct ThreadTreePanel {
     this.treeDataSource.clear()
     // 上一轮的缺页/部分数据提示属于旧结果：新一轮抓取重新判定
     this.skippedPageHint = ''
+    this.archiveCoverageHint = ''
+    this.archiveStartPage = 1
     this.partialData = false
     this.partialLoadedPages = 0
     this.partialTotalPages = 0
+    // 离线存档：数据源换成「整份存档逐页解释」——不请求网络、也不要求登录。
+    // 提交/收尾管线（onFetchCommit → finishFetch）与在线完全同一条，下面只是换源。
+    if (this.isSavedSource()) {
+      this.loadTreeFromArchive(generation, fetchTid)
+      return
+    }
     logger.info('tree-panel load start tid=%{public}s gen=%{public}d refresh=%{public}s',
       fetchTid, generation, String(keepSubject))
     threadTreeFetchService.fetchAll(this.treeOwner, fetchTid, (_done: number, total: number): void => {
@@ -723,6 +757,66 @@ export struct ThreadTreePanel {
       this.bannerErrorText = this.errorMsg
       this.refreshBanner()
       logger.error('tree-panel load failed tid=%{public}s: %{public}s', fetchTid, formatError(error))
+    })
+  }
+
+  /**
+   * 离线存档树的数据源：整份存档逐页解释（`getSavedThreadTreeResult`）。
+   *
+   * 与在线分支的差异只有数据来源与失败文案：
+   * - 不检查登录（存档是设备级数据，未登录也可读）；
+   * - 页数口径用**存档页数**：胶囊与尾部文案只表达存档边界，不表示服务端还有多少页；
+   * - 覆盖范围提示按存档页区间生成（全帖存档为空串），见 {@link archiveCoverageHint}。
+   *
+   * @param generation - 加载代际（异步回调校验；切帖/刷新后旧结果不得提交）
+   * @param fetchTid - 本次加载的帖子 ID
+   */
+  private loadTreeFromArchive(generation: number, fetchTid: string): void {
+    const archive: SavedThread | null = appStore.savedThreadStore.getByTid(fetchTid)
+    if (archive === null) {
+      // 存档在页面打开后被删除：落错误态，不能停在 ENTERING 的加载屏
+      this.frozen = true
+      this.phase = TreePagePhase.FAILED
+      this.errorMsg = '离线存档不存在或已被删除'
+      this.bannerErrorText = this.errorMsg
+      this.refreshBanner()
+      return
+    }
+    this.archiveCoverageHint = buildArchiveCoverageHint(archive.savedPages,
+      archive.startPage, archive.totalPages)
+    this.archiveStartPage = resolveArchiveStartPage(archive.startPage)
+    this.progressTotal = archive.savedPages
+    logger.info('tree-panel archive load start tid=%{public}s gen=%{public}d pages=%{public}d',
+      fetchTid, generation, archive.savedPages)
+    getSavedThreadTreeResult(fetchTid, (_done: number, total: number): void => {
+      if (generation !== this.fetchGeneration) {
+        return
+      }
+      this.progressTotal = total
+      if (this.totalPages <= 0) {
+        // 第 1 页尚未提交：先用总页数兜底刷新胶囊，避免「0/N」
+        this.refreshBanner()
+      }
+    }, (commit: ThreadTreeCommit): void => {
+      this.onFetchCommit(commit, generation)
+    }, (): boolean => {
+      // 页面销毁 / 点停止 / 刷新 / 切帖：立即终止解析。只靠回调层的代际拦截会让
+      // 旧解析在后台把整份存档跑完（长存档下重复进入会叠加多条循环）
+      return generation !== this.fetchGeneration || this.frozen
+    }).then((result: ThreadTreeFetchResult): void => {
+      this.finishFetch(result, generation)
+    }).catch((error: Object): void => {
+      if (generation !== this.fetchGeneration) {
+        return
+      }
+      this.stopping = false
+      this.frozen = true
+      this.phase = TreePagePhase.FAILED
+      this.errorMsg = formatError(error)
+      this.bannerErrorText = this.errorMsg
+      this.refreshBanner()
+      logger.error('tree-panel archive load failed tid=%{public}s: %{public}s',
+        fetchTid, formatError(error))
     })
   }
 
@@ -969,6 +1063,11 @@ export struct ThreadTreePanel {
    */
   private recordBrowseHistoryOfCommit(posts: PostInfo[]): void {
     if (!appStore.auth.isAuthenticated) {
+      return
+    }
+    // 离线存档不写浏览历史（与列表页一致）：历史条目后续会以在线通道打开，
+    // 记一条"离线读到的快照"只会让历史列表出现无法复现的楼层范围
+    if (this.isSavedSource()) {
       return
     }
     const info: ThreadInfo | null = this.pendingCommitThreadInfo
@@ -1570,10 +1669,13 @@ export struct ThreadTreePanel {
     for (let i: number = 0; i < limit; i++) {
       shown.push(String(skippedPages[i]))
     }
+    // 离线存档给出的是**存档页序**（覆盖条上的区间是线上页码，两套编号不能混用）
+    const pagePrefix: string = this.isSavedSource() ? '存档第 ' : '第 '
     if (skippedPages.length <= limit) {
-      return '第 ' + shown.join('、') + ' 页缺少楼层'
+      return pagePrefix + shown.join('、') + ' 页缺少楼层'
     }
-    return '共 ' + String(skippedPages.length) + ' 页缺少楼层（如第 ' + shown.join('、') + ' 页）'
+    return '共 ' + String(skippedPages.length) + ' 页缺少楼层（如' +
+      pagePrefix + shown.join('、') + ' 页）'
   }
 
   /**
@@ -1776,9 +1878,18 @@ export struct ThreadTreePanel {
       const mappedPage: number | undefined = this.pageByPid.get(pid)
       const targetPage: number = mappedPage !== undefined ? mappedPage : -1
       this.registerTarget(pid, targetPage, -1, LocateSource.USER, true)
-      const progressText: string = targetPage > 0
-        ? '该楼层在第 ' + String(targetPage) + ' 页，已加载到 ' + String(this.committedPages) + ' 页'
-        : '该楼层尚未加载，已加载到 ' + String(this.committedPages) + ' 页'
+      // 离线存档的 `pageByPid` 是存档页序（覆盖条上的区间是线上页码），文案标明口径
+      const loadedText: string = '已加载到 ' + String(this.committedPages) + ' 页'
+      let progressText: string = ''
+      if (this.isSavedSource()) {
+        progressText = targetPage > 0
+          ? '该楼层在存档第 ' + String(targetPage) + ' 页，' + loadedText
+          : '该楼层尚未加载，' + loadedText
+      } else {
+        progressText = targetPage > 0
+          ? '该楼层在第 ' + String(targetPage) + ' 页，' + loadedText
+          : '该楼层尚未加载，' + loadedText
+      }
       appStore.showToast(progressText)
       return
     }
@@ -1804,6 +1915,10 @@ export struct ThreadTreePanel {
   private missingFloorHint(): string {
     if (this.phase === TreePagePhase.STREAMING || this.phase === TreePagePhase.ENTERING) {
       return '该楼层尚未加载，正在加载中…'
+    }
+    if (this.isSavedSource()) {
+      // 离线存档解析已完成仍找不到：只可能是存档边界，不能说成"已删除"
+      return '该楼层不在离线存档范围内'
     }
     if (this.authorOnly) {
       return '该楼层不在只看楼主视图内，可切换为全部楼层'
@@ -1983,6 +2098,8 @@ export struct ThreadTreePanel {
     }
     return appStore.settings.recordReadingProgress &&
       appStore.auth.uid.length > 0 &&
+      // 离线存档不记录进度（与列表页同一口径）：存档是回看快照，进度域只服务在线阅读
+      !this.isSavedSource() &&
       this.treeReady &&
       // 导航事务进行中，rows 与 lastScrollCenter 可能暂时不同步
       !this.navigationPending &&
@@ -2033,6 +2150,19 @@ export struct ThreadTreePanel {
   }
 
   /**
+   * 是否由「保存的帖子」离线存档来源打开。
+   *
+   * 离线存档的数据源是本地 `rawPages`（见 `getSavedThreadTreeResult`），与列表页
+   * `ThreadPanel.isSavedSource` 同一语义：不写阅读进度/浏览历史、不推进跟踪已读、
+   * 菜单按离线条目裁剪、发帖成功也不补页。
+   *
+   * @returns 是否离线存档来源
+   */
+  private isSavedSource(): boolean {
+    return this.threadSource === ThreadSource.SAVED
+  }
+
+  /**
    * 是否允许恢复阅读进度：与列表页共用「继续阅读」语义的来源白名单。
    *
    * @returns 来源是否允许恢复
@@ -2053,6 +2183,12 @@ export struct ThreadTreePanel {
    * @param ctx - 提交上下文
    */
   private consumeSubmitResult(ctx: TreeSubmitContext): void {
+    if (this.isSavedSource()) {
+      // 提交本身已成功（走的是在线接口），但离线存档不会因发帖而更新：
+      // 既不补页也不整帖重抓，一条组合文案说清结果与数据边界
+      appStore.showToast(ctx.toast + '，离线存档不包含新楼层')
+      return
+    }
     appStore.showToast(ctx.toast)
     this.mergeAfterSubmit(ctx).catch((e: Error): void => {
       logger.warn('tree-panel local merge failed: %{public}s', formatError(e))
@@ -2074,6 +2210,12 @@ export struct ThreadTreePanel {
    * @param ctx - 提交上下文
    */
   private async mergeAfterSubmit(ctx: TreeSubmitContext): Promise<void> {
+    // 防御：正常路径已在 consumeSubmitResult 拦截离线存档；这里兜住任何未来新增的调用方
+    // （离线没有在线补页来源，抓服务端末页或重建本地树都没有意义）
+    if (this.isSavedSource()) {
+      appStore.showToast('离线存档不包含新楼层')
+      return
+    }
     if (this.phase !== TreePagePhase.COMPLETE || this.committedPages < this.totalPages
       || this.treeModel === null) {
       this.loadTree(true)
@@ -2266,6 +2408,10 @@ export struct ThreadTreePanel {
     const mapped: number | undefined = this.pageByPid.get(post.pid)
     if (mapped !== undefined && mapped > 0) {
       page = mapped
+      if (this.isSavedSource()) {
+        // 存档页序 → 线上页码：回复引用头的 C 段按线上页码生成（存档页序只在页面内使用）
+        page = this.archiveStartPage + page - 1
+      }
     }
     replyManager.startFloorReply(post, Number(this.threadTid), this.threadFid, page)
     floatingLayerStore.replyDialogTitle = replyManager.dialogTitle
@@ -2839,6 +2985,10 @@ export struct ThreadTreePanel {
     if (this.threadTid.length === 0 || !appStore.auth.isAuthenticated) {
       return
     }
+    // 离线存档不推进跟踪已读（与列表页一致）：存档快照不代表线上最新进度
+    if (this.isSavedSource()) {
+      return
+    }
     if (!appStore.isThreadTracked(this.threadTid)) {
       return
     }
@@ -2862,6 +3012,10 @@ export struct ThreadTreePanel {
   private getVisibleThreadSubject(): string {
     if (this.blacklistVersion >= 0 && appStore.settingsStore.isBlacklisted(this.threadAuthorId)) {
       return '该用户已被屏蔽'
+    }
+    // 离线存档来源：标题前加 [离线] 前缀（与列表页 `ThreadPanel` 同一条规则）
+    if (this.isSavedSource()) {
+      return '[离线] ' + this.threadSubject
     }
     return this.threadSubject
   }
@@ -2898,8 +3052,19 @@ export struct ThreadTreePanel {
 
   /**
    * 按 List 滚动偏移同步标题栏渐变进度。
+   *
+   * **离线存档覆盖范围提示条会把 List 推到标题区下方**：此时 List 的内容永远不会滚进
+   * 标题栏，`currentOffset().yOffset` 从 0 起算也不再表示「正文侵入标题区」。若仍按
+   * `getProgress(0, statusBar)` 计算，初始就是 1——标题栏 tint 与列表顶部渐变模糊会
+   * 直接盖住提示条与树首行。因此有条时进度恒为 0（`getBlurRadius(0) = 0`，模糊同时消失）。
    */
   private syncTitleScrollEffect(): void {
+    if (this.archiveCoverageHint.length > 0) {
+      if (this.titleScrollEffectProgress !== 0) {
+        this.titleScrollEffectProgress = 0
+      }
+      return
+    }
     const progress: number = TitleScrollEffect.getProgress(
       this.scroller.currentOffset().yOffset,
       this.statusBarHeight
@@ -2941,6 +3106,49 @@ export struct ThreadTreePanel {
    */
   private moreMenuItems(): NavBarMenuItem[] {
     const items: NavBarMenuItem[] = []
+    if (this.isSavedSource()) {
+      // 离线存档：与列表页离线来源同一套裁剪——收藏 / 离线保存 / 跟踪 / 刷新都依赖
+      // 在线通道，存档模式只保留「在线模式打开 / 只看楼主 / 切换阅读方式 / 网页 / 分享」
+      items.push({
+        label: '在线模式打开',
+        action: (): void => {
+          // 不预检帖子是否失效：直接以在线模式打开。**原地替换**当前离线树条目
+          // （与列表页离线来源的同一入口一致）：返回回存档列表，不会退回离线树
+          routerStore.navigateActivity(Screen.thread(this.threadTid), true)
+        }
+      })
+      items.push({
+        label: '只看楼主',
+        active: this.authorOnly,
+        action: (): void => {
+          this.toggleAuthorOnly()
+        }
+      })
+      items.push({
+        label: '切换为列表阅读',
+        action: (): void => {
+          this.replaceWithListReading()
+        }
+      })
+      items.push({
+        label: '从网页打开',
+        action: (): void => {
+          const threadUrl: string = getActiveDomain() + '/read.php?tid=' + this.threadTid
+          routerStore.navigateActivity(Screen.webview(threadUrl))
+        }
+      })
+      items.push({
+        label: '分享帖子',
+        action: (): void => {
+          let hostCtx: Context | undefined = this.getUIContext().getHostContext()
+          if (hostCtx !== undefined) {
+            let ctx: Context = hostCtx
+            shareThread(ctx, Number(this.threadTid), this.threadSubject)
+          }
+        }
+      })
+      return items
+    }
     items.push({
       label: this.getFavoriteMenuLabel(),
       action: (): void => {
@@ -3060,6 +3268,11 @@ export struct ThreadTreePanel {
         } else if (this.phase === TreePagePhase.FAILED && !this.treeReady) {
           this.ErrorState()
         } else if (this.treeReady) {
+          // 离线存档覆盖范围：固定在列表上方（**不能放进 List**：静态 ListItem 会占掉
+          // LazyForEach 的全局索引，`scrollToIndex` 的定位会整体偏移一行）
+          if (this.archiveCoverageHint.length > 0) {
+            this.ArchiveCoverageBar()
+          }
           this.TreeList()
         }
       }
@@ -3533,7 +3746,9 @@ export struct ThreadTreePanel {
       this.LoadEndFooter()
     }
     .width('100%').layoutWeight(1)
-    .contentStartOffset(TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
+    // 有覆盖范围提示条时列表已从导航栏下方开始，再留 contentStartOffset 会双重下移
+    .contentStartOffset(this.archiveCoverageHint.length > 0
+      ? 0 : TitleScrollEffect.getContentStartOffset(this.statusBarHeight))
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
     .cachedCount(6)
@@ -3604,6 +3819,31 @@ export struct ThreadTreePanel {
   }
 
   /**
+   * 离线存档的覆盖范围提示（固定在树列表上方）。
+   *
+   * 只在存档不是「全帖」时出现（`archiveCoverageHint` 为空串即全帖）。**不放进 List**：
+   * 静态 `ListItem` 会占用 `LazyForEach` 的全局索引，所有 `scrollToIndex` 定位都会偏移
+   * 一行；放在列表外既不影响索引，也保证滚动时始终可见。
+   *
+   * 外层只承担导航栏高度让位（与加载态/错误态同一 padding），色块只包住文案本身。
+   */
+  @Builder
+  ArchiveCoverageBar() {
+    Column() {
+      Text(this.archiveCoverageHint)
+        .fontSize(12)
+        .fontColor(AppColors.textSecondary)
+        .lineHeight(18)
+        .width('100%')
+        .textAlign(TextAlign.Start)
+        .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+        .backgroundColor(AppColors.bgSecondary)
+    }
+    .width('100%')
+    .padding({ top: NAV_BAR_H + this.statusBarHeight })
+  }
+
+  /**
    * 列表尾部提示（与列表页 `LoadMoreFooter` 的完成态文案一致）。
    *
    * 树页一次性抓完全帖，不存在「加载更多」的中间态；到达末尾即在最后一行下方
@@ -3662,10 +3902,12 @@ export struct ThreadTreePanel {
       }
       return progress
     }
+    // 离线存档的「全部」是存档边界，不是帖子全部回复（覆盖范围提示在列表上方的固定条）
+    const doneText: string = this.isSavedSource() ? '已加载存档全部楼层' : '已加载全部回复'
     if (this.skippedPageHint.length === 0) {
-      return '已加载全部回复'
+      return doneText
     }
-    return '已加载全部回复（' + this.skippedPageHint + '）'
+    return doneText + '（' + this.skippedPageHint + '）'
   }
 
   /**

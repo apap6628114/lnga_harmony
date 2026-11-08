@@ -1,4 +1,4 @@
-import { type NavEntry, ThreadSource } from '../store/RouterStore'
+import { type NavEntry } from '../store/RouterStore'
 import { AppColors, ThreadRenderMode } from '../common/constants/Constants'
 import { PanelNavBar } from '../common/components/PanelNavBar'
 import { ThreadPanel } from './ThreadPanel'
@@ -66,18 +66,18 @@ export struct ActivityRouter {
   /**
    * 帖子条目是否应挂载递进树页面。
    *
-   * 默认阅读样式为递进树时生效；以下情况仍走自然列表：
-   * - 路由显式要求列表样式（树页「切换为列表阅读」替换出来的页面）；
-   * - 离线存档来源（树页数据需要在线抓取，存档模式无网络来源）。
+   * 默认阅读样式为递进树时生效；路由显式要求列表样式时仍走自然列表
+   * （树页「切换为列表阅读」替换出来的页面）。
+   *
+   * 离线存档来源**同样可以进树页**：`ThreadTreePanel` 对 `ThreadSource.SAVED`
+   * 把数据源分叉为本地存档（`getSavedThreadTreeResult`），不需要网络、也不需要登录，
+   * 与列表页离线阅读共用同一份存档快照。
    *
    * @param entry - 活动栈条目
    * @returns 是否挂载递进树页面
    */
   private shouldUseTreeRender(entry: NavEntry): boolean {
     if (entry.screen.threadForceList) {
-      return false
-    }
-    if (entry.screen.threadSource === ThreadSource.SAVED) {
       return false
     }
     return appStore.settings.threadRenderMode === ThreadRenderMode.TREE

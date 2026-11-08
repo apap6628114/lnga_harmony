@@ -36,6 +36,13 @@ export class SavedThread {
   /** 实际保存的页数。 */
   savedPages: number = 0
   /**
+   * 保存范围的**起始页**（1 起；旧存档缺字段时由 `SavedThreadStore` 规整为 1）。
+   *
+   * 存档页序与线上页码是两套编号：`rawPages[0]` 是保存范围的第一页，即线上
+   * 第 `startPage` 页。离线树用它给出准确的覆盖范围提示（「仅含第 5-10 页」）。
+   */
+  startPage: number = 1
+  /**
    * 最后保存楼层的楼号（lou，保存的最后一页最后一个楼层）。
    *
    * 楼层提示口径以此为准：NGA 删除楼层不重编号，lou 存在空洞，
@@ -44,7 +51,12 @@ export class SavedThread {
   lastLou: number = 0
   /** 保存时间戳（毫秒），查看页按此降序排列。 */
   savedAt: number = 0
-  /** 每页的同形状原始帖子数据（数组下标 = 页号 - 1）。 */
+  /**
+   * 每页的同形状原始帖子数据。
+   *
+   * 数组下标 = **存档页序** - 1：第 0 项是保存范围的第一页，即线上第 `startPage` 页
+   * （不是固定第 1 页）。存档页序与线上页码是两套编号，见 `startPage`。
+   */
   rawPages: Object[] = []
 }
 
