@@ -125,6 +125,20 @@ export default function threadTreeIncrementalUnitTest(): void {
       expect(canActivateTarget(LocateState.NONE)).assertFalse()
     })
 
+    it('decideTargetState_cacheHitTargetIsAlreadyPromotable', 0, (): void => {
+      /*
+       * 缓存命中（进度读盘晚于第 1 页交付）：目标登记瞬间就已经在树里，
+       * 不会再有 WAITING → READY 的状态变化。判定结果必须是 READY / FILTERED，
+       * 页面才能在这种「登记即就绪」的时序下补发一次「前往查看 / 查看全部」。
+       */
+      const ready: number = decideTargetState(true, true, 12, 29, false)
+      expect(ready).assertEqual(LocateState.READY)
+      expect(canActivateTarget(ready)).assertTrue()
+      const filtered: number = decideTargetState(true, false, 12, 29, false)
+      expect(filtered).assertEqual(LocateState.FILTERED)
+      expect(canActivateTarget(filtered)).assertTrue()
+    })
+
     it('resolveBannerMode_enteringAndFailed', 0, (): void => {
       expect(resolveBannerMode(TreePagePhase.ENTERING, LocateState.NONE, false))
         .assertEqual(TreeBannerMode.HIDDEN)

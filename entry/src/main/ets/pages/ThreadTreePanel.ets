@@ -775,6 +775,13 @@ export struct ThreadTreePanel {
   /**
    * 异步读取树内阅读进度并登记为目标（读到后再判定，不阻塞首屏）。
    *
+   * **登记后必须再补一次就绪提示**（{@link promptTargetReady}）：进度来自 Preferences
+   * 读盘，而抓取服务命中 {@link TREE_CACHE_TTL_MS} 短时缓存时，第 1 页会在 `loadTree`
+   * 的同步阶段就回调 `onCommit`（见 `ThreadTreeFetchService.fetchAll` 的缓存分支），
+   * 树会**先于**本次读盘建好。此时登记瞬间目标就已经在树里（`READY` / `FILTERED`），
+   * 再也不会经过 `WAITING → READY` 的状态变化，`evaluatePendingTarget` 的 changed 分支
+   * 永远不会触发——就绪 Toast 静默丢失，用户没有任何入口回到上次阅读位置。
+   *
    * @param generation - 抓取代际
    */
   private async readResumeTarget(generation: number): Promise<void> {
@@ -797,7 +804,13 @@ export struct ThreadTreePanel {
       return
     }
     this.readingResumeHandled = true
-    this.registerTarget(entry.pid, entry.page, entry.rootPid, LocateSource.RESUME, false)
+    const registered: boolean = this.registerTarget(entry.pid, entry.page, entry.rootPid,
+      LocateSource.RESUME, false)
+    if (!registered) {
+      // 已被更高优先级的目标（路由 / 用户点击）占用：提示归那个目标
+      return
+    }
+    this.promptTargetReady()
   }
 
   /**
@@ -808,15 +821,16 @@ export struct ThreadTreePanel {
    * @param rootPid - 已知所属根（未知传 -1）
    * @param source - 来源，见 `LocateSource`
    * @param force - 为 true 时绕过优先级（内部用途：刷新锚点、进入时的路由目标）
+   * @returns 是否登记成功（被更高优先级的目标挡住时为 false，调用方据此决定要不要补提示）
    */
   private registerTarget(pid: number, page: number, rootPid: number, source: string,
-    force: boolean): void {
+    force: boolean): boolean {
     if (pid < 0) {
-      return
+      return false
     }
     const currentSource: string = this.pendingTarget !== null ? this.pendingTarget.source : ''
     if (!force && !canOverrideTarget(source, currentSource)) {
-      return
+      return false
     }
     const target: LocateTarget = new LocateTarget()
     target.pid = pid
@@ -832,6 +846,7 @@ export struct ThreadTreePanel {
     logger.info('tree-panel target register pid=%{public}d page=%{public}d source=%{public}s state=%{public}d',
       pid, page, source, this.targetState)
     this.refreshBanner()
+    return true
   }
 
   /**
@@ -1294,6 +1309,29 @@ export struct ThreadTreePanel {
       }
     }
     return null
+  }
+
+  /**
+   * 「登记即就绪」时补发一次就绪提示（§3.6.5 主通道）。
+   *
+   * 正常路径里目标以 `WAITING` 登记，随后水位推进时才变为 `READY` / `FILTERED`，
+   * 由 {@link evaluatePendingTarget} 的状态变化分支提示一次。但缓存命中时树会先于
+   * 进度读盘建好（见 {@link readResumeTarget}），登记瞬间就已经可操作、之后状态不再
+   * 变化——必须在这里补一次，否则用户永远看不到「前往查看 / 查看全部」。
+   *
+   * 两条路径互斥：状态一旦可操作就不会再「变成同一个状态」，不会重复弹。
+   */
+  private promptTargetReady(): void {
+    if (this.pendingTarget === null) {
+      return
+    }
+    if (this.targetState === LocateState.READY) {
+      this.showTargetToast(false)
+      return
+    }
+    if (this.targetState === LocateState.FILTERED) {
+      this.showTargetToast(true)
+    }
   }
 
   /**
