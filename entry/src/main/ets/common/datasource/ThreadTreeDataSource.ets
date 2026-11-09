@@ -113,8 +113,8 @@ export class ThreadTreeDataSource extends BaseLazyDataSource<ThreadTreeRow> {
   /**
    * 替换指定下标的行（内容变化，行数不变）。
    *
-   * 必须带上新键：树页的 `rowKey` 含 `rev` / 高亮后缀，内容变化时键会变；
-   * 不传 key 时框架沿用旧键，会与 keyGenerator 分叉，下一次增量提交因键不匹配退 RELOAD。
+   * 必须带上新键：树页的 `rowKey` 含内容版本 `uiRev` 与高亮后缀，内容变化时键会变；
+   * 不传 key 时框架沿用旧键并按「键没变」复用旧组件，这次 CHANGE 会被静默丢弃。
    *
    * @param index - 目标下标
    * @param item - 新行
@@ -164,8 +164,21 @@ export class ThreadTreeDataSource extends BaseLazyDataSource<ThreadTreeRow> {
         }
         operations.push(add)
       } else if (op.kind === RowOpKind.CHANGE) {
-        const change: DataChangeOperation = { type: DataOperationType.CHANGE, index: op.index }
-        operations.push(change)
+        if (op.key.length > 0) {
+          /*
+           * 必须带新键：树行的键含内容版本号，内容变化时键会变；不传键框架会沿用
+           * 旧键并复用旧组件，计数/正文的更新会被静默丢弃（与 updateAt 同一约束）。
+           */
+          const change: DataChangeOperation = {
+            type: DataOperationType.CHANGE,
+            index: op.index,
+            key: op.key
+          }
+          operations.push(change)
+        } else {
+          const change: DataChangeOperation = { type: DataOperationType.CHANGE, index: op.index }
+          operations.push(change)
+        }
       } else if (op.kind === RowOpKind.DELETE) {
         const del: DataDeleteOperation = {
           type: DataOperationType.DELETE,

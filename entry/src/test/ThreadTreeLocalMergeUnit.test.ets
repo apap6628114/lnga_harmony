@@ -7,8 +7,13 @@ import {
 } from '../main/ets/common/utils/ThreadTreeLocalMerge'
 import { PostInfo } from '../main/ets/model/PostInfo'
 import { buildThreadTree } from '../main/ets/common/utils/ThreadTreeBuilder'
-import { computeTreeRowDiff, RowDiffResult } from '../main/ets/common/utils/ThreadTreeRowDiff'
-import { ThreadTreeModel, ThreadTreeRow } from '../main/ets/model/ThreadTree'
+import {
+  buildRowId,
+  buildRowKey,
+  computeTreeRowDiff,
+  RowDiffResult
+} from '../main/ets/common/utils/ThreadTreeRowDiff'
+import { ThreadTreeModel } from '../main/ets/model/ThreadTree'
 
 /**
  * 构造一个楼层。
@@ -85,18 +90,6 @@ function createMainPost(pid: number): PostInfo {
   const post: PostInfo = createPost(pid, 0, 'main-body')
   post.tid = 100
   return post
-}
-
-/**
- * 行键（与页面 `rowKey` 同构：`kind_pid_rev(highlighted?'_h':'')`）。
- *
- * @param row - 树行
- * @returns 键值
- */
-function rowKeyOf(row: ThreadTreeRow): string {
-  const pid: number = row.post !== null ? row.post.pid : row.rootPid
-  const highlight: string = row.highlighted ? '_h' : ''
-  return String(row.kind) + '_' + String(pid) + '_' + String(row.rev) + highlight
 }
 
 /**
@@ -272,7 +265,7 @@ export default function threadTreeLocalMergeTest(): void {
       const child: PostInfo = createQuotedPost(3, 2, 2, 'child-body')
       const merged: LocalMergeResult = mergeTreePage([main, root], [child], 0, '')
       const after: ThreadTreeModel = buildThreadTree(merged.posts, 1)
-      const diff: RowDiffResult = computeTreeRowDiff(before.rows, after.rows, rowKeyOf)
+      const diff: RowDiffResult = computeTreeRowDiff(before.rows, after.rows, buildRowId, buildRowKey)
       expect(after.rows.length).assertEqual(before.rows.length + 1)
       expect(diff.needReload).assertFalse()
     })
@@ -284,9 +277,29 @@ export default function threadTreeLocalMergeTest(): void {
       const edited: PostInfo = createQuotedPost(2, 1, 1, 'new-body')
       const merged: LocalMergeResult = mergeTreePage([main, root], [edited], 0, '')
       const after: ThreadTreeModel = buildThreadTree(merged.posts, 1)
-      const diff: RowDiffResult = computeTreeRowDiff(before.rows, after.rows, rowKeyOf)
+      const diff: RowDiffResult = computeTreeRowDiff(before.rows, after.rows, buildRowId, buildRowKey)
       expect(after.rows.length).assertEqual(before.rows.length)
       expect(diff.needReload).assertFalse()
+    })
+
+    it('mergedEditBumpsFloorVersionWithoutMutatingInput', 0, (): void => {
+      /* 同 pid 替换必须递增楼层内容版本，否则页面行键不变（评论数/标题等不刷新）；
+         同时克隆后写，入参对象不能被篡改 */
+      const main: PostInfo = createMainPost(1)
+      const root: PostInfo = createQuotedPost(2, 1, 1, 'old-body')
+      const merged: LocalMergeResult =
+        mergeTreePage([main, root], [createQuotedPost(2, 1, 1, 'new-body')], 0, '')
+      let replaced: PostInfo | null = null
+      for (let i: number = 0; i < merged.posts.length; i++) {
+        if (merged.posts[i].pid === 2) {
+          replaced = merged.posts[i]
+        }
+      }
+      expect(replaced !== null).assertTrue()
+      if (replaced !== null) {
+        expect(replaced.uiRev).assertEqual(1)
+      }
+      expect(root.uiRev).assertEqual(0)
     })
   })
 }

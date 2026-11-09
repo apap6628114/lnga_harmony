@@ -95,7 +95,7 @@ export class ThreadTreeRoot {
   /** 是否已展开全部子节点。 */
   expanded: boolean = false
 
-  /** 展开/折叠版本号（重建 rows 时递增，供诊断）。 */
+  /** 展开代际（展开时递增；行键用它给整组行换键，内容变化另由行 `uiRev` 表达）。 */
   rev: number = 0
 }
 
@@ -144,8 +144,18 @@ export class ThreadTreeRow {
   /** 当前行是否高亮。 */
   highlighted: boolean = false
 
-  /** 行版本号（内容/折叠状态变化时递增，供刷新与诊断）。 */
+  /** 行版本号（所属根展开/折叠时递增，用于整组换键与诊断；内容变化走 `uiRev`）。 */
   rev: number = 0
+
+  /**
+   * 行**内容版本号**：可见内容（正文、折叠计数、回复关系、高亮）变化时递增。
+   *
+   * `rev` 表达的是「所属根的展开代际」，加载过程中恒定；而增量合并会改变同一行的
+   * 正文或折叠计数，此时必须让 LazyForEach 的键跟着变，否则框架按「键没变」复用
+   * 旧组件，`CHANGE` 通知等于没发（折叠行「共 N 条回复」停在旧值）。
+   * 由页面在每次重建行序列时与上一版比较后继承/递增，见 `ThreadTreePanel.stampRowContentRev`。
+   */
+  uiRev: number = 0
 }
 
 /** 两层树模型（一次全帖抓取 + 建树后的完整结果）。 */

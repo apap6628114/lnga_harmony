@@ -95,8 +95,11 @@ import {
   shouldShowBanner
 } from '../common/utils/ThreadTreeLocatePolicy'
 import {
+  buildRowId,
+  buildRowKey,
   computeTreeRowDiff,
-  RowDiffResult
+  RowDiffResult,
+  stampRowContentRev
 } from '../common/utils/ThreadTreeRowDiff'
 import {
   mergeTreePage,
@@ -413,7 +416,8 @@ export struct ThreadTreePanel {
   /** 用户是否真正移动过视口（手势滚动或点过「前往」）：进度记录的必要条件。 */
   private viewportMoved: boolean = false
   /** 是否有一次增量提交已排程（合并同一宏任务内的多次回调）。 */
-  private commitScheduled: boolean = false  /** 待提交的楼层前缀（服务层 collected 的同一引用）。 */
+  private commitScheduled: boolean = false
+  /** 待提交的楼层前缀（服务层 collected 的同一引用）。 */
   private pendingCommitPosts: PostInfo[] = []
   /** 待提交的已提交页数。 */
   private pendingCommitPages: number = 0
@@ -423,7 +427,7 @@ export struct ThreadTreePanel {
   private pendingCommitForumName: string = ''
   /** 待提交载荷里的服务端总楼层数（写浏览历史用）。 */
   private pendingCommitTotalRows: number = 0
-  /** 是否因滚动/定位事务推迟了提交。 */
+  /** 是否因滚动推迟了提交（`onScrollStop` 时补一次 flush）。 */
   private commitDeferred: boolean = false
   /** 用户是否正在拖拽/惯性滚动（期间不提交，避免插入行打断手势）。 */
   private scrolling: boolean = false
@@ -960,8 +964,11 @@ export struct ThreadTreePanel {
   /**
    * 执行排程中的提交。
    *
-   * 用户正在拖拽/惯性滚动、或定位事务进行中时**推迟**：在用户手指下插入行会打断
-   * 手势，`scrollToIndex` 也会用被挤偏的 index。推迟期间内容不丢，条件满足后立即补上。
+   * 用户正在拖拽/惯性滚动时**推迟**：在手指下插入行会打断手势，`scrollToIndex`
+   * 也会用被挤偏的 index。推迟期间内容不丢，`onScrollStop` 立即补上。
+   *
+   * 收尾提交（`finishFetch`）是唯一例外：它不能推迟（`frozen` 会拦掉排程），
+   * 但滚动中会跳过锚点补偿，见 `applyCommit` 的 `skipAnchor`。
    */
   private flushCommit(): void {
     if (this.frozen) {
@@ -983,8 +990,11 @@ export struct ThreadTreePanel {
    *
    * @param posts - 已提交的连续前缀
    * @param committedPages - 已提交页数
+   * @param skipAnchor - 是否跳过锚点补偿（收尾提交落在用户拖拽期间时使用：
+   *   行必须上屏，但不能在手指下再发起 `scrollToIndex`）
    */
-  private applyCommit(posts: PostInfo[], committedPages: number): void {
+  private applyCommit(posts: PostInfo[], committedPages: number,
+    skipAnchor: boolean = false): void {
     const isFirst: boolean = !this.treeReady
     this.allPosts = posts
     this.rebuildAllPidIndex(posts)
@@ -999,7 +1009,7 @@ export struct ThreadTreePanel {
       this.phase = TreePagePhase.STREAMING
     }
     this.rebuildTreePreservingState()
-    this.applyRowsToDataSource()
+    this.applyRowsToDataSource(skipAnchor)
     this.treeReady = true
     if (isFirst) {
       this.lastScrollStart = 0
@@ -1070,6 +1080,9 @@ export struct ThreadTreePanel {
       logger.warn('tree-panel finish stale tid=%{public}s gen=%{public}d', this.threadTid, generation)
       return
     }
+    /* 收尾之后不再需要任何排程提交：统一在这里取消，避免 timer 空转或语义漂移 */
+    clearTimeout(this.commitTimer)
+    this.commitTimer = -1
     this.commitScheduled = false
     this.commitDeferred = false
     // 用户已点停止：状态在 {@link stopLoading} 里即时落定，这里只记日志
@@ -1090,7 +1103,24 @@ export struct ThreadTreePanel {
         this.threadTid, result.loadedPages)
       return
     }
-    if (result.ok) {
+    /*
+     * 收尾是**最后一次权威提交**，无论成功、部分失败还是「过半空页」都应用它：
+     *
+     * 最后一次 `onCommit` 与本次 `finishFetch` 处在同一条微任务链里（服务层
+     * `commitReadyPages` 同步回调 → worker 返回 → Promise.all → fetchAll →
+     * 本方法），而它排的 `setTimeout(0)` 要等当前宏任务结束才执行；紧接着的
+     * `frozen = true` 会把那个排程拦掉。`onCommit` 又会同步更新 `committedPages`，
+     * 因此旧的 `loadedPages > committedPages` 判断必然为假、这里被跳过 ——
+     * 最后一次水位推进的楼层就永远不上屏（首屏残缺、缓存命中却完整）。
+     *
+     * 注意不能只放在 `result.ok` 分支里：`isSkippedPagesOverwhelming` 会把
+     * `ok` 置 false 但保留已提交前缀，那批楼层同样只在 `result.posts` 里。
+     * 已上屏内容一致时 diff 为空，不会重复通知。
+     *
+     * 滚动中（scrolling）仍立即应用（收尾不能推迟，`frozen` 会拦掉排程），
+     * 但跳过锚点补偿：绝不在用户手指下再发起一次程序化 `scrollToIndex`。
+     */
+    if (result.posts.length > 0 && (result.ok || this.treeReady)) {
       if (result.threadInfo !== null) {
         this.pendingCommitThreadInfo = result.threadInfo
       }
@@ -1101,17 +1131,12 @@ export struct ThreadTreePanel {
         this.pendingCommitForumName = result.forumName
       }
       this.pageByPid = result.pageByPid
-      this.totalPages = result.totalPages
-      // 结果里的 posts 是权威前缀。两种情况下必须在这里补一次 apply：
-      // 1) 还没建过树（缓存命中时 onCommit 排程的 setTimeout 晚于本微任务，
-      //    若只按 loadedPages 判定会永远跳过，页面空白）；
-      // 2) 最后一页只走了结果、没走 onCommit。
-      // 收尾是最后一次提交，直接应用（中途提交才遵守拖拽互斥）。
-      if (!this.treeReady || result.loadedPages > this.committedPages) {
-        this.pendingCommitPosts = result.posts
-        this.pendingCommitPages = result.loadedPages
-        this.applyCommit(result.posts, result.loadedPages)
+      if (result.totalPages > 0) {
+        this.totalPages = result.totalPages
       }
+      this.pendingCommitPosts = result.posts
+      this.pendingCommitPages = result.loadedPages
+      this.applyCommit(result.posts, result.loadedPages, this.scrolling)
     }
     this.frozen = true
     if (!result.ok) {
@@ -1203,7 +1228,11 @@ export struct ThreadTreePanel {
     }
     // 统一次摊平：build 内部已摊平过一次，但上面改过 displayContent / expanded
     flattenThreadTree(next)
-    // 高亮态跨重建保留：行键含 `_h` 后缀，重建丢掉高亮会让 diff 认不出旧行 → 整表 RELOAD
+    /*
+     * 高亮态跨重建保留：diff 用身份键匹配，丢高亮不会让旧行认不出来，但重建会把
+     * `highlighted` 复位成 false，紧接着的版本结算会把它当成一次内容变化（多一次
+     * CHANGE + 重建）。这里按 pid 回填，避免 2 秒高亮期内每次提交都抖一下。
+     */
     if (this.highlightPid > 0) {
       for (let i: number = 0; i < next.rows.length; i++) {
         const row: ThreadTreeRow = next.rows[i]
@@ -1230,6 +1259,11 @@ export struct ThreadTreePanel {
       return
     }
     const next: ThreadTreeRow[] = model.rows
+    /*
+     * 内容版本必须先于 diff 结算：新旧行是两批对象，只有与上一版可见行比较后
+     * 才知道哪些行的可见内容真的变了，键才会跟着变（见 buildRowKey 注释）。
+     */
+    stampRowContentRev(this.lastRows, next)
     const old: ThreadTreeRow[] = this.lastRows
     const anchor: RowAnchor = skipAnchor ? new RowAnchor() : this.captureAnchor(old)
     if (old.length === 0) {
@@ -1237,14 +1271,23 @@ export struct ThreadTreePanel {
       this.lastRows = next
       return
     }
+    /**
+     * diff 用**身份键**匹配（`buildRowId`），展示键（`buildRowKey`，含内容版本）
+     * 只用来给 `CHANGE` 赋新键：若拿展示键匹配，内容一变化就匹配不上、退化为整表 RELOAD。
+     */
     const diff: RowDiffResult = computeTreeRowDiff(old, next,
-      (row: ThreadTreeRow): string => this.rowKey(row))
+      (row: ThreadTreeRow): string => buildRowId(row),
+      (row: ThreadTreeRow): string => buildRowKey(row))
     if (diff.needReload) {
       this.treeDataSource.replaceAll(next)
     } else if (diff.ops.length > 0) {
       this.treeDataSource.applyRowOps(next, diff.ops)
     } else {
-      this.lastRows = next
+      /*
+       * 零 op：模型与数据源内容一致。lastRows 必须指向数据源里的那批对象，
+       * 否则高亮等「直接改数据源行对象」的动作会让下一次版本结算误判内容变化。
+       */
+      this.lastRows = this.treeDataSource.rows()
       return
     }
     this.lastRows = next
@@ -1772,6 +1815,7 @@ export struct ThreadTreePanel {
     }
     expandRoot(model, rootPid)
     flattenThreadTree(model)
+    stampRowContentRev(this.lastRows, model.rows)
     this.treeDataSource.replaceAll(model.rows)
     this.lastRows = model.rows
     return this.treeDataSource.findIndexByPid(pid) >= 0
@@ -1791,6 +1835,7 @@ export struct ThreadTreePanel {
       return
     }
     flattenThreadTree(model)
+    stampRowContentRev(this.lastRows, model.rows)
     this.treeDataSource.replaceAll(model.rows)
     this.lastRows = model.rows
   }
@@ -1901,7 +1946,7 @@ export struct ThreadTreePanel {
     }
     row.highlighted = true
     this.highlightPid = pid
-    this.treeDataSource.updateAt(index, row, this.rowKey(row))
+    this.treeDataSource.updateAt(index, row, buildRowKey(row))
     this.highlightTimer = setTimeout((): void => {
       this.highlightTimer = -1
       const targetPid: number = this.highlightPid
@@ -1918,7 +1963,7 @@ export struct ThreadTreePanel {
         return
       }
       current.highlighted = false
-      this.treeDataSource.updateAt(currentIndex, current, this.rowKey(current))
+      this.treeDataSource.updateAt(currentIndex, current, buildRowKey(current))
     }, 2000)
   }
 
@@ -2010,18 +2055,6 @@ export struct ThreadTreePanel {
     }
     const target: PostInfo | undefined = this.treeModel.postByPid.get(ref.targetPid)
     return target !== undefined ? target.lou : -1
-  }
-
-  /**
-   * 树行 LazyForEach 键值。
-   *
-   * @param row - 树行
-   * @returns 稳定键值
-   */
-  private rowKey(row: ThreadTreeRow): string {
-    const pid: number = row.post !== null ? row.post.pid : row.rootPid
-    const highlight: string = row.highlighted ? '_h' : ''
-    return String(row.kind) + '_' + String(pid) + '_' + String(row.rev) + highlight
   }
 
   // ==================== 阅读进度（树内锚点） ====================
@@ -3504,7 +3537,7 @@ export struct ThreadTreePanel {
             })
           }
         }
-      }, (row: ThreadTreeRow) => this.rowKey(row))
+      }, (row: ThreadTreeRow) => buildRowKey(row))
       this.LoadEndFooter()
     }
     .width('100%').layoutWeight(1)

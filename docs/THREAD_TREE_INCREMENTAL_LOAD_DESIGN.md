@@ -635,7 +635,7 @@ restoreHighlights(model, highlights)
 | T2 | **展开状态快照取在执行时刻**（见上） | 用户刚展开的根被折叠回去 |
 | T3 | **缓存 peek 命中后不启动 `fetchAll`** | 两次提交（peek 一次、缓存命中一次），列表闪一下、浏览历史写两次 |
 | T4 | **停止后 `frozen = true`**：迟到的 `fetchAll` 结果只记日志，不提交、不写缓存、不改状态 | 用户点了停止，几秒后内容又长出一截 |
-| T5 | **用户拖拽/惯性滚动中不提交**：`onScrollState === Scrolling` 时把提交挂起，`onScrollStop` 立即 flush | 在用户手指下插入行，滚动被打断或猛跳；`scrollToIndex` 也会抢走手势 |
+| T5 | **用户拖拽/惯性滚动中不提交**：中途提交在 `scrolling` 时挂起，`onScrollStop` 立即 flush；**收尾提交是唯一例外**（`finishFetch` 必须同步上屏，否则紧随的 `frozen` 会吞掉最后一批），但滚动中跳过锚点补偿，不发起 `scrollToIndex` | 在用户手指下插入行，滚动被打断或猛跳；`scrollToIndex` 也会抢走手势 |
 
 ### 4.3 数据源：`onDatasetChange` 单一通路
 
@@ -667,8 +667,8 @@ applyIncremental(next: ThreadTreeRow[], ops: DataOperation[]): void {
 
 1. 建旧序列 `oldKeys: Map<key, index>`。
 2. 顺序遍历新 rows，得到「相对旧序列的插入点」。
-3. 纯追加/插入 → `ADD`（`index` = 旧数组中的插入位置，`count` = 连续插入条数，`key` = 新行的 `rowKey`）。
-4. 位置不变但内容变（MORE 计数、正文/高亮） → `CHANGE`。
+3. 纯追加/插入 → `ADD`（`index` = 旧数组中的插入位置，`count` = 连续插入条数）。ADD **不带 key**：由 LazyForEach 在插入时调用 keyGenerator 生成（与官方样例一致；`DataAddOperation` 本身也没有必填 key）。
+4. 位置不变但内容变（MORE 计数、正文、高亮、`post.uiRev`） → `CHANGE`，并携带**新键** `key = buildRowKey(newRow)`。省略 key 会让框架沿用旧键、按「键没变」复用旧组件，这次更新等于没发。
 5. 出现删除/移动（理论上只有「3 条 → 2 + MORE」这一种同位置形态变化）→ 用 `DELETE + ADD` 同位置表达；若 diff 判定为复杂重排（防御性兜底），整表 `RELOAD` 并走锚点事务。
 
 > 实现上建议先做**保守版本**：能纯追加就 `ADD/CHANGE`，否则 `RELOAD`，并统计 RELOAD 占比（日志）。跑真实帖后若 RELOAD 频繁，再补 DELETE/MOVE。
@@ -957,7 +957,7 @@ P0 内部建议按这个顺序落地，便于中途验证：
 4. **停止即时落定**：`stopLoading` 立即写 `phase` / 清目标 / 清排程，`finishFetch` 见 `stoppedByUser` 只记日志（不再卡在「正在停止…」等 15s 超时）。
 5. **有内容的页失败/被抢占 → `FAILED`**：`partial` 不再伪装成用户停止，错误条与「重试」可达（符合 §3.8 与 D14 修订）。
 6. **排程提交可取消、带代际**：新增 `commitTimer`，`loadTree` / `cancelWork` / `onThreadChanged` 清理；回调校验 generation，`flushCommit` 拒绝空前缀（避免刷新/切帖后用空前缀提交、串写旧帖历史）。
-7. **收尾提交遵守拖拽互斥**：`finishFetch` 在 `scrolling` 时只更新 pending 并 `commitDeferred`，等 `onScrollStop` 再补。
+7. **收尾提交不推迟**：`finishFetch` 必须同步应用最终结果（否则排程会被紧随的 `frozen` 吞掉，见 §10.15）；滚动中只跳过锚点补偿，不发起 `scrollToIndex`。原「收尾在 scrolling 时只更新 pending 并 `commitDeferred`」的表述已被本次实现取代。
 8. **正文同帖链接与 `→` 同入口**：未加载时登记 `user` 目标并提示「在第 X 页，已加载到 Y 页」。
 9. **锚点只在 `newIndex > oldIndex` 补偿**；只看楼主切换跳过锚点事务（避免「补偿 + 居中」双跳）。
 10. **边界**：`ensureRowVisible` 允许 `pid = 0`（主楼）；`recordTreeProgress` 页码未知写 `-1`；`onDisAppear` 复位 `scrolling`；`targetPage` 在刷新保留目标时不被清成 `-1`。
@@ -972,22 +972,23 @@ P0 内部建议按这个顺序落地，便于中途验证：
 **数据层（独立 Agent 第二轮）**
 
 15. **缓存命中空白页（P0）**：服务层在 `fetchAll` 内同步调 `onCommit` 再返回结果，而页面的 `.then(finishFetch)` 是微任务、先于 `setTimeout(0)` 的排程执行；`finishFetch` 看到 `loadedPages > committedPages` 为假就跳过 `applyCommit` 并置 `frozen`，排程随后被冻结 → `treeReady` 永远 false。修法：`finishFetch` 的补提交条件改为 `!treeReady || loadedPages > committedPages`。
+    > 该条件已被 §10.15 取代：`onCommit` 会同步更新 `committedPages`，增量路径下条件恒假；现行实现是收尾无条件应用 `result.posts`（有楼层时）。
 16. **行 diff 同 index 冲突**：折叠行前插入子行时会产生 `ADD@j` 与 `CHANGE@j`，而官方规定同 index 只有第一条生效，CHANGE 会被静默丢弃。修法：diff 记录本批 ADD 的 index，CHANGE 撞同 index 即整体退 `RELOAD`（新增回归用例 `addAndChangeOnSameIndex_fallsBackToReload`）。
 17. **缓存读取前移**：`readCache` 原排在「等待上一个任务退场」之后，缓存命中要等别的页面抓完（最坏 15s+）。改为先行读取，命中即返回。
 18. **提交载荷传快照**：`ThreadTreeCommit.posts` 改为 `slice()`，避免后续页继续 push 让旧 commit 对象悄悄变长。
 19. **过半空页不再清空已提交内容**：该分支只置 `ok=false` 与错误文案，不再把 `posts`/`pageByPid`/`loadedPages` 清零（那些楼层已经渲染在屏幕上）。
 20. **缺页提示只报已提交范围**：`fillSkippedPages` 过滤 `page <= commitUpTo`，避免「提示第 10 页缺楼层，但只加载到第 7 页」。
 21. **失败后丢弃在途页**：worker 在 `await` 返回后同样判 `scheduler.stopped`，不再入缓冲/推进水位。
-22. **`updateAt` 带键**：`CHANGE` 操作补 `key`（树页 `rowKey` 含 `rev`/高亮后缀），否则框架缓存键与 keyGenerator 分叉；基类 `updateAt` 增加可选 `key` 参数保持签名兼容。
+22. **`updateAt`/`CHANGE` 带键**：树页 `rowKey` 含 `rev`、内容版本 `uiRev` 与高亮后缀；`updateAt` 与 diff 产出的 `CHANGE` 都必须带新键，否则框架沿用旧键并按「键没变」复用旧组件。基类 `updateAt` 增加可选 `key` 参数保持签名兼容。
 23. `targetPageRatio` 在页码越界时返回 `-1`（记录过期，不画在 100%）。
 
 **未修（已知限制，留待真机判断）**
 
-- 高亮/展开会改变 `rowKey`，下一次提交时 diff 退化为 RELOAD 并清掉高亮（高亮本就在 2s 后消失，影响有限）；
+- 展开会改变 `rev`（整组换键），下一次提交时 diff 退化为 RELOAD 并清掉高亮；单纯高亮走 `_h` 后缀的 CHANGE，不再触发 RELOAD（高亮本就在 2s 后消失，影响有限）；
 - 胶囊动作触摸区约 25vp（设计目标 ≥40），需要真机手感确认后再决定是否加 `responseRegion`；
 - 「（等待第 k 页）」文案与进度条 `animateTo` 平滑未实现；
 - 多列覆盖时的 Toast 可见性判断未做（只在滚动中挂起）；
-- 水位推进（乱序只提交连续前缀）仍内嵌在服务层，未抽成纯函数做单测；`rowKey` 也未抽公共纯函数，测试用的是简化键。
+- 水位推进（乱序只提交连续前缀）仍内嵌在服务层，未抽成纯函数做单测；`buildRowId` / `buildRowKey` / `stampRowContentRev` 已抽公共纯函数并补测，但页面接线（`applyRowsToDataSource` 的调用顺序、数据源 CHANGE 透传）仍只能靠真机验证。
 
 ### 10.7 v6 调整：进入加载态收敛到列表页同款（2026-11-08）
 
@@ -1180,3 +1181,45 @@ P0 内部建议按这个顺序落地，便于中途验证：
 - 门禁：`assembleHap`（DevEco，`--no-daemon`，debug）**BUILD SUCCESSFUL in 27s 004ms**；
   Hypium Local Test **Tests run: 888, Failure: 0, Error: 0, Pass: 888**；
   `node scripts/check-eol.mjs` 全 LF；`tools/bbcode-ts` 镜像 `--dry` 0 修改。
+
+### 10.15 缺陷修复：首屏最后一次水位提交丢失 + 折叠计数不刷新（2026-11-09）
+
+- 用户反馈（6 页帖）：无缓存首次进入，加载完成后「回复 1 楼的楼层」不显示、3 楼折叠行
+  「共 N 条回复」偏少；退出再进（命中 90s 缓存）正常，杀进程重进（无缓存）复现。
+- 根因 1（**数据未上屏，不是 ArkTS 响应式观测失效**）：最后一次 `onCommit` 与
+  `finishFetch` 位于同一条微任务链（`commitReadyPages` 同步回调 → worker 返回 →
+  `Promise.all` → `fetchAll` → `.then`），它排的 `setTimeout(0)` 要等当前宏任务结束才执行；
+  而 `onFetchCommit` 已把 `committedPages` 同步更新到最终页数，使 `finishFetch` 原有的
+  `loadedPages > committedPages` 补提交条件恒假，紧接着的 `frozen = true` 又把排程提交拦掉
+  → 最后一次水位推进（通常就是末页）的楼层永远不上屏。缓存命中不受影响，是因为那次
+  `!treeReady` 成立、走的是全量 `applyCommit`（§10.6 第 15 条只修了这条缓存路径）。
+  修法：`finishFetch` 在**所有有内容的出口**（成功 / 部分失败 / 过半空页）统一取消排程并
+  应用 `result.posts`；与已上屏内容一致时 diff 为空，不会重复通知。滚动中立即应用数据，
+  但跳过锚点补偿（`applyCommit(..., skipAnchor = true)`），不在手指下发起 `scrollToIndex`。
+- 根因 2（**行键不含内容版本**）：`rowKey` 只有 `kind_pid_rev(+_h)`，增量合并改变折叠计数
+  （或正文、`PostInfo` 字段）时键不变，LazyForEach 按「键没变」复用旧组件，`CHANGE` 被
+  静默丢弃 → 3 楼折叠行「共 N 条回复」停在旧值。修法：
+  - 身份键 `buildRowId`（`kind_pid_rev`，diff 匹配）与展示键 `buildRowKey`
+    （身份 + `uiRev` + 高亮）拆成公共纯函数；
+  - `ThreadTreeRow.uiRev` 由 `stampRowContentRev(previous, next)` 结算：内容一致继承、
+    变化 +1；行从不可见状态重现时用 `post.uiRev` 兜底，避免版本回退到旧键；
+  - `isSameRowContent` 增加 `post.uiRev` 比较；`mergeTreePage` 同 pid 替换时克隆并递增
+    楼层版本（评论数 / 标题 / 附件等不在正文里的字段也能刷新）；
+  - `RowOp` 增加 `key`，`CHANGE` 携带新键（`keyOf` 改为**必填**，杜绝省略后静默丢键），
+    `ThreadTreeDataSource.applyRowOps` 透传；零 op 时 `lastRows` 对齐数据源当前行对象。
+- 单测：新增 `moreRowCountChange_carriesContentKey`、`identityKeyIgnoresContentVersion`、
+  `contentEqual_producesNoChange`、`buildRowKey_includesContentVersion`、
+  `stampRowContentRev_bumpsChangedRow`、`stampRowContentRev_inheritsUnchangedRow`、
+  `stampRowContentRev_restoresFloorVersionWhenRowReappears`、
+  `postVersionChange_producesChange`、`mergedEditBumpsFloorVersionWithoutMutatingInput`。
+- 真机验收：**已由用户确认**——无缓存重进 6 页帖，末页楼层与 3 楼折叠计数均恢复正常。
+- 门禁：`assembleHap`（DevEco，`--no-daemon`，debug）**BUILD SUCCESSFUL in 22 s 662 ms**；
+  Hypium Local Test **Tests run: 935, Failure: 0, Error: 0, Pass: 935, Ignore: 0**；
+  `node scripts/check-eol.mjs` 全 LF；`git diff --check` 0 输出；`tools/bbcode-ts` 镜像 `--dry` 0 修改。
+- 已知未修（非本次引入）：
+  - 用户点「停止」时，已到达但尚未上屏的 pending 提交仍会被丢弃（`stopLoading` 清排程 +
+    `stoppedByUser` 直接 return），语义上等价于「冻结在点击那一刻」；
+  - 完成后才登记的超范围进度目标（`targetPage > committedPages` 且 `phase = COMPLETE`）
+    会永久停在 `WAITING`，导致阅读进度整场不落盘（`decideTargetState` 的既有边界）；
+  - `BBCodeUnit.test.ets` 有 16 个 `it` 位于 `describe` 之外，Hypium 汇总不计入
+    （`class=null`），与本次改动无关。

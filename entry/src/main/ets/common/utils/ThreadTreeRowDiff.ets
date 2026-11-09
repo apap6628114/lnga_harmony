@@ -32,10 +32,22 @@ export class RowOp {
   index: number = 0
   count: number = 1
 
-  constructor(kind: number = RowOpKind.ADD, index: number = 0, count: number = 1) {
+  /**
+   * `CHANGE` 操作要赋给该行的**新键**（与 LazyForEach 的 keyGenerator 一致）。
+   *
+   * 树行的键含内容版本号：内容变化时键必须跟着变，否则框架按「键没变」复用旧组件，
+   * 计数/正文的 `CHANGE` 会被静默丢弃（详见 `ThreadTreePanel.rowKey` 注释）。
+   * 空串表示不指定（框架沿用原键）。正常路径不会为空：{@link computeTreeRowDiff}
+   * 的 `keyOf` 已改为必填；空键分支只保留给数据源的兼容调用。
+   */
+  key: string = ''
+
+  constructor(kind: number = RowOpKind.ADD, index: number = 0, count: number = 1,
+    key: string = '') {
     this.kind = kind
     this.index = index
     this.count = count
+    this.key = key
   }
 }
 
@@ -51,15 +63,16 @@ export class RowDiffResult {
 /**
  * 判断两行的可见内容是否一致。
  *
- * 行键（`kind + pid + rev + highlight`）相同只说明"同一行"，内容仍可能变化：
- * 折叠行计数、正文剥离结果、回复关系行、高亮态都会变。这些变化必须产出 CHANGE，
- * 否则 LazyForEach 复用组件时不会刷新。
+ * 身份相同（`kind + pid + rev`）只说明"同一行"，内容仍可能变化：折叠行计数、正文
+ * 剥离结果、回复关系、高亮态、以及楼层的**内容版本**（`post.uiRev`：回复/编辑后
+ * 局部合并会替换 `PostInfo`，评论数、标题、附件等字段不在正文里，只能靠版本号
+ * 感知）。这些变化必须产出 CHANGE，否则 LazyForEach 复用组件时不会刷新。
  *
  * @param a - 旧行
  * @param b - 新行
  * @returns 内容一致时为 true
  */
-function sameRowContent(a: ThreadTreeRow, b: ThreadTreeRow): boolean {
+export function isSameRowContent(a: ThreadTreeRow, b: ThreadTreeRow): boolean {
   if (a.kind !== b.kind) {
     return false
   }
@@ -77,18 +90,32 @@ function sameRowContent(a: ThreadTreeRow, b: ThreadTreeRow): boolean {
   if (aRefPid !== bRefPid) {
     return false
   }
+  const aPostRev: number = a.post !== null ? a.post.uiRev : -1
+  const bPostRev: number = b.post !== null ? b.post.uiRev : -1
+  if (aPostRev !== bPostRev) {
+    return false
+  }
   return true
 }
 
 /**
  * 把「旧行序列 → 新行序列」换算成增量操作。
  *
+ * **匹配键与展示键必须分开**：`idOf` 只含行的身份（类型 + pid + 展开代际），用来判断
+ * 「新序列是否旧序列的超序列」；`keyOf` 是交给 LazyForEach 的实际键（身份 + 内容版本）。
+ * 若用 `keyOf` 匹配，内容一变化键就变，旧行匹配不上 → 退化成整表 RELOAD，视口跳动。
+ *
+ * `keyOf` 刻意**不设可选**：省略它会让 CHANGE 丢掉新键，静默退化为「内容更新不刷新」，
+ * 而这种回归在编译期完全看不出来（上一版就踩过）。
+ *
  * @param oldRows - 旧的行序列（可为空）
  * @param newRows - 新的行序列
- * @param keyOf - 行键生成函数（与 LazyForEach 的键生成器一致）
+ * @param idOf - 行身份键（diff 匹配用，内容变化时必须保持一致）
+ * @param keyOf - 行展示键（LazyForEach keyGenerator；`CHANGE` 会把它带给数据源）
  * @returns diff 结果；无法用增量表达时 `needReload = true`
  */
 export function computeTreeRowDiff(oldRows: ThreadTreeRow[], newRows: ThreadTreeRow[],
+  idOf: (row: ThreadTreeRow) => string,
   keyOf: (row: ThreadTreeRow) => string): RowDiffResult {
   const result: RowDiffResult = new RowDiffResult()
   if (newRows.length === 0) {
@@ -111,12 +138,13 @@ export function computeTreeRowDiff(oldRows: ThreadTreeRow[], newRows: ThreadTree
   const addIndexes: Set<number> = new Set<number>()
   while (i < newRows.length) {
     const newRow: ThreadTreeRow = newRows[i]
-    if (j < oldRows.length && keyOf(newRow) === keyOf(oldRows[j])) {
-      if (!sameRowContent(oldRows[j], newRow)) {
+    if (j < oldRows.length && idOf(newRow) === idOf(oldRows[j])) {
+      if (!isSameRowContent(oldRows[j], newRow)) {
         if (addIndexes.has(j)) {
           return buildReloadResult()
         }
-        result.ops.push(new RowOp(RowOpKind.CHANGE, j, 1))
+        const newKey: string = keyOf(newRow)
+        result.ops.push(new RowOp(RowOpKind.CHANGE, j, 1, newKey))
       }
       i++
       j++
@@ -152,4 +180,83 @@ function buildReloadResult(): RowDiffResult {
   reload.needReload = true
   reload.ops.push(new RowOp(RowOpKind.RELOAD, 0, 0))
   return reload
+}
+
+/**
+ * 树行身份键：行类型 + 楼层 pid + 所属根展开代际。
+ *
+ * 专供行 diff 匹配（{@link computeTreeRowDiff} 的 `idOf`）。内容版本不能进身份键：
+ * 否则内容一变化就匹配不上旧行，增量 diff 会退化成整表 RELOAD。
+ * `MORE` 行没有楼层，用所属根 pid 作为行标识（每个根至多一行）。
+ *
+ * @param row - 树行
+ * @returns 身份键
+ */
+export function buildRowId(row: ThreadTreeRow): string {
+  const pid: number = row.post !== null ? row.post.pid : row.rootPid
+  return String(row.kind) + '_' + String(pid) + '_' + String(row.rev)
+}
+
+/**
+ * 树行展示键（LazyForEach keyGenerator）：身份键 + 内容版本 + 高亮标记。
+ *
+ * 键是 LazyForEach 判断「需要重建组件」的唯一依据：内容变了但键不变时，框架会
+ * 复用旧子组件，`CHANGE` 等于没发。因此增量合并改变折叠计数、正文或楼层内容
+ * 版本（`post.uiRev`：评论数/标题/附件等）时，必须让行的 `uiRev` 变化。
+ *
+ * @param row - 树行
+ * @returns 展示键
+ */
+export function buildRowKey(row: ThreadTreeRow): string {
+  const highlight: string = row.highlighted ? '_h' : ''
+  return buildRowId(row) + '_u' + String(row.uiRev) + highlight
+}
+
+/**
+ * 结算一批新可见行的内容版本号（就地写 `uiRev`）。
+ *
+ * 规则：
+ * - 与 `previous` 中同身份（{@link buildRowId}）的行比较：内容一致 → 继承旧版本；
+ *   内容变化 → `旧版本 + 1`；
+ * - `previous` 里找不到（首屏、或行从不可见状态重现）：用楼层内容版本
+ *   `post.uiRev` 兜底。编辑/合并过的楼层版本已递增，重现时不会回退到旧键；
+ * - 新行且楼层版本为 0 时保持 0。
+ *
+ * 为什么放在这里而不是 `buildThreadTree` / `flattenThreadTree`：它们是纯函数，
+ * 不持有上一版行序列；版本号是「渲染层快照比较」的产物。
+ *
+ * @param previous - 上一版可见行（可为空）
+ * @param next - 本次重建得到的可见行（就地写入 `uiRev`）
+ */
+export function stampRowContentRev(previous: ThreadTreeRow[], next: ThreadTreeRow[]): void {
+  if (previous.length === 0) {
+    for (let i: number = 0; i < next.length; i++) {
+      const row: ThreadTreeRow = next[i]
+      const post = row.post
+      if (post !== null) {
+        row.uiRev = post.uiRev
+      }
+    }
+    return
+  }
+  const previousById: Map<string, ThreadTreeRow> = new Map<string, ThreadTreeRow>()
+  for (let i: number = 0; i < previous.length; i++) {
+    const old: ThreadTreeRow = previous[i]
+    previousById.set(buildRowId(old), old)
+  }
+  for (let i: number = 0; i < next.length; i++) {
+    const row: ThreadTreeRow = next[i]
+    const old: ThreadTreeRow | undefined = previousById.get(buildRowId(row))
+    if (old === undefined) {
+      const post = row.post
+      if (post !== null) {
+        row.uiRev = post.uiRev
+      }
+      continue
+    }
+    row.uiRev = old.uiRev
+    if (!isSameRowContent(old, row)) {
+      row.uiRev = old.uiRev + 1
+    }
+  }
 }

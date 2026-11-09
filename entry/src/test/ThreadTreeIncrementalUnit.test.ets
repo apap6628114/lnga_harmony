@@ -22,9 +22,12 @@ import {
   TreePagePhase
 } from '../main/ets/model/ThreadTreeLocate'
 import {
+  buildRowId,
+  buildRowKey,
   computeTreeRowDiff,
   RowDiffResult,
-  RowOpKind
+  RowOpKind,
+  stampRowContentRev
 } from '../main/ets/common/utils/ThreadTreeRowDiff'
 import { PostInfo } from '../main/ets/model/PostInfo'
 import { ThreadTreeRow, ThreadTreeRowKind } from '../main/ets/model/ThreadTree'
@@ -65,14 +68,23 @@ function createMoreRow(rootPid: number, totalCount: number): ThreadTreeRow {
 }
 
 /**
- * 行键生成（与页面 `rowKey` 同构的简化版）。
+ * 行身份键：直接复用页面同款实现，避免测试自造格式与生产代码漂移。
  *
  * @param row - 树行
- * @returns 键值
+ * @returns 身份键（diff 匹配用）
  */
-function keyOf(row: ThreadTreeRow): string {
-  const pid: number = row.post !== null ? row.post.pid : row.rootPid
-  return String(row.kind) + '_' + String(pid)
+function idOf(row: ThreadTreeRow): string {
+  return buildRowId(row)
+}
+
+/**
+ * 行展示键：直接复用页面同款实现（身份 + 内容版本 + 高亮）。
+ *
+ * @param row - 树行
+ * @returns LazyForEach 键值
+ */
+function displayKeyOf(row: ThreadTreeRow): string {
+  return buildRowKey(row)
 }
 
 /**
@@ -233,7 +245,7 @@ export default function threadTreeIncrementalUnitTest(): void {
   describe('threadTreeRowDiff', (): void => {
     it('diffFromEmpty_isSingleAdd', 0, (): void => {
       const next: ThreadTreeRow[] = [createRow(1, ThreadTreeRowKind.ROOT)]
-      const result: RowDiffResult = computeTreeRowDiff([], next, keyOf)
+      const result: RowDiffResult = computeTreeRowDiff([], next, idOf, displayKeyOf)
       expect(result.needReload).assertFalse()
       expect(result.ops.length).assertEqual(1)
       expect(result.ops[0].kind).assertEqual(RowOpKind.ADD)
@@ -251,7 +263,7 @@ export default function threadTreeIncrementalUnitTest(): void {
         createRow(2, ThreadTreeRowKind.CHILD),
         createRow(3, ThreadTreeRowKind.ROOT)
       ]
-      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, keyOf)
+      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, idOf, displayKeyOf)
       expect(result.needReload).assertFalse()
       expect(result.ops.length).assertEqual(1)
       expect(result.ops[0].kind).assertEqual(RowOpKind.ADD)
@@ -270,7 +282,7 @@ export default function threadTreeIncrementalUnitTest(): void {
         createRow(3, ThreadTreeRowKind.CHILD),
         createRow(5, ThreadTreeRowKind.ROOT)
       ]
-      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, keyOf)
+      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, idOf, displayKeyOf)
       expect(result.needReload).assertFalse()
       expect(result.ops.length).assertEqual(1)
       expect(result.ops[0].kind).assertEqual(RowOpKind.ADD)
@@ -291,7 +303,7 @@ export default function threadTreeIncrementalUnitTest(): void {
         createRow(6, ThreadTreeRowKind.CHILD),
         createRow(9, ThreadTreeRowKind.ROOT)
       ]
-      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, keyOf)
+      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, idOf, displayKeyOf)
       expect(result.needReload).assertFalse()
       expect(result.ops.length).assertEqual(2)
       expect(result.ops[0].index).assertEqual(1)
@@ -301,7 +313,7 @@ export default function threadTreeIncrementalUnitTest(): void {
     it('unchangedRows_produceNoOps', 0, (): void => {
       const oldRows: ThreadTreeRow[] = [createRow(1, ThreadTreeRowKind.ROOT)]
       const next: ThreadTreeRow[] = [createRow(1, ThreadTreeRowKind.ROOT)]
-      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, keyOf)
+      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, idOf, displayKeyOf)
       expect(result.needReload).assertFalse()
       expect(result.ops.length).assertEqual(0)
     })
@@ -319,7 +331,7 @@ export default function threadTreeIncrementalUnitTest(): void {
         createRow(3, ThreadTreeRowKind.CHILD),
         createMoreRow(1, 5)
       ]
-      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, keyOf)
+      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, idOf, displayKeyOf)
       expect(result.needReload).assertTrue()
       expect(result.ops.length).assertEqual(1)
       expect(result.ops[0].kind).assertEqual(RowOpKind.RELOAD)
@@ -334,19 +346,58 @@ export default function threadTreeIncrementalUnitTest(): void {
         createRow(1, ThreadTreeRowKind.ROOT),
         createMoreRow(1, 6)
       ]
-      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, keyOf)
+      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, idOf, displayKeyOf)
       expect(result.needReload).assertFalse()
       expect(result.ops.length).assertEqual(1)
       expect(result.ops[0].kind).assertEqual(RowOpKind.CHANGE)
       expect(result.ops[0].index).assertEqual(1)
     })
 
-    it('deletionFallsBackToReload', 0, (): void => {      const oldRows: ThreadTreeRow[] = [
+    it('moreRowCountChange_carriesContentKey', 0, (): void => {
+      /* 折叠行计数变化时 CHANGE 必须带含内容版本的新键：
+         不传键时框架沿用旧键并复用旧组件，「共 N 条回复」会停在旧值 */
+      const oldMore: ThreadTreeRow = createMoreRow(1, 4)
+      const nextMore: ThreadTreeRow = createMoreRow(1, 6)
+      nextMore.uiRev = 1
+      const result: RowDiffResult = computeTreeRowDiff(
+        [createRow(1, ThreadTreeRowKind.ROOT), oldMore],
+        [createRow(1, ThreadTreeRowKind.ROOT), nextMore],
+        idOf,
+        displayKeyOf)
+      expect(result.needReload).assertFalse()
+      expect(result.ops.length).assertEqual(1)
+      expect(result.ops[0].kind).assertEqual(RowOpKind.CHANGE)
+      expect(result.ops[0].key).assertEqual(displayKeyOf(nextMore))
+    })
+
+    it('identityKeyIgnoresContentVersion', 0, (): void => {
+      /* 身份键不含 uiRev：内容版本递增不能让 diff 把它当成删除/重排而退 RELOAD */
+      const oldMore: ThreadTreeRow = createMoreRow(1, 4)
+      const nextMore: ThreadTreeRow = createMoreRow(1, 6)
+      nextMore.uiRev = 3
+      const result: RowDiffResult = computeTreeRowDiff([oldMore], [nextMore], idOf, displayKeyOf)
+      expect(result.needReload).assertFalse()
+      expect(result.ops.length).assertEqual(1)
+      expect(result.ops[0].kind).assertEqual(RowOpKind.CHANGE)
+    })
+
+    it('contentEqual_producesNoChange', 0, (): void => {
+      /* 内容完全一致（即使行对象是新建的）不能产生 CHANGE，避免无谓重建 */
+      const oldMore: ThreadTreeRow = createMoreRow(1, 6)
+      const nextMore: ThreadTreeRow = createMoreRow(1, 6)
+      nextMore.uiRev = 2
+      const result: RowDiffResult = computeTreeRowDiff([oldMore], [nextMore], idOf, displayKeyOf)
+      expect(result.needReload).assertFalse()
+      expect(result.ops.length).assertEqual(0)
+    })
+
+    it('deletionFallsBackToReload', 0, (): void => {
+      const oldRows: ThreadTreeRow[] = [
         createRow(1, ThreadTreeRowKind.ROOT),
         createRow(2, ThreadTreeRowKind.CHILD)
       ]
       const next: ThreadTreeRow[] = [createRow(1, ThreadTreeRowKind.ROOT)]
-      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, keyOf)
+      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, idOf, displayKeyOf)
       expect(result.needReload).assertTrue()
       expect(result.ops.length).assertEqual(1)
       expect(result.ops[0].kind).assertEqual(RowOpKind.RELOAD)
@@ -361,8 +412,62 @@ export default function threadTreeIncrementalUnitTest(): void {
         createRow(2, ThreadTreeRowKind.ROOT),
         createRow(1, ThreadTreeRowKind.ROOT)
       ]
-      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, keyOf)
+      const result: RowDiffResult = computeTreeRowDiff(oldRows, next, idOf, displayKeyOf)
       expect(result.needReload).assertTrue()
+    })
+
+    it('buildRowKey_includesContentVersion', 0, (): void => {
+      /* 展示键必须含内容版本：版本变了键才变，LazyForEach 才会重建该行 */
+      const row: ThreadTreeRow = createRow(7, ThreadTreeRowKind.CHILD)
+      row.uiRev = 3
+      expect(displayKeyOf(row)).assertEqual(buildRowId(row) + '_u3')
+      row.uiRev = 4
+      expect(displayKeyOf(row)).assertEqual(buildRowId(row) + '_u4')
+    })
+
+    it('stampRowContentRev_bumpsChangedRow', 0, (): void => {
+      /* 折叠计数变化：上一版 uiRev=0，新行结算后应为 1 */
+      const oldMore: ThreadTreeRow = createMoreRow(1, 4)
+      const nextMore: ThreadTreeRow = createMoreRow(1, 6)
+      stampRowContentRev([oldMore], [nextMore])
+      expect(nextMore.uiRev).assertEqual(1)
+    })
+
+    it('stampRowContentRev_inheritsUnchangedRow', 0, (): void => {
+      /* 内容一致：继承上一版版本，不制造无谓重建 */
+      const oldMore: ThreadTreeRow = createMoreRow(1, 6)
+      oldMore.uiRev = 2
+      const nextMore: ThreadTreeRow = createMoreRow(1, 6)
+      stampRowContentRev([oldMore], [nextMore])
+      expect(nextMore.uiRev).assertEqual(2)
+    })
+
+    it('stampRowContentRev_restoresFloorVersionWhenRowReappears', 0, (): void => {
+      /* 行从不可见状态重现（只看楼主切换回来）：用楼层版本兜底，不回退到旧键 */
+      const row: ThreadTreeRow = createRow(9, ThreadTreeRowKind.CHILD)
+      const post: PostInfo | null = row.post
+      if (post !== null) {
+        post.uiRev = 4
+      }
+      stampRowContentRev([], [row])
+      expect(row.uiRev).assertEqual(4)
+    })
+
+    it('postVersionChange_producesChange', 0, (): void => {
+      /* 正文没变、但楼层内容版本变了（评论数/标题/附件更新）：仍要产出 CHANGE 并带新键 */
+      const oldRow: ThreadTreeRow = createRow(11, ThreadTreeRowKind.CHILD)
+      const newRow: ThreadTreeRow = createRow(11, ThreadTreeRowKind.CHILD)
+      const newPost: PostInfo | null = newRow.post
+      if (newPost !== null) {
+        newPost.uiRev = 1
+      }
+      stampRowContentRev([oldRow], [newRow])
+      expect(newRow.uiRev).assertEqual(1)
+      const result: RowDiffResult = computeTreeRowDiff([oldRow], [newRow], idOf, displayKeyOf)
+      expect(result.needReload).assertFalse()
+      expect(result.ops.length).assertEqual(1)
+      expect(result.ops[0].kind).assertEqual(RowOpKind.CHANGE)
+      expect(result.ops[0].key).assertEqual(displayKeyOf(newRow))
     })
   })
 }

@@ -6,7 +6,8 @@
  * 不依赖提交响应的 `pid` 之外任何信息。
  *
  * 合并语义（与列表页 `ThreadPaginationManager.mergePage` 同源，但更严格）：
- * 1. 同 pid：以服务端对象替换；`guard` 命中且内容不一致时保留本地正文
+ * 1. 同 pid：以服务端对象替换，并**递增楼层内容版本 `uiRev`**（克隆后写，不改入参）；
+ *    `guard` 命中且内容不一致时保留本地正文
  *    （read.php/CDN 缓存未失效时服务端仍返回编辑前的旧正文，列表页同一套保护）；
  * 2. 新 pid：追加到末尾（树的父子关系由 `buildThreadTree` 按引用重建，
  *    追加顺序不影响正确性）；
@@ -96,7 +97,15 @@ export function mergeTreePage(current: PostInfo[], pagePosts: PostInfo[],
       result.addedPids.push(fresh.pid)
       continue
     }
-    merged[existingIndex] = fresh
+    /**
+     * 同 pid 替换时递增楼层内容版本：页面行键依赖 `post.uiRev` 判定「这一行的
+     * 可见内容变了」，评论数 / 楼层标题 / 附件这类不在正文里的字段也才能刷新。
+     * 克隆后再写，保证入参 `pagePosts` 不被篡改（与本函数的入参契约一致）。
+     */
+    const previousPost: PostInfo = merged[existingIndex]
+    const replaced: PostInfo = clonePost(fresh)
+    replaced.uiRev = previousPost.uiRev + 1
+    merged[existingIndex] = replaced
     result.replacedPids.push(fresh.pid)
   }
   result.posts = merged
