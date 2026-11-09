@@ -495,7 +495,7 @@ export default function appThreadUnitTest(): void {
       fillThreadResult(raw, result, new Set<string>(), [], {})
       const info = result.threadInfo
       expect(info === null).assertFalse()
-      // 主题作者键未知（空串）→ ThreadPanel 的 isAuthorKeyUsable 会拒绝，不产生任何楼主标记
+      // 主题作者键未知（空串）→ ThreadPostUtils.isAuthorKeyUsable 会拒绝，不产生任何楼主标记
       expect(info === null ? 'x' : info.authorKey).assertEqual('')
       // 楼层数字语义保持既有行为（引用/资料卡用 uid），且不等于主题作者键
       expect(result.posts[0].authorid).assertEqual(41976057)

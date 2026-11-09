@@ -1,4 +1,6 @@
 import { common, Context } from '@kit.AbilityKit'
+import { display } from '@kit.ArkUI'
+import { UIContext } from '@ohos.arkui.UIContext'
 import { routerStore, Screen, ThreadSource } from '../../store/RouterStore'
 import { floatingLayerStore, FloatingPage } from '../../store/FloatingLayerStore'
 import { appStore } from '../../store/AppStore'
@@ -57,6 +59,44 @@ function parseQueryString(qs: string): Map<string, string> {
 }
 
 /**
+ * 应用内帖子链接（`#/thread?tid=…&pid=…&page=…`）的解析结果。
+ *
+ * 每个字段都保留原样（可能是空串），由调用方按自己的定位能力决定用哪个：
+ * 列表页只做「同帖已加载窗口内」的页内定位，树页把未知 pid 登记为等待目标。
+ */
+export class InAppThreadLink {
+  /** 主题 ID（原样，可能为空串）。 */
+  tid: string = ''
+
+  /** 目标楼层 pid（原样，可能为空串）。 */
+  pid: string = ''
+
+  /** 目标页码（原样，可能为空串）。 */
+  page: string = ''
+}
+
+/**
+ * 解析应用内帖子链接。
+ *
+ * 只是**解析**，不判断链接是否有效、也不做任何跳转——同一条链接在不同页面上的处理
+ * 语义不同（列表页页内定位 / 树页登记目标 / 全局打开帖子），把判断留给调用方。
+ *
+ * @param href - 链接地址
+ * @returns 解析结果；不是应用内帖子链接时返回 null
+ */
+export function parseInAppThreadLink(href: string): InAppThreadLink | null {
+  if (!href.startsWith('#/thread?')) {
+    return null
+  }
+  const params: Map<string, string> = parseQueryString(href.substring(href.indexOf('?') + 1))
+  const link: InAppThreadLink = new InAppThreadLink()
+  link.tid = params.get('tid') || ''
+  link.pid = params.get('pid') || ''
+  link.page = params.get('page') || ''
+  return link
+}
+
+/**
  * 判断主机名是否属于 NGA 域名（单一实现，WebViewPanel 等复用）。
  *
  * @param hostname - 主机名（不含协议）
@@ -76,6 +116,38 @@ export function openImageViewer(urls: string[], index: number): void {
   floatingLayerStore.imageViewerUrls = urls
   floatingLayerStore.imageViewerIndex = index
   floatingLayerStore.push(FloatingPage.IMAGE_VIEWER)
+}
+
+/**
+ * 在点击位置附近打开用户资料卡（屏幕内收敛位置）。
+ *
+ * 资料卡尺寸是固定值（280×400），定位要把点击点换算成卡片左上角坐标，并把卡片完全
+ * 收敛在屏幕内：贴边时向内收，避免卡片被裁掉。取不到屏幕尺寸时退化为「点击点下方居中」，
+ * 保证仍能弹出。帖子页（列表/树）的资料卡入口共用这一处几何。
+ *
+ * @param uiContext - 页面 UIContext（用于 px → vp 换算）
+ * @param uid - 用户 uid
+ * @param screenX - 点击点 x（vp）
+ * @param screenY - 点击点 y（vp）
+ */
+export function openProfileCardAt(uiContext: UIContext, uid: string, screenX: number,
+  screenY: number): void {
+  const cardW: number = 280
+  const cardH: number = 400
+  const pad: number = 8
+  let posX: number = screenX
+  let posY: number = screenY
+  try {
+    const displayInfo = display.getDefaultDisplaySync()
+    const screenW = uiContext.px2vp(displayInfo.width)
+    const screenH = uiContext.px2vp(displayInfo.height)
+    posX = Math.max(pad, Math.min(screenX - cardW / 2, screenW - cardW - pad))
+    posY = Math.max(pad, Math.min(screenY + pad, screenH - cardH - pad))
+  } catch (e) {
+    posX = screenX - cardW / 2
+    posY = screenY + pad
+  }
+  floatingLayerStore.openProfileCard(uid, posX, posY)
 }
 
 /**
@@ -150,12 +222,9 @@ export function handleForumLink(
 ): void {
   if (href.startsWith('#/thread?')) {
     // 应用内帖子链接 → 导航到帖子详情
-    const params: Map<string, string> = parseQueryString(href.substring(href.indexOf('?') + 1))
-    const tid: string = params.get('tid') || ''
-    const rawPage: string = params.get('page') || ''
-    const pid: string = params.get('pid') || ''
-    if (tid.length > 0) {
-      openThreadLink(tid, rawPage, pid)
+    const link: InAppThreadLink | null = parseInAppThreadLink(href)
+    if (link !== null && link.tid.length > 0) {
+      openThreadLink(link.tid, link.page, link.pid)
     }
   } else if (href.startsWith('#/profile?')) {
     // 应用内用户链接 → 弹窗资料卡：uid 直查；[username] 先按用户名解析 uid

@@ -94,6 +94,35 @@ export const TITLE_TEXT_GAP: number = 10
  */
 export const TITLE_POD_SIZE: number = 36
 
+// ============== HDS 悬浮栏几何 ==============
+
+/**
+ * HDS 悬浮栏材质块的边长（vp）。
+ *
+ * 帖子页底部三类常驻块共用：列表页右下角页码指示器的横条高度、递进树进度胶囊的高度、
+ * 两种阅读样式共用的回复按钮（正方形，宽高同值）。40 与标题栏按钮 36 不属于同一档
+ * （见 `TITLE_POD_SIZE`）：它是内容区浮动动作的尺寸，真机已核对
+ * （`docs/IMMERSIVE_LIGHT_DESIGN.md` §12.9）。
+ */
+export const HDS_BAR_SIZE: number = 40
+
+/**
+ * HDS 悬浮栏内容块的**两端内边距**（vp）。
+ *
+ * 内容必须铺满材质块（用显式宽度，不用 `'100%'`），否则内容会跟着 HDS 页签项的对齐方式
+ * 整体偏移——实测现象是"首元素左边空一大块、尾元素贴死边界"；首尾元素靠这个内边距离边。
+ */
+export const HDS_BAR_PADDING: number = 10
+
+/**
+ * HDS 悬浮栏内容的整体垂直补偿（vp，负值上移）。
+ *
+ * HDS 的内容区与材质块**不同心**（真机逐像素实测内容天生偏低约 2.5vp，取整补偿 4）。
+ * 这是 HDS 组件的几何事实、不是某个页面的局部魔法值：列表页页码条与递进树进度胶囊
+ * 必须带同一补偿，否则两块并排时一个数字居中、另一个偏下。
+ */
+export const HDS_BAR_CONTENT_OFFSET_Y: number = -4
+
 // 当前激活的主题色（通过 $r 引用资源，setColorMode 自动切换）
 export class AppColors {
   static primary: Resource = $r('app.color.primary')

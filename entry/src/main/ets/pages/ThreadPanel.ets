@@ -1,4 +1,4 @@
-import { display, LengthMetrics, CustomContentDialog } from '@kit.ArkUI'
+import { LengthMetrics, CustomContentDialog } from '@kit.ArkUI'
 import { common, Context } from '@kit.AbilityKit'
 import { taskpool } from '@kit.ArkTS'
 
@@ -11,8 +11,14 @@ import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
 import { getThread, THREAD_FLOOR_MISSING_ERROR, ONLY_AUTHOR_OPT,
   ANONYMOUS_TOPIC_AUTHOR_ID } from '../service/api/ThreadApi'
 import { votePost } from '../service/api/FavoriteApi'
-import { getActiveDomain } from '../service/api/MiscApi'
 import { ThreadResult } from '../model/ThreadResult'
+import {
+  EditSnapshot,
+  FetchPageResult,
+  PageNavigationSource,
+  ThreadLoadMode,
+  ThreadPageFetch
+} from '../model/ThreadPageLoad'
 import type { PostReplyResult } from '../model/ThreadResult'
 import type { PostInfo } from '../model/PostInfo'
 import { VoteResult } from '../model/NgaApiResults'
@@ -21,6 +27,9 @@ import { getCachedBBNodes } from '../parser/bbcode/BBCodeCache'
 import { preWarmPosts } from '../common/utils/PostWarmup'
 import {
   AppColors,
+  HDS_BAR_CONTENT_OFFSET_Y,
+  HDS_BAR_PADDING,
+  HDS_BAR_SIZE,
   NAV_BAR_H,
   ThreadNavMode
 } from '../common/constants/Constants'
@@ -38,15 +47,27 @@ import { ANONYMOUS_NAME_PREFIX } from '../parser/AnonymousParser'
 import { bbNodesToPlainText } from '../common/utils/Utils'
 import { resolveFloorSubject } from '../common/utils/ThreadTreeBuilder'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
-import { TtsMediaMetadata } from '../common/media/TtsAvSessionController'
 import { TtsPlayer } from '../common/media/TtsPlayer'
 import { shareThread, sharePost } from '../common/utils/ShareUtils'
 import { SaveThreadContent } from '../common/dialogs/SaveThreadDialogs'
+import { AiTaskPickerContent } from '../common/dialogs/AiTaskPickerContent'
 import { ThreadTrackContent } from '../common/dialogs/ThreadTrackDialogs'
-import { savedThreadService, SaveThreadOutcome, getSavedThreadResult } from '../service/SavedThreadService'
-import { TrackRequest, TrackResult } from '../store/TrackedThreadStore'
-import { TrackedThread, TRACK_DEFAULT_KEEP_DAYS, TRACK_MAX_COUNT } from '../model/TrackedThread'
-import { openImageViewer as sharedOpenImageViewer, handleForumLink } from '../common/utils/LinkUtils'
+import { getSavedThreadResult } from '../service/SavedThreadService'
+import { TrackedThread, TRACK_DEFAULT_KEEP_DAYS } from '../model/TrackedThread'
+import { openImageViewer as sharedOpenImageViewer, handleForumLink, parseInAppThreadLink,
+  InAppThreadLink, openProfileCardAt } from '../common/utils/LinkUtils'
+import {
+  buildReadAloudMetadata,
+  canResumeReadingProgress,
+  favoriteMenuLabel,
+  findTopicAuthorName,
+  isAuthorKeyUsable,
+  isSavedThreadSource,
+  isTopicAuthorPost,
+  visibleThreadSubject
+} from '../common/utils/ThreadPostUtils'
+import { buildThreadMenuItems, ThreadMenuHost } from '../common/components/thread-menu/ThreadMenuItems'
+import { saveThreadWithToast, submitThreadTrack } from '../common/utils/ThreadPageActions'
 import { ThreadPaginationManager, MergePageResult } from '../common/managers/ThreadPaginationManager'
 import type { ThreadInfo } from '../model/Thread'
 import { Logger, DOMAIN_UI, formatError } from '../common/utils/Logger'
@@ -67,41 +88,22 @@ import { ReadingProgressEntry } from '../store/ReadingProgressStore'
 
 const logger = new Logger(DOMAIN_UI, 'ThreadPanel')
 
-/** 右下角页码指示器的材质块高度（vp）：与回复按钮同为 40，由 HDS 材质宿主显式指定。 */
-const PAGE_BAR_H = 40
+/**
+ * 页面内沿用 `PAGE_BAR_*` 旧名（历史注释与排障记录都按这个名字引用），
+ * 取值统一指向 `Constants` 的 HDS 悬浮栏几何——改尺寸只改那一处。
+ */
+/** 右下角页码指示器的材质块高度（vp）：与回复按钮共用 HDS 悬浮栏尺寸。 */
+const PAGE_BAR_H = HDS_BAR_SIZE
 
 /**
  * 页码指示器材质块的**两端内边距**（vp）：页码内容铺满整块材质，首尾元素靠它离边。
  * 内容必须铺满材质块（用显式宽度，不用 `'100%'`），否则内容会跟着 HDS 页签项的对齐方式
  * 整体偏移——实测现象是"1 左边空一大块、『到』右侧贴死边界"。
  */
-const PAGE_BAR_PAD = 10
+const PAGE_BAR_PAD = HDS_BAR_PADDING
 
 /** 页码指示器里「到」格的宽度（vp）：显式给定，宽度分档才不依赖文字度量。 */
 const PAGE_BAR_GOTO_W = 22
-
-/**
- * 一次替换加载的取数结果。
- *
- * `floorMissing` 表示"本次是目标楼层已删除后的整页回退视图"，必须随本次调用返回，
- * 不能落成组件字段：回退请求在途时用户可能切页 / 切帖，字段会被新一轮加载的清零与
- * 旧调用的写入交错，导致新加载误弹「该楼层不存在或已删除」。
- */
-class ThreadPageFetch {
-  /** 帖子请求结果。 */
-  result: ThreadResult
-  /** 是否因目标楼层已删除而回退为整页视图。 */
-  floorMissing: boolean
-
-  /**
-   * @param result - 帖子请求结果
-   * @param floorMissing - 是否因目标楼层已删除而回退为整页视图
-   */
-  constructor(result: ThreadResult, floorMissing: boolean) {
-    this.result = result
-    this.floorMissing = floorMissing
-  }
-}
 
 /**
  * 页码指示器里"当前页定位点"（数字下的「•」）相对**居中位置**的下移量（vp）。
@@ -127,52 +129,9 @@ const PAGE_BAR_DOT_OFFSET = 11
  *
  * 换设备/系统版本后若又出现"整体偏下/偏上"，只调这一个值。
  */
-const PAGE_BAR_CONTENT_OFFSET_Y = -4
-
-/** 帖子页面结果写入连续窗口的方式。 */
-enum ThreadLoadMode {
-  /** 用目标页重建窗口。 */
-  REPLACE = 0,
-  /** 将下一相邻页追加到窗口末尾。 */
-  APPEND = 1,
-  /** 将上一相邻页插入窗口开头。 */
-  PREPEND = 2
-}
-
-/** 用户通过底部分页控件发起跳页的来源。 */
-enum PageNavigationSource {
-  /** 点击相邻页码按钮。 */
-  PAGER_BUTTON = 0,
-  /** 从页码选择器中选择页面。 */
-  PAGE_PICKER = 1
-}
+const PAGE_BAR_CONTENT_OFFSET_Y = HDS_BAR_CONTENT_OFFSET_Y
 
 const PAGE_LOAD_AHEAD_ITEMS: number = 3
-
-/** 带请求页码的预取结果。 */
-class FetchPageResult {
-  /** 请求页码。 */
-  page: number = 0
-
-  /** 页面接口结果。 */
-  result: ThreadResult | null = null
-}
-
-/**
- * 编辑提交快照：记录编辑前后正文，供静默刷新区分「服务端确认的新内容」与
- * 「read.php/CDN 未失效的旧缓存」——旧缓存返回时跳过覆盖，防止乐观更新的
- * 新正文被回退成旧内容。
- */
-class EditSnapshot {
-  /** 被编辑楼层 pid。 */
-  pid: number = 0
-
-  /** 编辑前正文（服务端旧内容，用于识别未失效的缓存）。 */
-  oldContent: string = ''
-
-  /** 编辑后提交的正文（乐观更新写入的内容）。 */
-  newContent: string = ''
-}
 
 /**
  * 帖子详情面板。
@@ -240,13 +199,13 @@ export struct ThreadPanel {
    */
   @StorageProp('effectiveColorMode') effectiveColorMode: string = 'light'
   @State showPagePicker: boolean = false
-  /** 保存帖子对话框控制器（更多菜单「保存帖子」入口）。 */
   /** 帖子入口可用的 AI 任务（用于选择弹窗）。 */
   @State aiTasks: AiAgentPreset[] = []
   /** AI 任务选择弹窗控制器。 */
   private aiTaskDialogController?: CustomDialogController
   /** 待处理的楼层（弹窗选择任务后使用）。 */
   private aiTaskPost: PostInfo | null = null
+  /** 保存帖子对话框控制器（更多菜单「保存帖子」入口）。 */
   private saveDialogController?: CustomDialogController
   /** 跟踪帖子更新对话框控制器（更多菜单「跟踪帖子更新」入口）。 */
   private trackDialogController?: CustomDialogController
@@ -436,23 +395,7 @@ export struct ThreadPanel {
   }
 
   private showProfileCard(uid: string, screenX: number, screenY: number): void {
-    const cardW: number = 280
-    const cardH: number = 400
-    const pad: number = 8
-    let posX: number = screenX
-    let posY: number = screenY
-    try {
-      const context = this.getUIContext()
-      const displayInfo = display.getDefaultDisplaySync()
-      const screenW = context.px2vp(displayInfo.width)
-      const screenH = context.px2vp(displayInfo.height)
-      posX = Math.max(pad, Math.min(screenX - cardW / 2, screenW - cardW - pad))
-      posY = Math.max(pad, Math.min(screenY + pad, screenH - cardH - pad))
-    } catch (e) {
-      posX = screenX - cardW / 2
-      posY = screenY + pad
-    }
-    floatingLayerStore.openProfileCard(uid, posX, posY)
+    openProfileCardAt(this.getUIContext(), uid, screenX, screenY)
   }
 
   private hasInitiallyLoaded: boolean = false
@@ -468,7 +411,7 @@ export struct ThreadPanel {
     // （递进树页切换阅读方式时携带，保证「只看楼主」首屏就能过滤），其余由首屏响应补齐。
     this.threadAuthorId = this.authorIdInit
     this.threadAuthorKey = this.authorKeyInit
-    this.hasThreadAuthorKey = this.isAuthorKeyUsable(this.authorKeyInit)
+    this.hasThreadAuthorKey = isAuthorKeyUsable(this.authorKeyInit)
     // 「只看楼主」由路由声明（递进树页切换阅读方式时沿用），默认关闭；
     // 但若同时没有可用的楼主身份（树页 threadInfo 缺失时可能发生），不能只亮着菜单却不过滤
     this.authorOnly = this.authorOnlyInit && this.hasUsableAuthorIdentityInit()
@@ -546,7 +489,7 @@ export struct ThreadPanel {
     // 其余由新帖首页响应补齐
     this.threadAuthorId = this.authorIdInit
     this.threadAuthorKey = this.authorKeyInit
-    this.hasThreadAuthorKey = this.isAuthorKeyUsable(this.authorKeyInit)
+    this.hasThreadAuthorKey = isAuthorKeyUsable(this.authorKeyInit)
     this.syncFavoriteState()
     this.votedUpPids = new Set()
     this.votedDownPids = new Set()
@@ -635,9 +578,7 @@ export struct ThreadPanel {
    * @returns 来源是否允许恢复
    */
   private isResumeAllowedSource(): boolean {
-    return this.threadSource === ThreadSource.DEFAULT ||
-      this.threadSource === ThreadSource.TOPIC_LIST ||
-      this.threadSource === ThreadSource.BROWSE_HISTORY
+    return canResumeReadingProgress(this.threadSource)
   }
 
   /**
@@ -742,37 +683,16 @@ export struct ThreadPanel {
   }
 
   /**
-   * 返回当前可信收藏状态对应的菜单文案。
-   *
-   * @returns 收藏操作菜单文案
-   */
-  private getFavoriteMenuLabel(): string {
-    if (this.favoriteState === FavoriteMembershipState.FAVORED) {
-      return '管理收藏'
-    }
-    if (this.favoriteState === FavoriteMembershipState.NOT_FAVORED) {
-      return '收藏到…'
-    }
-    return '收藏夹…'
-  }
-
-  /**
    * 获取当前可显示的主题标题。
    *
    * @returns 屏蔽作者时返回占位文案，否则返回原主题标题
    */
   private getVisibleThreadSubject(): string {
-    // 说明：黑名单只存真实 uid，匿名帖的主题作者没有真实 uid（`threadAuthorId` 是页内
-    // 局部号），故匿名楼主无法被拉黑——这是"不知道是谁"的必然结果，不是本处漏判。
-    if (this.blacklistVersion >= 0 &&
-      appStore.settingsStore.isBlacklisted(this.threadAuthorId)) {
-      return '该用户已被屏蔽'
-    }
-    // 离线存档来源：标题前加 [离线] 前缀提醒（替代悬浮提示，不遮挡内容）
-    if (this.isSavedSource()) {
-      return '[离线] ' + this.threadSubject
-    }
-    return this.threadSubject
+    // 显式读取 blacklistVersion 建立响应式依赖：屏蔽名单变化后本页要重绘、
+    // 标题要重新按规则计算（文案规则本身见 ThreadPostUtils.visibleThreadSubject）。
+    const authorBlocked: boolean = this.blacklistVersion >= 0 &&
+      appStore.settingsStore.isBlacklisted(this.threadAuthorId)
+    return visibleThreadSubject(this.threadSubject, authorBlocked, this.isSavedSource())
   }
 
   private async loadPersistedVotes(): Promise<void> {
@@ -1254,7 +1174,8 @@ export struct ThreadPanel {
     }
     applyBlacklistStateToPosts(result.posts, appStore.settingsStore.getBlacklistIds())
     if (canFilterLocally) {
-      result.posts = result.posts.filter((post: PostInfo): boolean => this.isTopicAuthorPost(post))
+      result.posts = result.posts.filter((post: PostInfo): boolean =>
+        isTopicAuthorPost(this.hasThreadAuthorKey, this.threadAuthorKey, post))
     }
     try {
       await preWarmPosts(result.posts, false, priority)
@@ -1431,7 +1352,7 @@ export struct ThreadPanel {
           // 该键可靠（匿名帖非首页判不出时给空串）。这样即使首屏落在第 N 页，标记也只是
           // 暂时缺失，读到含主楼的页后立即补齐，不会锁死一个错误的楼主。
           const hasMainFloor: boolean = result.posts.some((item: PostInfo): boolean => item.lou === 0)
-          if (!this.hasThreadAuthorKey && hasMainFloor && this.isAuthorKeyUsable(info.authorKey)) {
+          if (!this.hasThreadAuthorKey && hasMainFloor && isAuthorKeyUsable(info.authorKey)) {
             this.threadAuthorKey = info.authorKey
             this.hasThreadAuthorKey = true
           }
@@ -2040,23 +1961,13 @@ export struct ThreadPanel {
   }
 
   /**
-   * 打开当前主题的收藏夹多选页面。
-   */
-  private openFavoriteFolders(): void {
-    if (this.threadTid.length === 0) {
-      return
-    }
-    routerStore.navigateActivity(Screen.favoriteFolders(this.threadTid))
-  }
-
-  /**
    * 是否由「保存的帖子」离线存档来源打开：本地存档模式下隐藏与在线
    * 收藏/保存冲突的功能入口（收藏到…、离线保存帖子）。
    *
    * @returns 是否离线存档来源
    */
   private isSavedSource(): boolean {
-    return this.threadSource === ThreadSource.SAVED
+    return isSavedThreadSource(this.threadSource)
   }
 
   /**
@@ -2116,15 +2027,7 @@ export struct ThreadPanel {
    * 启动后台保存任务；结果以 Toast 提示（进度由全局指示组件展示）。
    */
   private startSaveThread(tid: string, startPage: number, endPage: number): void {
-    savedThreadService.saveThread(tid, startPage, endPage).then((outcome: SaveThreadOutcome): void => {
-      if (outcome.ok) {
-        appStore.showToast('已保存：' + outcome.message)
-      } else if (outcome.cancelled) {
-        appStore.showToast('已取消保存')
-      } else {
-        appStore.showToast('保存失败：' + outcome.message)
-      }
-    })
+    saveThreadWithToast(tid, startPage, endPage)
   }
 
   // ==================== 跟踪帖子更新 ====================
@@ -2154,29 +2057,12 @@ export struct ThreadPanel {
    */
   private hasUsableAuthorIdentityInit(): boolean {
     // 匿名帖的 uid 是页内局部负数，只有稳定 authorKey 能用于本地过滤
-    if (this.isAuthorKeyUsable(this.authorKeyInit)) {
+    if (isAuthorKeyUsable(this.authorKeyInit)) {
       return true
     }
     const numericId: number = Number(this.authorIdInit)
     return this.authorIdInit.length > 0 && this.authorIdInit !== '0' &&
       Number.isFinite(numericId) && numericId > 0
-  }
-
-  /**
-   * 该稳定作者标识是否可用于身份比较。
-   *
-   * 空串（解析不出）与非正数字（匿名楼的页内局部合成号）都不可比：前者没有信息，
-   * 后者逐页重排，拿它判定会既漏判楼主、又误判撞号的匿名用户。
-   *
-   * @param authorKey - 待判定的稳定作者标识
-   * @returns 可用于比较时为 true
-   */
-  private isAuthorKeyUsable(authorKey: string): boolean {
-    if (authorKey.length === 0) {
-      return false
-    }
-    const numeric: number = Number(authorKey)
-    return isNaN(numeric) || numeric > 0
   }
 
   /**
@@ -2218,37 +2104,6 @@ export struct ThreadPanel {
     }
     const numeric: number = Number(this.threadAuthorId)
     return !isNaN(numeric)
-  }
-
-  /**
-   * 当前楼层是否为主题作者（楼主）所发。
-   *
-   * 判据是稳定作者标识而不是 uid：匿名帖里 uid 是页内局部号（见 `PostInfo.authorKey`），
-   * 只有 `#anony_` 编码名能跨页认出楼主的匿名回复。
-   *
-   * @param post - 待判定楼层
-   * @returns 是楼主所发时为 true
-   */
-  private isTopicAuthorPost(post: PostInfo): boolean {
-    return this.hasThreadAuthorKey && post.authorKey === this.threadAuthorKey
-  }
-
-  /**
-   * 当前窗口内主楼（lou=0）的作者昵称。
-   *
-   * 添加跟踪时带上，避免跟踪列表在首次检查回填前显示「未知作者」；主楼不在当前窗口
-   * （只看楼主以外的跨页视图）时返回空串，由检查响应里的 `__T.author` 回填。
-   *
-   * @returns 楼主昵称；未知时返回空串
-   */
-  private resolveThreadAuthorName(): string {
-    const posts: PostInfo[] = this.mgr.posts
-    for (let index: number = 0; index < posts.length; index++) {
-      if (posts[index].lou === 0) {
-        return posts[index].author
-      }
-    }
-    return ''
   }
 
   /**
@@ -2380,46 +2235,19 @@ export struct ThreadPanel {
     })
   }
 
-  /** AI 任务选择弹窗内容。 */
+  /** AI 任务选择弹窗内容（列表与选中回调由页面负责，列表本身是共享构件）。 */
   @Builder
   aiTaskContent() {
-    Column() {
-      ForEach(this.aiTasks, (task: AiAgentPreset) => {
-        Row() {
-          Column() {
-            Text(task.name)
-              .fontSize(15)
-              .fontColor(AppColors.textPrimary)
-            if (task.description.length > 0) {
-              Text(task.description)
-                .fontSize(11)
-                .fontColor(AppColors.textTertiary)
-                .lineHeight(16)
-                .maxLines(2)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .margin({ top: 2 })
-            }
-          }
-          .layoutWeight(1)
-          .alignItems(HorizontalAlign.Start)
-
-          Text('›')
-            .fontSize(18)
-            .fontColor(AppColors.chevron)
+    AiTaskPickerContent({
+      tasks: this.aiTasks,
+      onPick: (task: AiAgentPreset): void => {
+        this.aiTaskDialogController?.close()
+        const post: PostInfo | null = this.aiTaskPost
+        if (post !== null) {
+          this.launchAiTask(task, post, task.name)
         }
-        .width('100%')
-        .padding({ top: 10, bottom: 10 })
-        .alignItems(VerticalAlign.Center)
-        .onClick((): void => {
-          this.aiTaskDialogController?.close()
-          const post: PostInfo | null = this.aiTaskPost
-          if (post !== null) {
-            this.launchAiTask(task, post, task.name)
-          }
-        })
-      }, (task: AiAgentPreset): string => task.id)
-    }
-    .width('100%')
+      }
+    })
   }
 
   /** 跟踪对话框的自定义内容（官方 CustomContentDialog 的 contentBuilder）。 */
@@ -2440,28 +2268,14 @@ export struct ThreadPanel {
 
   /**
    * 提交跟踪设置：未跟踪则新建，已跟踪则只更新跟踪天数（不动已读基准）。
+   *
+   * 标题占位值（`'帖子'`）不作为真实标题入库，交给检查回填；占位判断留在页面，
+   * 提交流程与树页共用 `submitThreadTrack`。
    */
   private startTrackThread(): void {
-    if (!appStore.canTrackMoreThreads() && !appStore.isThreadTracked(this.threadTid)) {
-      appStore.showToast('最多同时跟踪 ' + String(TRACK_MAX_COUNT) + ' 个帖子')
-      return
-    }
-    const request: TrackRequest = new TrackRequest()
-    request.tid = this.threadTid
-    // 标题占位值（'帖子'）不作为真实标题入库，交给检查回填
-    request.subject = this.threadSubject === '帖子' ? '' : this.threadSubject
-    request.author = this.resolveThreadAuthorName()
-    request.authorid = Number(this.threadAuthorId) > 0 ? Number(this.threadAuthorId) : 0
-    request.fid = this.threadFid
-    request.forumName = ''
-    request.keepDays = this.trackKeepDays
-    appStore.trackThread(request).then((result: TrackResult): void => {
-      if (result.ok) {
-        appStore.showToast(result.created ? '已开始跟踪' : '跟踪设置已更新')
-      } else {
-        appStore.showToast(result.error || '跟踪失败')
-      }
-    })
+    const subject: string = this.threadSubject === '帖子' ? '' : this.threadSubject
+    submitThreadTrack(this.threadTid, subject, findTopicAuthorName(this.mgr.posts),
+      this.threadAuthorId, this.threadFid, this.trackKeepDays)
   }
 
   /**
@@ -2531,42 +2345,124 @@ export struct ThreadPanel {
     sharedOpenImageViewer(urls, index)
   }
 
+  /**
+   * 朗读楼层正文。
+   *
+   * 列表页渲染的是原始 `content`（引用区未被剥离），因此读的也是原始正文；递进树页读
+   * 已剥离引用区的 `displayContent`（见其 `readAloud`）。播控元数据两侧共用
+   * `buildReadAloudMetadata`。
+   *
+   * @param p - 楼层
+   */
+  private readAloud(p: PostInfo): void {
+    const subject: string = resolveFloorSubject(p)
+    const bodyText: string = bbNodesToPlainText(getCachedBBNodes(p.content))
+    const plainText: string = subject.length > 0 ? subject + '。' + bodyText : bodyText
+    if (plainText.trim().length === 0) {
+      appStore.showToast('该楼层没有可朗读的内容')
+      return
+    }
+    TtsPlayer.speak(plainText, p.pid, true,
+      buildReadAloudMetadata(this.threadTid, this.threadSubject, p))
+  }
+
   private handleLinkClick(href: string): void {
     // 同主题引用且目标楼层已在当前加载窗口：页内直接定位，
     // 避免整页重载与服务端单帖视图（最常见引用场景零网络请求）。
-    if (href.startsWith('#/thread?')) {
-      const query: string = href.substring(href.indexOf('?') + 1)
-      let linkTid: string = ''
-      let linkPid: string = ''
-      const parts: string[] = query.split('&')
-      for (let i: number = 0; i < parts.length; i++) {
-        const kv: string[] = parts[i].split('=')
-        if (kv.length === 2) {
-          if (kv[0] === 'tid') linkTid = kv[1]
-          if (kv[0] === 'pid') linkPid = kv[1]
-        }
+    const link: InAppThreadLink | null = parseInAppThreadLink(href)
+    if (link !== null && link.tid === this.threadTid && link.pid.length > 0 && this.listMounted &&
+      !this.listNavigationPending && !this.prependAnchorPending) {
+      const linkPidNumber: number = parseInt(link.pid, 10)
+      if (this.mgr.findPostIndex(linkPidNumber) >= 0) {
+        logger.info(
+          'quote-jump local tid=%{public}s pid=%{public}s gen=%{public}d window=%{public}d-%{public}d',
+          this.threadTid, link.pid, this.mgr.getGeneration(),
+          this.mgr.loadedPageStart, this.mgr.loadedPageEnd
+        )
+        this.scrollToPid(link.pid)
+        return
       }
-      if (linkTid === this.threadTid && linkPid.length > 0 && this.listMounted &&
-        !this.listNavigationPending && !this.prependAnchorPending) {
-        const linkPidNumber: number = parseInt(linkPid, 10)
-        if (this.mgr.findPostIndex(linkPidNumber) >= 0) {
-          logger.info(
-            'quote-jump local tid=%{public}s pid=%{public}s gen=%{public}d window=%{public}d-%{public}d',
-            this.threadTid, linkPid, this.mgr.getGeneration(),
-            this.mgr.loadedPageStart, this.mgr.loadedPageEnd
-          )
-          this.scrollToPid(linkPid)
-          return
-        }
-        // 离线存档模式：引用目标不在已保存的窗口内，不跳出离线上下文在线打开
-        if (this.isSavedSource()) {
-          appStore.showToast('该楼层未包含在存档中')
-          return
-        }
+      // 离线存档模式：引用目标不在已保存的窗口内，不跳出离线上下文在线打开
+      if (this.isSavedSource()) {
+        appStore.showToast('该楼层未包含在存档中')
+        return
       }
     }
     handleForumLink(href, this.getUIContext().getHostContext() as common.UIAbilityContext, (uid: string) => {
       this.showProfileCard(uid, 200, 200)
+    })
+  }
+
+  /**
+   * 楼层卡片（列表项内容）。
+   *
+   * 把 15 个回调的装配从 `build()` 里提出来，与树页的 `postCell` 同构：新增一个
+   * `PostItem` 属性时只需改这一处。
+   *
+   * **按值传参的边界**：`post` 来自 `LazyForEach` 的数据源，项内容变化由数据源以
+   * `pid_uiRev` 新键重建（见 `LazyForEach` 的键函数），不依赖 `@Builder` 的响应式刷新。
+   * @Builder 内部经 `this` 读取的 **@State / @Prop**（投票态、握持态、页码、标题）仍会随
+   * 状态变化刷新；但 `hasThreadAuthorKey` 是普通字段（非 @State），它单独变化不会触发重绘——
+   * 这与提取前的内联写法完全一致，不是本处引入的（见 backlog A5）。
+   *
+   * @param post - 楼层
+   */
+  @Builder
+  postItem(post: PostInfo) {
+    PostItem({
+      post: post,
+      isVotedUp: this.votedUpPids.has(String(post.pid)),
+      isVotedDown: this.votedDownPids.has(String(post.pid)),
+      holdingHand: this.holdingStatus,
+      onImageClick: (urls: string[], index: number): void => {
+        this.openImageViewer(urls, index)
+      },
+      onLinkClick: (href: string): void => {
+        this.handleLinkClick(href)
+      },
+      onVideoClick: (url: string): void => {
+        this.handleLinkClick(url)
+      },
+      onProfileClick: (uid: string, screenX: number, screenY: number): void => {
+        this.showProfileCard(uid, screenX, screenY)
+      },
+      onVote: (p: PostInfo, value: number): Promise<VoteResult> => {
+        return this.handleVote(p, value)
+      },
+      onReply: (p: PostInfo): void => {
+        replyManager.startFloorReply(p, Number(this.threadTid), this.threadFid, this.displayPage)
+        floatingLayerStore.replyDialogTitle = replyManager.dialogTitle
+        floatingLayerStore.replyOnSend = (text: string, isAnony: boolean): Promise<void> => {
+          return this.handleReplySend(text, isAnony)
+        }
+        floatingLayerStore.editMode = false
+        floatingLayerStore.push(FloatingPage.REPLY_DIALOG)
+      },
+      onEdit: (p: PostInfo): void => {
+        replyManager.startEdit(p, Number(this.threadTid), this.threadFid)
+        floatingLayerStore.replyDialogTitle = replyManager.dialogTitle
+        floatingLayerStore.editMode = true
+        floatingLayerStore.editInitialContent = unescapeHtml(p.content).replace(/<br\s*\/?>/gi, '\n')
+        floatingLayerStore.replyOnSend = (_text: string, _isAnony: boolean): Promise<void> => {
+          return this.handleEditSend(_text, _isAnony)
+        }
+        floatingLayerStore.push(FloatingPage.REPLY_DIALOG)
+      },
+      onShare: (p: PostInfo): void => {
+        let hostCtx: Context | undefined = this.getUIContext().getHostContext()
+        if (hostCtx !== undefined) {
+          let ctx: Context = hostCtx
+          sharePost(ctx, p, this.threadSubject)
+        }
+      },
+      onSummarize: (p: PostInfo): void => {
+        this.beginAiSummarize(p)
+      },
+      onReadAloud: (p: PostInfo): void => {
+        this.readAloud(p)
+      },
+      isTopicAuthor: isTopicAuthorPost(this.hasThreadAuthorKey, this.threadAuthorKey, post),
+      isOwnPost: appStore.auth.isAuthenticated && String(post.authorid) === appStore.auth.uid,
     })
   }
 
@@ -2582,75 +2478,7 @@ export struct ThreadPanel {
         List({ scroller: this.scroller }) {
           LazyForEach(this.postsDataSource, (post: PostInfo) => {
             ListItem() {
-              PostItem({
-                post: post,
-                isVotedUp: this.votedUpPids.has(String(post.pid)),
-                isVotedDown: this.votedDownPids.has(String(post.pid)),
-                holdingHand: this.holdingStatus,
-                onImageClick: (urls: string[], index: number): void => {
-                  this.openImageViewer(urls, index)
-                },
-                onLinkClick: (href: string): void => {
-                  this.handleLinkClick(href)
-                },
-                onVideoClick: (url: string): void => {
-                  this.handleLinkClick(url)
-                },
-                onProfileClick: (uid: string, screenX: number, screenY: number): void => {
-                  this.showProfileCard(uid, screenX, screenY)
-                },
-                onVote: (p: PostInfo, value: number): Promise<VoteResult> => {
-                  return this.handleVote(p, value)
-                },
-                onReply: (p: PostInfo): void => {
-                  replyManager.startFloorReply(p, Number(this.threadTid), this.threadFid, this.displayPage)
-                  floatingLayerStore.replyDialogTitle = replyManager.dialogTitle
-                  floatingLayerStore.replyOnSend = (text: string, isAnony: boolean): Promise<void> => {
-                    return this.handleReplySend(text, isAnony)
-                  }
-                  floatingLayerStore.editMode = false
-                  floatingLayerStore.push(FloatingPage.REPLY_DIALOG)
-                },
-                onEdit: (p: PostInfo): void => {
-                  replyManager.startEdit(p, Number(this.threadTid), this.threadFid)
-                  floatingLayerStore.replyDialogTitle = replyManager.dialogTitle
-                  floatingLayerStore.editMode = true
-                  floatingLayerStore.editInitialContent = unescapeHtml(p.content).replace(/<br\s*\/?>/gi, '\n')
-                  floatingLayerStore.replyOnSend = (_text: string, _isAnony: boolean): Promise<void> => {
-                    return this.handleEditSend(_text, _isAnony)
-                  }
-                  floatingLayerStore.push(FloatingPage.REPLY_DIALOG)
-                },
-                onShare: (p: PostInfo): void => {
-                  let hostCtx: Context | undefined = this.getUIContext().getHostContext()
-                  if (hostCtx !== undefined) {
-                    let ctx: Context = hostCtx
-                    sharePost(ctx, p, this.threadSubject)
-                  }
-                },
-                onSummarize: (p: PostInfo): void => {
-                  this.beginAiSummarize(p)
-                },
-                onReadAloud: (p: PostInfo): void => {
-                  const subject: string = resolveFloorSubject(p)
-                  const bodyText: string = bbNodesToPlainText(getCachedBBNodes(p.content))
-                  const plainText: string = subject.length > 0 ? subject + '。' + bodyText : bodyText
-                  if (plainText.trim().length === 0) {
-                    appStore.showToast('该楼层没有可朗读的内容')
-                    return
-                  }
-                  const floorName: string = p.lou === 0 ? '楼主' : '第' + p.lou.toString() + '楼'
-                  const metadata: TtsMediaMetadata = {
-                    assetId: 'thread-' + this.threadTid + '-post-' + p.pid.toString(),
-                    title: this.threadSubject.trim().length > 0 ? this.threadSubject : '帖子朗读',
-                    artist: p.author,
-                    album: floorName
-                  }
-                  TtsPlayer.speak(plainText, p.pid, true, metadata)
-                },
-                isTopicAuthor: this.isTopicAuthorPost(post),
-                isOwnPost: appStore.auth.isAuthenticated && String(post.authorid) === appStore.auth.uid,
-              })
+              this.postItem(post)
             }
           }, (post: PostInfo) => String(post.pid) + '_' + String(post.uiRev))
           this.LoadMoreFooter()
@@ -2766,10 +2594,13 @@ export struct ThreadPanel {
    *
    * 这里**不再需要**在回调里关闭菜单：两参 `bindMenu` 由系统持有开合，点菜单项后系统自会收起。
    *
-   * ## 排序（与树页 `ThreadTreePanel.moreMenuItems` 同序同构）
+   * ## 排序与装配位置
    *
-   * 按「保存订阅 → 阅读视图 → 外部动作」三段排列：
-   * 收藏 / 离线保存 / 跟踪 → 只看楼主 / 切换阅读方式 → 从网页打开 / 分享。
+   * 菜单顺序与离线裁剪规则两页同构，已抽到
+   * `common/components/thread-menu/ThreadMenuItems.ets`（`buildThreadMenuItems`）：
+   * 订阅三项 → 阅读视图两项 → 外部动作两项。本方法只负责把**本页当前状态与回调**装进
+   * `ThreadMenuHost`；每一项点下去做什么仍留在本组件——「只看楼主」的前置检查与重载、
+   * 分享时 UIContext 的取值、切换阅读的目标页面都不与树页共用。
    *
    * 视图组只有两个状态开关，**不再提供菜单内刷新**：整页重载不放进更多菜单，避免与
    * 状态开关相邻误触；需要重载时走页内既有路径（错误态重试）。
@@ -2777,90 +2608,46 @@ export struct ThreadPanel {
    * @returns 菜单项
    */
   private moreMenuItems(): NavBarMenuItem[] {
-    const items: NavBarMenuItem[] = []
-    if (this.isSavedSource()) {
-      items.push({
-        label: '在线模式打开',
-        action: (): void => {
-          // 不预检帖子是否失效：直接以在线模式打开（栈顶帖子条目自动替换），
-          // 帖子若已删除由在线加载的错误态呈现
-          routerStore.navigateActivity(Screen.thread(this.threadTid))
-        }
-      })
-    } else {
-      items.push({
-        label: this.getFavoriteMenuLabel(),
-        action: (): void => {
-          this.openFavoriteFolders()
-        }
-      })
-      items.push({
-        label: '离线保存帖子',
-        action: (): void => {
-          this.openSaveThreadDialog()
-        }
-      })
-      // 激活态用文字色表达（`active`），与「只看楼主」同一模式：已跟踪时主色提示
-      items.push({
-        label: '跟踪帖子更新',
-        active: this.isTrackingCurrentThread(),
-        action: (): void => {
-          this.openTrackDialog()
-        }
-      })
+    const host: ThreadMenuHost = new ThreadMenuHost()
+    host.threadTid = this.threadTid
+    host.savedSource = this.isSavedSource()
+    host.favoriteLabel = favoriteMenuLabel(this.favoriteState)
+    host.trackingActive = this.isTrackingCurrentThread()
+    host.authorOnlyActive = this.authorOnly
+    host.switchReadingLabel = '切换为递进树阅读'
+    // 列表页无需强制替换：`navigateActivity` 对 thread 类型本身就替换栈顶 thread 条目
+    host.replaceEntryOnOpenOnline = false
+    host.onOpenSave = (): void => {
+      this.openSaveThreadDialog()
     }
-    // 「只看楼主」对两种来源都成立（离线存档也能重新过滤已保存楼层），是视图组首项
-    // 激活态用文字色表达（`active`），不用系统菜单的选中图标：后者会为该菜单项单独预留一块
-    // 左侧图标位，本菜单只有这一项带它时会显得"像多了几个空格"（实机反馈）。
-    items.push({
-      label: '只看楼主',
-      active: this.authorOnly,
-      action: (): void => {
-        // 与官方同一前置条件：主题作者身份未知时不允许进入只看楼主（官方
-        // `onAuthor()` 在 currentTopic 为空时直接 return）。否则菜单会亮着激活态，
-        // 而请求既没有 authorid 也没有本地过滤，实际显示的仍是全部楼层。
-        if (!this.authorOnly && !this.hasAuthorFilterIdentity()) {
-          appStore.showToast('楼主身份尚未加载，请稍后重试')
-          return
-        }
-        this.authorOnly = !this.authorOnly
-        this.pendingTargetPid = ''
-        this.singlePostFallback = false
-        this.pendingTargetLastPost = false
-        this.loadPosts(1, ThreadLoadMode.REPLACE)
+    host.onOpenTrack = (): void => {
+      this.openTrackDialog()
+    }
+    host.onToggleAuthorOnly = (): void => {
+      // 与官方同一前置条件：主题作者身份未知时不允许进入只看楼主（官方
+      // `onAuthor()` 在 currentTopic 为空时直接 return）。否则菜单会亮着激活态，
+      // 而请求既没有 authorid 也没有本地过滤，实际显示的仍是全部楼层。
+      if (!this.authorOnly && !this.hasAuthorFilterIdentity()) {
+        appStore.showToast('楼主身份尚未加载，请稍后重试')
+        return
       }
-    })
-    // 两种阅读样式**互斥**：原地替换当前列表页条目（列表页实例随替换销毁，
-    // 销毁前由 `aboutToDisappear` 补记阅读进度），返回直接回主题列表。
-    // **不携带当前楼层**：两种样式各有独立的阅读进度（列表 reading_progress /
-    // 树 tree_reading_progress），切换后由目标页恢复它自己的进度；
-    // 只看楼主、楼主身份与路由来源随路由透传。
-    // 离线存档来源同样可切：树页对 SAVED 使用本地存档数据源（不联网、不要求登录）。
-    items.push({
-      label: '切换为递进树阅读',
-      action: (): void => {
-        this.switchToTreeReading()
+      this.authorOnly = !this.authorOnly
+      this.pendingTargetPid = ''
+      this.singlePostFallback = false
+      this.pendingTargetLastPost = false
+      this.loadPosts(1, ThreadLoadMode.REPLACE)
+    }
+    host.onSwitchReading = (): void => {
+      this.switchToTreeReading()
+    }
+    host.onShare = (): void => {
+      let hostCtx: Context | undefined = this.getUIContext().getHostContext()
+      if (hostCtx !== undefined) {
+        let ctx: Context = hostCtx
+        shareThread(ctx, Number(this.threadTid), this.threadSubject)
       }
-    })
-    items.push({
-      label: '从网页打开',
-      action: (): void => {
-        const baseUrl: string = getActiveDomain()
-        const threadUrl: string = baseUrl + '/read.php?tid=' + this.threadTid
-        routerStore.navigateActivity(Screen.webview(threadUrl))
-      }
-    })
-    items.push({
-      label: '分享帖子',
-      action: (): void => {
-        let hostCtx: Context | undefined = this.getUIContext().getHostContext()
-        if (hostCtx !== undefined) {
-          let ctx: Context = hostCtx
-          shareThread(ctx, Number(this.threadTid), this.threadSubject)
-        }
-      }
-    })
-    return items
+    }
+    return buildThreadMenuItems(host)
   }
 
   /**
@@ -3243,8 +3030,8 @@ export struct ThreadPanel {
       }
 
       HdsMaterialHost({
-        barWidth: 40,
-        barHeight: 40,
+        barWidth: HDS_BAR_SIZE,
+        barHeight: HDS_BAR_SIZE,
         onTap: () => {
           replyManager.startThreadReply(Number(this.threadTid), this.threadFid)
           floatingLayerStore.replyDialogTitle = replyManager.dialogTitle

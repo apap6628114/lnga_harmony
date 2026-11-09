@@ -1,11 +1,10 @@
-import { display, CustomContentDialog, LengthMetrics } from '@kit.ArkUI'
+import { CustomContentDialog, LengthMetrics } from '@kit.ArkUI'
 import { common, Context } from '@kit.AbilityKit'
 
 import { appStore } from '../store/AppStore'
 import { AiAgentPreset, PRESET_ENTRY_THREAD } from '../model/AiAgentPreset'
-import { routerStore, Screen, ThreadSource } from '../store/RouterStore'
+import { routerStore, Screen } from '../store/RouterStore'
 import { votePost } from '../service/api/FavoriteApi'
-import { getActiveDomain } from '../service/api/MiscApi'
 import { ThreadResult } from '../model/ThreadResult'
 import type { PostReplyResult } from '../model/ThreadResult'
 import type { ThreadInfo } from '../model/Thread'
@@ -14,7 +13,8 @@ import type { SavedThread } from '../model/SavedThread'
 import { VoteResult } from '../model/NgaApiResults'
 import { FavoriteMembershipState } from '../model/Favorite'
 import { getCachedBBNodes } from '../parser/bbcode/BBCodeCache'
-import { AppColors, NAV_BAR_H } from '../common/constants/Constants'
+import { AppColors, HDS_BAR_CONTENT_OFFSET_Y, HDS_BAR_PADDING, HDS_BAR_SIZE,
+  NAV_BAR_H } from '../common/constants/Constants'
 import { PanelNavBar, NavBarMenuItem } from '../common/components/PanelNavBar'
 import { PostItem } from '../common/components/PostItem'
 import { LoadingStateView, ErrorStateView } from '../common/components/PageStateView'
@@ -24,10 +24,21 @@ import { ThreadTreeMoreItem } from '../common/components/thread-tree/ThreadTreeM
 import { floatingLayerStore, FloatingPage } from '../store/FloatingLayerStore'
 import { replyManager } from '../common/managers/ReplyManager'
 import { unescapeHtml } from '../parser/_shared/HtmlEntityCodec'
-import { TtsMediaMetadata } from '../common/media/TtsAvSessionController'
 import { TtsPlayer } from '../common/media/TtsPlayer'
 import { sharePost, shareThread } from '../common/utils/ShareUtils'
-import { openImageViewer as sharedOpenImageViewer, handleForumLink } from '../common/utils/LinkUtils'
+import { openImageViewer as sharedOpenImageViewer, handleForumLink, parseInAppThreadLink,
+  InAppThreadLink, openProfileCardAt } from '../common/utils/LinkUtils'
+import {
+  buildReadAloudMetadata,
+  canResumeReadingProgress,
+  favoriteMenuLabel,
+  findTopicAuthorName,
+  isAuthorKeyUsable,
+  isSavedThreadSource,
+  isTopicAuthorPost,
+  visibleThreadSubject
+} from '../common/utils/ThreadPostUtils'
+import { buildThreadMenuItems, ThreadMenuHost } from '../common/components/thread-menu/ThreadMenuItems'
 import { Logger, DOMAIN_UI, formatError } from '../common/utils/Logger'
 import { getActiveAiValidationMessage } from '../service/ai/ActiveAiService'
 import { bbNodesToPlainText } from '../common/utils/Utils'
@@ -37,12 +48,14 @@ import { applyBlacklistStateToPosts } from '../common/utils/BlacklistUtils'
 import { dismissAnalyzerSessions } from '../common/media/ImageAnalyzerSession'
 import { HoldingHandMonitor, HoldingHandStatus } from '../common/managers/HoldingHandMonitor'
 import { SaveThreadContent } from '../common/dialogs/SaveThreadDialogs'
+import { AiTaskPickerContent } from '../common/dialogs/AiTaskPickerContent'
 import { ThreadTrackContent } from '../common/dialogs/ThreadTrackDialogs'
-import { savedThreadService, SaveThreadOutcome, getSavedThreadTreeResult } from '../service/SavedThreadService'
+import { getSavedThreadTreeResult } from '../service/SavedThreadService'
 import { buildArchiveCoverageHint } from '../common/utils/SavedThreadTreePolicy'
 import { resolveArchiveStartPage } from '../common/utils/SavedThreadPageUtils'
-import { TrackRequest, TrackResult } from '../store/TrackedThreadStore'
-import { TrackedThread, TRACK_DEFAULT_KEEP_DAYS, TRACK_MAX_COUNT } from '../model/TrackedThread'
+import { TrackedThread, TRACK_DEFAULT_KEEP_DAYS } from '../model/TrackedThread'
+import { RootState, RowAnchor, TreeSubmitContext, TreeSubmitKind } from '../model/ThreadTreePageState'
+import { saveThreadWithToast, submitThreadTrack } from '../common/utils/ThreadPageActions'
 import { ThreadTreeProgressEntry } from '../store/ThreadTreeProgressStore'
 import {
   ThreadTreeModel,
@@ -94,51 +107,6 @@ import {
 
 const logger = new Logger(DOMAIN_UI, 'ThreadTreePanel')
 
-/** 根节点跨重建保留的状态（展开态与展开代际）。 */
-class RootState {
-  expanded: boolean = false
-  rev: number = 0
-}
-
-/** 增量提交前的视口锚点（插入到锚点之前时用于补偿）。 */
-class RowAnchor {
-  valid: boolean = false
-  pid: number = -1
-  oldIndex: number = -1
-  offset: number = 0
-}
-
-/** 提交类型：决定回复/编辑成功后局部刷新抓哪一页。 */
-class TreeSubmitKind {
-  /** 楼层回复 / 主题回复：新楼层必在末页 */
-  static readonly REPLY: number = 0
-  /** 编辑：被编辑楼层在其所属页 */
-  static readonly EDIT: number = 1
-}
-
-/**
- * 一次「提交成功」的上下文（回复与编辑共用同一套局部刷新流程）。
- *
- * 只承载**已有的事实**（服务端返回的新 pid、编辑目标 pid、提交正文），
- * 不含任何对楼层号/正文的猜测——局部合并的数据一律来自服务端那一页。
- */
-class TreeSubmitContext {
-  /** 提交类型，见 {@link TreeSubmitKind} */
-  kind: number = TreeSubmitKind.REPLY
-
-  /** 服务端返回的新楼层 pid（回复；响应未携带时为 0） */
-  newPid: number = 0
-
-  /** 编辑目标楼层 pid（编辑；回复为 0） */
-  editPid: number = 0
-
-  /** 用户提交的正文（编辑的旧缓存保护用；其余场景空串） */
-  text: string = ''
-
-  /** 成功提示文案 */
-  toast: string = ''
-}
-
 /**
  * 进入阶段加载态的延迟淡入时间（ms）。
  *
@@ -163,12 +131,15 @@ const TREE_STOP_SETTLE_MS: number = 300
  * 底边对齐，真机实测见 `docs/IMMERSIVE_LIGHT_DESIGN.md` §12.9），两端内边距 10，内容再做
  * -4vp 垂直补偿（HDS 内容区与材质块不同心）。
  *
+ * 材质块几何（高 / 两端内边距 / 垂直补偿）统一取自 `Constants.HDS_BAR_*`；页内沿用
+ * `TREE_BANNER_*` 旧名，便于与历史注释和排障记录对照。
+ *
  * **间距全部显式**：图标 / 数字 / 动作之间统一 `TREE_BANNER_GAP`；数字宽度由
  * `MeasureUtils.measureText` 实测（不是估算），材质块宽度 = 各段相加，内容正好铺满。
  */
-const TREE_BANNER_H: number = 40
-const TREE_BANNER_PAD: number = 10
-const TREE_BANNER_CONTENT_OFFSET_Y: number = -4
+const TREE_BANNER_H: number = HDS_BAR_SIZE
+const TREE_BANNER_PAD: number = HDS_BAR_PADDING
+const TREE_BANNER_CONTENT_OFFSET_Y: number = HDS_BAR_CONTENT_OFFSET_Y
 const TREE_BANNER_FONT: number = 14
 /** 加载图标（`LoadingProgress`）与失败前缀 `!` 的宽度。 */
 const TREE_BANNER_ICON_W: number = 14
@@ -507,7 +478,7 @@ export struct ThreadTreePanel {
     // 加载中再切回列表也要能沿用「只看楼主」，抓取结果返回后以服务端 threadInfo 为准
     this.threadAuthorId = this.authorIdInit
     this.threadAuthorKey = this.authorKeyInit
-    this.hasThreadAuthorKey = this.isAuthorKeyUsable(this.authorKeyInit)
+    this.hasThreadAuthorKey = isAuthorKeyUsable(this.authorKeyInit)
     this.loadTree(false)
     this.loadPersistedVotes()
     this.syncFavoriteState()
@@ -597,7 +568,7 @@ export struct ThreadTreePanel {
     // 与 aboutToAppear 同源：先回到路由身份（可能为空），抓取结果返回后再覆盖
     this.threadAuthorId = this.authorIdInit
     this.threadAuthorKey = this.authorKeyInit
-    this.hasThreadAuthorKey = this.isAuthorKeyUsable(this.authorKeyInit)
+    this.hasThreadAuthorKey = isAuthorKeyUsable(this.authorKeyInit)
     this.authorOnly = this.authorOnlyInit
     this.threadSubject = '递进树'
     this.titleScrollEffectProgress = 0
@@ -1722,7 +1693,7 @@ export struct ThreadTreePanel {
     for (let i: number = 0; i < this.allPosts.length; i++) {
       const post: PostInfo = this.allPosts[i]
       // 主楼恒保留：它是树的第一行，且 `buildThreadTree` 靠 `lou === 0` 识别
-      if (post.lou === 0 || this.isTopicAuthorPost(post)) {
+      if (post.lou === 0 || isTopicAuthorPost(this.hasThreadAuthorKey, this.threadAuthorKey, post)) {
         filtered.push(post)
       }
     }
@@ -1751,7 +1722,7 @@ export struct ThreadTreePanel {
     // 否则「只看楼主」与标题屏蔽会在加载完成后反而被关闭
     this.threadAuthorId = fetchAuthorId !== 0 ? String(fetchAuthorId) : this.authorIdInit
     this.threadAuthorKey = fetchAuthorKey.length > 0 ? fetchAuthorKey : this.authorKeyInit
-    this.hasThreadAuthorKey = this.isAuthorKeyUsable(this.threadAuthorKey)
+    this.hasThreadAuthorKey = isAuthorKeyUsable(this.threadAuthorKey)
     this.disableAuthorOnlyIfUnavailable()
     if (keepSubject && this.threadSubject.length > 0 && this.threadSubject !== '递进树') {
       return
@@ -1773,30 +1744,6 @@ export struct ThreadTreePanel {
     }
     this.authorOnly = false
     appStore.showToast('无法识别楼主，已显示全部楼层')
-  }
-
-  /**
-   * 楼主标识是否可用于身份比较。
-   *
-   * @param authorKey - 稳定作者标识
-   * @returns 可用于比较时为 true
-   */
-  private isAuthorKeyUsable(authorKey: string): boolean {
-    if (authorKey.length === 0) {
-      return false
-    }
-    const numeric: number = Number(authorKey)
-    return isNaN(numeric) || numeric > 0
-  }
-
-  /**
-   * 当前楼层是否楼主所发（匿名帖用稳定 authorKey 判定）。
-   *
-   * @param post - 楼层
-   * @returns 是楼主所发时为 true
-   */
-  private isTopicAuthorPost(post: PostInfo): boolean {
-    return this.hasThreadAuthorKey && post.authorKey === this.threadAuthorKey
   }
 
   // ==================== 树定位 ====================
@@ -2158,7 +2105,7 @@ export struct ThreadTreePanel {
    * @returns 是否离线存档来源
    */
   private isSavedSource(): boolean {
-    return this.threadSource === ThreadSource.SAVED
+    return isSavedThreadSource(this.threadSource)
   }
 
   /**
@@ -2167,9 +2114,7 @@ export struct ThreadTreePanel {
    * @returns 来源是否允许恢复
    */
   private isResumeAllowedSource(): boolean {
-    return this.threadSource === ThreadSource.DEFAULT ||
-      this.threadSource === ThreadSource.TOPIC_LIST ||
-      this.threadSource === ThreadSource.BROWSE_HISTORY
+    return canResumeReadingProgress(this.threadSource)
   }
 
   // ==================== 交互 ====================
@@ -2556,23 +2501,7 @@ export struct ThreadTreePanel {
    * @param screenY - 点击点 y
    */
   private showProfileCard(uid: string, screenX: number, screenY: number): void {
-    const cardW: number = 280
-    const cardH: number = 400
-    const pad: number = 8
-    let posX: number = screenX
-    let posY: number = screenY
-    try {
-      const context = this.getUIContext()
-      const displayInfo = display.getDefaultDisplaySync()
-      const screenW = context.px2vp(displayInfo.width)
-      const screenH = context.px2vp(displayInfo.height)
-      posX = Math.max(pad, Math.min(screenX - cardW / 2, screenW - cardW - pad))
-      posY = Math.max(pad, Math.min(screenY + pad, screenH - cardH - pad))
-    } catch (e) {
-      posX = screenX - cardW / 2
-      posY = screenY + pad
-    }
-    floatingLayerStore.openProfileCard(uid, posX, posY)
+    openProfileCardAt(this.getUIContext(), uid, screenX, screenY)
   }
 
   /**
@@ -2591,28 +2520,16 @@ export struct ThreadTreePanel {
    * @param href - 链接
    */
   private handleLinkClick(href: string): void {
-    if (href.startsWith('#/thread?')) {
-      const query: string = href.substring(href.indexOf('?') + 1)
-      let linkTid: string = ''
-      let linkPid: string = ''
-      const parts: string[] = query.split('&')
-      for (let i: number = 0; i < parts.length; i++) {
-        const kv: string[] = parts[i].split('=')
-        if (kv.length === 2) {
-          if (kv[0] === 'tid') linkTid = kv[1]
-          if (kv[0] === 'pid') linkPid = kv[1]
-        }
-      }
-      if (linkTid === this.threadTid && linkPid.length > 0) {
-        const linkPidNumber: number = parseInt(linkPid, 10)
-        if (Number.isFinite(linkPidNumber) && linkPidNumber >= 0) {
-          // 与子节点「→」同一入口：已加载就定位，未加载就登记为等待目标
-          this.treeJumpToPid(linkPidNumber)
-          return
-        }
-        appStore.showToast(this.missingFloorHint())
+    const link: InAppThreadLink | null = parseInAppThreadLink(href)
+    if (link !== null && link.tid === this.threadTid && link.pid.length > 0) {
+      const linkPidNumber: number = parseInt(link.pid, 10)
+      if (Number.isFinite(linkPidNumber) && linkPidNumber >= 0) {
+        // 与子节点「→」同一入口：已加载就定位，未加载就登记为等待目标
+        this.treeJumpToPid(linkPidNumber)
         return
       }
+      appStore.showToast(this.missingFloorHint())
+      return
     }
     handleForumLink(href, this.getUIContext().getHostContext() as common.UIAbilityContext, (uid: string) => {
       this.showProfileCard(uid, 200, 200)
@@ -2637,14 +2554,8 @@ export struct ThreadTreePanel {
       appStore.showToast('该楼层没有可朗读的内容')
       return
     }
-    const floorName: string = p.lou === 0 ? '楼主' : '第' + p.lou.toString() + '楼'
-    const metadata: TtsMediaMetadata = {
-      assetId: 'thread-' + this.threadTid + '-post-' + p.pid.toString(),
-      title: this.threadSubject.trim().length > 0 ? this.threadSubject : '帖子朗读',
-      artist: p.author,
-      album: floorName
-    }
-    TtsPlayer.speak(plainText, p.pid, true, metadata)
+    TtsPlayer.speak(plainText, p.pid, true,
+      buildReadAloudMetadata(this.threadTid, this.threadSubject, p))
   }
 
   /**
@@ -2721,39 +2632,19 @@ export struct ThreadTreePanel {
     })
   }
 
-  /** AI 任务选择弹窗内容。 */
+  /** AI 任务选择弹窗内容（列表与选中回调由页面负责，列表本身是共享构件）。 */
   @Builder
   aiTaskContent() {
-    Column() {
-      ForEach(this.aiTasks, (task: AiAgentPreset) => {
-        Row() {
-          Column() {
-            Text(task.name).fontSize(15).fontColor(AppColors.textPrimary)
-            if (task.description.length > 0) {
-              Text(task.description)
-                .fontSize(11).fontColor(AppColors.textTertiary).lineHeight(16)
-                .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
-                .margin({ top: 2 })
-            }
-          }
-          .layoutWeight(1)
-          .alignItems(HorizontalAlign.Start)
-
-          Text('›').fontSize(18).fontColor(AppColors.chevron)
+    AiTaskPickerContent({
+      tasks: this.aiTasks,
+      onPick: (task: AiAgentPreset): void => {
+        this.aiTaskDialogController?.close()
+        const post: PostInfo | null = this.aiTaskPost
+        if (post !== null) {
+          this.launchAiTask(task, post, task.name)
         }
-        .width('100%')
-        .padding({ top: 10, bottom: 10 })
-        .alignItems(VerticalAlign.Center)
-        .onClick((): void => {
-          this.aiTaskDialogController?.close()
-          const post: PostInfo | null = this.aiTaskPost
-          if (post !== null) {
-            this.launchAiTask(task, post, task.name)
-          }
-        })
-      }, (task: AiAgentPreset): string => task.id)
-    }
-    .width('100%')
+      }
+    })
   }
 
   // ==================== 收藏 / 保存 / 跟踪（与列表页同一套入口） ====================
@@ -2772,31 +2663,6 @@ export struct ThreadTreePanel {
     this.favoriteState = this.threadTid.length > 0
       ? appStore.favoriteStore.getTopicFavoriteState(this.threadTid)
       : FavoriteMembershipState.UNKNOWN
-  }
-
-  /**
-   * 返回当前可信收藏状态对应的菜单文案。
-   *
-   * @returns 收藏操作菜单文案
-   */
-  private getFavoriteMenuLabel(): string {
-    if (this.favoriteState === FavoriteMembershipState.FAVORED) {
-      return '管理收藏'
-    }
-    if (this.favoriteState === FavoriteMembershipState.NOT_FAVORED) {
-      return '收藏到…'
-    }
-    return '收藏夹…'
-  }
-
-  /**
-   * 打开当前主题的收藏夹多选页面。
-   */
-  private openFavoriteFolders(): void {
-    if (this.threadTid.length === 0) {
-      return
-    }
-    routerStore.navigateActivity(Screen.favoriteFolders(this.threadTid))
   }
 
   /**
@@ -2860,15 +2726,7 @@ export struct ThreadTreePanel {
    * @param endPage - 结束页
    */
   private startSaveThread(tid: string, startPage: number, endPage: number): void {
-    savedThreadService.saveThread(tid, startPage, endPage).then((outcome: SaveThreadOutcome): void => {
-      if (outcome.ok) {
-        appStore.showToast('已保存：' + outcome.message)
-      } else if (outcome.cancelled) {
-        appStore.showToast('已取消保存')
-      } else {
-        appStore.showToast('保存失败：' + outcome.message)
-      }
-    })
+    saveThreadWithToast(tid, startPage, endPage)
   }
 
   /**
@@ -2879,20 +2737,6 @@ export struct ThreadTreePanel {
   private isTrackingCurrentThread(): boolean {
     const version: number = this.trackedThreadVersion
     return version >= 0 && appStore.isThreadTracked(this.threadTid)
-  }
-
-  /**
-   * 当前帖子的楼主昵称（添加跟踪时写入，避免检查回填前显示「未知作者」）。
-   *
-   * @returns 楼主昵称；未知时返回空串
-   */
-  private resolveThreadAuthorName(): string {
-    for (let i: number = 0; i < this.allPosts.length; i++) {
-      if (this.allPosts[i].lou === 0) {
-        return this.allPosts[i].author
-      }
-    }
-    return ''
   }
 
   /**
@@ -2953,28 +2797,14 @@ export struct ThreadTreePanel {
 
   /**
    * 提交跟踪设置：未跟踪则新建，已跟踪则只更新跟踪天数（不动已读基准）。
+   *
+   * 标题占位值（`'递进树'`）不作为真实标题入库，交给检查回填；占位判断留在页面，
+   * 提交流程与列表页共用 `submitThreadTrack`。
    */
   private startTrackThread(): void {
-    if (!appStore.canTrackMoreThreads() && !appStore.isThreadTracked(this.threadTid)) {
-      appStore.showToast('最多同时跟踪 ' + String(TRACK_MAX_COUNT) + ' 个帖子')
-      return
-    }
-    const request: TrackRequest = new TrackRequest()
-    request.tid = this.threadTid
-    // 标题占位值（'递进树'）不作为真实标题入库，交给检查回填
-    request.subject = this.threadSubject === '递进树' ? '' : this.threadSubject
-    request.author = this.resolveThreadAuthorName()
-    request.authorid = Number(this.threadAuthorId) > 0 ? Number(this.threadAuthorId) : 0
-    request.fid = this.threadFid
-    request.forumName = ''
-    request.keepDays = this.trackKeepDays
-    appStore.trackThread(request).then((result: TrackResult): void => {
-      if (result.ok) {
-        appStore.showToast(result.created ? '已开始跟踪' : '跟踪设置已更新')
-      } else {
-        appStore.showToast(result.error || '跟踪失败')
-      }
-    })
+    const subject: string = this.threadSubject === '递进树' ? '' : this.threadSubject
+    submitThreadTrack(this.threadTid, subject, findTopicAuthorName(this.allPosts),
+      this.threadAuthorId, this.threadFid, this.trackKeepDays)
   }
 
   /**
@@ -3009,14 +2839,10 @@ export struct ThreadTreePanel {
    * @returns 可显示标题
    */
   private getVisibleThreadSubject(): string {
-    if (this.blacklistVersion >= 0 && appStore.settingsStore.isBlacklisted(this.threadAuthorId)) {
-      return '该用户已被屏蔽'
-    }
-    // 离线存档来源：标题前加 [离线] 前缀（与列表页 `ThreadPanel` 同一条规则）
-    if (this.isSavedSource()) {
-      return '[离线] ' + this.threadSubject
-    }
-    return this.threadSubject
+    // 显式读取 blacklistVersion 建立响应式依赖（文案规则见 ThreadPostUtils.visibleThreadSubject）
+    const authorBlocked: boolean = this.blacklistVersion >= 0 &&
+      appStore.settingsStore.isBlacklisted(this.threadAuthorId)
+    return visibleThreadSubject(this.threadSubject, authorBlocked, this.isSavedSource())
   }
 
   // ==================== 握持状态 ====================
@@ -3091,8 +2917,10 @@ export struct ThreadTreePanel {
    * 「切换为递进树阅读 / 切换为列表阅读」。这样两页的多功能下拉在用户看来是同一个菜单，
    * 切换阅读方式不会丢掉收藏、离线保存、跟踪等入口。
    *
-   * 顺序按「保存订阅 → 阅读视图 → 外部动作」三段：收藏 / 离线保存 / 跟踪 →
-   * 只看楼主 / 切换阅读方式 → 从网页打开 / 分享。
+   * 菜单顺序与离线裁剪规则已抽到 `common/components/thread-menu/ThreadMenuItems.ets`
+   * （`buildThreadMenuItems`）：订阅三项 → 阅读视图两项 → 外部动作两项。本方法只负责把
+   * **本页当前状态与回调**装进 `ThreadMenuHost`；「只看楼主」的树重建、切换阅读的目标页面、
+   * 分享时 UIContext 的取值都留在本组件。
    *
    * **不提供菜单内刷新**：树页刷新要重抓全帖（4 路并发 + 限流，长帖可达数十秒，期间整页为
    * 加载态），代价在整份菜单里最高，不放进多功能下拉；需要重抓时重新进入帖子（内容已可见
@@ -3104,100 +2932,35 @@ export struct ThreadTreePanel {
    * @returns 菜单项
    */
   private moreMenuItems(): NavBarMenuItem[] {
-    const items: NavBarMenuItem[] = []
-    if (this.isSavedSource()) {
-      // 离线存档：与列表页离线来源同一套裁剪——收藏 / 离线保存 / 跟踪 / 刷新都依赖
-      // 在线通道，存档模式只保留「在线模式打开 / 只看楼主 / 切换阅读方式 / 网页 / 分享」
-      items.push({
-        label: '在线模式打开',
-        action: (): void => {
-          // 不预检帖子是否失效：直接以在线模式打开。**原地替换**当前离线树条目
-          // （与列表页离线来源的同一入口一致）：返回回存档列表，不会退回离线树
-          routerStore.navigateActivity(Screen.thread(this.threadTid), true)
-        }
-      })
-      items.push({
-        label: '只看楼主',
-        active: this.authorOnly,
-        action: (): void => {
-          this.toggleAuthorOnly()
-        }
-      })
-      items.push({
-        label: '切换为列表阅读',
-        action: (): void => {
-          this.replaceWithListReading()
-        }
-      })
-      items.push({
-        label: '从网页打开',
-        action: (): void => {
-          const threadUrl: string = getActiveDomain() + '/read.php?tid=' + this.threadTid
-          routerStore.navigateActivity(Screen.webview(threadUrl))
-        }
-      })
-      items.push({
-        label: '分享帖子',
-        action: (): void => {
-          let hostCtx: Context | undefined = this.getUIContext().getHostContext()
-          if (hostCtx !== undefined) {
-            let ctx: Context = hostCtx
-            shareThread(ctx, Number(this.threadTid), this.threadSubject)
-          }
-        }
-      })
-      return items
+    const host: ThreadMenuHost = new ThreadMenuHost()
+    host.threadTid = this.threadTid
+    host.savedSource = this.isSavedSource()
+    host.favoriteLabel = favoriteMenuLabel(this.favoriteState)
+    host.trackingActive = this.isTrackingCurrentThread()
+    host.authorOnlyActive = this.authorOnly
+    host.switchReadingLabel = '切换为列表阅读'
+    // 树页必须强制替换栈顶：当前栈顶就是离线树条目，返回要回存档列表而不是退回离线树
+    host.replaceEntryOnOpenOnline = true
+    host.onOpenSave = (): void => {
+      this.openSaveThreadDialog()
     }
-    items.push({
-      label: this.getFavoriteMenuLabel(),
-      action: (): void => {
-        this.openFavoriteFolders()
+    host.onOpenTrack = (): void => {
+      this.openTrackDialog()
+    }
+    host.onToggleAuthorOnly = (): void => {
+      this.toggleAuthorOnly()
+    }
+    host.onSwitchReading = (): void => {
+      this.replaceWithListReading()
+    }
+    host.onShare = (): void => {
+      let hostCtx: Context | undefined = this.getUIContext().getHostContext()
+      if (hostCtx !== undefined) {
+        let ctx: Context = hostCtx
+        shareThread(ctx, Number(this.threadTid), this.threadSubject)
       }
-    })
-    items.push({
-      label: '离线保存帖子',
-      action: (): void => {
-        this.openSaveThreadDialog()
-      }
-    })
-    items.push({
-      label: '跟踪帖子更新',
-      active: this.isTrackingCurrentThread(),
-      action: (): void => {
-        this.openTrackDialog()
-      }
-    })
-    items.push({
-      label: '只看楼主',
-      active: this.authorOnly,
-      action: (): void => {
-        this.toggleAuthorOnly()
-      }
-    })
-    items.push({
-      label: '切换为列表阅读',
-      action: (): void => {
-        this.replaceWithListReading()
-      }
-    })
-    items.push({
-      label: '从网页打开',
-      action: (): void => {
-        const threadUrl: string = getActiveDomain() + '/read.php?tid=' + this.threadTid
-        routerStore.navigateActivity(Screen.webview(threadUrl))
-      }
-    })
-    items.push({
-      label: '分享帖子',
-      action: (): void => {
-        let hostCtx: Context | undefined = this.getUIContext().getHostContext()
-        if (hostCtx !== undefined) {
-          let ctx: Context = hostCtx
-          shareThread(ctx, Number(this.threadTid), this.threadSubject)
-        }
-      }
-    })
-    return items
+    }
+    return buildThreadMenuItems(host)
   }
 
   /**
@@ -3666,7 +3429,7 @@ export struct ThreadTreePanel {
       onReadAloud: (p: PostInfo): void => {
         this.readAloud(p, displayContent)
       },
-      isTopicAuthor: this.isTopicAuthorPost(post),
+      isTopicAuthor: isTopicAuthorPost(this.hasThreadAuthorKey, this.threadAuthorKey, post),
       isOwnPost: appStore.auth.isAuthenticated && String(post.authorid) === appStore.auth.uid,
     })
   }
@@ -3691,7 +3454,7 @@ export struct ThreadTreePanel {
               isVotedUp: this.votedUpPids.has(String(row.post.pid)),
               isVotedDown: this.votedDownPids.has(String(row.post.pid)),
               holdingHand: this.holdingStatus,
-              isTopicAuthor: this.isTopicAuthorPost(row.post),
+              isTopicAuthor: isTopicAuthorPost(this.hasThreadAuthorKey, this.threadAuthorKey, row.post),
               isOwnPost: appStore.auth.isAuthenticated && String(row.post.authorid) === appStore.auth.uid,
               highlight: row.highlighted,
               onImageClick: (urls: string[], index: number): void => {
@@ -3925,8 +3688,8 @@ export struct ThreadTreePanel {
         this.ProgressBanner()
       }
       HdsMaterialHost({
-        barWidth: 40,
-        barHeight: 40,
+        barWidth: HDS_BAR_SIZE,
+        barHeight: HDS_BAR_SIZE,
         onTap: (): void => {
           this.openThreadReply()
         }

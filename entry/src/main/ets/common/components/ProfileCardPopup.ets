@@ -7,6 +7,7 @@ import { unescapeHtml } from '../../parser/_shared/HtmlEntityCodec'
 import { Avatar } from './Avatar'
 import { CustomContentDialog } from '@kit.ArkUI'
 import { NoteEditorContent } from '../dialogs/Dialogs'
+import { AiTaskPickerContent } from '../dialogs/AiTaskPickerContent'
 import { PageScope } from '../concurrency/PageScope'
 import { openImageViewer } from '../utils/LinkUtils'
 
@@ -132,43 +133,16 @@ export struct ProfileCardPopup {
     this.isAnalyzing = false
   }
 
-  /** AI 任务选择弹窗内容。 */
+  /** AI 任务选择弹窗内容（列表是共享构件，选中后启动任务的逻辑留在本组件）。 */
   @Builder
   aiTaskContent() {
-    Column() {
-      ForEach(this.aiTasks, (task: AiAgentPreset) => {
-        Row() {
-          Column() {
-            Text(task.name)
-              .fontSize(15)
-              .fontColor(AppColors.textPrimary)
-            if (task.description.length > 0) {
-              Text(task.description)
-                .fontSize(11)
-                .fontColor(AppColors.textTertiary)
-                .lineHeight(16)
-                .maxLines(2)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .margin({ top: 2 })
-            }
-          }
-          .layoutWeight(1)
-          .alignItems(HorizontalAlign.Start)
-
-          Text('›')
-            .fontSize(18)
-            .fontColor(AppColors.chevron)
-        }
-        .width('100%')
-        .padding({ top: 10, bottom: 10 })
-        .alignItems(VerticalAlign.Center)
-        .onClick((): void => {
-          this.aiTaskDialogController?.close()
-          this.launchAiTask(task, task.name)
-        })
-      }, (task: AiAgentPreset): string => task.id)
-    }
-    .width('100%')
+    AiTaskPickerContent({
+      tasks: this.aiTasks,
+      onPick: (task: AiAgentPreset): void => {
+        this.aiTaskDialogController?.close()
+        this.launchAiTask(task, task.name)
+      }
+    })
   }
 
   private showNoteDialog(): void {
